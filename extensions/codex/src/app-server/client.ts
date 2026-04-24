@@ -1,5 +1,5 @@
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness";
+import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexInitializeResponse,
@@ -15,6 +15,7 @@ import { createWebSocketTransport } from "./transport-websocket.js";
 import { closeCodexAppServerTransport, type CodexAppServerTransport } from "./transport.js";
 
 export const MIN_CODEX_APP_SERVER_VERSION = "0.118.0";
+const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 
 type PendingRequest = {
   method: string;
@@ -234,7 +235,10 @@ export class CodexAppServerClient {
     try {
       parsed = JSON.parse(trimmed);
     } catch (error) {
-      embeddedAgentLog.warn("failed to parse codex app-server message", { error });
+      embeddedAgentLog.warn("failed to parse codex app-server message", {
+        error,
+        linePreview: redactCodexAppServerLinePreview(trimmed),
+      });
       return;
     }
     if (!parsed || typeof parsed !== "object") {
@@ -416,8 +420,27 @@ function numericVersionParts(version: string): number[] {
     .map((part) => (Number.isFinite(part) ? part : 0));
 }
 
+function redactCodexAppServerLinePreview(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  const redacted = compact
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+/gi, "$1<redacted>")
+    .replace(
+      /("(?:api_?key|authorization|token|access_token|refresh_token)"\s*:\s*")([^"]+)(")/gi,
+      "$1<redacted>$3",
+    );
+  return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
+    ? `${redacted.slice(0, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
+    : redacted;
+}
+
+const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+]);
+
 export function isCodexAppServerApprovalRequest(method: string): boolean {
-  return method.includes("requestApproval") || method.includes("Approval");
+  return CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS.has(method);
 }
 
 function formatExitValue(value: unknown): string {
@@ -432,4 +455,5 @@ function formatExitValue(value: unknown): string {
 
 export const __testing = {
   closeCodexAppServerTransport,
+  redactCodexAppServerLinePreview,
 } as const;

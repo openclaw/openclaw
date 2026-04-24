@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw config` (get/set/unset/file/schema/validate)"
 read_when:
   - You want to read or edit config non-interactively
-title: "config"
+title: "Config"
 ---
 
 # `openclaw config`
@@ -38,6 +38,7 @@ openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
 openclaw config unset plugins.entries.brave.config.webSearch.apiKey
@@ -104,6 +105,22 @@ openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
 
 `config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
+
+Object assignment replaces the target path by default. Protected map/list paths
+that commonly hold user-added entries, such as `agents.defaults.models`,
+`models.providers`, `models.providers.<id>.models`, `plugins.entries`, and
+`auth.profiles`, refuse replacements that would remove existing entries unless
+you pass `--replace`.
+
+Use `--merge` when adding entries to those maps:
+
+```bash
+openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
+openclaw config set models.providers.ollama.models '[{"id":"llama3.2","name":"Llama 3.2"}]' --strict-json --merge
+```
+
+Use `--replace` only when you intentionally want the provided value to become
+the complete target value.
 
 ## `config set` modes
 
@@ -186,6 +203,7 @@ File provider (`--provider-source file`):
 - `--provider-path <path>` (required)
 - `--provider-mode <singleValue|json>`
 - `--provider-max-bytes <bytes>`
+- `--provider-allow-insecure-path`
 
 Exec provider (`--provider-source exec`):
 
@@ -342,6 +360,9 @@ If dry-run fails:
 post-change config before committing it to disk. If the new payload fails schema
 validation or looks like a destructive clobber, the active config is left alone
 and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+The active config path must be a regular file. Symlinked `openclaw.json`
+layouts are unsupported for writes; use `OPENCLAW_CONFIG_PATH` to point directly
+at the real file instead.
 
 Prefer CLI writes for small edits:
 
@@ -366,7 +387,7 @@ last-known-good backup during startup or hot reload. See
 
 ## Subcommands
 
-- `config file`: Print the active config file path (resolved from `OPENCLAW_CONFIG_PATH` or default location).
+- `config file`: Print the active config file path (resolved from `OPENCLAW_CONFIG_PATH` or default location). The path should name a regular file, not a symlink.
 
 Restart the gateway after edits.
 
@@ -379,3 +400,31 @@ gateway.
 openclaw config validate
 openclaw config validate --json
 ```
+
+After `openclaw config validate` is passing, you can use the local TUI to have
+an embedded agent compare the active config against the docs while you validate
+each change from the same terminal:
+
+If validation is already failing, start with `openclaw configure` or
+`openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config
+guard.
+
+```bash
+openclaw chat
+```
+
+Then inside the TUI:
+
+```text
+!openclaw config file
+!openclaw docs gateway auth token secretref
+!openclaw config validate
+!openclaw doctor
+```
+
+Typical repair loop:
+
+- Ask the agent to compare your current config with the relevant docs page and suggest the smallest fix.
+- Apply targeted edits with `openclaw config set` or `openclaw configure`.
+- Rerun `openclaw config validate` after each change.
+- If validation passes but the runtime is still unhealthy, run `openclaw doctor` or `openclaw doctor --fix` for migration and repair help.

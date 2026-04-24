@@ -205,4 +205,41 @@ describe("createGatewayCloseHandler", () => {
     await closeExpectation;
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("ignores unbound http servers during shutdown", async () => {
+    const close = createGatewayCloseHandler({
+      bonjourStop: null,
+      tailscaleCleanup: null,
+      canvasHost: null,
+      canvasHostServer: null,
+      stopChannel: vi.fn(async () => undefined),
+      pluginServices: null,
+      cron: { stop: vi.fn() },
+      heartbeatRunner: { stop: vi.fn() } as never,
+      updateCheckStop: null,
+      nodePresenceTimers: new Map(),
+      broadcast: vi.fn(),
+      tickInterval: setInterval(() => undefined, 60_000),
+      healthInterval: setInterval(() => undefined, 60_000),
+      dedupeCleanup: setInterval(() => undefined, 60_000),
+      mediaCleanup: null,
+      agentUnsub: null,
+      heartbeatUnsub: null,
+      transcriptUnsub: null,
+      lifecycleUnsub: null,
+      chatRunState: { clear: vi.fn() },
+      clients: new Set(),
+      configReloader: { stop: vi.fn(async () => undefined) },
+      wss: { close: (cb: () => void) => cb() } as never,
+      httpServer: {
+        close: (cb: (err?: NodeJS.ErrnoException | null) => void) =>
+          cb(
+            Object.assign(new Error("Server is not running."), { code: "ERR_SERVER_NOT_RUNNING" }),
+          ),
+        closeIdleConnections: vi.fn(),
+      } as never,
+    });
+
+    await expect(close({ reason: "startup failed before bind" })).resolves.toBeUndefined();
+  });
 });

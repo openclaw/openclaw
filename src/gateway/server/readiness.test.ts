@@ -32,7 +32,10 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   };
 }
 
-function createHealthyDiscordManager(startedAt: number, lastEventAt: number): ChannelManager {
+function createHealthyDiscordManager(
+  startedAt: number,
+  lastTransportActivityAt: number,
+): ChannelManager {
   return createManager(
     snapshotWith({
       discord: {
@@ -41,7 +44,7 @@ function createHealthyDiscordManager(startedAt: number, lastEventAt: number): Ch
         enabled: true,
         configured: true,
         lastStartAt: startedAt,
-        lastEventAt,
+        lastTransportActivityAt,
       },
     }),
   );
@@ -99,6 +102,28 @@ describe("createReadinessChecker", () => {
         failing: ["startup-sidecars"],
         uptimeMs: 300_000,
       });
+    });
+  });
+
+  it("does not cache startup-pending readiness", () => {
+    withReadinessClock(() => {
+      let startupPending = true;
+      const { manager, readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getStartupPending: () => startupPending,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["startup-sidecars"],
+        uptimeMs: 300_000,
+      });
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+      startupPending = false;
+      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -194,7 +219,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: startedAt,
-            lastEventAt: Date.now() - 31 * 60_000,
+            lastTransportActivityAt: Date.now() - 31 * 60_000,
           },
         },
       });
@@ -214,7 +239,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: startedAt,
-            lastEventAt: null,
+            lastTransportActivityAt: null,
           },
         },
       });
@@ -233,7 +258,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: Date.now() - 5 * 60_000,
-            lastEventAt: Date.now() - 1_000,
+            lastTransportActivityAt: Date.now() - 1_000,
           },
         },
         cacheTtlMs: 1_000,

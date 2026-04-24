@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import {
   detectChangedLanes,
@@ -8,9 +7,24 @@ import {
 } from "./changed-lanes.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
-export function createChangedCheckPlan(result) {
+export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "60000";
+const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
+
+export function createChangedCheckVitestEnv(baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]:
+      baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]?.trim() ||
+      CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+    [VITEST_NO_OUTPUT_RETRY_ENV_KEY]: baseEnv[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim() || "0",
+  };
+}
+
+export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
   const add = (name, args) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
@@ -33,6 +47,28 @@ export function createChangedCheckPlan(result) {
 
   const lanes = result.lanes;
   const runAll = lanes.all;
+
+  if (lanes.releaseMetadata) {
+    add("release metadata guard", [
+      "release-metadata:check",
+      "--",
+      ...(options.staged
+        ? ["--staged"]
+        : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
+    ]);
+    add("iOS version sync", ["ios:version:check"]);
+    add("config schema baseline", ["config:schema:check"]);
+    add("config docs baseline", ["config:docs:check"]);
+    add("root dependency ownership", ["deps:root-ownership:check"]);
+    return {
+      commands,
+      testTargets: [],
+      runChangedTestsBroad: false,
+      runFullTests: false,
+      runExtensionTests: false,
+      summary: "release metadata",
+    };
+  }
 
   if (runAll) {
     add("typecheck all", ["tsgo:all"]);
@@ -84,13 +120,17 @@ export function createChangedCheckPlan(result) {
   }
 
   const testPlan = resolveChangedTestTargetPlan(result.paths);
+  const runExtensionTests = result.extensionImpactFromCore;
+  const testTargets = runExtensionTests
+    ? testPlan.targets.filter((target) => target !== "extensions")
+    : testPlan.targets;
   const runChangedTestsBroad = testPlan.mode === "broad";
   return {
     commands,
-    testTargets: testPlan.targets,
+    testTargets,
     runChangedTestsBroad,
     runFullTests: false,
-    runExtensionTests: result.extensionImpactFromCore,
+    runExtensionTests,
     summary: Object.entries(lanes)
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)
@@ -99,7 +139,7 @@ export function createChangedCheckPlan(result) {
 }
 
 export async function runChangedCheck(result, options = {}) {
-  const plan = createChangedCheckPlan(result);
+  const plan = createChangedCheckPlan(result, options);
   printPlan(result, plan, options);
 
   if (options.dryRun) {
@@ -116,19 +156,23 @@ export async function runChangedCheck(result, options = {}) {
   }
 
   if (plan.runFullTests) {
-    const status = await runPnpm({ name: "tests all", args: ["test"] }, timings);
+    const status = await runPnpm(
+      { name: "tests all", args: ["test"], env: createChangedCheckVitestEnv() },
+      timings,
+    );
     if (status !== 0) {
       printSummary(timings, options);
       return status;
     }
   } else if (plan.runChangedTestsBroad) {
     const testArgs = options.explicitPaths
-      ? ["scripts/test-projects.mjs"]
-      : ["scripts/test-projects.mjs", "--changed", options.base ?? "origin/main"];
-    const status = await runNode(
+      ? ["test"]
+      : ["test", "--changed", options.base ?? "origin/main"];
+    const status = await runPnpm(
       {
         name: options.explicitPaths ? "tests all" : "tests changed broad",
         args: testArgs,
+        env: createChangedCheckVitestEnv(),
       },
       timings,
     );
@@ -137,10 +181,11 @@ export async function runChangedCheck(result, options = {}) {
       return status;
     }
   } else if (plan.testTargets.length > 0) {
-    const status = await runNode(
+    const status = await runPnpm(
       {
         name: "tests changed",
-        args: ["scripts/test-projects.mjs", ...plan.testTargets],
+        args: ["test", ...plan.testTargets],
+        env: createChangedCheckVitestEnv(),
       },
       timings,
     );
@@ -151,7 +196,14 @@ export async function runChangedCheck(result, options = {}) {
   }
 
   if (plan.runExtensionTests) {
-    const status = await runPnpm({ name: "tests extensions", args: ["test:extensions"] }, timings);
+    const status = await runPnpm(
+      {
+        name: "tests extensions",
+        args: ["test:extensions"],
+        env: createChangedCheckVitestEnv(),
+      },
+      timings,
+    );
     if (status !== 0) {
       printSummary(timings, options);
       return status;
@@ -187,38 +239,26 @@ async function runPnpm(command, timings) {
   return await runCommand({ ...command, bin: "pnpm" }, timings);
 }
 
-async function runNode(command, timings) {
-  return await runCommand({ ...command, bin: process.execPath }, timings);
-}
-
 async function runCommand(command, timings) {
   const startedAt = performance.now();
   console.error(`\n[check:changed] ${command.name}`);
-  const child = spawn(command.bin, command.args, {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  });
+  let status = 1;
+  try {
+    status = await runManagedCommand({
+      bin: command.bin,
+      args: command.args,
+      env: command.env,
+    });
+  } catch (error) {
+    console.error(error);
+  }
 
-  return await new Promise((resolve) => {
-    child.once("error", (error) => {
-      console.error(error);
-      timings.push({
-        name: command.name,
-        durationMs: performance.now() - startedAt,
-        status: 1,
-      });
-      resolve(1);
-    });
-    child.once("close", (status) => {
-      const resolvedStatus = status ?? 1;
-      timings.push({
-        name: command.name,
-        durationMs: performance.now() - startedAt,
-        status: resolvedStatus,
-      });
-      resolve(resolvedStatus);
-    });
+  timings.push({
+    name: command.name,
+    durationMs: performance.now() - startedAt,
+    status,
   });
+  return status;
 }
 
 function printSummary(timings, options) {

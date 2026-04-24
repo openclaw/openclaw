@@ -4,7 +4,7 @@ read_when:
   - Scheduling background jobs or wakeups
   - Wiring external triggers (webhooks, Gmail) into OpenClaw
   - Deciding between heartbeat and cron for scheduled tasks
-title: "Scheduled Tasks"
+title: "Scheduled tasks"
 ---
 
 # Scheduled Tasks (Cron)
@@ -25,6 +25,7 @@ openclaw cron add \
 
 # Check your jobs
 openclaw cron list
+openclaw cron show <job-id>
 
 # See run history
 openclaw cron runs --id <job-id>
@@ -89,6 +90,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
 
+Isolated cron runs also dispose any bundled MCP runtime instances created for the job through the shared runtime-cleanup path. This matches how main-session and custom-session MCP clients are torn down, so isolated cron jobs do not leak stdio child processes or long-lived MCP connections across runs.
+
 When isolated cron runs orchestrate subagents, delivery also prefers the final
 descendant output over stale parent interim text. If descendants are still
 running, OpenClaw suppresses that partial parent update instead of announcing it.
@@ -125,22 +128,19 @@ retries, cron aborts instead of looping forever.
 
 ## Delivery and output
 
-| Mode       | What happens                                             |
-| ---------- | -------------------------------------------------------- |
-| `announce` | Deliver summary to target channel (default for isolated) |
-| `webhook`  | POST finished event payload to a URL                     |
-| `none`     | Internal only, no delivery                               |
+| Mode       | What happens                                                        |
+| ---------- | ------------------------------------------------------------------- |
+| `announce` | Fallback-deliver final text to the target if the agent did not send |
+| `webhook`  | POST finished event payload to a URL                                |
+| `none`     | No runner fallback delivery                                         |
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
 
-For cron-owned isolated jobs, the runner owns the final delivery path. The
-agent is prompted to return a plain-text summary, and that summary is then sent
-through `announce`, `webhook`, or kept internal for `none`. `--no-deliver`
-does not hand delivery back to the agent; it keeps the run internal.
-
-If the original task explicitly says to message some external recipient, the
-agent should note who/where that message should go in its output instead of
-trying to send it directly.
+For isolated jobs, chat delivery is shared. If a chat route is available, the
+agent can use the `message` tool even when the job uses `--no-deliver`. If the
+agent sends to the configured/current target, OpenClaw skips the fallback
+announce. Otherwise `announce`, `webhook`, and `none` only control what the
+runner does with the final reply after the agent turn.
 
 Failure notifications follow a separate destination path:
 
@@ -235,7 +235,7 @@ Run an isolated agent turn:
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4"}'
 ```
 
 Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
@@ -318,6 +318,9 @@ gog gmail watch start \
 ```bash
 # List all jobs
 openclaw cron list
+
+# Show one job, including resolved delivery route
+openclaw cron show <jobId>
 
 # Edit a job
 openclaw cron edit <jobId> --message "Updated prompt" --model "opus"
@@ -406,15 +409,15 @@ openclaw doctor
 
 ### Cron fired but no delivery
 
-- Delivery mode is `none` means no external message is expected.
+- Delivery mode `none` means no runner fallback send is expected. The agent can
+  still send directly with the `message` tool when a chat route is available.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
 - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
   OpenClaw suppresses direct outbound delivery and also suppresses the fallback
   queued summary path, so nothing is posted back to chat.
-- For cron-owned isolated jobs, do not expect the agent to use the message tool
-  as a fallback. The runner owns final delivery; `--no-deliver` keeps it
-  internal instead of allowing a direct send.
+- If the agent should message the user itself, check that the job has a usable
+  route (`channel: "last"` with a previous chat, or an explicit channel/target).
 
 ### Timezone gotchas
 

@@ -3,7 +3,7 @@ summary: "Voice Call plugin: outbound + inbound calls via Twilio/Telnyx/Plivo (p
 read_when:
   - You want to place an outbound voice call from OpenClaw
   - You are configuring or developing the voice-call plugin
-title: "Voice Call Plugin"
+title: "Voice call plugin"
 ---
 
 # Voice Call (plugin)
@@ -155,8 +155,9 @@ Current runtime behavior:
 
 - `streaming.provider` is optional. If unset, Voice Call uses the first
   registered realtime transcription provider.
-- Today the bundled provider is OpenAI, registered by the bundled `openai`
-  plugin.
+- Bundled realtime transcription providers include Deepgram (`deepgram`),
+  ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI
+  (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
 - If `streaming.provider` points at an unregistered provider, or no realtime
   transcription provider is registered at all, Voice Call logs a warning and
@@ -168,6 +169,15 @@ OpenAI streaming transcription defaults:
 - model: `gpt-4o-transcribe`
 - `silenceDurationMs`: `800`
 - `vadThreshold`: `0.5`
+
+xAI streaming transcription defaults:
+
+- API key: `streaming.providers.xai.apiKey` or `XAI_API_KEY`
+- endpoint: `wss://api.x.ai/v1/stt`
+- `encoding`: `mulaw`
+- `sampleRate`: `8000`
+- `endpointingMs`: `800`
+- `interimResults`: `true`
 
 Example:
 
@@ -187,6 +197,33 @@ Example:
                 model: "gpt-4o-transcribe",
                 silenceDurationMs: 800,
                 vadThreshold: 0.5,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Use xAI instead:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          streaming: {
+            enabled: true,
+            provider: "xai",
+            streamPath: "/voice/stream",
+            providers: {
+              xai: {
+                apiKey: "${XAI_API_KEY}", // optional if XAI_API_KEY is set
+                endpointingMs: 800,
+                language: "en",
               },
             },
           },
@@ -464,3 +501,9 @@ This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
 - `voicecall.speak` (`callId`, `message`)
 - `voicecall.end` (`callId`)
 - `voicecall.status` (`callId`)
+
+## Related
+
+- [Text-to-speech](/tools/tts)
+- [Talk mode](/nodes/talk)
+- [Voice wake](/nodes/voicewake)

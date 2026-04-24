@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
 import {
   buildAllPluginInspectReports,
@@ -16,6 +17,7 @@ import {
   buildPluginSnapshotReport,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
+import type { PluginLogger } from "../plugins/types.js";
 import {
   resolveUninstallChannelConfigKeys,
   resolveUninstallDirectoryTarget,
@@ -64,6 +66,13 @@ export type PluginUninstallOptions = {
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
+};
+
+const quietPluginJsonLogger: PluginLogger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
 };
 
 function formatInspectSection(title: string, lines: string[]): string[] {
@@ -144,7 +153,9 @@ export function registerPluginsCli(program: Command) {
     .option("--enabled", "Only show enabled plugins", false)
     .option("--verbose", "Show detailed entries", false)
     .action((opts: PluginsListOptions) => {
-      const report = buildPluginSnapshotReport();
+      const report = buildPluginSnapshotReport(
+        opts.json ? { logger: quietPluginJsonLogger } : undefined,
+      );
       const list = opts.enabled
         ? report.plugins.filter((p) => p.status === "loaded")
         : report.plugins;
@@ -246,7 +257,10 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .action((id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
-      const report = buildPluginDiagnosticsReport({ config: cfg });
+      const report = buildPluginDiagnosticsReport({
+        config: cfg,
+        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+      });
       if (opts.all) {
         if (id) {
           defaultRuntime.error("Pass either a plugin id or --all, not both.");
@@ -254,6 +268,7 @@ export function registerPluginsCli(program: Command) {
         }
         const inspectAll = buildAllPluginInspectReports({
           config: cfg,
+          ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
           report,
         });
         const inspectAllWithInstall = inspectAll.map((inspect) => ({
@@ -322,6 +337,7 @@ export function registerPluginsCli(program: Command) {
       const inspect = buildPluginInspectReport({
         id,
         config: cfg,
+        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
         report,
       });
       if (!inspect) {
@@ -564,7 +580,7 @@ export function registerPluginsCli(program: Command) {
         preview.push("load path");
       }
       if (cfg.plugins?.slots?.memory === pluginId) {
-        preview.push(`memory slot (will reset to "memory-core")`);
+        preview.push(`memory slot (will reset to "${defaultSlotIdForKey("memory")}")`);
       }
       const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
       const channels = cfg.channels as Record<string, unknown> | undefined;

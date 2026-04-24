@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -48,7 +49,7 @@ describe("handleControlUiHttpRequest", () => {
     expect(params.end).toHaveBeenCalledWith("Not Found");
   }
 
-  function runControlUiRequest(params: {
+  async function runControlUiRequest(params: {
     url: string;
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
@@ -56,7 +57,7 @@ describe("handleControlUiHttpRequest", () => {
     rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
-    const handled = handleControlUiHttpRequest(
+    const handled = await handleControlUiHttpRequest(
       { url: params.url, method: params.method } as IncomingMessage,
       res,
       {
@@ -67,18 +68,56 @@ describe("handleControlUiHttpRequest", () => {
     return { res, end, handled };
   }
 
-  function runAvatarRequest(params: {
+  async function runBootstrapConfigRequest(params: {
+    rootPath: string;
+    basePath?: string;
+    auth?: ResolvedGatewayAuth;
+    headers?: IncomingMessage["headers"];
+  }) {
+    const { res, end } = makeMockHttpResponse();
+    const url = params.basePath
+      ? `${params.basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
+      : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
+    const handled = await handleControlUiHttpRequest(
+      {
+        url,
+        method: "GET",
+        headers: params.headers ?? {},
+        socket: { remoteAddress: "127.0.0.1" },
+      } as IncomingMessage,
+      res,
+      {
+        ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.auth ? { auth: params.auth } : {}),
+        root: { kind: "resolved", path: params.rootPath },
+      },
+    );
+    return { res, end, handled };
+  }
+
+  async function runAvatarRequest(params: {
     url: string;
     method: "GET" | "HEAD";
     resolveAvatar: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
     basePath?: string;
+    auth?: ResolvedGatewayAuth;
+    headers?: IncomingMessage["headers"];
+    trustedProxies?: string[];
+    remoteAddress?: string;
   }) {
     const { res, end } = makeMockHttpResponse();
-    const handled = handleControlUiAvatarRequest(
-      { url: params.url, method: params.method } as IncomingMessage,
+    const handled = await handleControlUiAvatarRequest(
+      {
+        url: params.url,
+        method: params.method,
+        headers: params.headers ?? {},
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
+      } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.auth ? { auth: params.auth } : {}),
+        ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
         resolveAvatar: params.resolveAvatar,
       },
     );
@@ -148,6 +187,24 @@ describe("handleControlUiHttpRequest", () => {
     });
   }
 
+  async function runTrustedProxyAvatarRequest(params: {
+    agentId?: string;
+    meta?: boolean;
+    headers?: IncomingMessage["headers"];
+    resolveAvatar?: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
+  }) {
+    return await runAvatarRequest({
+      url: `/avatar/${params.agentId ?? "main"}${params.meta ? "?meta=1" : ""}`,
+      method: "GET",
+      auth: createTrustedProxyAuth(),
+      trustedProxies: ["10.0.0.1"],
+      remoteAddress: "10.0.0.1",
+      headers: createTrustedProxyHeaders(params.headers),
+      resolveAvatar:
+        params.resolveAvatar ?? (() => ({ kind: "remote", url: "https://example.com/avatar.png" })),
+    });
+  }
+
   function expectMissingOperatorReadResponse(params: {
     handled: boolean;
     res: ReturnType<typeof makeMockHttpResponse>["res"];
@@ -208,11 +265,38 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
+  async function withPairedOperatorDeviceToken<T>(params: { fn: (token: string) => Promise<T> }) {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
+    vi.stubEnv("OPENCLAW_HOME", tempHome);
+    try {
+      const deviceId = "control-ui-device";
+      const requested = await requestDevicePairing({
+        deviceId,
+        publicKey: "test-public-key",
+        role: "operator",
+        scopes: ["operator.read"],
+        clientId: "openclaw-control-ui",
+        clientMode: "webchat",
+      });
+      const approved = await approveDevicePairing(requested.request.requestId, {
+        callerScopes: ["operator.read"],
+      });
+      expect(approved?.status).toBe("approved");
+      const operatorToken =
+        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      expect(typeof operatorToken).toBe("string");
+      return await params.fn(operatorToken ?? "");
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  }
+
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, setHeader } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
           {
@@ -314,6 +398,51 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("accepts paired operator device tokens on assistant media requests", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-device-token-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+              method: "GET",
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: {
+                authorization: `Bearer ${operatorToken}`,
+              },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
+      },
+    });
+  });
+
+  it("accepts paired operator device tokens in assistant media query auth", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-device-token-query-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=${encodeURIComponent(operatorToken)}`,
+              method: "GET",
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
+      },
+    });
+  });
+
   it("rejects trusted-proxy assistant media requests from disallowed browser origins", async () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-proxy-",
@@ -376,7 +505,7 @@ describe("handleControlUiHttpRequest", () => {
       indexHtml: html,
       fn: async (tmp) => {
         const { res, setHeader } = makeMockHttpResponse();
-        handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
           root: { kind: "resolved", path: tmp },
         });
         const cspCalls = setHeader.mock.calls.filter(
@@ -395,7 +524,7 @@ describe("handleControlUiHttpRequest", () => {
       indexHtml: html,
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
           {
@@ -416,7 +545,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
           res,
           {
@@ -438,11 +567,65 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("rejects bootstrap config requests without a valid auth token when auth is enabled", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, handled, end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+      },
+    });
+  });
+
+  it("serves bootstrap config JSON when auth is enabled and the token is valid", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, handled, end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer test-token",
+          },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
+  it("serves bootstrap config JSON when paired device-token auth is valid", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            const { res, handled, end } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: {
+                authorization: `Bearer ${operatorToken}`,
+              },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            const parsed = parseBootstrapPayload(end);
+            expect(parsed.assistantAgentId).toBe("main");
+          },
+        });
+      },
+    });
+  });
+
   it("serves bootstrap config JSON under basePath", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, method: "GET" } as IncomingMessage,
           res,
           {
@@ -471,7 +654,7 @@ describe("handleControlUiHttpRequest", () => {
       const avatarPath = path.join(tmp, "main.png");
       await fs.writeFile(avatarPath, "avatar-bytes\n");
 
-      const { res, end, handled } = runAvatarRequest({
+      const { res, end, handled } = await runAvatarRequest({
         url: "/avatar/main",
         method: "GET",
         resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
@@ -494,7 +677,7 @@ describe("handleControlUiHttpRequest", () => {
       const linkPath = path.join(tmp, "avatar-link.png");
       await fs.symlink(outsideFile, linkPath);
 
-      const { res, end, handled } = runAvatarRequest({
+      const { res, end, handled } = await runAvatarRequest({
         url: "/avatar/main",
         method: "GET",
         resolveAvatar: () => ({ kind: "local", filePath: linkPath }),
@@ -505,6 +688,99 @@ describe("handleControlUiHttpRequest", () => {
       await fs.rm(tmp, { recursive: true, force: true });
       await fs.rm(outside, { recursive: true, force: true });
     }
+  });
+
+  it("serves local avatar bytes when auth is enabled and the token is valid", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-auth-"));
+    try {
+      const avatarPath = path.join(tmp, "main.png");
+      await fs.writeFile(avatarPath, "avatar-bytes\n");
+
+      const { res, handled } = await runAvatarRequest({
+        url: "/avatar/main",
+        method: "GET",
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+        headers: {
+          authorization: "Bearer test-token",
+        },
+        resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
+      });
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("serves local avatar bytes when paired device-token auth is valid", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-device-token-"));
+        try {
+          const avatarPath = path.join(tmp, "main.png");
+          await fs.writeFile(avatarPath, "avatar-bytes\n");
+
+          const { res, handled, end } = await runAvatarRequest({
+            url: "/avatar/main",
+            method: "GET",
+            auth: { mode: "token", token: "shared-token", allowTailscale: false },
+            headers: {
+              authorization: `Bearer ${operatorToken}`,
+            },
+            resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+        } finally {
+          await fs.rm(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("returns avatar metadata when auth is enabled and the token is valid", async () => {
+    const { res, end, handled } = await runAvatarRequest({
+      url: "/avatar/main?meta=1",
+      method: "GET",
+      auth: { mode: "token", token: "test-token", allowTailscale: false },
+      headers: {
+        authorization: "Bearer test-token",
+      },
+      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+      avatarUrl: "https://example.com/avatar.png",
+    });
+  });
+
+  it("rejects avatar requests without a valid auth token when auth is enabled", async () => {
+    const { res, handled, end } = await runAvatarRequest({
+      url: "/avatar/main",
+      method: "GET",
+      auth: { mode: "token", token: "test-token", allowTailscale: false },
+      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(401);
+    expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+  });
+
+  it("rejects trusted-proxy avatar metadata requests without operator.read scope", async () => {
+    const { res, handled, end } = await runTrustedProxyAvatarRequest({
+      meta: true,
+      headers: {
+        "x-openclaw-scopes": "",
+      },
+    });
+
+    expectMissingOperatorReadResponse({ handled, res, end });
   });
 
   it("rejects symlinked assets that resolve outside control-ui root", async () => {
@@ -519,7 +795,7 @@ describe("handleControlUiHttpRequest", () => {
           await fs.symlink(outsideFile, path.join(assetsDir, "leak.txt"));
 
           const { res, end } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
+          const handled = await handleControlUiHttpRequest(
             { url: "/assets/leak.txt", method: "GET" } as IncomingMessage,
             res,
             {
@@ -540,7 +816,7 @@ describe("handleControlUiHttpRequest", () => {
         const { assetsDir, filePath } = await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
         await fs.symlink(filePath, path.join(assetsDir, "linked.txt"));
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/assets/linked.txt",
           method: "GET",
           rootPath: tmp,
@@ -558,7 +834,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/assets/actual.txt",
           method: "HEAD",
           rootPath: tmp,
@@ -581,7 +857,7 @@ describe("handleControlUiHttpRequest", () => {
           await fs.rm(path.join(tmp, "index.html"));
           await fs.symlink(outsideIndex, path.join(tmp, "index.html"));
 
-          const { res, end, handled } = runControlUiRequest({
+          const { res, end, handled } = await runControlUiRequest({
             url: "/app/route",
             method: "GET",
             rootPath: tmp,
@@ -604,7 +880,7 @@ describe("handleControlUiHttpRequest", () => {
           await fs.rm(path.join(tmp, "index.html"));
           await fs.link(outsideIndex, path.join(tmp, "index.html"));
 
-          const { res, end, handled } = runControlUiRequest({
+          const { res, end, handled } = await runControlUiRequest({
             url: "/",
             method: "GET",
             rootPath: tmp,
@@ -622,7 +898,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         await createHardlinkedAssetFile(tmp);
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/assets/app.hl.js",
           method: "GET",
           rootPath: tmp,
@@ -640,7 +916,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         await createHardlinkedAssetFile(tmp);
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/assets/app.hl.js",
           method: "GET",
           rootPath: tmp,
@@ -659,7 +935,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         for (const webhookPath of ["/bluebubbles-webhook", "/custom-webhook", "/callback"]) {
           const { res } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
+          const handled = await handleControlUiHttpRequest(
             { url: webhookPath, method: "POST" } as IncomingMessage,
             res,
             { root: { kind: "resolved", path: tmp } },
@@ -676,7 +952,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
+        const handled = await handleControlUiHttpRequest(
           { url: "/bluebubbles-webhook", method: "POST" } as IncomingMessage,
           res,
           { basePath: "/openclaw", root: { kind: "resolved", path: tmp } },
@@ -690,7 +966,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         for (const apiPath of ["/api", "/api/sessions", "/api/channels/nostr"]) {
-          const { handled } = runControlUiRequest({
+          const { handled } = await runControlUiRequest({
             url: apiPath,
             method: "GET",
             rootPath: tmp,
@@ -705,7 +981,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         for (const pluginPath of ["/plugins", "/plugins/diffs/view/abc/def"]) {
-          const { handled } = runControlUiRequest({
+          const { handled } = await runControlUiRequest({
             url: pluginPath,
             method: "GET",
             rootPath: tmp,
@@ -719,7 +995,7 @@ describe("handleControlUiHttpRequest", () => {
   it("falls through POST requests when basePath is empty", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { handled, end } = runControlUiRequest({
+        const { handled, end } = await runControlUiRequest({
           url: "/webhook/bluebubbles",
           method: "POST",
           rootPath: tmp,
@@ -734,7 +1010,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         for (const route of ["/openclaw", "/openclaw/", "/openclaw/some-page"]) {
-          const { handled, end } = runControlUiRequest({
+          const { handled, end } = await runControlUiRequest({
             url: route,
             method: "POST",
             rootPath: tmp,
@@ -756,7 +1032,7 @@ describe("handleControlUiHttpRequest", () => {
 
         const secretPathUrl = secretPath.split(path.sep).join("/");
         const absolutePathUrl = secretPathUrl.startsWith("/") ? secretPathUrl : `/${secretPathUrl}`;
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: `/openclaw/${absolutePathUrl}`,
           method: "GET",
           rootPath: root,
@@ -785,7 +1061,7 @@ describe("handleControlUiHttpRequest", () => {
           throw error;
         }
 
-        const { res, end, handled } = runControlUiRequest({
+        const { res, end, handled } = await runControlUiRequest({
           url: "/openclaw/assets/leak.txt",
           method: "GET",
           rootPath: root,

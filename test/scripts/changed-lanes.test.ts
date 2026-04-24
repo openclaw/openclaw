@@ -3,21 +3,41 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectChangedLanes } from "../../scripts/changed-lanes.mjs";
-import { createChangedCheckPlan } from "../../scripts/check-changed.mjs";
+import {
+  CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  createChangedCheckPlan,
+  createChangedCheckVitestEnv,
+} from "../../scripts/check-changed.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
+const nestedGitEnvKeys = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_QUARANTINE_PATH",
+  "GIT_WORK_TREE",
+] as const;
+
+function createNestedGitEnv(): NodeJS.ProcessEnv {
+  const env = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  for (const key of nestedGitEnvKeys) {
+    delete env[key];
+  }
+  return env;
+}
 
 const git = (cwd: string, args: string[]) =>
   execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    },
+    env: createNestedGitEnv(),
   }).trim();
 
 afterEach(() => {
@@ -50,11 +70,7 @@ describe("scripts/changed-lanes", () => {
       {
         cwd: dir,
         encoding: "utf8",
-        env: {
-          ...process.env,
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_TERMINAL_PROMPT: "0",
-        },
+        env: createNestedGitEnv(),
       },
     );
 
@@ -149,15 +165,119 @@ describe("scripts/changed-lanes", () => {
       all: false,
     });
     expect(plan.runExtensionTests).toBe(true);
+    expect(plan.testTargets).toEqual(["src/plugin-sdk/core.ts"]);
   });
 
   it("fails safe for root config changes", () => {
-    const result = detectChangedLanes(["package.json"]);
+    const result = detectChangedLanes(["pnpm-lock.yaml"]);
     const plan = createChangedCheckPlan(result);
 
     expect(result.lanes.all).toBe(true);
     expect(plan.runFullTests).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:all");
+  });
+
+  it("routes gitignore changes to tooling instead of all lanes", () => {
+    const result = detectChangedLanes([".gitignore"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes).toMatchObject({
+      tooling: true,
+      all: false,
+    });
+    expect(plan.runFullTests).toBe(false);
+    expect(plan.runChangedTestsBroad).toBe(false);
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:scripts");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("keeps release metadata commits off the full changed gate", () => {
+    const result = detectChangedLanes([
+      "CHANGELOG.md",
+      "apps/android/app/build.gradle.kts",
+      "apps/ios/CHANGELOG.md",
+      "apps/ios/Config/Version.xcconfig",
+      "apps/ios/fastlane/metadata/en-US/release_notes.txt",
+      "apps/ios/version.json",
+      "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      "docs/.generated/config-baseline.sha256",
+      "package.json",
+      "src/config/schema.base.generated.ts",
+    ]);
+    const plan = createChangedCheckPlan(result, { staged: true });
+
+    expect(result.lanes).toMatchObject({
+      releaseMetadata: true,
+      all: false,
+      core: false,
+      apps: false,
+    });
+    expect(plan.runFullTests).toBe(false);
+    expect(plan.commands.map((command) => command.args[0])).toEqual([
+      "check:no-conflict-markers",
+      "release-metadata:check",
+      "ios:version:check",
+      "config:schema:check",
+      "config:docs:check",
+      "deps:root-ownership:check",
+    ]);
+  });
+
+  it("guards release metadata package changes to the top-level version field", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-release-metadata-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify({ name: "fixture", version: "2026.4.20", dependencies: { leftpad: "1.0.0" } }, null, 2)}\n`,
+      "utf8",
+    );
+    git(dir, ["add", "package.json"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify({ name: "fixture", version: "2026.4.21", dependencies: { leftpad: "1.0.0" } }, null, 2)}\n`,
+      "utf8",
+    );
+    git(dir, ["add", "package.json"]);
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
+        {
+          cwd: dir,
+          env: createNestedGitEnv(),
+          stdio: "pipe",
+        },
+      ),
+    ).not.toThrow();
+
+    writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify({ name: "fixture", version: "2026.4.21", dependencies: { leftpad: "1.0.1" } }, null, 2)}\n`,
+      "utf8",
+    );
+    git(dir, ["add", "package.json"]);
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
+        {
+          cwd: dir,
+          env: createNestedGitEnv(),
+          stdio: "pipe",
+        },
+      ),
+    ).toThrow();
   });
 
   it("routes root test/support changes to the tooling test lane instead of all lanes", () => {
@@ -190,6 +310,17 @@ describe("scripts/changed-lanes", () => {
     expect(plan.runFullTests).toBe(false);
   });
 
+  it("does not route generated A2UI artifacts as direct Vitest targets", () => {
+    const result = detectChangedLanes([
+      "src/canvas-host/a2ui/.bundle.hash",
+      "test/scripts/bundle-a2ui.test.ts",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.testTargets).toEqual(["test/scripts/bundle-a2ui.test.ts"]);
+    expect(plan.runChangedTestsBroad).toBe(false);
+  });
+
   it("routes changed extension Vitest configs to only their owning shard", () => {
     const result = detectChangedLanes(["test/vitest/vitest.extension-discord.config.ts"]);
     const plan = createChangedCheckPlan(result);
@@ -211,6 +342,7 @@ describe("scripts/changed-lanes", () => {
       apps: false,
       docs: false,
       tooling: false,
+      releaseMetadata: false,
       all: false,
     });
     expect(plan.commands).toEqual([
@@ -230,5 +362,23 @@ describe("scripts/changed-lanes", () => {
     ]);
     expect(plan.runChangedTestsBroad).toBe(false);
     expect(plan.runFullTests).toBe(false);
+  });
+
+  it("sets a fail-fast Vitest watchdog for changed checks", () => {
+    expect(createChangedCheckVitestEnv({ PATH: "/usr/bin" })).toMatchObject({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+      OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
+    });
+
+    expect(
+      createChangedCheckVitestEnv({
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "45000",
+        OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1",
+      }),
+    ).toMatchObject({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "45000",
+      OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1",
+    });
   });
 });

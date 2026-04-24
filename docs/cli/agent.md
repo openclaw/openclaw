@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw agent` (send one agent turn via the Gateway)"
 read_when:
   - You want to run one agent turn from scripts (optionally deliver reply)
-title: "agent"
+title: "Agent"
 ---
 
 # `openclaw agent`
@@ -26,7 +26,7 @@ Related:
 - `-t, --to <dest>`: recipient used to derive the session key
 - `--session-id <id>`: explicit session id
 - `--agent <id>`: agent id; overrides routing bindings
-- `--thinking <off|minimal|low|medium|high|xhigh>`: agent thinking level
+- `--thinking <level>`: agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider-supported custom levels such as `xhigh`, `adaptive`, or `max`)
 - `--verbose <on|off>`: persist verbose level for the session
 - `--channel <channel>`: delivery channel; omit to use the main session channel
 - `--reply-to <target>`: delivery target override

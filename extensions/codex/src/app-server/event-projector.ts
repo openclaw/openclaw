@@ -1,13 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   formatErrorMessage,
   normalizeUsage,
-  type NormalizedUsage,
+  runAgentHarnessAfterCompactionHook,
+  runAgentHarnessBeforeCompactionHook,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type MessagingToolSend,
-} from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -67,7 +69,7 @@ export class CodexAppServerEventProjector {
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private aborted = false;
-  private tokenUsage: NormalizedUsage | undefined;
+  private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
 
@@ -98,24 +100,23 @@ export class CodexAppServerEventProjector {
         this.handleTurnPlanUpdated(params);
         break;
       case "item/started":
-        this.handleItemStarted(params);
+        await this.handleItemStarted(params);
         break;
       case "item/completed":
-        this.handleItemCompleted(params);
+        await this.handleItemCompleted(params);
         break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
-        this.guardianReviewCount += 1;
-        this.params.onAgentEvent?.({
-          stream: "codex_app_server.guardian",
-          data: { method: notification.method },
-        });
+        this.handleGuardianReviewNotification(notification.method, params);
         break;
       case "thread/tokenUsage/updated":
         this.handleTokenUsage(params);
         break;
       case "turn/completed":
         await this.handleTurnCompleted(params);
+        break;
+      case "rawResponseItem/completed":
+        this.handleRawResponseItemCompleted(params);
         break;
       case "error":
         this.promptError = readString(params, "message") ?? "codex app-server error";
@@ -271,7 +272,7 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private handleItemStarted(params: JsonObject): void {
+  private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (itemId) {
@@ -279,7 +280,21 @@ export class CodexAppServerEventProjector {
     }
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.add(itemId);
-      this.params.onAgentEvent?.({
+      await runAgentHarnessBeforeCompactionHook({
+        sessionFile: this.params.sessionFile,
+        messages: this.readMirroredSessionMessages(),
+        ctx: {
+          runId: this.params.runId,
+          agentId: this.params.agentId,
+          sessionKey: this.params.sessionKey,
+          sessionId: this.params.sessionId,
+          workspaceDir: this.params.workspaceDir,
+          messageProvider: this.params.messageProvider ?? undefined,
+          trigger: this.params.trigger,
+          channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
+        },
+      });
+      this.emitAgentEvent({
         stream: "compaction",
         data: {
           phase: "start",
@@ -291,13 +306,13 @@ export class CodexAppServerEventProjector {
       });
     }
     this.emitStandardItemEvent({ phase: "start", item });
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "codex_app_server.item",
       data: { phase: "started", itemId, type: item?.type },
     });
   }
 
-  private handleItemCompleted(params: JsonObject): void {
+  private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (itemId) {
@@ -315,7 +330,22 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
-      this.params.onAgentEvent?.({
+      await runAgentHarnessAfterCompactionHook({
+        sessionFile: this.params.sessionFile,
+        messages: this.readMirroredSessionMessages(),
+        compactedCount: -1,
+        ctx: {
+          runId: this.params.runId,
+          agentId: this.params.agentId,
+          sessionKey: this.params.sessionKey,
+          sessionId: this.params.sessionId,
+          workspaceDir: this.params.workspaceDir,
+          messageProvider: this.params.messageProvider ?? undefined,
+          trigger: this.params.trigger,
+          channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
+        },
+      });
+      this.emitAgentEvent({
         stream: "compaction",
         data: {
           phase: "end",
@@ -328,7 +358,7 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "codex_app_server.item",
       data: { phase: "completed", itemId, type: item?.type },
     });
@@ -346,6 +376,27 @@ export class CodexAppServerEventProjector {
     if (usage) {
       this.tokenUsage = usage;
     }
+  }
+
+  private handleGuardianReviewNotification(method: string, params: JsonObject): void {
+    this.guardianReviewCount += 1;
+    const review = isJsonObject(params.review) ? params.review : undefined;
+    const action = isJsonObject(params.action) ? params.action : undefined;
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: {
+        method,
+        phase: method.endsWith("/started") ? "started" : "completed",
+        reviewId: readString(params, "reviewId"),
+        targetItemId: readNullableString(params, "targetItemId"),
+        decisionSource: readString(params, "decisionSource"),
+        status: review ? readString(review, "status") : undefined,
+        riskLevel: review ? readString(review, "riskLevel") : undefined,
+        userAuthorization: review ? readString(review, "userAuthorization") : undefined,
+        rationale: review ? readNullableString(review, "rationale") : undefined,
+        actionType: action ? readString(action, "type") : undefined,
+      },
+    });
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
@@ -376,6 +427,20 @@ export class CodexAppServerEventProjector {
     await this.maybeEndReasoning();
   }
 
+  private handleRawResponseItemCompleted(params: JsonObject): void {
+    const item = isJsonObject(params.item) ? params.item : undefined;
+    if (!item || readString(item, "role") !== "assistant") {
+      return;
+    }
+    const text = extractRawAssistantText(item);
+    if (!text) {
+      return;
+    }
+    const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    this.rememberAssistantItem(itemId);
+    this.assistantTextByItem.set(itemId, text);
+  }
+
   private async maybeEndReasoning(): Promise<void> {
     if (!this.reasoningStarted || this.reasoningEnded) {
       return;
@@ -388,7 +453,7 @@ export class CodexAppServerEventProjector {
     if (!params.explanation && (!params.steps || params.steps.length === 0)) {
       return;
     }
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "plan",
       data: {
         phase: "update",
@@ -412,7 +477,7 @@ export class CodexAppServerEventProjector {
     if (!kind) {
       return;
     }
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "item",
       data: {
         itemId: item.id,
@@ -440,6 +505,16 @@ export class CodexAppServerEventProjector {
     });
   }
 
+  private emitAgentEvent(
+    event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
+  ): void {
+    try {
+      this.params.onAgentEvent?.(event);
+    } catch {
+      // Downstream event consumers must not corrupt the canonical Codex turn projection.
+    }
+  }
+
   private collectAssistantTexts(): string[] {
     const finalText = this.resolveFinalAssistantText();
     return finalText ? [finalText] : [];
@@ -464,6 +539,14 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.assistantItemOrder.push(itemId);
+  }
+
+  private readMirroredSessionMessages(): AgentMessage[] {
+    try {
+      return SessionManager.open(this.params.sessionFile).buildSessionContext().messages;
+    } catch {
+      return [];
+    }
   }
 
   private createAssistantMessage(text: string): AssistantMessage {
@@ -510,9 +593,18 @@ export class CodexAppServerEventProjector {
 
   private isNotificationForTurn(params: JsonObject): boolean {
     const threadId = readString(params, "threadId");
-    const turnId = readString(params, "turnId");
-    return (!threadId || threadId === this.threadId) && (!turnId || turnId === this.turnId);
+    const turnId = readNotificationTurnId(params);
+    return threadId === this.threadId && turnId === this.turnId;
   }
+}
+
+function readNotificationTurnId(record: JsonObject): string | undefined {
+  return readString(record, "turnId") ?? readNestedTurnId(record);
+}
+
+function readNestedTurnId(record: JsonObject): string | undefined {
+  const turn = record.turn;
+  return isJsonObject(turn) ? readString(turn, "id") : undefined;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
@@ -553,7 +645,7 @@ function readNumberAlias(record: JsonObject, keys: readonly string[]): number | 
   return undefined;
 }
 
-function normalizeCodexTokenUsage(record: JsonObject): NormalizedUsage | undefined {
+function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
   return normalizeUsage({
     input: readNumberAlias(record, ["inputTokens", "input_tokens", "input", "promptTokens"]),
     output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),
@@ -584,6 +676,24 @@ function splitPlanText(text: string): string[] {
 
 function collectTextValues(map: Map<string, string>): string[] {
   return [...map.values()].filter((text) => text.trim().length > 0);
+}
+
+function extractRawAssistantText(item: JsonObject): string | undefined {
+  const content = Array.isArray(item.content) ? item.content : [];
+  const text = content
+    .flatMap((entry) => {
+      if (!isJsonObject(entry)) {
+        return [];
+      }
+      const type = readString(entry, "type");
+      if (type !== "output_text" && type !== "text") {
+        return [];
+      }
+      const value = readString(entry, "text");
+      return value ? [value] : [];
+    })
+    .join("");
+  return text.trim() || undefined;
 }
 
 function itemKind(

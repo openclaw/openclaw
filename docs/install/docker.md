@@ -6,8 +6,6 @@ read_when:
 title: "Docker"
 ---
 
-# Docker (optional)
-
 Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
 ## Is Docker right for me?
@@ -124,15 +122,15 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                       | Purpose                                                          |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                   |
-| `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)        |
-| `OPENCLAW_EXTENSIONS`          | Pre-install extension deps at build time (space-separated names) |
-| `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
-| `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
-| `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
-| `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
+| Variable                       | Purpose                                                         |
+| ------------------------------ | --------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                  |
+| `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)       |
+| `OPENCLAW_EXTENSIONS`          | Pre-install plugin deps at build time (space-separated names)   |
+| `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`) |
+| `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                   |
+| `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
+| `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                     |
 
 ### Health checks
 

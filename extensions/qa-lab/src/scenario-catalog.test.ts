@@ -123,6 +123,83 @@ describe("qa scenario catalog", () => {
     );
   });
 
+  it("includes the GPT-5.4 thinking visibility switch scenario", () => {
+    const scenario = readQaScenarioById("gpt54-thinking-visibility-switch");
+    const config = readQaScenarioExecutionConfig("gpt54-thinking-visibility-switch") as
+      | {
+          requiredLiveProvider?: string;
+          requiredLiveModel?: string;
+          offDirective?: string;
+          maxDirective?: string;
+          reasoningDirective?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt54-thinking-visibility-switch.md");
+    expect(config?.requiredLiveProvider).toBe("openai");
+    expect(config?.requiredLiveModel).toBe("gpt-5.5");
+    expect(config?.offDirective).toBe("/think off");
+    expect(config?.maxDirective).toBe("/think max");
+    expect(config?.reasoningDirective).toBe("/reasoning on");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "enables reasoning display and disables thinking",
+      "switches to max thinking",
+      "verifies max thinking emits visible reasoning",
+      "verifies max thinking completes the answer",
+    ]);
+  });
+
+  it("includes the OpenAI native web search live scenario", () => {
+    const scenario = readQaScenarioById("openai-native-web-search-live");
+    const config = readQaScenarioExecutionConfig("openai-native-web-search-live") as
+      | {
+          requiredProvider?: string;
+          requiredModel?: string;
+          expectedMarker?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.md");
+    expect(scenario.gatewayConfigPatch?.tools).toEqual({
+      web: {
+        search: {
+          enabled: true,
+          provider: null,
+        },
+      },
+    });
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "confirms live OpenAI GPT-5.5 web search auto mode",
+      "searches official OpenAI News through the live model",
+    ]);
+  });
+
+  it("includes the thinking slash model remap scenario", () => {
+    const scenario = readQaScenarioById("thinking-slash-model-remap");
+    const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as
+      | {
+          requiredProviderMode?: string;
+          anthropicModelRef?: string;
+          openAiXhighModelRef?: string;
+          noXhighModelRef?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/thinking-slash-model-remap.md");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.5");
+    expect(config?.noXhighModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "selects Anthropic and verifies adaptive options",
+      "maps adaptive to medium when switching to OpenAI",
+      "maps xhigh to high on a model without xhigh",
+    ]);
+  });
+
   it("includes the seeded mock-only broken-turn scenarios in the markdown pack", () => {
     const scenarioIds = [
       "reasoning-only-recovery-replay-safe-read",

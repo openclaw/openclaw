@@ -12,6 +12,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../subagent-spawn.js", () => ({
+  SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
@@ -51,7 +52,7 @@ describe("sessions_spawn tool", () => {
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -209,7 +210,7 @@ describe("sessions_spawn tool", () => {
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -245,6 +246,28 @@ describe("sessions_spawn tool", () => {
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards model override to ACP runtime spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-2-model", {
+      runtime: "acp",
+      task: "investigate the failing CI run",
+      agentId: "codex",
+      model: "github-copilot/claude-sonnet-4.6",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "investigate the failing CI run",
+        agentId: "codex",
+        model: "github-copilot/claude-sonnet-4.6",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("adds requested role to forwarded ACP failures", async () => {
@@ -346,7 +369,7 @@ describe("sessions_spawn tool", () => {
   it("rejects attachments for ACP runtime", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
+import "./message-handler-mock-support.test-support.js";
+import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
 
@@ -15,14 +17,7 @@ type TestAttachment = {
   content: string;
 };
 
-const runtimeApiMockState = vi.hoisted(() => ({
-  dispatchReplyFromConfigWithSettledDispatcher: vi.fn(async (params: { ctxPayload: unknown }) => ({
-    queuedFinal: false,
-    counts: {},
-    capturedCtxPayload: params.ctxPayload,
-  })),
-}));
-
+const runtimeApiMockState = getRuntimeApiMockState();
 const graphThreadMockState = vi.hoisted(() => ({
   resolveTeamGroupId: vi.fn(async () => "group-1"),
   fetchChannelMessage: vi.fn<
@@ -44,33 +39,45 @@ const graphThreadMockState = vi.hoisted(() => ({
   >(async () => []),
 }));
 
-vi.mock("../../runtime-api.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
-  return {
-    ...actual,
-    dispatchReplyFromConfigWithSettledDispatcher:
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+vi.mock("../graph-thread.js", () => {
+  const stripHtmlFromTeamsMessage = (html: string) =>
+    html
+      .replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const formatThreadContext = (messages: GraphThreadMessage[], currentMessageId?: string) => {
+    const lines: string[] = [];
+    for (const msg of messages) {
+      if (msg.id && msg.id === currentMessageId) {
+        continue;
+      }
+      const sender = msg.from?.user?.displayName ?? msg.from?.application?.displayName ?? "unknown";
+      const rawContent = msg.body?.content ?? "";
+      const content =
+        msg.body?.contentType === "html"
+          ? stripHtmlFromTeamsMessage(rawContent)
+          : rawContent.trim();
+      if (content) {
+        lines.push(`${sender}: ${content}`);
+      }
+    }
+    return lines.join("\n");
   };
-});
-
-vi.mock("../graph-thread.js", async () => {
-  const actual = await vi.importActual<typeof import("../graph-thread.js")>("../graph-thread.js");
   return {
-    ...actual,
+    stripHtmlFromTeamsMessage,
+    formatThreadContext,
     resolveTeamGroupId: graphThreadMockState.resolveTeamGroupId,
     fetchChannelMessage: graphThreadMockState.fetchChannelMessage,
     fetchThreadReplies: graphThreadMockState.fetchThreadReplies,
   };
 });
-
-vi.mock("../reply-dispatcher.js", () => ({
-  createMSTeamsReplyDispatcher: () => ({
-    dispatcher: {},
-    replyOptions: {},
-    markDispatchIdle: vi.fn(),
-  }),
-}));
 
 describe("msteams monitor handler authz", () => {
   function createDeps(cfg: OpenClawConfig) {

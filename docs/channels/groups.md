@@ -5,8 +5,6 @@ read_when:
 title: "Groups"
 ---
 
-# Groups
-
 OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo.
 
 ## Beginner intro (2 minutes)
@@ -400,7 +398,7 @@ Channel specific notes:
 
 - BlueBubbles can optionally enrich unnamed macOS group participants from the local Contacts database before populating `GroupMembers`. This is off by default and only runs after normal group gating passes.
 
-The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences.
+The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
 
 ## iMessage specifics
 
@@ -408,6 +406,17 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - List chats: `imsg chats --limit 20`.
 - Group replies always go back to the same `chat_id`.
 
+## WhatsApp system prompts
+
+See [WhatsApp](/channels/whatsapp#system-prompts) for the canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics.
+
 ## WhatsApp specifics
 
 See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
+
+## Related
+
+- [Group messages](/channels/group-messages)
+- [Broadcast groups](/channels/broadcast-groups)
+- [Channel routing](/channels/channel-routing)
+- [Pairing](/channels/pairing)

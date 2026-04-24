@@ -1,48 +1,12 @@
-import type { BaseProbeResult, ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { expectDirectoryIds } from "../../../test/helpers/channels/directory-ids.js";
 import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
 import type { SlackProbe } from "./probe.js";
-
-type DirectoryListFn = (params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  query?: string | null;
-  limit?: number | null;
-}) => Promise<ChannelDirectoryEntry[]>;
-
-async function listDirectoryEntriesWithDefaults(listFn: DirectoryListFn, cfg: OpenClawConfig) {
-  return await listFn({
-    cfg,
-    accountId: "default",
-    query: null,
-    limit: null,
-  });
-}
-
-async function expectDirectoryIds(
-  listFn: DirectoryListFn,
-  cfg: OpenClawConfig,
-  expected: string[],
-  options?: { sorted?: boolean },
-) {
-  const entries = await listDirectoryEntriesWithDefaults(listFn, cfg);
-  const ids = entries.map((entry) => entry.id);
-  expect(options?.sorted ? sortDirectoryIds(ids) : ids).toEqual(
-    options?.sorted ? sortDirectoryIds(expected) : expected,
-  );
-}
-
-function compareDirectoryIds(left: string, right: string) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function sortDirectoryIds(values: string[]) {
-  return values.toSorted(compareDirectoryIds);
-}
 
 describe("Slack directory contract", () => {
   it("keeps public probe aligned with base contract", () => {

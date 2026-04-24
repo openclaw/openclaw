@@ -21,6 +21,7 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.j
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
+import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -401,6 +402,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       channel?: string;
       accountId?: string;
       agentId?: string;
+      replyToId?: string;
       threadId?: string;
       sessionKey?: string;
       idempotencyKey: string;
@@ -438,6 +440,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const accountId = normalizeOptionalString(request.accountId);
+    const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
 
     const work = (async (): Promise<InflightResult> => {
@@ -501,15 +504,30 @@ export const sendHandlers: GatewayRequestHandlers = {
           target: deliveryTarget,
           currentSessionKey: providedSessionKey,
           resolvedTarget: idLikeTarget,
+          replyToId,
           threadId,
         });
+        const providedSessionBaseKey =
+          parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
+        const shouldUseDerivedThreadSessionKey =
+          channel === "slack" &&
+          !!providedSessionKey &&
+          !!normalizeOptionalString(derivedRoute?.threadId) &&
+          normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
+            normalizeOptionalLowercaseString(providedSessionBaseKey) &&
+          normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
         const outboundRoute = derivedRoute
           ? providedSessionKey
-            ? {
-                ...derivedRoute,
-                sessionKey: providedSessionKey,
-                baseSessionKey: providedSessionKey,
-              }
+            ? shouldUseDerivedThreadSessionKey
+              ? {
+                  ...derivedRoute,
+                  baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey,
+                }
+              : {
+                  ...derivedRoute,
+                  sessionKey: providedSessionKey,
+                  baseSessionKey: providedSessionKey,
+                }
             : derivedRoute
           : null;
         if (outboundRoute) {
@@ -532,9 +550,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           to: deliveryTarget,
           accountId,
           payloads: outboundPayloads,
+          replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
-          threadId: threadId ?? null,
+          threadId: outboundRoute?.threadId ?? threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: outboundSessionKey

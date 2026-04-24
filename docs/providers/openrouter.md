@@ -6,8 +6,6 @@ read_when:
 title: "OpenRouter"
 ---
 
-# OpenRouter
-
 OpenRouter provides a **unified API** that routes requests to many models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
@@ -52,6 +50,15 @@ Model refs follow the pattern `openrouter/<provider>/<model>`. For the full list
 available providers and models, see [/concepts/model-providers](/concepts/model-providers).
 </Note>
 
+Bundled fallback examples:
+
+| Model ref                            | Notes                         |
+| ------------------------------------ | ----------------------------- |
+| `openrouter/auto`                    | OpenRouter automatic routing  |
+| `openrouter/moonshotai/kimi-k2.6`    | Kimi K2.6 via MoonshotAI      |
+| `openrouter/openrouter/healer-alpha` | OpenRouter Healer Alpha route |
+| `openrouter/openrouter/hunter-alpha` | OpenRouter Hunter Alpha route |
+
 ## Authentication and headers
 
 OpenRouter uses a Bearer token with your API key under the hood.
@@ -70,7 +77,7 @@ If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw
 does **not** inject those OpenRouter-specific headers or Anthropic cache markers.
 </Warning>
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Anthropic cache markers">

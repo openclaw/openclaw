@@ -10,6 +10,8 @@ import {
   spawnWatchedVitestProcess,
 } from "./run-vitest.mjs";
 import {
+  applyDefaultMultiSpecVitestCachePaths,
+  applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestRunSpecs,
@@ -18,6 +20,7 @@ import {
   resolveParallelFullSuiteConcurrency,
   resolveChangedTargetArgs,
   shouldAcquireLocalHeavyCheckLock,
+  shouldRetryVitestNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 
@@ -38,7 +41,11 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.extensions.config.ts", 168],
   ["test/vitest/vitest.extension-provider-openai.config.ts", 167],
   ["test/vitest/vitest.runtime-config.config.ts", 166],
-  ["test/vitest/vitest.contracts.config.ts", 165],
+  ["test/vitest/vitest.contracts-channel-config.config.ts", 85],
+  ["test/vitest/vitest.contracts-channel-surface.config.ts", 60],
+  ["test/vitest/vitest.contracts-channel-session.config.ts", 50],
+  ["test/vitest/vitest.contracts-channel-registry.config.ts", 35],
+  ["test/vitest/vitest.contracts-plugin.config.ts", 20],
   ["test/vitest/vitest.tasks.config.ts", 165],
   ["test/vitest/vitest.channels.config.ts", 164],
   ["test/vitest/vitest.unit-fast.config.ts", 160],
@@ -183,11 +190,15 @@ function runVitestSpec(spec) {
   if (spec.includeFilePath && spec.includePatterns) {
     writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
   }
+  let noOutputTimedOut = false;
   return new Promise((resolve, reject) => {
     const { child, teardown } = spawnWatchedVitestProcess({
       pnpmArgs: spec.pnpmArgs,
       env: spec.env,
       label: spec.config,
+      onNoOutputTimeout: () => {
+        noOutputTimedOut = true;
+      },
       spawnParams: {
         cwd: process.cwd(),
         ...resolveVitestSpawnParams(spec.env),
@@ -197,7 +208,7 @@ function runVitestSpec(spec) {
     child.on("exit", (code, signal) => {
       teardown();
       cleanupVitestRunSpec(spec);
-      resolve({ code: code ?? 1, signal });
+      resolve({ code: code ?? (signal ? 143 : 1), noOutputTimedOut, signal });
     });
 
     child.on("error", (error) => {
@@ -225,8 +236,21 @@ function applyDefaultParallelVitestWorkerBudget(specs, env) {
 async function runLoggedVitestSpec(spec) {
   console.error(`[test] starting ${spec.config}`);
   const startedAt = performance.now();
-  const result = await runVitestSpec(spec);
+  let result = await runVitestSpec(spec);
+  if (result.noOutputTimedOut && !spec.watchMode && shouldRetryVitestNoOutputTimeout(spec.env)) {
+    console.error(`[test] retrying ${spec.config} after no-output timeout`);
+    result = await runVitestSpec(spec);
+  }
   const durationMs = performance.now() - startedAt;
+  if (result.noOutputTimedOut && result.signal) {
+    console.error(`[test] ${spec.config} exceeded no-output timeout`);
+    return {
+      ...result,
+      code: result.code || 143,
+      signal: null,
+      timing: null,
+    };
+  }
   if (result.signal) {
     console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
     releaseLockOnce();
@@ -320,7 +344,7 @@ async function main() {
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
-  const runSpecs =
+  const rawRunSpecs =
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
           config: plan.config,
@@ -344,6 +368,10 @@ async function main() {
           baseEnv: process.env,
           cwd: process.cwd(),
         });
+  const runSpecs = applyDefaultMultiSpecVitestCachePaths(
+    applyDefaultVitestNoOutputTimeout(rawRunSpecs, { env: process.env }),
+    { cwd: process.cwd(), env: process.env },
+  );
 
   if (runSpecs.length === 0) {
     console.error("[test] no changed test targets; skipping Vitest.");
@@ -362,7 +390,12 @@ async function main() {
     targetArgs.length === 0 &&
     changedTargetArgs === null &&
     !runSpecs.some((spec) => spec.watchMode);
-  const isParallelShardRun = isFullSuiteRun || isFullExtensionsProjectRun(runSpecs);
+  const isExplicitParallelMultiConfigRun =
+    Boolean(process.env.OPENCLAW_TEST_PROJECTS_PARALLEL) &&
+    runSpecs.length > 1 &&
+    !runSpecs.some((spec) => spec.watchMode);
+  const isParallelShardRun =
+    isFullSuiteRun || isFullExtensionsProjectRun(runSpecs) || isExplicitParallelMultiConfigRun;
   if (isParallelShardRun) {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
     if (concurrency > 1) {

@@ -323,7 +323,7 @@ async function waitForProbe(params: {
 function requestStatus(port: number, pathname: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const req = request(
-      { host: "127.0.0.1", method: "GET", path: pathname, port, timeout: 1000 },
+      { host: "127.0.0.1", method: "GET", path: pathname, port, timeout: 100 },
       (res) => {
         res.resume();
         res.on("end", () => resolve(res.statusCode ?? 0));
@@ -511,20 +511,22 @@ async function runGatewaySample(options: {
   child.stdout.on("data", onChunk);
   child.stderr.on("data", onChunk);
 
-  const healthz = await waitForProbe({
-    deadlineAt,
-    isDone: () => childExited,
-    path: "/healthz",
-    port,
-    startAt,
-  });
-  const readyz = await waitForProbe({
-    deadlineAt,
-    isDone: () => childExited,
-    path: "/readyz",
-    port,
-    startAt,
-  });
+  const [healthz, readyz] = await Promise.all([
+    waitForProbe({
+      deadlineAt,
+      isDone: () => childExited,
+      path: "/healthz",
+      port,
+      startAt,
+    }),
+    waitForProbe({
+      deadlineAt,
+      isDone: () => childExited,
+      path: "/readyz",
+      port,
+      startAt,
+    }),
+  ]);
   const exit = await stopChild(child);
   await childExitPromise.catch(() => null);
   rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });

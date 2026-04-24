@@ -1025,6 +1025,7 @@
                   "channels/irc",
                   "channels/line",
                   "channels/matrix",
+                  "channels/matrix-push-rules",
                   "channels/mattermost",
                   "channels/msteams",
                   "channels/nextcloud-talk",
@@ -1146,6 +1147,7 @@
                     "group": "SDK Reference",
                     "pages": [
                       "plugins/sdk-overview",
+                      "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
                       "plugins/sdk-agent-harness",
@@ -1182,8 +1184,26 @@
               {
                 "group": "Tools",
                 "pages": [
-                  "tools/media-overview",
                   "tools/apply-patch",
+                  "tools/btw",
+                  "tools/code-execution",
+                  "tools/diffs",
+                  "tools/elevated",
+                  "tools/exec-approvals",
+                  "tools/exec-approvals-advanced",
+                  "tools/exec",
+                  "tools/image-generation",
+                  "tools/llm-task",
+                  "tools/lobster",
+                  "tools/media-overview",
+                  "tools/music-generation",
+                  "tools/pdf",
+                  "tools/reactions",
+                  "tools/thinking",
+                  "tools/tokenjuice",
+                  "tools/loop-detection",
+                  "tools/trajectory",
+                  "tools/video-generation",
                   {
                     "group": "Web Browser",
                     "pages": [
@@ -1211,22 +1231,7 @@
                       "tools/searxng-search",
                       "tools/tavily"
                     ]
-                  },
-                  "tools/btw",
-                  "tools/code-execution",
-                  "tools/diffs",
-                  "tools/elevated",
-                  "tools/exec",
-                  "tools/exec-approvals",
-                  "tools/image-generation",
-                  "tools/music-generation",
-                  "tools/llm-task",
-                  "tools/lobster",
-                  "tools/loop-detection",
-                  "tools/pdf",
-                  "tools/reactions",
-                  "tools/thinking",
-                  "tools/video-generation"
+                  }
                 ]
               },
               {
@@ -1265,6 +1270,7 @@
                   "providers/comfy",
                   "providers/deepgram",
                   "providers/deepseek",
+                  "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
@@ -1292,6 +1298,7 @@
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
+                  "providers/tencent",
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
@@ -1362,6 +1369,7 @@
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
                       "gateway/health",
+                      "gateway/diagnostics",
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/logging",
@@ -1376,6 +1384,7 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/audit-checks",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
@@ -1481,7 +1490,8 @@
                       "cli/message",
                       "cli/models",
                       "cli/sessions",
-                      "cli/system"
+                      "cli/system",
+                      "cli/tasks"
                     ]
                   },
                   {

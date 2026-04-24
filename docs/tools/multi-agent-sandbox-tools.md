@@ -1,6 +1,6 @@
 ---
 summary: “Per-agent sandbox + tool restrictions, precedence, and examples”
-title: Multi-Agent Sandbox & Tools
+title: Multi-agent sandbox & tools
 read_when: “You want per-agent sandboxing or per-agent tool allow/deny policies in a multi-agent gateway.”
 status: active
 ---
@@ -363,7 +363,7 @@ After configuring multi-agent sandbox and tools:
 
 ---
 
-## See also
+## Related
 
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"

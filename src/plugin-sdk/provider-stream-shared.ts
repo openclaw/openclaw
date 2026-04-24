@@ -149,6 +149,7 @@ export type GoogleThinkingInputLevel =
   | "medium"
   | "adaptive"
   | "high"
+  | "max"
   | "xhigh";
 
 // Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
@@ -188,8 +189,11 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
       case "medium":
       case "adaptive":
       case "high":
+      case "max":
       case "xhigh":
         return "HIGH";
+      case undefined:
+        break;
     }
     if (typeof params.thinkingBudget === "number") {
       return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
@@ -209,8 +213,11 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case "adaptive":
       return "MEDIUM";
     case "high":
+    case "max":
     case "xhigh":
       return "HIGH";
+    case undefined:
+      break;
   }
   if (typeof params.thinkingBudget !== "number") {
     return undefined;
@@ -258,6 +265,7 @@ function mapThinkLevelToGemma4ThinkingLevel(
     case "medium":
     case "adaptive":
     case "high":
+    case "max":
     case "xhigh":
       return "HIGH";
     default:

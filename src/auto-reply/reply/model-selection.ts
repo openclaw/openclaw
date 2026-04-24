@@ -304,6 +304,8 @@ export async function createModelSelectionState(params: {
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,
   });
+  const hadDirectAutoSessionOverride =
+    sessionEntry?.modelOverrideSource === "auto" && Boolean(directStoredOverride);
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -339,7 +341,42 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
-  if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
+  // Auto-failover overrides are transient: on this turn, retry the configured
+  // primary so the session self-heals when the primary recovers. The fallback loop
+  // in runWithModelFallback will re-set the override if the primary is still down.
+  // User-selected overrides (/model command) are preserved across turns.
+  //
+  // Clear this before allowlist validation so an old fallback outside the current
+  // agent allowlist does not emit the unrelated "Model override not allowed" event.
+  if (hadDirectAutoSessionOverride && sessionEntry && sessionStore && sessionKey) {
+    const { updated } = applyModelOverrideToSessionEntry({
+      entry: sessionEntry,
+      selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+    });
+    if (updated) {
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await (
+          await loadSessionStoreRuntime()
+        ).updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
+      }
+      // Reset in-memory selection to the configured primary. The caller-provided
+      // provider/model may already be set to the fallback by stored-override preload
+      // in get-reply.ts; updating them here ensures this turn retries the primary.
+      provider = defaultProvider;
+      model = defaultModel;
+    }
+  }
+
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    directStoredOverride &&
+    !hadDirectAutoSessionOverride
+  ) {
     const normalizedOverride = normalizeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
@@ -364,17 +401,20 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  const storedOverride = resolveStoredModelOverride({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey,
-    defaultProvider,
-  });
+  const storedOverride = hadDirectAutoSessionOverride
+    ? undefined
+    : resolveStoredModelOverride({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        parentSessionKey,
+        defaultProvider,
+      });
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
   const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
       storedOverride.provider || defaultProvider,
@@ -410,11 +450,32 @@ export async function createModelSelectionState(params: {
     if (defaultThinkingLevel) {
       return defaultThinkingLevel;
     }
-    let catalogForThinking = modelCatalog ?? allowedModelCatalog;
-    if (!catalogForThinking || catalogForThinking.length === 0) {
+    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
+    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
+    if (explicitThinkingDefault) {
+      defaultThinkingLevel = explicitThinkingDefault;
+      return defaultThinkingLevel;
+    }
+    let catalogForThinking =
+      modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
+    const selectedCatalogEntry = catalogForThinking?.find(
+      (entry) => entry.provider === provider && entry.id === model,
+    );
+    const shouldHydrateRuntimeCatalog =
+      !modelCatalog && (!selectedCatalogEntry || selectedCatalogEntry.reasoning === undefined);
+    if (shouldHydrateRuntimeCatalog) {
       modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
-      catalogForThinking = modelCatalog;
+      const runtimeSelectedEntry = modelCatalog.find(
+        (entry) => entry.provider === provider && entry.id === model,
+      );
+      catalogForThinking =
+        runtimeSelectedEntry || !catalogForThinking || catalogForThinking.length === 0
+          ? modelCatalog.length > 0
+            ? modelCatalog
+            : allowedModelCatalog
+          : allowedModelCatalog;
     }
     const resolved = resolveThinkingDefault({
       cfg,
@@ -422,12 +483,7 @@ export async function createModelSelectionState(params: {
       model,
       catalog: catalogForThinking,
     });
-    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
-    defaultThinkingLevel =
-      agentThinkingDefault ??
-      resolved ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-      "off";
+    defaultThinkingLevel = resolved ?? "off";
     return defaultThinkingLevel;
   };
 

@@ -99,6 +99,7 @@ type MockOpenAiRequestSnapshot = {
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
   plannedToolName?: string;
+  plannedToolArgs?: Record<string, unknown>;
 };
 
 // Anthropic /v1/messages request/response shapes the mock actually needs.
@@ -140,6 +141,8 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
+const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i;
+const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
@@ -575,6 +578,7 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   }
   const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
   const mode = extractBareToolArg(text, "mode")?.toLowerCase();
+  const context = extractBareToolArg(text, "context")?.toLowerCase();
   const runTimeoutSecondsRaw = extractBareToolArg(text, "runTimeoutSeconds");
   const runTimeoutSeconds =
     runTimeoutSecondsRaw && /^\d+$/.test(runTimeoutSecondsRaw)
@@ -585,6 +589,7 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
     ...(label ? { label } : {}),
     ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
     ...(mode === "session" || mode === "run" ? { mode } : {}),
+    ...(context === "fork" || context === "isolated" ? { context } : {}),
     ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
   };
 }
@@ -743,12 +748,26 @@ function buildAssistantText(
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
+  if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
+    return "FORKED-CONTEXT-ALPHA";
+  }
+  const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
+  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+    scenarioState.subagentFanoutPhase = 3;
+    return fanoutCompleteReply;
+  }
   if (
-    /subagent fanout synthesis check/i.test(prompt) &&
-    toolOutput &&
-    scenarioState.subagentFanoutPhase >= 2
+    /forked subagent context qa check/i.test(prompt) &&
+    /FORKED-CONTEXT-ALPHA/i.test(allInputText)
   ) {
-    return "Protocol note: delegated fanout complete. Alpha=ALPHA-OK. Beta=BETA-OK.";
+    return [
+      "Worked",
+      "- FORKED-CONTEXT-ALPHA",
+      "Evidence",
+      "- The forked child recovered the visible code from requester transcript context.",
+      "Blocked",
+      "- None.",
+    ].join("\n");
   }
   if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
     const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
@@ -797,6 +816,25 @@ function extractPlannedToolName(events: StreamEvent[]) {
     const item = event.item as { type?: unknown; name?: unknown };
     if (item.type === "function_call" && typeof item.name === "string") {
       return item.name;
+    }
+  }
+  return undefined;
+}
+
+function extractPlannedToolArgs(events: StreamEvent[]) {
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as { type?: unknown; arguments?: unknown };
+    if (item.type !== "function_call" || typeof item.arguments !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(item.arguments);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+    } catch {
+      return undefined;
     }
   }
   return undefined;
@@ -924,6 +962,61 @@ function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[
   ];
 }
 
+function buildReasoningAndAssistantEvents(params: {
+  reasoningId: string;
+  answerText: string;
+  answerId?: string;
+}): StreamEvent[] {
+  const reasoningItem = {
+    type: "reasoning",
+    id: params.reasoningId,
+    summary: [],
+  } as const;
+  const answerItem = buildAssistantOutputItem({
+    id: params.answerId ?? "msg_mock_reasoned_answer",
+    phase: "final_answer",
+    text: params.answerText,
+  });
+  return [
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "reasoning",
+        id: params.reasoningId,
+        summary: [],
+      },
+    },
+    {
+      type: "response.output_item.done",
+      item: reasoningItem,
+    },
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "message",
+        id: answerItem.id,
+        role: "assistant",
+        phase: "final_answer",
+        content: [],
+        status: "in_progress",
+      },
+    },
+    {
+      type: "response.output_item.done",
+      item: answerItem,
+    },
+    {
+      type: "response.completed",
+      response: {
+        id: `resp_${params.reasoningId}`,
+        status: "completed",
+        output: [reasoningItem, answerItem],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
@@ -980,6 +1073,15 @@ async function buildResponsesPayload(
       );
     }
     return buildAssistantEvents("BUG-SHOULD-NOT-AUTO-RETRY");
+  }
+  if (QA_THINKING_VISIBILITY_MAX_PROMPT_RE.test(prompt)) {
+    return buildReasoningAndAssistantEvents({
+      reasoningId: "rs_mock_thinking_visibility_max",
+      answerText: "THINKING-MAX-OK",
+    });
+  }
+  if (QA_THINKING_VISIBILITY_OFF_PROMPT_RE.test(prompt)) {
+    return buildAssistantEvents("THINKING-OFF-OK");
   }
   if (QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!toolOutput) {
@@ -1212,6 +1314,14 @@ async function buildResponsesPayload(
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   if (canCallSessionsSpawn && explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
+  }
+  if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("sessions_spawn", {
+      task: "Report the visible code from the requester transcript.",
+      label: "qa-fork-context",
+      mode: "run",
+      context: "fork",
+    });
   }
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -1750,6 +1860,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         providerVariant: resolveProviderVariant(resolvedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
+        plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {
@@ -1805,6 +1916,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         providerVariant: resolveProviderVariant(normalizedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
+        plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {

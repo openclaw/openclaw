@@ -1,11 +1,11 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth";
 import {
+  type CommandArgs,
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
-  listProviderPluginCommandSpecs,
-} from "openclaw/plugin-sdk/command-auth";
-import { type ChatCommandDefinition, type CommandArgs } from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -47,6 +47,9 @@ let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime
   null;
 let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime.js")> | null =
   null;
+let slackPluginCommandsRuntimePromise: Promise<
+  typeof import("./slash-plugin-commands.runtime.js")
+> | null = null;
 let slashSkillCommandsRuntimePromise: Promise<
   typeof import("./slash-skill-commands.runtime.js")
 > | null = null;
@@ -59,6 +62,11 @@ function loadSlashCommandsRuntime() {
 function loadSlashDispatchRuntime() {
   slashDispatchRuntimePromise ??= import("./slash-dispatch.runtime.js");
   return slashDispatchRuntimePromise;
+}
+
+function loadSlackPluginCommandsRuntime() {
+  slackPluginCommandsRuntimePromise ??= import("./slash-plugin-commands.runtime.js");
+  return slackPluginCommandsRuntimePromise;
 }
 
 function loadSlashSkillCommandsRuntime() {
@@ -282,8 +290,9 @@ function buildSlackCommandArgMenuBlocks(params: {
 export async function registerSlackMonitorSlashCommands(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
+  trackEvent?: () => void;
 }): Promise<void> {
-  const { ctx, account } = params;
+  const { ctx, account, trackEvent } = params;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
 
@@ -313,6 +322,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         );
         return;
       }
+      trackEvent?.();
       if (!prompt.trim()) {
         await ack({
           text: "Message required.",
@@ -683,6 +693,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     const existingNativeNames = new Set(
       nativeCommands.map((c) => normalizeLowercaseStringOrEmpty(c.name)).filter(Boolean),
     );
+    const { listProviderPluginCommandSpecs } = await loadSlackPluginCommandsRuntime();
     for (const pluginCommand of listProviderPluginCommandSpecs("slack")) {
       const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
       if (!normalizedName || existingNativeNames.has(normalizedName)) {
@@ -768,6 +779,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         runtime.log?.("slack: drop slash arg options payload (mismatched app/team)");
         return;
       }
+      trackEvent?.();
       const typedBody = body as {
         value?: string;
         user?: { id?: string };

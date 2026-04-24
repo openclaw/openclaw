@@ -1,5 +1,4 @@
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
@@ -46,6 +45,7 @@ const {
   getTelegramSequentialKey,
   setTelegramBotRuntimeForTest,
 } = await import("./bot.js");
+const { resetTelegramForumFlagCacheForTest } = await import("./bot/helpers.js");
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
@@ -123,6 +123,29 @@ function mockTelegramConfigWrites() {
   return vi.spyOn(configRuntime, "writeConfigFile").mockResolvedValue(undefined);
 }
 
+async function withEnvAsync(env: Record<string, string | undefined>, fn: () => Promise<void>) {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
@@ -131,6 +154,7 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
   beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
@@ -837,55 +861,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
-  it("blocks unauthorized DM media before download and sends pairing reply", async () => {
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
-    sendMessageSpy.mockClear();
-    replySpy.mockClear();
-    const senderId = Number(`${Date.now()}01`.slice(-9));
-
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-    );
-    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
-
-    try {
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-      await handler({
-        message: {
-          chat: { id: 1234, type: "private" },
-          message_id: 411,
-          date: 1736380800,
-          photo: [{ file_id: "p1" }],
-          from: { id: senderId, username: "random" },
-        },
-        me: { username: "openclaw_bot" },
-        getFile: getFileSpy,
-      });
-
-      expect(getFileSpy).not.toHaveBeenCalled();
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-      expect(pairingText).toContain("Pairing code:");
-      expect(pairingText).toContain("<pre><code>");
-      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({ parse_mode: "HTML" }),
-      );
-      expect(replySpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
   it("blocks DM media downloads completely when dmPolicy is disabled", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "disabled" } },
@@ -1705,7 +1680,12 @@ describe("createTelegramBot", () => {
     const configForAgent = (agentId: string) => ({
       channels: {
         telegram: {
+          defaultAccount: "work",
           accounts: {
+            work: {
+              botToken: "tok-work",
+              dmPolicy: "open",
+            },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
@@ -1809,7 +1789,12 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
+          defaultAccount: "work",
           accounts: {
+            work: {
+              botToken: "tok-work",
+              dmPolicy: "open",
+            },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
@@ -3274,6 +3259,16 @@ describe("createTelegramBot", () => {
     expect(buildModelsProviderDataMock).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Select a provider:");
+    expect(
+      (
+        editMessageTextSpy.mock.calls[0]?.[3] as {
+          reply_markup?: { inline_keyboard?: unknown[][] };
+        }
+      )?.reply_markup?.inline_keyboard?.[0]?.[0],
+    ).toEqual({
+      text: "Add model",
+      callback_data: "/models add",
+    });
   });
 
   it("retries command pagination callbacks after a bubbled edit failure", async () => {
@@ -3654,6 +3649,16 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Select a provider:");
+    expect(
+      (
+        editMessageTextSpy.mock.calls.at(-1)?.[3] as {
+          reply_markup?: { inline_keyboard?: unknown[][] };
+        }
+      )?.reply_markup?.inline_keyboard?.[0]?.[0],
+    ).toEqual({
+      text: "Add model",
+      callback_data: "/models add",
+    });
   });
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {

@@ -684,6 +684,7 @@ export const MemorySearchSchema = z
       .object({
         modelPath: z.string().optional(),
         modelCacheDir: z.string().optional(),
+        contextSize: z.union([z.number().int().positive(), z.literal("auto")]).optional(),
       })
       .strict()
       .optional(),
@@ -819,7 +820,7 @@ export const AgentEntrySchema = z
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     thinkingDefault: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
