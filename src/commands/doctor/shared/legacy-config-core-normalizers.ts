@@ -1,3 +1,4 @@
+import { migrateLegacyRuntimeModelRef } from "../../../agents/model-runtime-aliases.js";
 import { isLegacyModelsAddCodexMetadataModel } from "../../../agents/openai-codex-models-add-legacy.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
@@ -196,55 +197,6 @@ type AgentEmbeddedHarnessPatch = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["embeddedHarness"]
 >;
 
-const LEGACY_CODEX_PROVIDER_ID = "codex";
-const OPENAI_PROVIDER_ID = "openai";
-const CODEX_HARNESS_RUNTIME = "codex";
-
-function migrateLegacyCodexModelRef(raw: string): string | null {
-  const trimmed = raw.trim();
-  const separatorIndex = trimmed.indexOf("/");
-  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
-    return null;
-  }
-  if (normalizeProviderId(trimmed.slice(0, separatorIndex)) !== LEGACY_CODEX_PROVIDER_ID) {
-    return null;
-  }
-  return `${OPENAI_PROVIDER_ID}/${trimmed.slice(separatorIndex + 1)}`;
-}
-
-function normalizeLegacyCodexAgentModelConfig(raw: unknown): {
-  value?: unknown;
-  changed: boolean;
-  codexPrimarySelected: boolean;
-} {
-  if (typeof raw === "string") {
-    const migrated = migrateLegacyCodexModelRef(raw);
-    return migrated
-      ? { value: migrated, changed: true, codexPrimarySelected: true }
-      : { value: raw, changed: false, codexPrimarySelected: false };
-  }
-  if (!isRecord(raw)) {
-    return { value: raw, changed: false, codexPrimarySelected: false };
-  }
-
-  const migratedPrimary =
-    typeof raw.primary === "string" ? migrateLegacyCodexModelRef(raw.primary) : null;
-  if (!migratedPrimary) {
-    return { value: raw, changed: false, codexPrimarySelected: false };
-  }
-
-  const next: Record<string, unknown> = { ...raw, primary: migratedPrimary };
-  if (Array.isArray(raw.fallbacks)) {
-    next.fallbacks = raw.fallbacks.map((fallback) => {
-      if (typeof fallback !== "string") {
-        return fallback;
-      }
-      return migrateLegacyCodexModelRef(fallback) ?? fallback;
-    });
-  }
-  return { value: next, changed: true, codexPrimarySelected: true };
-}
-
 function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
   if (!isRecord(legacyEntry) || !isRecord(currentEntry)) {
     return currentEntry ?? legacyEntry;
@@ -252,14 +204,54 @@ function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
   return { ...legacyEntry, ...currentEntry };
 }
 
-function normalizeLegacyCodexAllowlistModels(
+function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
+  value?: unknown;
+  changed: boolean;
+  selectedRuntime?: string;
+} {
+  if (typeof raw === "string") {
+    const migrated = migrateLegacyRuntimeModelRef(raw);
+    return migrated
+      ? { value: migrated.ref, changed: true, selectedRuntime: migrated.runtime }
+      : { value: raw, changed: false };
+  }
+  if (!isRecord(raw)) {
+    return { value: raw, changed: false };
+  }
+
+  const migratedPrimary =
+    typeof raw.primary === "string" ? migrateLegacyRuntimeModelRef(raw.primary) : null;
+  if (!migratedPrimary) {
+    return { value: raw, changed: false };
+  }
+
+  const next: Record<string, unknown> = { ...raw, primary: migratedPrimary.ref };
+  if (Array.isArray(raw.fallbacks)) {
+    next.fallbacks = raw.fallbacks.map((fallback) => {
+      if (typeof fallback !== "string") {
+        return fallback;
+      }
+      const migratedFallback = migrateLegacyRuntimeModelRef(fallback);
+      return migratedFallback?.runtime === migratedPrimary.runtime
+        ? migratedFallback.ref
+        : fallback;
+    });
+  }
+  return {
+    value: next,
+    changed: true,
+    selectedRuntime: migratedPrimary.runtime,
+  };
+}
+
+function normalizeLegacyRuntimeAllowlistModels(
   rawModels: unknown,
-  migrateCodexKeys: boolean,
+  selectedRuntime: string | undefined,
 ): {
   value?: unknown;
   changed: boolean;
 } {
-  if (!migrateCodexKeys || !isRecord(rawModels)) {
+  if (!selectedRuntime || !isRecord(rawModels)) {
     return { value: rawModels, changed: false };
   }
 
@@ -267,10 +259,10 @@ function normalizeLegacyCodexAllowlistModels(
   const next: Record<string, unknown> = {};
   const legacyEntries: Array<[string, unknown]> = [];
   for (const [rawKey, entry] of Object.entries(rawModels)) {
-    const migratedKey = migrateLegacyCodexModelRef(rawKey);
-    if (migratedKey) {
+    const migrated = migrateLegacyRuntimeModelRef(rawKey);
+    if (migrated?.runtime === selectedRuntime) {
       changed = true;
-      legacyEntries.push([migratedKey, entry]);
+      legacyEntries.push([migrated.ref, entry]);
       continue;
     }
     next[rawKey] = mergeModelEntry(entry, next[rawKey]);
@@ -281,24 +273,27 @@ function normalizeLegacyCodexAllowlistModels(
   return { value: next, changed };
 }
 
-function ensureCodexEmbeddedHarness(raw: unknown): {
+function ensureEmbeddedHarnessRuntime(
+  raw: unknown,
+  selectedRuntime: string,
+): {
   value: AgentEmbeddedHarnessPatch;
   changed: boolean;
 } {
   if (!isRecord(raw)) {
-    return { value: { runtime: CODEX_HARNESS_RUNTIME }, changed: true };
+    return { value: { runtime: selectedRuntime }, changed: true };
   }
-  const runtime = normalizeOptionalLowercaseString(raw.runtime);
-  if (runtime === CODEX_HARNESS_RUNTIME) {
-    return { value: raw as AgentEmbeddedHarnessPatch, changed: false };
+  const currentRuntime = normalizeOptionalLowercaseString(raw.runtime);
+  if (!currentRuntime || currentRuntime === "auto") {
+    return {
+      value: { ...raw, runtime: selectedRuntime } as AgentEmbeddedHarnessPatch,
+      changed: currentRuntime !== selectedRuntime,
+    };
   }
-  return {
-    value: { ...raw, runtime: CODEX_HARNESS_RUNTIME } as AgentEmbeddedHarnessPatch,
-    changed: true,
-  };
+  return { value: raw as AgentEmbeddedHarnessPatch, changed: false };
 }
 
-function normalizeLegacyCodexAgentContainer(
+function normalizeLegacyRuntimeAgentContainer(
   raw: Record<string, unknown>,
   path: string,
   changes: string[],
@@ -306,22 +301,27 @@ function normalizeLegacyCodexAgentContainer(
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
 
-  const model = normalizeLegacyCodexAgentModelConfig(raw.model);
+  const model = normalizeLegacyRuntimeAgentModelConfig(raw.model);
   if (model.changed) {
     next.model = model.value;
     changed = true;
-    changes.push(`Moved ${path}.model legacy codex/* primary refs to openai/* with Codex harness.`);
+    const runtimeSuffix = model.selectedRuntime
+      ? ` and selected ${model.selectedRuntime} runtime`
+      : "";
+    changes.push(
+      `Moved ${path}.model legacy runtime primary refs to canonical provider refs${runtimeSuffix}.`,
+    );
   }
 
-  const models = normalizeLegacyCodexAllowlistModels(raw.models, model.codexPrimarySelected);
+  const models = normalizeLegacyRuntimeAllowlistModels(raw.models, model.selectedRuntime);
   if (models.changed) {
     next.models = models.value;
     changed = true;
-    changes.push(`Moved ${path}.models legacy codex/* keys to openai/*.`);
+    changes.push(`Moved ${path}.models legacy runtime keys to canonical provider keys.`);
   }
 
-  if (model.codexPrimarySelected) {
-    const harness = ensureCodexEmbeddedHarness(raw.embeddedHarness);
+  if (model.selectedRuntime) {
+    const harness = ensureEmbeddedHarnessRuntime(raw.embeddedHarness, model.selectedRuntime);
     if (harness.changed) {
       next.embeddedHarness = harness.value;
       changed = true;
@@ -331,7 +331,7 @@ function normalizeLegacyCodexAgentContainer(
   return { value: next, changed };
 }
 
-export function normalizeLegacyCodexHarnessModelRefs(
+export function normalizeLegacyRuntimeModelRefs(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
@@ -343,7 +343,7 @@ export function normalizeLegacyCodexHarnessModelRefs(
   let changed = false;
   const nextAgents: Record<string, unknown> = { ...rawAgents };
   if (isRecord(rawAgents.defaults)) {
-    const defaults = normalizeLegacyCodexAgentContainer(
+    const defaults = normalizeLegacyRuntimeAgentContainer(
       rawAgents.defaults,
       "agents.defaults",
       changes,
@@ -359,26 +359,26 @@ export function normalizeLegacyCodexHarnessModelRefs(
       if (!isRecord(entry)) {
         return entry;
       }
-      const agentId = normalizeOptionalString(entry.id) ?? String(index);
-      const agent = normalizeLegacyCodexAgentContainer(entry, `agents.list.${agentId}`, changes);
-      if (!agent.changed) {
-        return entry;
+      const agentId = normalizeOptionalString(entry.id);
+      const path = agentId ? `agents.list.${sanitizeForLog(agentId)}` : `agents.list[${index}]`;
+      const agent = normalizeLegacyRuntimeAgentContainer(entry, path, changes);
+      if (agent.changed) {
+        changed = true;
+        return agent.value;
       }
-      changed = true;
-      return agent.value;
+      return entry;
     });
     if (changed) {
       nextAgents.list = nextList;
     }
   }
 
-  if (!changed) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    agents: nextAgents as OpenClawConfig["agents"],
-  };
+  return changed
+    ? {
+        ...cfg,
+        agents: nextAgents as OpenClawConfig["agents"],
+      }
+    : cfg;
 }
 
 export function normalizeLegacyOpenAICodexModelsAddMetadata(

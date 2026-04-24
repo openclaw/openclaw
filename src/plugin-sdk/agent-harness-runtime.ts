@@ -37,6 +37,7 @@ export type {
   AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
+  AgentToolResultMiddlewareRuntime,
   OpenClawAgentToolResult,
 } from "../plugins/agent-tool-result-middleware-types.js";
 export type {

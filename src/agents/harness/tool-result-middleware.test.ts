@@ -3,7 +3,7 @@ import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.
 
 describe("createAgentToolResultMiddlewareRunner", () => {
   it("fails closed when middleware throws", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "pi" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [
       () => {
         throw new Error("raw secret should not be logged or returned");
       },
@@ -32,7 +32,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
 
   it("fails closed for invalid middleware results", async () => {
     const original = { content: [{ type: "text" as const, text: "raw" }], details: {} };
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({ result: { content: "not an array" } as never }),
     ]);
 
@@ -47,7 +47,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("fails closed when middleware mutates the current result into an invalid shape", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "pi" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [
       (event) => {
         event.result.content = "not an array" as never;
         return undefined;
@@ -65,7 +65,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("rejects oversized middleware details", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
@@ -87,7 +87,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   it("rejects cyclic middleware details", async () => {
     const details: Record<string, unknown> = {};
     details.self = details;
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
@@ -107,11 +107,11 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("accepts well-formed middleware results", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
-      () => ({
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      (_event, ctx) => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
-          details: { compacted: true },
+          details: { compacted: true, runtime: ctx.runtime, harness: ctx.harness },
         },
       }),
     ]);
@@ -124,6 +124,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
 
     expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
-    expect(result.details).toEqual({ compacted: true });
+    expect(result.details).toEqual({ compacted: true, runtime: "codex", harness: "codex" });
   });
 });

@@ -13,7 +13,8 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Alternative provider: `google-gemini-cli` (OAuth)
+- Runtime option: `agents.defaults.embeddedHarness.runtime: "google-gemini-cli"`
+  reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
 
 ## Getting started
 
@@ -92,12 +93,13 @@ Choose your preferred auth method and follow the setup steps.
       </Step>
       <Step title="Verify the model is available">
         ```bash
-        openclaw models list --provider google-gemini-cli
+        openclaw models list --provider google
         ```
       </Step>
     </Steps>
 
-    - Default model: `google-gemini-cli/gemini-3-flash-preview`
+    - Default model: `google/gemini-3.1-pro-preview`
+    - Runtime: `google-gemini-cli`
     - Alias: `gemini-cli`
 
     **Environment variables:**
@@ -117,9 +119,9 @@ Choose your preferred auth method and follow the setup steps.
     command is installed and on `PATH`.
     </Note>
 
-    The OAuth-only `google-gemini-cli` provider is a separate text-inference
-    surface. Image generation, media understanding, and Gemini Grounding stay on
-    the `google` provider id.
+    `google-gemini-cli/*` model refs are legacy compatibility aliases. New
+    configs should use `google/*` model refs plus the `google-gemini-cli`
+    runtime when they want local Gemini CLI execution.
 
   </Tab>
 </Tabs>

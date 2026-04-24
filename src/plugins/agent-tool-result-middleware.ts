@@ -1,44 +1,74 @@
 import type {
   AgentToolResultMiddleware,
-  AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
+  AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
-export const AGENT_TOOL_RESULT_MIDDLEWARE_HARNESSES = [
+export const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "pi",
-  "codex-app-server",
-] as const satisfies AgentToolResultMiddlewareHarness[];
+  "codex",
+] as const satisfies AgentToolResultMiddlewareRuntime[];
 
-const AGENT_TOOL_RESULT_MIDDLEWARE_HARNESS_SET = new Set<string>(
-  AGENT_TOOL_RESULT_MIDDLEWARE_HARNESSES,
+const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET = new Set<string>(
+  AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES,
 );
 
-export function normalizeAgentToolResultMiddlewareHarnesses(
-  options?: AgentToolResultMiddlewareOptions,
-): AgentToolResultMiddlewareHarness[] {
-  const requested = options?.harnesses;
-  if (!requested || requested.length === 0) {
-    return [...AGENT_TOOL_RESULT_MIDDLEWARE_HARNESSES];
+function normalizeAgentToolResultMiddlewareRuntime(
+  runtime: string,
+): AgentToolResultMiddlewareRuntime | undefined {
+  const normalized = runtime.trim().toLowerCase();
+  if (normalized === "codex-app-server") {
+    return "codex";
   }
-  const normalized: AgentToolResultMiddlewareHarness[] = [];
-  for (const harness of requested) {
-    if (!AGENT_TOOL_RESULT_MIDDLEWARE_HARNESS_SET.has(harness)) {
+  return AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET.has(normalized)
+    ? (normalized as AgentToolResultMiddlewareRuntime)
+    : undefined;
+}
+
+export function normalizeAgentToolResultMiddlewareRuntimes(
+  options?: AgentToolResultMiddlewareOptions,
+): AgentToolResultMiddlewareRuntime[] {
+  const requested = options?.runtimes ?? options?.harnesses;
+  if (!requested || requested.length === 0) {
+    return [...AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES];
+  }
+  const normalized: AgentToolResultMiddlewareRuntime[] = [];
+  for (const runtime of requested) {
+    const value = normalizeAgentToolResultMiddlewareRuntime(runtime);
+    if (!value) {
       continue;
     }
-    if (!normalized.includes(harness)) {
-      normalized.push(harness);
+    if (!normalized.includes(value)) {
+      normalized.push(value);
+    }
+  }
+  return normalized;
+}
+
+/** @deprecated Use normalizeAgentToolResultMiddlewareRuntimes. */
+export const normalizeAgentToolResultMiddlewareHarnesses =
+  normalizeAgentToolResultMiddlewareRuntimes;
+
+export function normalizeAgentToolResultMiddlewareRuntimeIds(
+  runtimes: readonly string[] | undefined,
+): AgentToolResultMiddlewareRuntime[] {
+  const normalized: AgentToolResultMiddlewareRuntime[] = [];
+  for (const runtime of runtimes ?? []) {
+    const value = normalizeAgentToolResultMiddlewareRuntime(runtime);
+    if (value && !normalized.includes(value)) {
+      normalized.push(value);
     }
   }
   return normalized;
 }
 
 export function listAgentToolResultMiddlewares(
-  harness: AgentToolResultMiddlewareHarness,
+  runtime: AgentToolResultMiddlewareRuntime,
 ): AgentToolResultMiddleware[] {
   return (
     getActivePluginRegistry()
-      ?.agentToolResultMiddlewares?.filter((entry) => entry.harnesses.includes(harness))
+      ?.agentToolResultMiddlewares?.filter((entry) => entry.runtimes.includes(runtime))
       .map((entry) => entry.handler) ?? []
   );
 }

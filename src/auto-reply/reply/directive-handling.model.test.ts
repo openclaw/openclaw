@@ -553,6 +553,60 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
+  it("persists provider-compatible runtime overrides for mixed-content messages", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+    });
+
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("canonicalizes legacy Codex app-server runtime overrides during persistence", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime codex-app-server hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("clears runtime overrides when the model directive asks for default runtime", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime default hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "codex" }),
+      provider: "openai",
+      model: "gpt-4o",
+      initialModelLabel: "openai/gpt-4o",
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("ignores runtime overrides that do not belong to the selected provider", async () => {
+    vi.mocked(enqueueSystemEvent).mockClear();
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime claude-cli hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "pi" }),
+      provider: "openai",
+      model: "gpt-4o",
+      initialModelLabel: "openai/gpt-4o",
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBe("pi");
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Ignored unsupported runtime claude-cli for openai.",
+      {
+        sessionKey: "agent:main:dm:1",
+        contextKey: "model-runtime:openai:claude-cli",
+      },
+    );
+  });
+
   it("persists alias-based numeric auth-profile overrides for mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: `/model gpt@${OPENAI_DATE_PROFILE_ID} hello`,

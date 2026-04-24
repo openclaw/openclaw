@@ -282,6 +282,9 @@ function applyHarnessResultClassification(
 function resolvePinnedAgentHarnessPolicy(
   agentHarnessId: string | undefined,
 ): AgentHarnessPolicy | undefined {
+  if (!agentHarnessId?.trim()) {
+    return undefined;
+  }
   const runtime = normalizeEmbeddedAgentRuntime(agentHarnessId);
   if (runtime === "auto") {
     return undefined;

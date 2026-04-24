@@ -47,7 +47,7 @@ describe("captured plugin registration", () => {
           handler: async () => ({ text: "ok" }),
         });
         api.registerAgentToolResultMiddleware(() => undefined, {
-          harnesses: ["codex-app-server"],
+          runtimes: ["codex"],
         });
       },
     });
@@ -57,7 +57,7 @@ describe("captured plugin registration", () => {
     expect(captured.textTransforms).toHaveLength(1);
     expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
-    expect(captured.agentToolResultMiddlewares[0]?.harnesses).toEqual(["codex-app-server"]);
+    expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
   });
 });

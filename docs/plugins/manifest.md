@@ -406,7 +406,7 @@ read without importing the plugin runtime.
 ```json
 {
   "contracts": {
-    "agentToolResultMiddleware": ["pi", "codex-app-server"],
+    "agentToolResultMiddleware": ["pi", "codex"],
     "externalAuthProviders": ["acme-ai"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
@@ -427,7 +427,7 @@ Each list is optional:
 | Field                            | Type       | What it means                                                         |
 | -------------------------------- | ---------- | --------------------------------------------------------------------- |
 | `embeddedExtensionFactories`     | `string[]` | Deprecated embedded extension factory ids.                            |
-| `agentToolResultMiddleware`      | `string[]` | Harness ids a bundled plugin may register tool-result middleware for. |
+| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for. |
 | `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.       |
 | `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                 |
 | `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                 |

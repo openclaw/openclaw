@@ -7,7 +7,7 @@ import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type {
   AgentToolResultMiddleware,
-  AgentToolResultMiddlewareHarness,
+  AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginActivationSource } from "./config-state.js";
@@ -173,7 +173,7 @@ export type PluginAgentToolResultMiddlewareRegistration = {
   pluginName?: string;
   rawHandler: AgentToolResultMiddleware;
   handler: AgentToolResultMiddleware;
-  harnesses: AgentToolResultMiddlewareHarness[];
+  runtimes: AgentToolResultMiddlewareRuntime[];
   source: string;
   rootDir?: string;
 };

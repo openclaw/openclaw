@@ -35,13 +35,13 @@ describe("agent tool result middleware", () => {
       filename: "index.mjs",
       manifest: {
         contracts: {
-          agentToolResultMiddleware: ["codex-app-server"],
+          agentToolResultMiddleware: ["codex"],
         },
       },
       body: `export default { id: "tool-result-middleware", register(api) {
   api.registerAgentToolResultMiddleware(async (event) => ({
     result: { ...event.result, content: [{ type: "text", text: event.toolName + " compacted" }] }
-  }), { harnesses: ["codex-app-server"] });
+  }), { runtimes: ["codex"] });
 } };`,
     });
 
@@ -58,14 +58,14 @@ describe("agent tool result middleware", () => {
     };
 
     loadOpenClawPlugins(options);
-    expect(listAgentToolResultMiddlewares("codex-app-server")).toHaveLength(1);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
     expect(listAgentToolResultMiddlewares("pi")).toHaveLength(0);
 
     resetActivePluginRegistryForTest();
-    expect(listAgentToolResultMiddlewares("codex-app-server")).toHaveLength(0);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
 
     loadOpenClawPlugins(options);
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" });
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
     const result = await runner.applyToolResultMiddleware({
       threadId: "thread-1",
       turnId: "turn-1",
@@ -78,7 +78,7 @@ describe("agent tool result middleware", () => {
     expect(result.content).toEqual([{ type: "text", text: "exec compacted" }]);
   });
 
-  it("rejects middleware when the manifest omits the harness contract", () => {
+  it("rejects middleware when the manifest omits the runtime contract", () => {
     const tmp = createTempDir();
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
 
@@ -92,7 +92,7 @@ describe("agent tool result middleware", () => {
         },
       },
       body: `export default { id: "tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(() => undefined, { harnesses: ["codex-app-server"] });
+  api.registerAgentToolResultMiddleware(() => undefined, { runtimes: ["codex"] });
 } };`,
     });
 
@@ -112,10 +112,10 @@ describe("agent tool result middleware", () => {
       expect.objectContaining({
         level: "error",
         pluginId: "tool-result-middleware",
-        message: "plugin must declare contracts.agentToolResultMiddleware for: codex-app-server",
+        message: "plugin must declare contracts.agentToolResultMiddleware for: codex",
       }),
     );
-    expect(listAgentToolResultMiddlewares("codex-app-server")).toHaveLength(0);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
 
   it("rejects middleware from non-bundled plugins even when they declare the contract", () => {
@@ -127,11 +127,11 @@ describe("agent tool result middleware", () => {
       id: "tool-result-middleware",
       manifest: {
         contracts: {
-          agentToolResultMiddleware: ["codex-app-server"],
+          agentToolResultMiddleware: ["codex"],
         },
       },
       body: `export default { id: "tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(() => undefined, { harnesses: ["codex-app-server"] });
+  api.registerAgentToolResultMiddleware(() => undefined, { runtimes: ["codex"] });
 } };`,
     });
 
@@ -152,10 +152,10 @@ describe("agent tool result middleware", () => {
         message: "only bundled plugins can register agent tool result middleware",
       }),
     );
-    expect(listAgentToolResultMiddlewares("codex-app-server")).toHaveLength(0);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
 
-  it("merges harnesses when a plugin registers the same middleware function twice", () => {
+  it("merges runtimes when a plugin registers the same middleware function twice", () => {
     const tmp = createTempDir();
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
 
@@ -165,13 +165,13 @@ describe("agent tool result middleware", () => {
       filename: "index.mjs",
       manifest: {
         contracts: {
-          agentToolResultMiddleware: ["pi", "codex-app-server"],
+          agentToolResultMiddleware: ["pi", "codex"],
         },
       },
       body: `const middleware = () => undefined;
 export default { id: "tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(middleware, { harnesses: ["pi"] });
-  api.registerAgentToolResultMiddleware(middleware, { harnesses: ["codex-app-server"] });
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["pi"] });
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["codex"] });
 } };`,
     });
 
@@ -188,7 +188,7 @@ export default { id: "tool-result-middleware", register(api) {
     });
 
     expect(listAgentToolResultMiddlewares("pi")).toHaveLength(1);
-    expect(listAgentToolResultMiddlewares("codex-app-server")).toHaveLength(1);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
   });
 });
 

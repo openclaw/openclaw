@@ -152,10 +152,15 @@ describe("promptDefaultModel", () => {
     );
   });
 
-  it("hides the virtual Codex harness provider from default model choices", async () => {
+  it("hides legacy runtime providers from default model choices", async () => {
     loadModelCatalog.mockResolvedValue([
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "google-gemini-cli", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
       { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
     ]);
 
@@ -173,9 +178,12 @@ describe("promptDefaultModel", () => {
     const optionValues = (select.mock.calls[0]?.[0]?.options ?? []).map(
       (option: { value: string }) => option.value,
     );
-    expect(optionValues).toContain("openai/gpt-5.5");
-    expect(optionValues).toContain("openai-codex/gpt-5.5");
-    expect(optionValues).not.toContain("codex/gpt-5.5");
+    expect(optionValues).toEqual([
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3-pro-preview",
+      "openai-codex/gpt-5.5",
+    ]);
   });
 
   it("treats byteplus plan models as preferred-provider matches", async () => {
@@ -428,11 +436,15 @@ describe("promptModelAllowlist", () => {
   });
 });
 
-describe("Codex harness model picker visibility", () => {
-  it("hides virtual Codex harness refs from allowlist choices and configured supplements", async () => {
+describe("runtime model picker visibility", () => {
+  it("hides legacy runtime refs from allowlist choices and configured supplements", async () => {
     loadModelCatalog.mockResolvedValue([
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "google-gemini-cli", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
     ]);
 
     const multiselect = createSelectAllMultiselect();
@@ -442,6 +454,8 @@ describe("Codex harness model picker visibility", () => {
         defaults: {
           models: {
             "codex/gpt-5.5": { alias: "legacy-codex" },
+            "claude-cli/claude-sonnet-4-6": { alias: "CLI Claude" },
+            "google-gemini-cli/gemini-3-pro-preview": { alias: "CLI Gemini" },
             "openai/gpt-5.5": { alias: "gpt" },
           },
         },
@@ -452,7 +466,11 @@ describe("Codex harness model picker visibility", () => {
 
     const call = multiselect.mock.calls[0]?.[0];
     const optionValues = (call?.options ?? []).map((option: { value: string }) => option.value);
-    expect(optionValues).toEqual(["openai/gpt-5.5"]);
+    expect(optionValues).toEqual([
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3-pro-preview",
+    ]);
     expect(call?.initialValues).toEqual(["openai/gpt-5.5"]);
   });
 });

@@ -361,9 +361,9 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.changes).toEqual(
       expect.arrayContaining([
-        "Moved agents.defaults.model legacy codex/* primary refs to openai/* with Codex harness.",
-        "Moved agents.defaults.models legacy codex/* keys to openai/*.",
-        "Moved agents.list.reviewer.model legacy codex/* primary refs to openai/* with Codex harness.",
+        "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+        "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+        "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
       ]),
     );
   });
@@ -378,6 +378,107 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
           models: {
             "codex/gpt-5.4-mini": { alias: "legacy-codex" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toEqual([]);
+  });
+
+  it("migrates legacy Claude CLI primary refs to Anthropic refs plus explicit runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "claude-cli/claude-opus-4-7",
+            fallbacks: ["claude-cli/claude-sonnet-4-6"],
+          },
+          models: {
+            "claude-cli/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({ runtime: "claude-cli" });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
+    });
+  });
+
+  it("migrates legacy Codex CLI primary refs to OpenAI refs plus explicit runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex-cli/gpt-5.5",
+            fallbacks: ["codex-cli/gpt-5.4-mini"],
+          },
+          models: {
+            "codex-cli/gpt-5.5": { alias: "Codex CLI" },
+            "openai/gpt-5.5": { alias: "OpenAI GPT" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({ runtime: "codex-cli" });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "OpenAI GPT" },
+    });
+  });
+
+  it("migrates legacy Gemini CLI primary refs to Google refs plus explicit runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google-gemini-cli/gemini-3.1-pro-preview",
+            fallbacks: ["google-gemini-cli/gemini-3-flash-preview"],
+          },
+          models: {
+            "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini CLI" },
+            "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3-flash-preview"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({
+      runtime: "google-gemini-cli",
+    });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
+    });
+  });
+
+  it("preserves legacy runtime fallback-only refs because runtime is container-scoped", () => {
+    const input = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["claude-cli/claude-sonnet-4-6"],
+          },
+          models: {
+            "claude-cli/claude-sonnet-4-6": { alias: "CLI fallback" },
           },
         },
       },

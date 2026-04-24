@@ -575,7 +575,7 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
-  it("leaves a fresh unpinned session on config-selected harness resolution", async () => {
+  it("pins a fresh unpinned session to the default PI harness", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "fresh-session",
       updatedAt: Date.now(),
@@ -613,7 +613,7 @@ describe("embedded attempt harness pinning", () => {
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentHarnessId: undefined,
+        agentHarnessId: "pi",
       }),
     );
   });

@@ -1,9 +1,8 @@
+import { isLegacyRuntimeModelProvider } from "./model-runtime-aliases.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-const HIDDEN_MODEL_PICKER_PROVIDERS = new Set(["codex"]);
-
 export function isModelPickerVisibleProvider(provider: string): boolean {
-  return !HIDDEN_MODEL_PICKER_PROVIDERS.has(normalizeProviderId(provider));
+  return !isLegacyRuntimeModelProvider(normalizeProviderId(provider));
 }
 
 export function isModelPickerVisibleModelRef(ref: string): boolean {

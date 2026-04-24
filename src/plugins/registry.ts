@@ -29,7 +29,10 @@ import {
 } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
-import { normalizeAgentToolResultMiddlewareHarnesses } from "./agent-tool-result-middleware.js";
+import {
+  normalizeAgentToolResultMiddlewareRuntimeIds,
+  normalizeAgentToolResultMiddlewareRuntimes,
+} from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
@@ -375,18 +378,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const harnesses = normalizeAgentToolResultMiddlewareHarnesses(options);
-    if (harnesses.length === 0) {
+    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
+    if (runtimes.length === 0) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "agent tool result middleware must target at least one supported harness",
+        message: "agent tool result middleware must target at least one supported runtime",
       });
       return;
     }
-    const declared = record.contracts?.agentToolResultMiddleware ?? [];
-    const missing = harnesses.filter((harness) => !declared.includes(harness));
+    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
+      record.contracts?.agentToolResultMiddleware,
+    );
+    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
     if (missing.length > 0) {
       pushDiagnostic({
         level: "error",
@@ -400,7 +405,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      existing.harnesses = [...new Set([...existing.harnesses, ...harnesses])];
+      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
       return;
     }
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
@@ -418,7 +423,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       rawHandler: handler,
       handler: safeHandler,
-      harnesses,
+      runtimes,
       source: record.source,
       rootDir: record.rootDir,
     });

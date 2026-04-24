@@ -60,7 +60,7 @@ export function createCodexDynamicToolBridge(params: {
     toolAudioAsVoice: false,
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
-    harness: "codex-app-server",
+    runtime: "codex",
     ...params.hookContext,
   });
   const legacyExtensionRunner = createCodexAppServerToolResultExtensionRunner(

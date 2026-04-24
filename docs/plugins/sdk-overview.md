@@ -99,7 +99,7 @@ methods:
 | `api.registerCli(registrar, opts?)`             | CLI subcommand                          |
 | `api.registerService(service)`                  | Background service                      |
 | `api.registerInteractiveHandler(registration)`  | Interactive handler                     |
-| `api.registerAgentToolResultMiddleware(...)`    | Harness tool-result middleware          |
+| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware          |
 | `api.registerEmbeddedExtensionFactory(factory)` | Deprecated PI extension factory         |
 | `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus      |
@@ -113,12 +113,12 @@ methods:
 
 <Accordion title="When to use tool-result middleware">
   Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when
-  they need to rewrite a tool result after execution and before the harness
-  feeds that result back into the model. This is the trusted harness-neutral
+  they need to rewrite a tool result after execution and before the runtime
+  feeds that result back into the model. This is the trusted runtime-neutral
   seam for async output reducers such as tokenjuice.
 
 Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
-targeted harness, for example `["pi", "codex-app-server"]`. External plugins
+targeted runtime, for example `["pi", "codex"]`. External plugins
 cannot register this middleware; keep normal OpenClaw plugin hooks for work
 that does not need pre-model tool-result timing.
 </Accordion>
