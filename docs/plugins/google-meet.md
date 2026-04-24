@@ -305,7 +305,9 @@ Common failure checks:
   config points at the profile you want, for example
   `browser.defaultProfile: "user"` or a named existing-session profile.
 - Duplicate Meet tabs: leave `chrome.reuseExistingTab: true` enabled. OpenClaw
-  activates an existing tab for the same Meet URL before opening a new one.
+  activates an existing tab for the same Meet URL before opening a new one, and
+  browser meeting creation reuses an in-progress `https://meet.google.com/new`
+  or Google account prompt tab before opening another one.
 - No audio: in Meet, route microphone/speaker through the virtual audio device
   path used by OpenClaw; use separate virtual devices or Loopback-style routing
   for clean duplex audio.
@@ -820,6 +822,9 @@ to the pinned Chrome node browser. Confirm:
   `googlemeet.chrome`.
 - For browser fallback: the OpenClaw Chrome profile on that node is signed in
   to Google and can open `https://meet.google.com/new`.
+- For browser fallback: retries reuse an existing `https://meet.google.com/new`
+  or Google account prompt tab before opening a new tab. If an agent times out,
+  retry the tool call rather than manually opening another Meet tab.
 - For browser fallback: if Meet shows "Do you want people to hear you in the
   meeting?", leave the tab open. OpenClaw should click **Use microphone** or, for
   create-only fallback, **Continue without microphone** through browser
