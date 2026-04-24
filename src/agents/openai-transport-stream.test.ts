@@ -2214,6 +2214,98 @@ describe("openai transport stream", () => {
     expect(assistant?.tool_calls?.[0]?.function?.arguments).toBe('{"path":"/tmp/repro.txt"}');
   });
 
+  it.each([
+    ["reasoning", "Need to inspect the file first."],
+    ["reasoning_text", "Need to inspect the file first."],
+  ] as const)(
+    "maps %s into reasoning_content for DeepSeek tool-call replay",
+    (reasoningField, reasoningValue) => {
+      const params = buildOpenAICompletionsParams(
+        {
+          id: "deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          api: "openai-completions",
+          provider: "deepseek",
+          baseUrl: "https://api.deepseek.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } as never,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: "openai-completions",
+              provider: "openrouter",
+              model: "openrouter/deepseek/deepseek-r1",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "thinking",
+                  thinking: reasoningValue,
+                  thinkingSignature: reasoningField,
+                },
+                {
+                  type: "toolCall",
+                  id: "call_reasoning_alias_1",
+                  name: "read",
+                  arguments: { path: "/tmp/repro.txt" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_reasoning_alias_1",
+              toolName: "read",
+              content: [{ type: "text", text: "ok" }],
+              isError: false,
+              timestamp: 2,
+            },
+          ],
+          tools: [
+            {
+              name: "read",
+              description: "Read one file",
+              parameters: {
+                type: "object",
+                properties: { path: { type: "string" } },
+                required: ["path"],
+              },
+            },
+          ],
+        } as never,
+        undefined,
+      ) as {
+        messages?: Array<
+          Record<string, unknown> & {
+            role?: string;
+            content?: unknown;
+            reasoning?: unknown;
+            reasoning_text?: unknown;
+            reasoning_content?: unknown;
+            tool_calls?: Array<{ function?: { arguments?: unknown } }>;
+          }
+        >;
+      };
+
+      const assistant = params.messages?.find((message) => message.role === "assistant");
+      expect(assistant?.reasoning_content).toBe(reasoningValue);
+      expect(assistant?.tool_calls?.[0]?.function?.arguments).toBe('{"path":"/tmp/repro.txt"}');
+    },
+  );
+
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {

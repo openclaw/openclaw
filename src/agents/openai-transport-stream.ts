@@ -1765,23 +1765,32 @@ function injectDeepSeekReasoningReplay(outgoingMessages: unknown[], model: OpenA
     ) {
       continue;
     }
-    if (
-      typeof record.reasoning_content === "string" ||
-      typeof record.reasoning === "string" ||
-      typeof record.reasoning_text === "string"
-    ) {
-      continue;
-    }
     const extracted = extractReplayReasoningContent(record);
     for (const key of extracted.keysToDelete) {
       delete record[key];
     }
-    if (typeof record.content === "string" && record.content.trim().length > 0) {
-      record.reasoning_content = record.content;
+    if (
+      typeof record.reasoning_content === "string" &&
+      record.reasoning_content.trim().length > 0
+    ) {
+      continue;
+    }
+    const explicitReasoning =
+      typeof record.reasoning === "string" && record.reasoning.trim().length > 0
+        ? record.reasoning
+        : typeof record.reasoning_text === "string" && record.reasoning_text.trim().length > 0
+          ? record.reasoning_text
+          : undefined;
+    if (typeof explicitReasoning === "string" && explicitReasoning.trim().length > 0) {
+      record.reasoning_content = explicitReasoning;
       continue;
     }
     if (typeof extracted.content === "string" && extracted.content.trim().length > 0) {
       record.reasoning_content = extracted.content;
+      continue;
+    }
+    if (typeof record.content === "string" && record.content.trim().length > 0) {
+      record.reasoning_content = record.content;
     }
   }
 }
