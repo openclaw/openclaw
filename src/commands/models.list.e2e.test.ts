@@ -474,7 +474,9 @@ describe("models list/status", () => {
       models: {
         providers: {
           "custom-proxy": {
+            api: "openai-responses",
             baseUrl: "https://custom.example/v1",
+            apiKey: "$CUSTOM_PROXY_API_KEY",
             models: [
               {
                 id: "custom-model",
@@ -491,6 +493,7 @@ describe("models list/status", () => {
       models: {
         providers: {
           "custom-proxy": {
+            api: "openai-responses",
             baseUrl: "https://custom.example/v1",
             apiKey: "sk-resolved-runtime-value", // pragma: allowlist secret
             models: [
@@ -512,7 +515,7 @@ describe("models list/status", () => {
     getRuntimeConfig.mockReturnValue(resolvedConfig);
     const runtime = makeRuntime();
 
-    await modelsListCommand({ all: true, provider: "custom-proxy", json: true }, runtime);
+    await modelsListCommand({ all: true, json: true }, runtime);
 
     expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
     const payload = parseJsonLog(runtime);

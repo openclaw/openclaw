@@ -104,6 +104,16 @@ function toConfiguredProviderListModel(params: {
   };
 }
 
+function shouldListConfiguredProviderModel(params: {
+  providerConfig: Partial<ModelProviderConfig>;
+  model: Partial<ModelDefinitionConfig>;
+}): boolean {
+  return (
+    params.providerConfig.apiKey !== undefined &&
+    (params.providerConfig.api !== undefined || params.model.api !== undefined)
+  );
+}
+
 export async function loadListModelRegistry(
   cfg: OpenClawConfig,
   opts?: { providerFilter?: string },
@@ -159,6 +169,9 @@ export function appendConfiguredProviderRows(params: {
     params.context.cfg.models?.providers ?? {},
   )) {
     for (const configuredModel of providerConfig.models ?? []) {
+      if (!shouldListConfiguredProviderModel({ providerConfig, model: configuredModel })) {
+        continue;
+      }
       const key = modelKey(provider, configuredModel.id);
       if (params.seenKeys.has(key)) {
         continue;
