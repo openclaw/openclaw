@@ -232,6 +232,12 @@ function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
   idempotencyKey: string;
+  /**
+   * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
+   * completion to drop the matching `chatAbortControllers` entry without
+   * touching a same-runId entry owned by a concurrent chat.send.
+   */
+  abortController: AbortController;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
@@ -305,7 +311,10 @@ function dispatchAgentRunFromGateway(params: {
       });
     })
     .finally(() => {
-      params.context.chatAbortControllers.delete(params.runId);
+      const entry = params.context.chatAbortControllers.get(params.runId);
+      if (entry?.controller === params.abortController) {
+        params.context.chatAbortControllers.delete(params.runId);
+      }
     });
 }
 
@@ -1002,6 +1011,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
       runId,
       idempotencyKey: idem,
+      abortController: agentRunAbortController,
       respond,
       context,
     });

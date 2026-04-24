@@ -1718,10 +1718,12 @@ describe("gateway agent handler chat.abort integration", () => {
     });
   });
 
-  it("does not overwrite a pre-existing chatAbortControllers entry with the same runId", async () => {
+  it("does not overwrite or evict a pre-existing chatAbortControllers entry with the same runId", async () => {
     prime();
-    const pending = new Promise(() => {});
-    mocks.agentCommand.mockReturnValueOnce(pending);
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 1 },
+    });
 
     const context = makeContext();
     const runId = "idem-abort-collision";
@@ -1746,6 +1748,13 @@ describe("gateway agent handler chat.abort integration", () => {
       { context, reqId: runId },
     );
 
+    expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
+    // Cleanup after the agent run completes must not evict the pre-existing
+    // entry owned by a concurrent chat.send.
+    await waitForAssertion(() => {
+      expect(mocks.agentCommand).toHaveBeenCalled();
+    });
+    await new Promise((resolve) => setImmediate(resolve));
     expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
   });
 });
