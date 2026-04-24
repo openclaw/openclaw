@@ -266,6 +266,7 @@
   "provider-stream",
   "provider-tools",
   "provider-usage",
+  "web-content-extractor",
   "provider-web-fetch-contract",
   "provider-web-fetch",
   "provider-web-search-config-contract",
