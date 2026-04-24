@@ -62,8 +62,8 @@ function resolveEnabledBundledDocumentExtractorPlugins(params: {
     onlyPluginIds: params.onlyPluginIds,
     applyAutoEnable: true,
     compatMode: {
-      allowlist: true,
-      enablement: "always",
+      allowlist: false,
+      enablement: "allowlist",
       vitest: true,
     },
     resolveCompatPluginIds: resolveBundledDocumentExtractorCompatPluginIds,
@@ -104,19 +104,31 @@ export function resolvePluginDocumentExtractors(params?: {
   onlyPluginIds?: readonly string[];
 }): PluginDocumentExtractorEntry[] {
   const extractors: PluginDocumentExtractorEntry[] = [];
+  const loadErrors: unknown[] = [];
   for (const plugin of resolveEnabledBundledDocumentExtractorPlugins({
     config: params?.config,
     workspaceDir: params?.workspaceDir,
     env: params?.env,
     onlyPluginIds: params?.onlyPluginIds,
   })) {
-    const loaded = loadBundledDocumentExtractorEntriesFromDir({
-      dirName: plugin.id,
-      pluginId: plugin.id,
-    });
+    let loaded: PluginDocumentExtractorEntry[] | null;
+    try {
+      loaded = loadBundledDocumentExtractorEntriesFromDir({
+        dirName: plugin.id,
+        pluginId: plugin.id,
+      });
+    } catch (error) {
+      loadErrors.push(error);
+      continue;
+    }
     if (loaded) {
       extractors.push(...loaded);
     }
+  }
+  if (extractors.length === 0 && loadErrors.length > 0) {
+    throw new Error("Unable to load document extractor plugins", {
+      cause: loadErrors.length === 1 ? loadErrors[0] : new AggregateError(loadErrors),
+    });
   }
   return extractors.toSorted(compareExtractors);
 }

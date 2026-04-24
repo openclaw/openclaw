@@ -13,4 +13,16 @@ describe("resolvePluginDocumentExtractors", () => {
       }),
     ).toEqual([]);
   });
+
+  it("does not expand an operator plugin allowlist", () => {
+    expect(
+      resolvePluginDocumentExtractors({
+        config: {
+          plugins: {
+            allow: ["openai"],
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
 });

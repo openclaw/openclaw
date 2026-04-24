@@ -35,12 +35,19 @@ export async function extractDocumentContent(
   },
 ): Promise<(DocumentExtractionResult & { extractor: string }) | null> {
   const mimeType = normalizeLowercaseStringOrEmpty(params.mimeType);
-  let extractors: Awaited<ReturnType<typeof loadDocumentExtractors>>;
-  try {
-    extractors = await loadDocumentExtractors(params.config);
-  } catch {
-    return null;
-  }
+  const extractors = await loadDocumentExtractors(params.config);
+  const request: DocumentExtractionRequest = {
+    buffer: params.buffer,
+    mimeType: params.mimeType,
+    maxPages: params.maxPages,
+    maxPixels: params.maxPixels,
+    minTextChars: params.minTextChars,
+    ...(params.pageNumbers ? { pageNumbers: params.pageNumbers } : {}),
+    ...(params.onImageExtractionError
+      ? { onImageExtractionError: params.onImageExtractionError }
+      : {}),
+  };
+  const errors: unknown[] = [];
 
   for (const extractor of extractors) {
     if (
@@ -49,16 +56,21 @@ export async function extractDocumentContent(
       continue;
     }
     try {
-      const result = await extractor.extract(params);
+      const result = await extractor.extract(request);
       if (result) {
         return {
           ...result,
           extractor: extractor.id,
         };
       }
-    } catch {
-      continue;
+    } catch (error) {
+      errors.push(error);
     }
+  }
+  if (errors.length > 0) {
+    throw new Error(`Document extraction failed for ${mimeType || "unknown MIME type"}`, {
+      cause: errors.length === 1 ? errors[0] : new AggregateError(errors),
+    });
   }
   return null;
 }
