@@ -107,6 +107,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/startup: await startup sidecars before channel monitors report ready, reducing Discord and plugin startup races while still keeping gateway boot observability intact.
 - Plugins/Google Meet: report required manual actions for Chrome joins, use browser automation for Meet entry, and persist the private-WS node opt-in so paired-node realtime sessions keep their intended network policy.
 - Slack: route native stream fallback replies through the normal chunked sender so long buffered Slack Connect responses are not dropped or duplicated. (#71124) Thanks @martingarramon.
+- Config/media: reject LiteLLM routing aliases in `tools.media` model lists and when `tools.media.image` would fall back to `agents.defaults.imageModel`, so brittle media-understanding configs fail during validation instead of at runtime. (#54872) Thanks @Kyzcreig.
 
 ## 2026.4.23
 
@@ -137,7 +138,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/WebChat: preserve image attachments for text-only primary models by offloading them as media refs instead of dropping them, so configured image tools can still inspect the original file. Fixes #68513, #44276, #51656, #70212.
 - Plugins/Google Meet: hang up delegated Twilio calls on leave, clean up Chrome realtime audio bridges when launch fails, and use a flat provider-safe tool schema.
 - Media understanding: honor explicit image-model configuration before native-vision skips, including `agents.defaults.imageModel`, `tools.media.image.models`, and provider image defaults such as MiniMax VL when the active chat model is text-only. Fixes #47614, #63722, #69171.
-- Config/media: reject LiteLLM routing aliases in `tools.media` model lists and when `tools.media.image` would fall back to `agents.defaults.imageModel`, so brittle media-understanding configs fail during validation instead of at runtime. (#54872) Thanks @Kyzcreig.
 - Codex/media understanding: support `codex/*` image models through bounded Codex app-server image turns, while keeping `openai-codex/*` on the OpenAI Codex OAuth route and validating app-server responses against generated protocol contracts. Fixes #70201.
 - Providers/OpenAI Codex: synthesize the `openai-codex/gpt-5.5` OAuth model row when Codex catalog discovery omits it, so cron and subagent runs do not fail with `Unknown model` while the account is authenticated.
 - Models/Codex: preserve Codex provider metadata when adding models from chat or CLI commands, so manually added Codex models keep the right auth and routing behavior. (#70820) Thanks @Takhoffman.
