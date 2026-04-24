@@ -55,6 +55,94 @@ describe("openai codex provider", () => {
     loginOpenAICodexDeviceCodeMock.mockReset();
   });
 
+  describe("suppressBuiltInModel", () => {
+    it("returns undefined for a different provider id", () => {
+      const provider = buildOpenAICodexProviderPlugin();
+
+      expect(
+        provider.suppressBuiltInModel?.({
+          provider: "openai",
+          modelId: "gpt-5.4",
+          env: process.env,
+        }),
+      ).toBeUndefined();
+    });
+
+    it("returns undefined for an active model", () => {
+      const provider = buildOpenAICodexProviderPlugin();
+
+      expect(
+        provider.suppressBuiltInModel?.({
+          provider: "openai-codex",
+          modelId: "gpt-5.5",
+          env: process.env,
+        }),
+      ).toBeUndefined();
+    });
+
+    it("suppresses gpt-5.3-codex-spark with the existing migration hint", () => {
+      const provider = buildOpenAICodexProviderPlugin();
+
+      const result = provider.suppressBuiltInModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex-spark",
+        env: process.env,
+      });
+
+      expect(result).toMatchObject({
+        suppress: true,
+        errorMessage: expect.stringContaining("gpt-5.5"),
+      });
+    });
+
+    it("suppresses gpt-5.4 with a gpt-5.5 and gpt-5.4-mini migration hint", () => {
+      const provider = buildOpenAICodexProviderPlugin();
+
+      const result = provider.suppressBuiltInModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        env: process.env,
+      });
+
+      expect(result).toMatchObject({
+        suppress: true,
+        errorMessage: expect.stringContaining("gpt-5.5"),
+      });
+      expect(result?.errorMessage).toContain("gpt-5.4-mini");
+    });
+
+    it("suppresses gpt-5.4-pro with a gpt-5.5 migration hint", () => {
+      const provider = buildOpenAICodexProviderPlugin();
+
+      const result = provider.suppressBuiltInModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4-pro",
+        env: process.env,
+      });
+
+      expect(result).toMatchObject({
+        suppress: true,
+        errorMessage: expect.stringContaining("gpt-5.5"),
+      });
+    });
+
+    it("suppresses the user-facing gpt-5.4-codex legacy alias", () => {
+      const provider = buildOpenAICodexProviderPlugin();
+
+      const result = provider.suppressBuiltInModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4-codex",
+        env: process.env,
+      });
+
+      expect(result).toMatchObject({
+        suppress: true,
+        errorMessage: expect.stringContaining("gpt-5.5"),
+      });
+      expect(result?.errorMessage).toContain("gpt-5.4-mini");
+    });
+  });
+
   it("falls back to the cached credential when accountId extraction fails", async () => {
     const provider = buildOpenAICodexProviderPlugin();
     const credential = {

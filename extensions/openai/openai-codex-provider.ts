@@ -82,6 +82,24 @@ const OPENAI_CODEX_GPT_54_MINI_COST = {
   cacheRead: 0.075,
   cacheWrite: 0,
 } as const;
+const SUPPRESSED_CODEX_MODELS = new Map<string, string>([
+  [
+    "gpt-5.3-codex-spark",
+    "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+  ],
+  [
+    OPENAI_CODEX_GPT_54_MODEL_ID,
+    "openai-codex/gpt-5.4 has been retired from the Codex catalog. Update your config to use openai-codex/gpt-5.5 (recommended) or openai-codex/gpt-5.4-mini.",
+  ],
+  [
+    OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID,
+    "openai-codex/gpt-5.4-codex has been retired from the Codex catalog. Update your config to use openai-codex/gpt-5.5 (recommended) or openai-codex/gpt-5.4-mini.",
+  ],
+  [
+    OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
+    "openai-codex/gpt-5.4-pro has been retired from the Codex catalog. Update your config to use openai-codex/gpt-5.5-pro (if enabled) or openai-codex/gpt-5.5.",
+  ],
+]);
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 /** Legacy codex rows first; fall back to catalog `gpt-5.4` when the API omits 5.3/5.2. */
 const OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS = [
@@ -478,15 +496,13 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       ],
     }),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
-    suppressBuiltInModel: ({ provider, modelId }) =>
-      normalizeProviderId(provider) === PROVIDER_ID &&
-      normalizeLowercaseStringOrEmpty(modelId) === "gpt-5.3-codex-spark"
-        ? {
-            suppress: true,
-            errorMessage:
-              "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-          }
-        : undefined,
+    suppressBuiltInModel: ({ provider, modelId }) => {
+      if (normalizeProviderId(provider) !== PROVIDER_ID) {
+        return undefined;
+      }
+      const errorMessage = SUPPRESSED_CODEX_MODELS.get(normalizeLowercaseStringOrEmpty(modelId));
+      return errorMessage ? { suppress: true, errorMessage } : undefined;
+    },
     preferRuntimeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return false;
