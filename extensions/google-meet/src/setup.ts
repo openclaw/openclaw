@@ -79,6 +79,37 @@ export function getGoogleMeetSetupStatus(config: GoogleMeetConfig): {
         : "Chrome realtime audio bridge not configured",
   });
 
+  checks.push({
+    id: "guest-join-defaults",
+    ok: Boolean(
+      config.chrome.guestName && config.chrome.autoJoin && config.chrome.reuseExistingTab,
+    ),
+    message:
+      config.chrome.guestName && config.chrome.autoJoin && config.chrome.reuseExistingTab
+        ? "Guest auto-join and tab reuse defaults are enabled"
+        : "Set chrome.guestName, chrome.autoJoin, and chrome.reuseExistingTab for unattended guest joins",
+  });
+
+  checks.push({
+    id: "chrome-node-target",
+    ok: config.defaultTransport !== "chrome-node" || Boolean(config.chromeNode.node),
+    message:
+      config.defaultTransport === "chrome-node" && !config.chromeNode.node
+        ? "chrome-node default should pin chromeNode.node when multiple nodes may be connected"
+        : config.chromeNode.node
+          ? `Chrome node pinned to ${config.chromeNode.node}`
+          : "Chrome node not pinned; automatic selection works when exactly one capable node is connected",
+  });
+
+  checks.push({
+    id: "intro-after-in-call",
+    ok: config.chrome.waitForInCallMs > 0,
+    message:
+      config.chrome.waitForInCallMs > 0
+        ? `Realtime intro waits up to ${config.chrome.waitForInCallMs}ms for the Meet tab to be in-call`
+        : "Set chrome.waitForInCallMs to delay realtime intro until the Meet tab is in-call",
+  });
+
   return {
     ok: checks.every((check) => check.ok),
     checks,

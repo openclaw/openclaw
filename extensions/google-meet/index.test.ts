@@ -171,6 +171,10 @@ describe("google-meet plugin", () => {
       chrome: {
         audioBackend: "blackhole-2ch",
         launch: true,
+        guestName: "OpenClaw Agent",
+        reuseExistingTab: true,
+        autoJoin: true,
+        waitForInCallMs: 20000,
         audioInputCommand: [
           "rec",
           "-q",
@@ -285,7 +289,16 @@ describe("google-meet plugin", () => {
       properties: {
         action: {
           type: "string",
-          enum: ["join", "status", "setup_status", "resolve_space", "preflight", "leave", "speak"],
+          enum: [
+            "join",
+            "status",
+            "setup_status",
+            "resolve_space",
+            "preflight",
+            "leave",
+            "speak",
+            "test_speech",
+          ],
         },
         transport: { type: "string", enum: ["chrome", "chrome-node", "twilio"] },
         mode: { type: "string", enum: ["realtime", "transcribe"] },
@@ -554,6 +567,10 @@ describe("google-meet plugin", () => {
           action: "start",
           url: "https://meet.google.com/abc-defg-hij",
           mode: "transcribe",
+          guestName: "OpenClaw Agent",
+          reuseExistingTab: true,
+          autoJoin: true,
+          waitForInCallMs: 20000,
         }),
       }),
     );
@@ -566,6 +583,81 @@ describe("google-meet plugin", () => {
         },
       },
     });
+  });
+
+  it("reuses an active Meet session for the same URL and transport", async () => {
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        defaultMode: "transcribe",
+      },
+      {
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+            browser: { inCall: true, micMuted: false },
+          },
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.join") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const first = vi.fn();
+    const second = vi.fn();
+
+    await handler?.({
+      params: { url: "https://meet.google.com/abc-defg-hij" },
+      respond: first,
+    });
+    await handler?.({
+      params: { url: "https://meet.google.com/abc-defg-hij" },
+      respond: second,
+    });
+
+    expect(nodesInvoke).toHaveBeenCalledTimes(1);
+    expect(second.mock.calls[0]?.[1]).toMatchObject({
+      session: {
+        chrome: { health: { inCall: true, micMuted: false } },
+        notes: expect.arrayContaining(["Reused existing active Meet session."]),
+      },
+    });
+  });
+
+  it("exposes a test-speech action that joins the requested meeting", async () => {
+    const { tools, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+      },
+      {
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+            browser: { inCall: true },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { createdSession?: boolean } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "test_speech",
+      url: "https://meet.google.com/abc-defg-hij",
+      message: "Say exactly: hello.",
+    });
+
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "googlemeet.chrome",
+        params: expect.objectContaining({ action: "start" }),
+      }),
+    );
+    expect(result.details).toMatchObject({ createdSession: true });
   });
 
   it("explains when chrome-node has no capable paired node", async () => {
@@ -781,7 +873,7 @@ describe("google-meet plugin", () => {
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2, 3]));
     expect(outputStdinWrites).toEqual([Buffer.from([4, 5])]);
     expect(bridge.acknowledgeMark).toHaveBeenCalled();
-    expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say exactly: I'm here and listening.");
+    expect(bridge.triggerGreeting).not.toHaveBeenCalled();
     handle.speak("Say exactly: hello from the meeting.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the meeting.");
     expect(callbacks).toMatchObject({
@@ -922,7 +1014,7 @@ describe("google-meet plugin", () => {
         text: "Use the launch update.",
       });
     });
-    expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say exactly: I'm here and listening.");
+    expect(bridge.triggerGreeting).not.toHaveBeenCalled();
     handle.speak("Say exactly: hello from the node.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the node.");
     expect(callbacks).toMatchObject({
