@@ -97,6 +97,14 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     expect(payloads[0]?.reasoning).toEqual({ effort: "medium" });
   });
 
+  it("injects reasoning on reasoning-capable model when payload has no prior reasoning (#70904)", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "high");
+    void wrapped(codexModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "high" });
+  });
+
   it("returns underlying streamFn unchanged when thinkingLevel is undefined", () => {
     const { baseStreamFn } = createPayloadCapture();
     const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, undefined);

@@ -258,6 +258,17 @@ export function createOpenAIThinkingLevelWrapper(
       ) {
         (existingReasoning as Record<string, unknown>).effort =
           mapThinkingLevelToReasoningEffort(thinkingLevel);
+        return;
+      }
+      // pi-ai's Responses/Codex-Responses clients only populate `body.reasoning`
+      // when `options.reasoningEffort` is threaded through, which OpenClaw does
+      // not do for this wrapper. Without this branch, `thinkingLevel` is silently
+      // cosmetic for reasoning-capable models whose payload has no prior
+      // reasoning field. Mirror `normalizeProxyReasoningPayload`'s
+      // `!existingReasoning` case so the configured effort actually reaches the
+      // endpoint. (#70904)
+      if (existingReasoning === undefined || existingReasoning === null) {
+        payloadObj.reasoning = { effort: mapThinkingLevelToReasoningEffort(thinkingLevel) };
       }
     });
   };
