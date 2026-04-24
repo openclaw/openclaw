@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentInternalEvent } from "../internal-events.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -32,6 +33,10 @@ import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 const internalEvents: AgentInternalEvent[] = [];
+type RuntimePlanOverrides = Partial<Omit<AgentRuntimePlan, "auth" | "resolvedRef">> & {
+  auth?: Partial<AgentRuntimePlan["auth"]>;
+  resolvedRef?: Partial<AgentRuntimePlan["resolvedRef"]>;
+};
 const forwardingCase = {
   runId: "forward-attempt-params",
   params: {
@@ -58,23 +63,82 @@ const forwardingCase = {
   expected: Record<string, unknown>;
 };
 
-function makeForwardedRuntimePlan(
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return {
+function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRuntimePlan {
+  const basePlan: AgentRuntimePlan = {
+    auth: {
+      authProfileProviderForAuth: "anthropic",
+      providerForAuth: "anthropic",
+    },
+    delivery: {
+      isSilentPayload: vi.fn(() => false),
+      resolveFollowupRoute: vi.fn(),
+    },
+    observability: {
+      provider: "anthropic",
+      resolvedRef: "anthropic/test-model",
+      modelId: "test-model",
+    },
+    outcome: {
+      classifyRunResult: vi.fn(() => undefined),
+    },
+    prompt: {
+      provider: "anthropic",
+      modelId: "test-model",
+      resolveSystemPromptContribution: vi.fn(),
+    },
+    transcript: {
+      policy: {
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        preserveNativeAnthropicToolUseIds: false,
+        repairToolUseResultPairing: true,
+        preserveSignatures: false,
+        sanitizeThinkingSignatures: true,
+        dropThinkingBlocks: false,
+        applyGoogleTurnOrdering: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: false,
+        allowSyntheticToolResults: false,
+      },
+      resolvePolicy: vi.fn((params) => ({
+        sanitizeMode: params?.modelApi === "anthropic-messages" ? "full" : "images-only",
+        sanitizeToolCallIds: true,
+        preserveNativeAnthropicToolUseIds: false,
+        repairToolUseResultPairing: true,
+        preserveSignatures: false,
+        sanitizeThinkingSignatures: true,
+        dropThinkingBlocks: false,
+        applyGoogleTurnOrdering: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: false,
+        allowSyntheticToolResults: false,
+      })),
+    },
+    transport: {
+      extraParams: {},
+      resolveExtraParams: vi.fn(() => ({})),
+    },
     resolvedRef: {
       provider: "anthropic",
       modelId: "test-model",
       harnessId: "pi",
     },
     tools: {
-      normalize: vi.fn(),
+      normalize: vi.fn((tools) => tools),
       logDiagnostics: vi.fn(),
     },
-    transport: {
-      resolveExtraParams: vi.fn(),
-    },
+  };
+  return {
+    ...basePlan,
     ...overrides,
+    auth: {
+      ...basePlan.auth,
+      ...overrides.auth,
+    },
+    resolvedRef: {
+      ...basePlan.resolvedRef,
+      ...overrides.resolvedRef,
+    },
   };
 }
 
@@ -143,6 +207,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       runId: forwardingCase.runId,
     });
 
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         ...forwardingCase.expected,
@@ -208,6 +273,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "codex",
@@ -274,6 +340,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
