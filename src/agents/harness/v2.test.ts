@@ -77,7 +77,12 @@ describe("AgentHarness V2 compatibility adapter", () => {
         events.push(`outcome:${session.lifecycleState}`);
         return { ...rawResult, agentHarnessId: session.harnessId };
       },
-      cleanup: async ({ session, result: cleanupResult, error }) => {
+      cleanup: async ({ prepared, session, result: cleanupResult, error }) => {
+        expect(prepared?.lifecycleState).toBe("prepared");
+        expect(session?.lifecycleState).toBe("started");
+        if (!session) {
+          throw new Error("expected started session during successful cleanup");
+        }
         events.push(`cleanup:${session.lifecycleState}`);
         expect(cleanupResult).toMatchObject({ agentHarnessId: "native-v2" });
         expect(error).toBeUndefined();
@@ -127,8 +132,42 @@ describe("AgentHarness V2 compatibility adapter", () => {
     expect(cleanup).toHaveBeenCalledWith(
       expect.objectContaining({
         error: sendError,
+        prepared: expect.objectContaining({ lifecycleState: "prepared" }),
+        session: expect.objectContaining({ lifecycleState: "started" }),
       }),
     );
+  });
+
+  it("runs cleanup for failed prepare/start lifecycle stages", async () => {
+    const params = createAttemptParams();
+    const startError = new Error("codex app-server start failed");
+    const cleanup = vi.fn(async () => {});
+    const harness: AgentHarnessV2 = {
+      id: "native-v2",
+      label: "Native V2",
+      supports: () => ({ supported: true }),
+      prepare: async () => ({
+        harnessId: "native-v2",
+        label: "Native V2",
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async () => {
+        throw startError;
+      },
+      send: async () => createAttemptResult(),
+      resolveOutcome: async (_session, rawResult) => rawResult,
+      cleanup,
+    };
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+      "codex app-server start failed",
+    );
+    expect(cleanup).toHaveBeenCalledWith({
+      error: startError,
+      prepared: expect.objectContaining({ lifecycleState: "prepared" }),
+      session: undefined,
+    });
   });
 
   it("surfaces cleanup failures after successful outcomes", async () => {
