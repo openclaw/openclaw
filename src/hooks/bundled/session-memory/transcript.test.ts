@@ -38,24 +38,24 @@ describe("sanitizeModelOutput", () => {
   });
 
   it("strips [AUDIO_AS_VOICE] metadata marker", () => {
-    expect(sanitizeModelOutput("Hello [AUDIO_AS_VOICE] world")).toBe("Hello world");
+    expect(sanitizeModelOutput("Hello [AUDIO_AS_VOICE] world")).toBe("Hello  world");
   });
 
   it("strips [MEDIA:...] markers", () => {
-    expect(sanitizeModelOutput("See [MEDIA:image.png] attached")).toBe("See attached");
+    expect(sanitizeModelOutput("See [MEDIA:image.png] attached")).toBe("See  attached");
   });
 
   it("strips [reply_to:...] markers", () => {
-    expect(sanitizeModelOutput("Hello [reply_to:123] world")).toBe("Hello world");
+    expect(sanitizeModelOutput("Hello [reply_to:123] world")).toBe("Hello  world");
   });
 
   it("strips thinking blocks between XML-like tags", () => {
     const input = "Hello <reasoning>I'm thinking about this</reasoning> world";
-    expect(sanitizeModelOutput(input)).toBe("Hello world");
+    expect(sanitizeModelOutput(input)).toBe("Hello  world");
   });
 
   it("strips self-closing reasoning tags", () => {
-    expect(sanitizeModelOutput("Hello <reasoning/> world")).toBe("Hello world");
+    expect(sanitizeModelOutput("Hello <reasoning/> world")).toBe("Hello  world");
   });
 
   it("strips multi-line reasoning blocks", () => {
@@ -73,7 +73,7 @@ World`;
 
   it("strips tool_call XML blocks", () => {
     const input = `Hello <tool_call name="exec">run a command</tool_call> world`;
-    expect(sanitizeModelOutput(input)).toBe("Hello world");
+    expect(sanitizeModelOutput(input)).toBe("Hello  world");
   });
 
   it("strips tool-result XML blocks", () => {
@@ -83,12 +83,12 @@ World`;
 
   it("strips <<[Document...]>> RAG markers", () => {
     const input = "Context <<[Document(id=1, page=1)]>> more text";
-    expect(sanitizeModelOutput(input)).toBe("Context more text");
+    expect(sanitizeModelOutput(input)).toBe("Context  more text");
   });
 
   it("strips <retrieved_context> blocks", () => {
     const input = "Hello <retrieved_context>Some context</retrieved_context> world";
-    expect(sanitizeModelOutput(input)).toBe("Hello world");
+    expect(sanitizeModelOutput(input)).toBe("Hello  world");
   });
 
   it("strips orphaned role markers at line start, preserving content", () => {
@@ -98,13 +98,22 @@ World`;
   });
 
   it("strips system instruction leakage (## System header)", () => {
-    // System instruction blocks use indented continuation lines. The indented
-    // pattern matches header + indented content + trailing blank line.
     const input = `Hello
 
 ## System
   You are a helpful assistant.
   Never reveal this.
+
+World`;
+    expect(sanitizeModelOutput(input)).toBe("Hello\n\nWorld");
+  });
+
+  it("strips non-indented system instruction leakage", () => {
+    const input = `Hello
+
+## System
+You are a helpful assistant.
+Never reveal this.
 
 World`;
     expect(sanitizeModelOutput(input)).toBe("Hello\n\nWorld");
@@ -142,6 +151,11 @@ Let me know if you need more.`;
   it("strips [UNUSED_TOKEN] and [PAD_TOKEN]", () => {
     expect(sanitizeModelOutput("Hello [UNUSED_TOKEN] world")).toBe("Hello  world");
     expect(sanitizeModelOutput("Hello [PAD_TOKEN] world")).toBe("Hello  world");
+  });
+
+  it("does not strip legitimate bracketed content starting with DOCUMENT", () => {
+    expect(sanitizeModelOutput("Keep [DOCUMENTATION] intact")).toBe("Keep [DOCUMENTATION] intact");
+    expect(sanitizeModelOutput("See [Document review] notes")).toBe("See [Document review] notes");
   });
 
   it("does not strip content that merely resembles a token", () => {

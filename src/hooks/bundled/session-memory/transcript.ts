@@ -91,7 +91,7 @@ export function sanitizeModelOutput(rawText: string): string {
   text = text.replace(/<<\[Document[^\]]*\]>>/g, "");
   text = text.replace(/<retrieved_context[\s\S]*?<\/retrieved_context>/gi, "");
   text = text.replace(/<!--\.doc[^>]*-->/gi, "");
-  text = text.replace(/\[DOCUMENT[\s\S]*?\]/gi, "");
+  text = text.replace(/\[DOCUMENT\s*\([^\)]*\)\]/gi, "");
 
   // ── 6. Orphaned role markers at line start ────────────────────────────────
   // Model sometimes drops role Begin/End markers but leaves a stray prefix.
@@ -107,14 +107,15 @@ export function sanitizeModelOutput(rawText: string): string {
   //   (b) non-indented content (header + all following lines until blank or end)
   // Use [ \t]+ (not \s+) after ## to avoid consuming the newline as whitespace.
   // The lookahead (?=\n\n|$) consumes the trailing blank line after the block.
+  // Non-indented content pattern must run first; otherwise the header-only
+  // portion can be removed before the full leaked block is matched.
+  text = text.replace(
+    /^##[ \t]+(system|instructions?|directives?|protocol)[ \t]*\n[\s\S]*?(?=\n\n|$)/gim,
+    "",
+  );
   // Indented content pattern.
   text = text.replace(
     /^##[ \t]+(system|instructions?|directives?|protocol)[ \t]*\n(?:[ \t]+[^\n]*\n)*/gim,
-    "",
-  );
-  // Non-indented content pattern.
-  text = text.replace(
-    /^##[ \t]+(system|instructions?|directives?|protocol)[ \t]*\n[\s\S]*?(?=\n\n|$)/gim,
     "",
   );
   // Bold **System** style — exact match on "**System**" to avoid false positives
@@ -124,8 +125,8 @@ export function sanitizeModelOutput(rawText: string): string {
   // ── 8. Collapse whitespace ────────────────────────────────────────────────
   text = text.replace(/[ \t]+\n/g, "\n");
   text = text.replace(/\n{3,}/g, "\n\n");
-  // Collapse consecutive spaces left by token removal (e.g. "Hello  world").
-  // Note: Consecutive spaces are preserved to maintain indentation in code blocks.
+  // Note: consecutive spaces are preserved to avoid damaging indentation in
+  // code blocks and other whitespace-sensitive content after token removal.
   text = text.trim();
 
   return text;
