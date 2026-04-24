@@ -473,15 +473,20 @@ export type OrphanTranscriptPruneResult = {
  * reclaimed and subsequent disk-budget sweeps see the freed space.
  *
  * Path resolution is delegated to the caller via `preservedPaths`. That set
- * should contain every live transcript path for every live index entry (the
- * `resolveSessionTranscriptCandidates` helper in `gateway/session-transcript-files`
- * enumerates the full set of valid paths per session, covering explicit
- * `sessionFile` values, legacy absolute paths, and the agent/topic-thread
- * derivations). When `sessionsDir` may host multiple `sessions.json` stores
- * side by side, the caller is expected to union `preservedPaths` across every
- * neighbouring store. Paths are compared after `fs.realpathSync`
- * canonicalization, so symlinked `sessionsDir` access still matches the stored
- * realpath forms.
+ * should contain every live transcript path for every live index entry. For
+ * primary transcripts, `resolveSessionTranscriptCandidates` in
+ * `gateway/session-transcript-files` enumerates the valid paths per session
+ * (covering explicit `sessionFile` values, legacy absolute paths, and the
+ * agent/topic-thread derivations). For compaction-checkpoint snapshots, the
+ * caller must additionally include each
+ * `entry.compactionCheckpoints[].preCompaction.sessionFile` and
+ * `entry.compactionCheckpoints[].postCompaction.sessionFile` — those
+ * `*.checkpoint.*.jsonl` files are referenced by the store but are not
+ * returned by `resolveSessionTranscriptCandidates`. When `sessionsDir` may
+ * host multiple `sessions.json` stores side by side, the caller is expected
+ * to union `preservedPaths` across every neighbouring store. Paths are
+ * compared after `fs.realpathSync` canonicalization, so symlinked
+ * `sessionsDir` access still matches the stored realpath forms.
  *
  * Every candidate file also passes a content check: we read its header line
  * and require `type: "session"` plus a non-empty `id`. Files without a valid
