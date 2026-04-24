@@ -54,6 +54,15 @@ We prioritize secure defaults, but also expose clear knobs for trusted high-powe
 OpenClaw has an extensive plugin API.
 Core stays lean; optional capability should usually ship as plugins.
 
+There are two broad plugin styles:
+
+- Code plugins run OpenClaw plugin code and are appropriate for deeper runtime extension.
+- Bundle-style plugins package stable external surfaces such as skills, MCP servers, and related configuration.
+
+Prefer bundle-style plugins when they can express the capability.
+They have a smaller, more stable interface and better security boundaries.
+Use code plugins when the capability needs runtime hooks, providers, channels, tools, or other in-process extension points.
+
 Preferred plugin path is npm package distribution plus local extension loading for development.
 If you build a plugin, host and maintain it in your own repository.
 The bar for adding optional plugins to core is intentionally high.
