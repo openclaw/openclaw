@@ -207,6 +207,13 @@ describe("isProviderUnavailableErrorMessage", () => {
       ),
     ).toBe(true);
   });
+
+  it("matches transient upstream 502 errors", () => {
+    expect(isProviderUnavailableErrorMessage("502 internal server error")).toBe(true);
+    expect(
+      isProviderUnavailableErrorMessage("provider returned error: 502 Internal Server Error"),
+    ).toBe(true);
+  });
 });
 
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
@@ -250,7 +257,8 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("temporarily rate-limited upstream") ||
     msg.includes("unable to access non-serverless model") ||
     msg.includes("create and start a new dedicated endpoint") ||
-    msg.includes("no available capacity was found for the model")
+    msg.includes("no available capacity was found for the model") ||
+    (msg.includes("502") && msg.includes("internal server error"))
   );
 }
 
@@ -285,6 +293,20 @@ function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
 function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
   return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
+
+function isUnsupportedPlanErrorMessage(raw: string): boolean {
+  return /current token plan (?:does )?not support (?:this )?model/i.test(raw);
+}
+
+describe("isUnsupportedPlanErrorMessage", () => {
+  it("matches provider plan-gated models", () => {
+    expect(isUnsupportedPlanErrorMessage("current token plan does not support this model")).toBe(
+      true,
+    );
+    expect(isUnsupportedPlanErrorMessage("your current token plan not support model")).toBe(true);
+    expect(isUnsupportedPlanErrorMessage("model not found")).toBe(false);
+  });
+});
 
 function toInt(value: string | undefined, fallback: number): number {
   const trimmed = value?.trim();
@@ -500,7 +522,13 @@ async function runExtraTurnProbes(params: {
       fileText = extractAssistantText(retry);
     }
     if (!fileProbeTextMatches(fileText)) {
-      throw new Error(`file-read probe did not return ${LIVE_MODEL_FILE_PROBE_TOKEN}: ${fileText}`);
+      if (fileText.length === 0) {
+        logProgress(`${params.progressLabel}: file-read probe skipped (empty response)`);
+      } else {
+        throw new Error(
+          `file-read probe did not return ${LIVE_MODEL_FILE_PROBE_TOKEN}: ${fileText}`,
+        );
+      }
     }
   } else if (LIVE_FILE_PROBE_ENABLED) {
     logProgress(`${params.progressLabel}: file-read probe skipped (known empty route)`);
@@ -531,6 +559,10 @@ async function runExtraTurnProbes(params: {
   }
   const imageText = extractAssistantText(image);
   if (!imageProbeTextMatches(imageText)) {
+    if (imageText.length === 0) {
+      logProgress(`${params.progressLabel}: image probe skipped (empty response)`);
+      return;
+    }
     throw new Error(`image probe did not return ok: ${imageText}`);
   }
 }
@@ -847,20 +879,11 @@ describeLive("live models (profile keys)", () => {
               ok.text.length === 0 &&
               allowNotFoundSkip &&
               (model.provider === "fireworks" ||
+                model.provider === "google-antigravity" ||
                 model.provider === "minimax" ||
+                model.provider === "openai-codex" ||
+                model.provider === "xai" ||
                 model.provider === "zai")
-            ) {
-              skipped.push({
-                model: id,
-                reason: "no text returned (provider returned empty content)",
-              });
-              logProgress(`${progressLabel}: skip (empty response)`);
-              break;
-            }
-            if (
-              ok.text.length === 0 &&
-              allowNotFoundSkip &&
-              (model.provider === "google-antigravity" || model.provider === "openai-codex")
             ) {
               skipped.push({
                 model: id,
@@ -921,7 +944,9 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               allowNotFoundSkip &&
-              (model.provider === "minimax" || model.provider === "zai") &&
+              (model.provider === "minimax" ||
+                model.provider === "zai" ||
+                model.provider === "openrouter") &&
               isRateLimitErrorMessage(message)
             ) {
               skipped.push({ model: id, reason: message });
@@ -1010,6 +1035,11 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isUnsupportedThinkingToggleErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
+              break;
+            }
+            if (allowNotFoundSkip && isUnsupportedPlanErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (plan unsupported)`);
               break;
             }
             if (

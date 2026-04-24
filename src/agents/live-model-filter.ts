@@ -97,6 +97,11 @@ function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean 
   return !modelName.startsWith("gpt-5.2");
 }
 
+function isOldMiniMaxLiveModelRef(id: string): boolean {
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return modelName === "minimax-m2.1" || modelName.startsWith("minimax-m2.1:");
+}
+
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -127,6 +132,9 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
     return false;
   }
   if (isUnsupportedOpenAiLiveModelRef(provider, id)) {
+    return false;
+  }
+  if (isOldMiniMaxLiveModelRef(id)) {
     return false;
   }
   return isHighSignalClaudeModelId(id);
