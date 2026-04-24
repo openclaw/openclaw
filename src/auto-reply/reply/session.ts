@@ -698,6 +698,8 @@ export async function initSessionState(params: {
       agentId,
       reason: "reset",
     });
+  }
+  if (previousSessionEntry?.sessionId) {
     await disposeSessionMcpRuntime(previousSessionEntry.sessionId).catch((error) => {
       log.warn(
         `failed to dispose bundle MCP runtime for session ${previousSessionEntry.sessionId}`,
