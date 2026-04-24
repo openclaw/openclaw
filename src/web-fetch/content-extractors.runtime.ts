@@ -6,10 +6,23 @@ import type {
 import { resolvePluginWebContentExtractors } from "../plugins/web-content-extractors.runtime.js";
 
 let extractorPromise: Promise<ReturnType<typeof resolvePluginWebContentExtractors>> | undefined;
+const extractorPromisesByConfig = new WeakMap<
+  OpenClawConfig,
+  Promise<ReturnType<typeof resolvePluginWebContentExtractors>>
+>();
 
 async function loadWebContentExtractors(config?: OpenClawConfig) {
   if (config) {
-    return resolvePluginWebContentExtractors({ config });
+    const cached = extractorPromisesByConfig.get(config);
+    if (cached) {
+      return await cached;
+    }
+    const promise = Promise.resolve().then(() => resolvePluginWebContentExtractors({ config }));
+    extractorPromisesByConfig.set(config, promise);
+    void promise.catch(() => {
+      extractorPromisesByConfig.delete(config);
+    });
+    return await promise;
   }
   extractorPromise ??= Promise.resolve(resolvePluginWebContentExtractors());
   return await extractorPromise;
