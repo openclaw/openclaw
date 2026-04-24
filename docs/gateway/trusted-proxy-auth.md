@@ -53,9 +53,10 @@ scopes cleared to an empty set. The connection is allowed, but scope-gated metho
 (`operator.read`, `operator.write`, etc.) will fail with `missing scope`.
 
 To preserve operator scopes on trusted-proxy WebSocket connections without device
-identity, set `gateway.controlUi.dangerouslyDisableDeviceAuth: true`. This is safe
-in single-user, private-network deployments where the reverse proxy is the only
-path to the Gateway.
+identity, set `gateway.controlUi.dangerouslyDisableDeviceAuth: true`. Note that this
+is a break-glass flag (`openclaw security audit` reports it as critical) — use it
+only when the reverse proxy is the sole path to the Gateway and device identity
+cannot be established.
 
 ## Configuration
 

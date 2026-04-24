@@ -579,8 +579,10 @@ rather than the pre-handshake defaults.
 - **Omitting device identity has scope consequences.** When a Control UI connection
   lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity` clears
   self-declared scopes to an empty set (for token, password, and trusted-proxy auth).
-  The connection is allowed, but scope-gated methods will fail. Set
-  `gateway.controlUi.dangerouslyDisableDeviceAuth=true` to preserve scopes.
+  The connection is allowed, but scope-gated methods will fail. The one exception is
+  local Control UI token/password sessions with `allowInsecureAuth`, which preserve
+  scopes. For other cases, set `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+  to preserve scopes.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics
