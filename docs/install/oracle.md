@@ -7,8 +7,6 @@ read_when:
 title: "Oracle Cloud"
 ---
 
-# Oracle Cloud
-
 Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier (up to 4 OCPU, 24 GB RAM, 200 GB storage) at no cost.
 
 ## Prerequisites
@@ -156,3 +154,9 @@ Then open `http://localhost:18789`.
 - [Channels](/channels) -- connect Telegram, WhatsApp, Discord, and more
 - [Gateway configuration](/gateway/configuration) -- all config options
 - [Updating](/install/updating) -- keep OpenClaw up to date
+
+## Related
+
+- [Install overview](/install)
+- [GCP](/install/gcp)
+- [VPS hosting](/vps)

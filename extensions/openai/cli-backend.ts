@@ -3,9 +3,7 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
-import { prepareOpenAICodexCliExecution } from "./openai-codex-cli-bridge.js";
 
-const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
 
 export function buildOpenAICodexCliBackend(): CliBackendPlugin {
@@ -16,15 +14,12 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       defaultImageProbe: true,
       defaultMcpProbe: true,
       docker: {
-        npmPackage: "@openai/codex",
+        npmPackage: "@openai/codex@0.124.0",
         binaryName: "codex",
       },
     },
     bundleMcp: true,
     bundleMcpMode: "codex-config-overrides",
-    defaultAuthProfileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-    authEpochMode: "profile-only",
-    prepareExecution: prepareOpenAICodexCliExecution,
     config: {
       command: "codex",
       args: [
@@ -34,6 +29,8 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "never",
         "--sandbox",
         "workspace-write",
+        "-c",
+        'service_tier="fast"',
         "--skip-git-repo-check",
       ],
       resumeArgs: [
@@ -42,6 +39,8 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "{sessionId}",
         "-c",
         'sandbox_mode="workspace-write"',
+        "-c",
+        'service_tier="fast"',
         "--skip-git-repo-check",
       ],
       output: "jsonl",

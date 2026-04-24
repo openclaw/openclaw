@@ -19,6 +19,7 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
@@ -80,8 +81,8 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
   reasoningEffort?: OpenAIReasoningEffort;
 };
 
-type OpenAIModeModel = Model<Api> & {
-  compat?: Record<string, unknown>;
+type OpenAIModeModel = Omit<Model<Api>, "compat"> & {
+  compat?: ModelCompatConfig;
 };
 
 type MutableAssistantOutput = {
@@ -1505,31 +1506,24 @@ function getCompat(model: OpenAIModeModel): {
       : detected.supportsReasoningEffort;
   return {
     supportsStore,
-    supportsDeveloperRole:
-      (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
+    supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
     supportsReasoningEffort,
     reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
-    supportsUsageInStreaming:
-      (compat.supportsUsageInStreaming as boolean | undefined) ?? detected.supportsUsageInStreaming,
+    supportsUsageInStreaming: compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
     maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,
-    requiresToolResultName:
-      (compat.requiresToolResultName as boolean | undefined) ?? detected.requiresToolResultName,
+    requiresToolResultName: compat.requiresToolResultName ?? detected.requiresToolResultName,
     requiresAssistantAfterToolResult:
-      (compat.requiresAssistantAfterToolResult as boolean | undefined) ??
-      detected.requiresAssistantAfterToolResult,
-    requiresThinkingAsText:
-      (compat.requiresThinkingAsText as boolean | undefined) ?? detected.requiresThinkingAsText,
+      compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
+    requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
     thinkingFormat: (compat.thinkingFormat as string | undefined) ?? detected.thinkingFormat,
     openRouterRouting: (compat.openRouterRouting as Record<string, unknown> | undefined) ?? {},
     vercelGatewayRouting:
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
       detected.vercelGatewayRouting,
-    supportsStrictMode:
-      (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
-    requiresStringContent: (compat.requiresStringContent as boolean | undefined) ?? false,
+    supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
+    requiresStringContent: compat.requiresStringContent ?? false,
     visibleReasoningDetailTypes:
-      (compat.visibleReasoningDetailTypes as string[] | undefined) ??
-      detected.visibleReasoningDetailTypes,
+      compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
   };
 }
 

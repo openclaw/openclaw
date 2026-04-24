@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw configure` (interactive configuration prompts)"
 read_when:
   - You want to tweak credentials, devices, or agent defaults interactively
-title: "configure"
+title: "Configure"
 ---
 
 # `openclaw configure`
@@ -70,3 +70,8 @@ openclaw configure --section web
 openclaw configure --section model --section channels
 openclaw configure --section gateway --section daemon
 ```
+
+## Related
+
+- [CLI reference](/cli)
+- [Configuration](/gateway/configuration)

@@ -5,8 +5,6 @@ read_when:
 title: "Groups"
 ---
 
-# Groups
-
 OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo.
 
 ## Beginner intro (2 minutes)
@@ -140,7 +138,7 @@ Want “groups can only see folder X” instead of “no host access”? Keep `w
 
 Related:
 
-- Configuration keys and defaults: [Gateway configuration](/gateway/configuration-reference#agentsdefaultssandbox)
+- Configuration keys and defaults: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
 - Bind mounts details: [Sandboxing](/gateway/sandboxing#custom-bind-mounts)
 
@@ -415,3 +413,10 @@ See [WhatsApp](/channels/whatsapp#system-prompts) for the canonical WhatsApp sys
 ## WhatsApp specifics
 
 See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
+
+## Related
+
+- [Group messages](/channels/group-messages)
+- [Broadcast groups](/channels/broadcast-groups)
+- [Channel routing](/channels/channel-routing)
+- [Pairing](/channels/pairing)

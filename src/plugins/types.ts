@@ -40,6 +40,8 @@ import type {
 } from "../realtime-transcription/provider-types.js";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderConfiguredContext,
@@ -69,6 +71,7 @@ import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
   CliBackendAuthEpochMode,
+  CliBackendNormalizeConfigContext,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
   CliBackendPlugin,
@@ -148,6 +151,7 @@ export type {
 } from "./conversation-binding.types.js";
 export type {
   CliBackendAuthEpochMode,
+  CliBackendNormalizeConfigContext,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
   CliBackendPlugin,
@@ -1659,6 +1663,9 @@ export type RealtimeVoiceProviderPlugin = {
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
+  createBrowserSession?: (
+    req: RealtimeVoiceBrowserSessionCreateRequest,
+  ) => Promise<RealtimeVoiceBrowserSession>;
 };
 
 export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
@@ -1845,6 +1852,25 @@ export type OpenClawPluginSecurityAuditCollector = (
   ctx: OpenClawPluginSecurityAuditContext,
 ) => SecurityAuditFinding[] | Promise<SecurityAuditFinding[]>;
 
+export type OpenClawGatewayDiscoveryAdvertiseContext = {
+  machineDisplayName: string;
+  gatewayPort: number;
+  gatewayTlsEnabled: boolean;
+  gatewayTlsFingerprintSha256?: string;
+  canvasPort?: number;
+  tailnetDns?: string;
+  sshPort?: number;
+  cliPath?: string;
+  minimal: boolean;
+};
+
+export type OpenClawGatewayDiscoveryService = {
+  id: string;
+  advertise: (
+    ctx: OpenClawGatewayDiscoveryAdvertiseContext,
+  ) => void | Promise<void | { stop?: () => void | Promise<void> }>;
+};
+
 /** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
@@ -1962,6 +1988,8 @@ export type OpenClawPluginApi = {
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */
+  registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;
   /** Register a text-only CLI backend used by the local CLI runner. */
   registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register plugin-owned prompt/message compatibility text transforms. */

@@ -90,6 +90,8 @@ export function registerGroupIntroPromptCases(): void {
         expected: [
           "You are in a WhatsApp group chat.",
           "Activation: always-on (you receive every group message).",
+          'If you only react or otherwise handle the message without a text reply, your final answer must still be exactly "NO_REPLY".',
+          "Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.",
         ],
         defaultActivation: "always",
       },

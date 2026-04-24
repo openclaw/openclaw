@@ -31,7 +31,7 @@ jobs:
           github.event.workflow_run.event == 'push' &&
           github.event.workflow_run.head_branch == 'main' &&
           !endsWith(github.event.workflow_run.actor.login, '[bot]')))
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
       - name: Checkout
@@ -78,7 +78,7 @@ jobs:
 
           day_start="$(date -u +%Y-%m-%dT00:00:00Z)"
           runs_json="$RUNNER_TEMP/test-performance-agent-runs.json"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/test-performance-agent.yml/runs" \
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/test-performance-agent.yml/runs" \
             -f branch=main \
             -f event=workflow_run \
             -f per_page=50 > "$runs_json"
@@ -181,7 +181,7 @@ jobs:
 
       - name: Restore Node 24 path
         if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
-        run: |
+        run: | # zizmor: ignore[github-env] NODE_BIN is set by the trusted local setup-node-env action in this same job
           set -euo pipefail
           export PATH="${NODE_BIN}:${PATH}"
           echo "${NODE_BIN}" >> "$GITHUB_PATH"
@@ -227,7 +227,6 @@ jobs:
       - name: Commit test performance updates
         if: steps.gate.outputs.run_agent == 'true' && steps.patch.outputs.has_changes == 'true'
         env:
-          BASE_SHA: ${{ steps.gate.outputs.base_sha }}
           GITHUB_TOKEN: ${{ github.token }}
           TARGET_BRANCH: main
         run: |
@@ -253,9 +252,14 @@ jobs:
               exit 0
             fi
             remote_main="$(git rev-parse "origin/${TARGET_BRANCH}")"
-            if [ "$remote_main" != "$BASE_SHA" ]; then
-              echo "main advanced from ${BASE_SHA} to ${remote_main}; skipping stale test performance update."
-              exit 0
+            if [ "$remote_main" != "$(git rev-parse HEAD^)" ]; then
+              echo "main advanced; rebasing test performance update onto ${remote_main}."
+              if ! git rebase "origin/${TARGET_BRANCH}"; then
+                echo "Test performance update no longer applies cleanly; skipping stale update."
+                git rebase --abort || true
+                exit 0
+              fi
+              pnpm check:changed
             fi
             echo "Test performance update attempt ${attempt} failed; retrying."
             sleep $((attempt * 2))

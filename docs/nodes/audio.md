@@ -2,7 +2,7 @@
 summary: "How inbound audio/voice notes are downloaded, transcribed, and injected into replies"
 read_when:
   - Changing audio transcription or media handling
-title: "Audio and Voice Notes"
+title: "Audio and voice notes"
 ---
 
 # Audio / Voice Notes (2026-01-17)
@@ -189,3 +189,9 @@ When `requireMention: true` is set for a group chat, OpenClaw now transcribes au
 - For `parakeet-mlx`, if you pass `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when `--output-format` is `txt` (or omitted); non-`txt` output formats fall back to stdout parsing.
 - Keep timeouts reasonable (`timeoutSeconds`, default 60s) to avoid blocking the reply queue.
 - Preflight transcription only processes the **first** audio attachment for mention detection. Additional audio is processed during the main media understanding phase.
+
+## Related
+
+- [Media understanding](/nodes/media-understanding)
+- [Talk mode](/nodes/talk)
+- [Voice wake](/nodes/voicewake)

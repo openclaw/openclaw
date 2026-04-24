@@ -1,12 +1,10 @@
 ---
-title: "Vercel AI Gateway"
 summary: "Vercel AI Gateway setup (auth + model selection)"
+title: "Vercel AI gateway"
 read_when:
   - You want to use Vercel AI Gateway with OpenClaw
   - You need the API key env var or CLI auth choice
 ---
-
-# Vercel AI Gateway
 
 The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to
 access hundreds of models through a single endpoint.
@@ -83,7 +81,7 @@ You can use either the shorthand or the fully qualified model ref in your
 configuration. OpenClaw resolves the canonical form automatically.
 </Tip>
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Environment variable for daemon processes">

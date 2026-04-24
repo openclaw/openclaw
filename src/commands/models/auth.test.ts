@@ -585,7 +585,7 @@ describe("modelsAuthLoginCommand", () => {
       "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
       "anthropic/claude-opus-4-6": { alias: "opus" },
       "moonshot/kimi-k2.5": { alias: "kimi" },
-      "openai-codex/gpt-5.5": { alias: "gpt55" },
+      "openai/gpt-5.5": { alias: "gpt55" },
     };
     currentConfig = { agents: { defaults: { models: existingModels } } };
     runProviderAuth.mockResolvedValue({
@@ -608,7 +608,10 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
-    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(existingModels);
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      ...existingModels,
+      "openai-codex/gpt-5.5": {},
+    });
   });
 
   it("survives lockout clearing failure without blocking login", async () => {

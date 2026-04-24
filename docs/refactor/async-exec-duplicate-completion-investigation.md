@@ -3,10 +3,8 @@ summary: "Investigation notes for duplicate async exec completion injection"
 read_when:
   - Debugging repeated node exec completion events
   - Working on heartbeat/system-event dedupe
-title: "Async Exec Duplicate Completion Investigation"
+title: "Async exec duplicate completion investigation"
 ---
-
-# Async Exec Duplicate Completion Investigation
 
 ## Scope
 
@@ -128,3 +126,8 @@ If a fix is wanted, the smallest high-value change is:
 - or add a dedicated dedupe in `server-node-events` for `exec.finished` keyed by `(sessionKey, runId, event kind)`.
 
 That would directly block replayed `exec.finished` duplicates before they become session turns.
+
+## Related
+
+- [Exec tool](/tools/exec)
+- [Session management](/concepts/session)
