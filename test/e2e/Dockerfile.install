@@ -1,0 +1,24 @@
+# Dockerfile for verifying Gemmaclaw installs from a clean Node-only environment.
+#
+# This intentionally does not copy the local repo. It validates the README path:
+#   npm install -g github:gemmaclaw/gemmaclaw#main
+#   gemmaclaw setup
+#
+# Usage:
+#   docker build -f test/e2e/Dockerfile.install .
+#
+# The build succeeds only if all three acceptance criteria pass:
+#   1. npm install -g github:gemmaclaw/gemmaclaw#main exits 0
+#   2. gemmaclaw --version prints a version string
+#   3. gemmaclaw --help runs without error
+
+FROM node:22-bookworm
+
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN npm config set fund false \
+  && npm config set audit false
+
+# Install from GitHub and ensure the CLI works.
+RUN npm install -g github:gemmaclaw/gemmaclaw#main
+RUN gemmaclaw --version
+RUN gemmaclaw --help > /dev/null

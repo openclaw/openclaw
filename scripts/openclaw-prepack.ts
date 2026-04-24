@@ -111,8 +111,20 @@ async function writeDistInventory(): Promise<void> {
 
 async function main(): Promise<void> {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  run(pnpmCommand, ["build"]);
-  run(pnpmCommand, ["ui:build"]);
+  const corepackCommand = process.platform === "win32" ? "corepack.cmd" : "corepack";
+
+  const pnpmProbe = spawnSync(pnpmCommand, ["--version"], {
+    stdio: "ignore",
+    env: process.env,
+  });
+
+  const pnpmRunner =
+    pnpmProbe.status === 0
+      ? { command: pnpmCommand, prefixArgs: [] as string[] }
+      : { command: corepackCommand, prefixArgs: ["pnpm"] };
+
+  run(pnpmRunner.command, [...pnpmRunner.prefixArgs, "build"]);
+  run(pnpmRunner.command, [...pnpmRunner.prefixArgs, "ui:build"]);
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();
