@@ -90,8 +90,15 @@ export function createGatewayAuxHandlers(params: {
         if (!previousSnapshot) {
           throw new Error("Secrets runtime snapshot is not active.");
         }
+        // Snapshot both `current` and `required` because
+        // `setCurrentSharedGatewaySessionGeneration` can clear `required` as
+        // a side effect of activating a new generation. Restoring only
+        // `current` on rollback would leave `required` cleared and weaken
+        // shared-gateway auth-generation enforcement after a failed reload.
         const previousSharedGatewaySessionGeneration =
           params.sharedGatewaySessionGenerationState.current;
+        const previousSharedGatewaySessionGenerationRequired =
+          params.sharedGatewaySessionGenerationState.required;
         let nextSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
         let sharedGatewaySessionGenerationChanged = false;
         const stoppedChannels: ChannelKind[] = [];
@@ -152,6 +159,8 @@ export function createGatewayAuxHandlers(params: {
           activateSecretsRuntimeSnapshot(previousSnapshot);
           params.sharedGatewaySessionGenerationState.current =
             previousSharedGatewaySessionGeneration;
+          params.sharedGatewaySessionGenerationState.required =
+            previousSharedGatewaySessionGenerationRequired;
           if (sharedGatewaySessionGenerationChanged) {
             disconnectStaleSharedGatewayAuthClients({
               clients: params.clients,

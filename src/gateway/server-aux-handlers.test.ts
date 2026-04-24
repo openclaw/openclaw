@@ -285,6 +285,58 @@ describe("gateway aux handlers", () => {
     );
   });
 
+  it("restores both current and required shared-gateway generation on reload failure", async () => {
+    // Locks in the auth-generation rollback contract: a failed reload must
+    // not leave `required` cleared if `setCurrentSharedGatewaySessionGeneration`
+    // cleared it during activation, otherwise stale clients matching `current`
+    // could remain authorized after rollback.
+    const buildReloadPlan = () =>
+      createReloadPlan({
+        restartChannels: new Set(["slack"]),
+      });
+    activateSecretsRuntimeSnapshot(
+      createSnapshot(
+        asConfig({
+          channels: { slack: { signingSecret: "old-slack-secret" } },
+        }),
+      ),
+    );
+    const activateRuntimeSecrets = vi.fn().mockResolvedValue(
+      createSnapshot(
+        asConfig({
+          channels: { slack: { signingSecret: "new-slack-secret" } },
+        }),
+      ),
+    );
+    const stopChannel = vi.fn().mockResolvedValue(undefined);
+    const startChannel = vi.fn().mockRejectedValue(new Error("slack refused to start"));
+    const respond = vi.fn();
+
+    const sharedGatewaySessionGenerationState = {
+      current: "gen-a" as string | undefined,
+      required: "gen-a" as string | undefined | null,
+    };
+
+    const { extraHandlers } = createGatewayAuxHandlers({
+      log: {},
+      activateRuntimeSecrets,
+      buildReloadPlan,
+      sharedGatewaySessionGenerationState,
+      resolveSharedGatewaySessionGenerationForConfig: () => "gen-b",
+      clients: [],
+      startChannel,
+      stopChannel,
+      logChannels: { info: vi.fn() },
+    });
+
+    await invokeSecretsReload({ handlers: extraHandlers, respond });
+
+    expect(sharedGatewaySessionGenerationState.current).toBe("gen-a");
+    expect(sharedGatewaySessionGenerationState.required).toBe("gen-a");
+    expect(respond.mock.calls).toHaveLength(1);
+    expect(respond.mock.calls[0][0]).toBe(false);
+  });
+
   it("fails reload when channel restarts are required but skip flags block them", async () => {
     const buildReloadPlan = () =>
       createReloadPlan({
