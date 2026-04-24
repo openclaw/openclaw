@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { diagnosticErrorCategory } from "../../../infra/diagnostic-error-metadata.js";
+export { diagnosticErrorCategory } from "../../../infra/diagnostic-error-metadata.js";
 import {
   emitDiagnosticEvent,
   type DiagnosticEventInput,
@@ -9,8 +10,6 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-
-export { diagnosticErrorCategory };
 
 type ModelCallDiagnosticContext = {
   runId: string;

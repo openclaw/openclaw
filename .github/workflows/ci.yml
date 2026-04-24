@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
@@ -213,6 +216,7 @@ jobs:
                 configs: shard.configs,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
+                runner: shard.runner,
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -1041,7 +1045,7 @@ jobs:
     name: checks-node-compat-node22
     needs: [preflight]
     if: needs.preflight.outputs.run_node == 'true' && github.event_name == 'push'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -1118,10 +1122,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    # Keep core shards on GitHub-hosted runners. The Blacksmith pool is already
-    # occupied by build and extension shards; queueing these shards there hides
-    # actual test-speed improvements behind runner wait time.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && (matrix.runner || 'ubuntu-24.04') || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
