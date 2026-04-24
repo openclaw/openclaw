@@ -1,13 +1,60 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import type { FailoverReason } from "../pi-embedded-helpers/types.js";
-import type { PromptMode } from "../system-prompt.types.js";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
+
+export type AgentRuntimeThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
+
+export type AgentRuntimePromptMode = "full" | "minimal" | "none";
+
+export type AgentRuntimeFailoverReason =
+  | "auth"
+  | "auth_permanent"
+  | "format"
+  | "rate_limit"
+  | "overloaded"
+  | "billing"
+  | "timeout"
+  | "model_not_found"
+  | "session_expired"
+  | "unknown";
+
+export type AgentRuntimeConfig = unknown;
+
+export type AgentRuntimeModel = {
+  id?: string;
+  name?: string;
+  api?: string;
+  provider?: string;
+  baseUrl?: string;
+  reasoning?: boolean;
+  input?: string[];
+  cost?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+  contextWindow?: number;
+  maxTokens?: number;
+  contextTokens?: number;
+  compat?: unknown;
+};
+
+export type AgentRuntimeReplyPayload = {
+  text?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  [key: string]: unknown;
+};
 
 export type AgentRuntimeSystemPromptSectionId =
   | "interaction_style"
@@ -21,12 +68,12 @@ export type AgentRuntimeSystemPromptContribution = {
 };
 
 export type AgentRuntimeSystemPromptContributionContext = {
-  config?: OpenClawConfig;
+  config?: AgentRuntimeConfig;
   agentDir?: string;
   workspaceDir?: string;
   provider: string;
   modelId: string;
-  promptMode: PromptMode;
+  promptMode: AgentRuntimePromptMode;
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
@@ -61,7 +108,7 @@ export type AgentRuntimeTranscriptPolicy = {
 export type AgentRuntimeOutcomeClassification =
   | {
       message: string;
-      reason?: FailoverReason;
+      reason?: AgentRuntimeFailoverReason;
       status?: number;
       code?: string;
       rawError?: string;
@@ -109,7 +156,7 @@ export type AgentRuntimeToolPlan = {
     params?: {
       workspaceDir?: string;
       modelApi?: string;
-      model?: ProviderRuntimeModel;
+      model?: AgentRuntimeModel;
     },
   ): AgentTool<TSchemaType, TResult>[];
   logDiagnostics(
@@ -117,15 +164,17 @@ export type AgentRuntimeToolPlan = {
     params?: {
       workspaceDir?: string;
       modelApi?: string;
-      model?: ProviderRuntimeModel;
+      model?: AgentRuntimeModel;
     },
   ): void;
 };
 
 export type AgentRuntimeDeliveryPlan = {
-  isSilentPayload(payload: Pick<ReplyPayload, "text" | "mediaUrl" | "mediaUrls">): boolean;
+  isSilentPayload(
+    payload: Pick<AgentRuntimeReplyPayload, "text" | "mediaUrl" | "mediaUrls">,
+  ): boolean;
   resolveFollowupRoute(params: {
-    payload: ReplyPayload;
+    payload: AgentRuntimeReplyPayload;
     originatingChannel?: string;
     originatingTo?: string;
     originRoutable: boolean;
@@ -141,10 +190,10 @@ export type AgentRuntimeTransportPlan = {
   extraParams: Record<string, unknown>;
   resolveExtraParams(params?: {
     extraParamsOverride?: Record<string, unknown>;
-    thinkingLevel?: ThinkLevel;
+    thinkingLevel?: AgentRuntimeThinkLevel;
     agentId?: string;
     workspaceDir?: string;
-    model?: ProviderRuntimeModel;
+    model?: AgentRuntimeModel;
     resolvedTransport?: AgentRuntimeTransport;
   }): Record<string, unknown>;
 };
@@ -159,7 +208,7 @@ export type AgentRuntimePlan = {
     resolvePolicy(params?: {
       workspaceDir?: string;
       modelApi?: string;
-      model?: ProviderRuntimeModel;
+      model?: AgentRuntimeModel;
     }): AgentRuntimeTranscriptPolicy;
   };
   delivery: AgentRuntimeDeliveryPlan;
@@ -177,7 +226,7 @@ export type AgentRuntimePlan = {
 };
 
 export type BuildAgentRuntimeDeliveryPlanParams = {
-  config?: OpenClawConfig;
+  config?: AgentRuntimeConfig;
   workspaceDir?: string;
   agentDir?: string;
   provider: string;
@@ -185,12 +234,12 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
 };
 
 export type BuildAgentRuntimePlanParams = {
-  config?: OpenClawConfig;
+  config?: AgentRuntimeConfig;
   workspaceDir?: string;
   agentDir?: string;
   provider: string;
   modelId: string;
-  model?: ProviderRuntimeModel;
+  model?: AgentRuntimeModel;
   modelApi?: string | null;
   harnessId?: string;
   harnessRuntime?: string;
@@ -198,7 +247,7 @@ export type BuildAgentRuntimePlanParams = {
   authProfileProvider?: string;
   sessionAuthProfileId?: string;
   agentId?: string;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;
   resolvedTransport?: AgentRuntimeTransport;
 };
