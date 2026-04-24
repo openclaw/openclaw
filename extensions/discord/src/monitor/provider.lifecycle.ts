@@ -287,7 +287,7 @@ async function waitForGatewayReady(params: {
       if ((await params.beforePoll?.()) === "stop") {
         return "stopped";
       }
-      if (params.gateway?.isConnected ?? true) {
+      if (params.gateway?.isConnected === true) {
         const at = Date.now();
         params.pushStatus?.({
           ...createConnectedChannelStatusPatch(at),
