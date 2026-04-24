@@ -5,6 +5,8 @@ import type { TelegramContext } from "./bot/types.js";
 const MEDIA_GROUP_TIMEOUT_MS = 500;
 const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
 const RECENT_TELEGRAM_UPDATE_MAX = 2000;
+const RECENT_TELEGRAM_UPDATE_ID_TTL_MS = 5 * 60_000;
+const RECENT_TELEGRAM_UPDATE_ID_MAX = 512;
 
 export type MediaGroupEntry = {
   messages: Array<{
@@ -63,5 +65,16 @@ export const createTelegramUpdateDedupe = () =>
     ttlMs: RECENT_TELEGRAM_UPDATE_TTL_MS,
     maxSize: RECENT_TELEGRAM_UPDATE_MAX,
   });
+
+// Second-line defense keyed strictly on Telegram update.update_id. Backstops the
+// broader dedupe when the transport is force-restarted mid-turn and Telegram
+// replays updates whose offset write has not yet landed on disk.
+export const createTelegramUpdateIdDedupe = () =>
+  createDedupeCache({
+    ttlMs: RECENT_TELEGRAM_UPDATE_ID_TTL_MS,
+    maxSize: RECENT_TELEGRAM_UPDATE_ID_MAX,
+  });
+
+export const telegramUpdateIdDedupeKey = (updateId: number) => `update_id:${updateId}`;
 
 export { MEDIA_GROUP_TIMEOUT_MS };

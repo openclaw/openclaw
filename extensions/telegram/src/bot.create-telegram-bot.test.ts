@@ -1091,7 +1091,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
-  it("does not persist update offset past pending updates", async () => {
+  it("persists update offset at ingest so forced poll restarts do not replay in-flight turns", async () => {
     // For this test we need sequentialize(...) to behave like a normal middleware and call next().
     sequentializeSpy.mockImplementationOnce(
       () => async (_ctx: unknown, next: () => Promise<void>) => {
@@ -1146,26 +1146,26 @@ describe("createTelegramBot", () => {
       releaseUpdate101 = resolve;
     });
 
-    // Start processing update 101 but keep it pending (simulates an update queued behind sequentialize()).
+    // Start processing update 101 but keep its turn in-flight (simulates the poll-stall
+    // scenario: the transport may be force-restarted before the turn resolves).
     const p101 = runMiddlewareChain({ update: { update_id: 101 } }, async () => update101Gate);
-    // Let update 101 enter the chain and mark itself pending before 102 completes.
+    // Let update 101 enter the middleware pipeline before the second update is dispatched.
     await Promise.resolve();
+    await flushTelegramTestMicrotasks();
 
-    // Complete update 102 while 101 is still pending. The persisted watermark must not jump to 102.
+    // Update 101's watermark persists on ingest even though its turn has not completed,
+    // so a transport restart re-polling at offset=102 will not replay it.
+    expect(onUpdateId).toHaveBeenCalledWith(101);
+
     await runMiddlewareChain({ update: { update_id: 102 } }, async () => {});
-
-    const persistedValues = onUpdateId.mock.calls.map((call) => Number(call[0]));
-    const maxPersisted = persistedValues.length > 0 ? Math.max(...persistedValues) : -Infinity;
-    expect(maxPersisted).toBeLessThan(101);
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).toHaveBeenCalledWith(102);
 
     releaseUpdate101?.();
     await p101;
-
-    // Once the pending update finishes, the watermark can safely catch up.
-    const persistedAfterDrain = onUpdateId.mock.calls.map((call) => Number(call[0]));
-    const maxPersistedAfterDrain =
-      persistedAfterDrain.length > 0 ? Math.max(...persistedAfterDrain) : -Infinity;
-    expect(maxPersistedAfterDrain).toBe(102);
+    // Draining the in-flight turn does not regress the persisted watermark.
+    const persistedValues = onUpdateId.mock.calls.map((call) => Number(call[0]));
+    expect(Math.max(...persistedValues)).toBe(102);
   });
   it("logs and swallows update watermark persistence failures", async () => {
     sequentializeSpy.mockImplementationOnce(
@@ -1237,7 +1237,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("does not persist failed updates into the watermark", async () => {
+  it("persists the offset at ingest even when the turn fails, then dedupes the replay", async () => {
     sequentializeSpy.mockImplementationOnce(
       () => async (_ctx: unknown, next: () => Promise<void>) => {
         await next();
@@ -1283,21 +1283,18 @@ describe("createTelegramBot", () => {
       await dispatch(0);
     };
 
+    // A failing turn must still advance the persisted offset — we accepted
+    // responsibility for the update when it entered the pipeline, so on restart
+    // Telegram must not replay it even though the handler ultimately threw.
     await expect(
       runMiddlewareChain({ update: { update_id: 201 } }, async () => {
         throw new Error("middleware boom");
       }),
     ).rejects.toThrow("middleware boom");
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).toHaveBeenCalledWith(201);
 
     await runMiddlewareChain({ update: { update_id: 202 } }, async () => {});
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(onUpdateId).not.toHaveBeenCalled();
-    expect(onUpdateId).not.toHaveBeenCalledWith(201);
-    expect(onUpdateId).not.toHaveBeenCalledWith(202);
-
-    await runMiddlewareChain({ update: { update_id: 201 } }, async () => {});
-
     await flushTelegramTestMicrotasks();
     expect(onUpdateId).toHaveBeenCalledWith(202);
   });

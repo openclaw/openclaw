@@ -31,7 +31,9 @@ import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   buildTelegramUpdateKey,
   createTelegramUpdateDedupe,
+  createTelegramUpdateIdDedupe,
   resolveTelegramUpdateId,
+  telegramUpdateIdDedupeKey,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
 import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
@@ -279,49 +281,32 @@ export function createTelegramBotCore(
   });
 
   const recentUpdates = createTelegramUpdateDedupe();
+  const recentUpdateIds = createTelegramUpdateIdDedupe();
+  const inFlightUpdateIds = new Set<number>();
   const pendingUpdateKeys = new Set<string>();
   const activeHandledUpdateKeys = new Map<string, boolean>();
   const initialUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
 
-  // Track update_ids that have entered the middleware pipeline but have not completed yet.
-  // This includes updates that are "queued" behind sequentialize(...) for a chat/topic key.
-  // We only persist a watermark that is strictly less than the smallest pending update_id,
-  // so we never write an offset that would skip an update still waiting to run.
-  const pendingUpdateIds = new Set<number>();
-  const failedUpdateIds = new Set<number>();
-  let highestCompletedUpdateId: number | null = initialUpdateId;
+  // Persisted watermark tracks the highest update_id we have *accepted into*
+  // the in-process delivery pipeline (not the highest whose turn has
+  // completed). Advancing on ingest prevents Telegram from replaying the same
+  // update after the poller transport is force-restarted mid-turn, which
+  // would otherwise land a duplicate cold turn on top of the in-progress one
+  // (see openclaw/openclaw#70954-adjacent incident, 2026-04-24 gateway.err.log).
+  // The update_id LRU (recentUpdateIds) and pendingUpdateKeys are the
+  // in-memory second line of defense when offset persistence has not yet
+  // landed on disk.
+  let highestAcceptedUpdateId: number | null = initialUpdateId;
   let highestPersistedUpdateId: number | null = initialUpdateId;
-  const maybePersistSafeWatermark = () => {
+  const maybePersistAcceptedWatermark = () => {
     if (typeof opts.updateOffset?.onUpdateId !== "function") {
       return;
     }
-    if (highestCompletedUpdateId === null) {
+    if (highestAcceptedUpdateId === null) {
       return;
     }
-    let safe = highestCompletedUpdateId;
-    if (pendingUpdateIds.size > 0) {
-      let minPending: number | null = null;
-      for (const id of pendingUpdateIds) {
-        if (minPending === null || id < minPending) {
-          minPending = id;
-        }
-      }
-      if (minPending !== null) {
-        safe = Math.min(safe, minPending - 1);
-      }
-    }
-    if (failedUpdateIds.size > 0) {
-      let minFailed: number | null = null;
-      for (const id of failedUpdateIds) {
-        if (minFailed === null || id < minFailed) {
-          minFailed = id;
-        }
-      }
-      if (minFailed !== null) {
-        safe = Math.min(safe, minFailed - 1);
-      }
-    }
+    const safe = highestAcceptedUpdateId;
     if (highestPersistedUpdateId !== null && safe <= highestPersistedUpdateId) {
       return;
     }
@@ -341,8 +326,12 @@ export function createTelegramBotCore(
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
-    const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
-    if (typeof updateId === "number" && skipCutoff !== null && updateId <= skipCutoff) {
+    // Use the startup watermark, not the moving in-process watermark. Since
+    // ingest now advances highestPersistedUpdateId to the current update's id,
+    // comparing against it here would have handlers skip the very update they
+    // are processing. initialUpdateId still filters any Telegram-side replay
+    // of an update that finished before this process started.
+    if (typeof updateId === "number" && initialUpdateId !== null && updateId <= initialUpdateId) {
       return true;
     }
     const key = buildTelegramUpdateKey(ctx);
@@ -368,22 +357,34 @@ export function createTelegramBotCore(
   bot.use(async (ctx, next) => {
     const updateId = resolveTelegramUpdateId(ctx);
     const updateKey = buildTelegramUpdateKey(ctx);
-    let completed = false;
-    if (typeof updateId === "number") {
-      failedUpdateIds.delete(updateId);
-      pendingUpdateIds.add(updateId);
+    const updateIdKey =
+      typeof updateId === "number" ? telegramUpdateIdDedupeKey(updateId) : undefined;
+    // Second line of defense: skip any update whose update_id is already
+    // in-flight in this process or was recently handled. Runs before the
+    // broader updateKey dedupe so replays after a forced poll restart are
+    // rejected even if the offset write has not yet persisted.
+    if (typeof updateId === "number" && updateIdKey) {
+      if (inFlightUpdateIds.has(updateId) || recentUpdateIds.peek(updateIdKey)) {
+        logSkippedUpdate(updateIdKey);
+        return;
+      }
     }
     if (updateKey) {
       if (pendingUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
         logSkippedUpdate(updateKey);
-        if (typeof updateId === "number") {
-          pendingUpdateIds.delete(updateId);
-        }
         return;
       }
       pendingUpdateKeys.add(updateKey);
       activeHandledUpdateKeys.set(updateKey, false);
     }
+    if (typeof updateId === "number" && updateIdKey) {
+      inFlightUpdateIds.add(updateId);
+      if (highestAcceptedUpdateId === null || updateId > highestAcceptedUpdateId) {
+        highestAcceptedUpdateId = updateId;
+      }
+      maybePersistAcceptedWatermark();
+    }
+    let completed = false;
     try {
       await next();
       completed = true;
@@ -395,15 +396,10 @@ export function createTelegramBotCore(
         }
         pendingUpdateKeys.delete(updateKey);
       }
-      if (typeof updateId === "number") {
-        pendingUpdateIds.delete(updateId);
+      if (typeof updateId === "number" && updateIdKey) {
+        inFlightUpdateIds.delete(updateId);
         if (completed) {
-          if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
-            highestCompletedUpdateId = updateId;
-          }
-          maybePersistSafeWatermark();
-        } else {
-          failedUpdateIds.add(updateId);
+          recentUpdateIds.check(updateIdKey);
         }
       }
     }
