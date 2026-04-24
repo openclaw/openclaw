@@ -1025,6 +1025,10 @@
       "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-login.js"
     },
+    "./plugin-sdk/provider-selection-runtime": {
+      "types": "./dist/plugin-sdk/provider-selection-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-selection-runtime.js"
+    },
     "./plugin-sdk/plugin-entry": {
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
