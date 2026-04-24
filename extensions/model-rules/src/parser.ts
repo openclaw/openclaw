@@ -39,7 +39,10 @@ export async function readModelsFile(
     if (!realFile.startsWith(realBoundary)) {
       return null;
     }
-    const fd = await open(filePath, readFlags);
+    // Open the verified canonical path rather than the original (still-mutable)
+    // path so a race between realpath() and open() cannot redirect us through
+    // a swapped parent symlink.
+    const fd = await open(realFile, readFlags);
     try {
       const fileInfo = await fd.stat();
       if (!fileInfo.isFile() || fileInfo.size > MAX_FILE_BYTES) {

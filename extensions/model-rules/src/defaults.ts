@@ -1,5 +1,5 @@
 import { open, realpath } from "node:fs/promises";
-import { dirname, resolve, sep } from "node:path";
+import { basename, dirname, resolve, sep } from "node:path";
 
 /**
  * Default MODELS.md shipped with the plugin.
@@ -232,6 +232,7 @@ export async function ensureDefaultModelsFile(
   }
   // Canonical path check: resolve symlinked parent directories and verify
   // the real parent is still inside the real workspace root.
+  let canonicalTarget: string;
   try {
     const realWorkspace = await realpath(workspaceDir);
     const realParent = await realpath(dirname(filePath));
@@ -239,11 +240,15 @@ export async function ensureDefaultModelsFile(
     if (!realParent.startsWith(realBoundary) && realParent !== realWorkspace) {
       return false;
     }
+    // Create under the verified canonical parent directory so a race between
+    // the realpath check and the open() call cannot redirect the write
+    // through a swapped parent symlink.
+    canonicalTarget = `${realParent}${sep}${basename(filePath)}`;
   } catch {
     return false;
   }
   try {
-    const fd = await open(filePath, "wx");
+    const fd = await open(canonicalTarget, "wx");
     try {
       await fd.writeFile(DEFAULT_MODELS_MD, "utf-8");
     } finally {
