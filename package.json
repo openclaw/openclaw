@@ -1326,6 +1326,8 @@
     "deadcode:ts-unused": "pnpm dlx ts-unused-exports tsconfig.json --ignoreTestFiles --exitWithCount",
     "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
     "deps:root-ownership:check": "node scripts/root-dependency-ownership-audit.mjs --check",
+    "deps:sbom-risk": "node scripts/sbom-risk-report.mjs",
+    "deps:sbom-risk:check": "node scripts/sbom-risk-report.mjs --check",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
@@ -1578,14 +1580,14 @@
     "ui:install": "node scripts/ui.js install"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.19.0",
+    "@agentclientprotocol/sdk": "0.19.1",
     "@anthropic-ai/vertex-sdk": "^0.16.0",
     "@clack/prompts": "^1.2.0",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mariozechner/pi-agent-core": "0.70.0",
-    "@mariozechner/pi-ai": "0.70.0",
-    "@mariozechner/pi-coding-agent": "0.70.0",
-    "@mariozechner/pi-tui": "0.70.0",
+    "@mariozechner/pi-agent-core": "0.70.2",
+    "@mariozechner/pi-ai": "0.70.2",
+    "@mariozechner/pi-coding-agent": "0.70.2",
+    "@mariozechner/pi-tui": "0.70.2",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@vincentkoc/qrcode-tui": "0.2.1",
@@ -1614,7 +1616,7 @@
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",
-    "typebox": "1.1.28",
+    "typebox": "1.1.31",
     "undici": "8.1.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
@@ -1631,7 +1633,7 @@
     "@types/node": "25.6.0",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260423.1",
-    "@vitest/coverage-v8": "^4.1.4",
+    "@vitest/coverage-v8": "^4.1.5",
     "jscpd": "4.0.9",
     "jsdom": "^29.0.2",
     "lit": "^3.3.2",
@@ -1642,7 +1644,7 @@
     "tsdown": "0.21.9",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.5"
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
@@ -1681,7 +1683,7 @@
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-      "typebox": "1.1.28",
+      "typebox": "1.1.31",
       "tar": "7.5.13",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1",
@@ -1709,6 +1711,11 @@
         "dependencies": {
           "strip-ansi": "^7.2.0"
         }
+      }
+    },
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "prism-media>opusscript": "^0.0.8 || ^0.1.1"
       }
     },
     "patchedDependencies": {

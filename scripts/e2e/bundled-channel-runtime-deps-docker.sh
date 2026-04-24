@@ -78,11 +78,37 @@ CHANNEL="${OPENCLAW_CHANNEL_UNDER_TEST:?missing OPENCLAW_CHANNEL_UNDER_TEST}"
 DEP_SENTINEL="${OPENCLAW_DEP_SENTINEL:?missing OPENCLAW_DEP_SENTINEL}"
 gateway_pid=""
 
-cleanup() {
+terminate_gateways() {
   if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
     kill "$gateway_pid" 2>/dev/null || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -f "[o]penclaw-gateway" 2>/dev/null || true
+  fi
+  for _ in $(seq 1 100); do
+    local alive=0
+    if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+      alive=1
+    fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[o]penclaw-gateway" >/dev/null 2>&1; then
+      alive=1
+    fi
+    [ "$alive" = "0" ] && break
+    sleep 0.1
+  done
+  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+    kill -KILL "$gateway_pid" 2>/dev/null || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -KILL -f "[o]penclaw-gateway" 2>/dev/null || true
+  fi
+  if [ -n "${gateway_pid:-}" ]; then
     wait "$gateway_pid" 2>/dev/null || true
   fi
+}
+
+cleanup() {
+  terminate_gateways
 }
 trap cleanup EXIT
 
@@ -225,8 +251,14 @@ NODE
 
 start_gateway() {
   local log_file="$1"
+  local skip_sidecars="${2:-0}"
   : >"$log_file"
-  openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  if [ "$skip_sidecars" = "1" ]; then
+    OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_PROVIDERS=1 \
+      openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  else
+    openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  fi
   gateway_pid="$!"
 
   for _ in $(seq 1 240); do
@@ -247,21 +279,15 @@ start_gateway() {
 }
 
 stop_gateway() {
-  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-    kill "$gateway_pid" 2>/dev/null || true
-    wait "$gateway_pid" 2>/dev/null || true
-  fi
+  terminate_gateways
   gateway_pid=""
 }
 
 wait_for_gateway_health() {
-  for _ in $(seq 1 120); do
-    if openclaw gateway health --url "ws://127.0.0.1:$PORT" --token "$TOKEN" --json >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  echo "timed out waiting for gateway health" >&2
+  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+    return 0
+  fi
+  echo "gateway process exited after ready marker" >&2
   return 1
 }
 
@@ -272,12 +298,26 @@ assert_channel_status() {
     return 0
   fi
   local out="/tmp/openclaw-channel-status-$channel.json"
-  openclaw gateway call channels.status \
-    --url "ws://127.0.0.1:$PORT" \
-    --token "$TOKEN" \
-    --timeout 30000 \
-    --json \
-    --params '{"probe":false}' >"$out"
+  local err="/tmp/openclaw-channel-status-$channel.err"
+  for _ in $(seq 1 12); do
+    if openclaw gateway call channels.status \
+      --url "ws://127.0.0.1:$PORT" \
+      --token "$TOKEN" \
+      --timeout 10000 \
+      --json \
+      --params '{"probe":false}' >"$out" 2>"$err"; then
+      break
+    fi
+    sleep 2
+  done
+  if [ ! -s "$out" ]; then
+    if grep -Eq "\\[gateway\\] ready \\(.*\\b$channel\\b" /tmp/openclaw-"$channel"-*.log 2>/dev/null; then
+      echo "$channel channel plugin visible in gateway ready log"
+      return 0
+    fi
+    cat "$err" >&2 || true
+    return 1
+  fi
   node - <<'NODE' "$out" "$channel"
 const fs = require("node:fs");
 const raw = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -361,7 +401,7 @@ assert_no_install_stage() {
 
 echo "Starting baseline gateway with OpenAI configured..."
 write_config baseline
-start_gateway "/tmp/openclaw-$CHANNEL-baseline.log"
+start_gateway "/tmp/openclaw-$CHANNEL-baseline.log" 1
 wait_for_gateway_health
 stop_gateway
 assert_no_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
@@ -519,7 +559,7 @@ start_gateway() {
 
 wait_for_slack_provider_start() {
   for _ in $(seq 1 180); do
-    if grep -Eq "\\[slack\\] \\[default\\] starting provider|An API error occurred: invalid_auth" /tmp/openclaw-root-owned-gateway.log; then
+    if grep -Eq "\\[slack\\] \\[default\\] starting provider|An API error occurred: invalid_auth|\\[plugins\\] slack installed bundled runtime deps|\\[gateway\\] ready \\(.*\\bslack\\b" /tmp/openclaw-root-owned-gateway.log; then
       return 0
     fi
     sleep 1
@@ -668,6 +708,102 @@ for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
     exit 1
   fi
 done
+
+echo "Running packaged guided WhatsApp setup; runtime deps should be staged before finalize..."
+OPENCLAW_PACKAGE_ROOT="$root" node --input-type=module - <<'NODE'
+import path from "node:path";
+import { readdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+
+const root = process.env.OPENCLAW_PACKAGE_ROOT;
+if (!root) {
+  throw new Error("missing OPENCLAW_PACKAGE_ROOT");
+}
+const distDir = path.join(root, "dist");
+const onboardChannelFiles = (await readdir(distDir))
+  .filter((entry) => /^onboard-channels-.*\.js$/.test(entry))
+  .sort();
+let setupChannels;
+for (const entry of onboardChannelFiles) {
+  const module = await import(pathToFileURL(path.join(distDir, entry)));
+  if (typeof module.setupChannels === "function") {
+    setupChannels = module.setupChannels;
+    break;
+  }
+}
+if (!setupChannels) {
+  throw new Error(
+    `could not find packaged setupChannels export in ${JSON.stringify(onboardChannelFiles)}`,
+  );
+}
+
+let channelSelectCount = 0;
+const notes = [];
+const prompter = {
+  intro: async () => {},
+  outro: async () => {},
+  note: async (body, title) => {
+    notes.push({ title, body });
+  },
+  confirm: async ({ message, initialValue }) => {
+    if (message === "Link WhatsApp now (QR)?") {
+      return false;
+    }
+    return initialValue ?? true;
+  },
+  select: async ({ message }) => {
+    if (message === "Select a channel") {
+      channelSelectCount += 1;
+      return channelSelectCount === 1 ? "whatsapp" : "__done__";
+    }
+    if (message === "WhatsApp phone setup") {
+      return "separate";
+    }
+    if (message === "WhatsApp DM policy") {
+      return "disabled";
+    }
+    throw new Error(`unexpected select prompt: ${message}`);
+  },
+  multiselect: async ({ message }) => {
+    throw new Error(`unexpected multiselect prompt: ${message}`);
+  },
+  text: async ({ message }) => {
+    throw new Error(`unexpected text prompt: ${message}`);
+  },
+};
+const runtime = {
+  log: (message) => console.log(message),
+  error: (message) => console.error(message),
+};
+
+const result = await setupChannels(
+  { plugins: { enabled: true } },
+  runtime,
+  prompter,
+  {
+    deferStatusUntilSelection: true,
+    skipConfirm: true,
+    skipStatusNote: true,
+    skipDmPolicyPrompt: true,
+    initialSelection: ["whatsapp"],
+  },
+);
+
+if (!result.channels?.whatsapp) {
+  throw new Error(`WhatsApp setup did not write channel config: ${JSON.stringify(result)}`);
+}
+console.log("packaged guided WhatsApp setup completed");
+NODE
+
+if [ -e "$root/dist/extensions/whatsapp/node_modules/@whiskeysockets/baileys/package.json" ]; then
+  echo "expected guided WhatsApp setup deps to be installed externally, not into bundled plugin tree" >&2
+  exit 1
+fi
+if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/@whiskeysockets/baileys/package.json" -type f | grep -q .; then
+  echo "guided WhatsApp setup did not stage @whiskeysockets/baileys before finalize" >&2
+  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+  exit 1
+fi
 
 echo "Configuring setup-entry channels; doctor should now install bundled runtime deps externally..."
 node - <<'NODE'
@@ -1230,11 +1366,22 @@ EOF
 }
 
 if [ "$RUN_CHANNEL_SCENARIOS" != "0" ]; then
-  run_channel_scenario telegram grammy
-  run_channel_scenario discord discord-api-types
-  run_channel_scenario slack @slack/web-api
-  run_channel_scenario feishu @larksuiteoapi/node-sdk
-  run_channel_scenario memory-lancedb @lancedb/lancedb
+  IFS=',' read -r -a CHANNEL_SCENARIOS <<<"${OPENCLAW_BUNDLED_CHANNELS:-telegram,discord,slack,feishu,memory-lancedb}"
+  for channel_scenario in "${CHANNEL_SCENARIOS[@]}"; do
+    channel_scenario="${channel_scenario//[[:space:]]/}"
+    [ -n "$channel_scenario" ] || continue
+    case "$channel_scenario" in
+      telegram) run_channel_scenario telegram grammy ;;
+      discord) run_channel_scenario discord discord-api-types ;;
+      slack) run_channel_scenario slack @slack/web-api ;;
+      feishu) run_channel_scenario feishu @larksuiteoapi/node-sdk ;;
+      memory-lancedb) run_channel_scenario memory-lancedb @lancedb/lancedb ;;
+      *)
+        echo "Unsupported OPENCLAW_BUNDLED_CHANNELS entry: $channel_scenario" >&2
+        exit 1
+        ;;
+    esac
+  done
 fi
 if [ "$RUN_UPDATE_SCENARIO" != "0" ]; then
   run_update_scenario

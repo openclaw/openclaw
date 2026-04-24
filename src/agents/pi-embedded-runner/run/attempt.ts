@@ -9,8 +9,10 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { emitDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
+  createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -141,7 +143,11 @@ import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
+} from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -222,9 +228,12 @@ import {
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
+  diagnosticErrorCategory,
+  wrapStreamFnWithDiagnosticModelCallEvents,
+} from "./attempt.model-diagnostic-events.js";
+import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-  mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptPrependSystemContext,
@@ -274,6 +283,7 @@ import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
@@ -473,6 +483,15 @@ export async function runEmbeddedAttempt(
   });
 
   let restoreSkillEnv: (() => void) | undefined;
+  let aborted = Boolean(params.abortSignal?.aborted);
+  let externalAbort = false;
+  let timedOut = false;
+  let idleTimedOut = false;
+  let timedOutDuringCompaction = false;
+  let promptError: unknown = null;
+  let emitDiagnosticRunCompleted:
+    | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
+    | undefined;
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
@@ -512,6 +531,40 @@ export async function runEmbeddedAttempt(
     const contextInjectionMode = resolveContextInjectionMode(params.config);
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
     const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
+    const runTrace = freezeDiagnosticTraceContext(
+      createChildDiagnosticTraceContext(diagnosticTrace),
+    );
+    const diagnosticRunBase = {
+      runId: params.runId,
+      ...(params.sessionKey && { sessionKey: params.sessionKey }),
+      ...(params.sessionId && { sessionId: params.sessionId }),
+      provider: params.provider,
+      model: params.modelId,
+      trigger: params.trigger,
+      ...((params.messageChannel ?? params.messageProvider)
+        ? { channel: params.messageChannel ?? params.messageProvider }
+        : {}),
+      trace: runTrace,
+    };
+    emitDiagnosticEvent({
+      type: "run.started",
+      ...diagnosticRunBase,
+    });
+    const diagnosticRunStartedAt = Date.now();
+    let diagnosticRunCompleted = false;
+    emitDiagnosticRunCompleted = (outcome, err) => {
+      if (diagnosticRunCompleted) {
+        return;
+      }
+      diagnosticRunCompleted = true;
+      emitDiagnosticEvent({
+        type: "run.completed",
+        ...diagnosticRunBase,
+        durationMs: Date.now() - diagnosticRunStartedAt,
+        outcome,
+        ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
+      });
+    };
     const toolsRaw = params.disableTools
       ? []
       : (() => {
@@ -982,12 +1035,6 @@ export async function runEmbeddedAttempt(
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
     let trajectoryEndRecorded = false;
-    let aborted = Boolean(params.abortSignal?.aborted);
-    let externalAbort = false;
-    let timedOut = false;
-    let idleTimedOut = false;
-    let timedOutDuringCompaction = false;
-    let promptError: unknown = null;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1381,6 +1428,10 @@ export async function runEmbeddedAttempt(
         effectiveWorkspace,
         params.model,
         agentDir,
+        resolveExplicitSettingsTransport({
+          settingsManager,
+          sessionTransport: activeSession.agent.transport,
+        }),
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
@@ -1582,6 +1633,21 @@ export async function runEmbeddedAttempt(
           (error) => idleTimeoutTrigger?.(error),
         );
       }
+      let diagnosticModelCallSeq = 0;
+      activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
+        activeSession.agent.streamFn,
+        {
+          runId: params.runId,
+          ...(params.sessionKey && { sessionKey: params.sessionKey }),
+          ...(params.sessionId && { sessionId: params.sessionId }),
+          provider: params.provider,
+          model: params.modelId,
+          api: params.model.api,
+          transport: effectiveAgentTransport,
+          trace: runTrace,
+          nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+        },
+      );
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -2066,7 +2132,7 @@ export async function runEmbeddedAttempt(
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          const orphanPromptMerge = mergeOrphanedTrailingUserPrompt({
+          const orphanPromptMerge = resolveMessageMergeStrategy().mergeOrphanedTrailingUserPrompt({
             prompt: effectivePrompt,
             trigger: params.trigger,
             leafMessage: leafEntry.message,
@@ -2088,8 +2154,10 @@ export async function runEmbeddedAttempt(
                   ? "Merged and removed"
                   : "Removed already-queued"
                 : "Preserved"
-            } orphaned user message ` +
-            `to prevent consecutive user turns. ` +
+            } orphaned user message` +
+            (orphanPromptMerge.removeLeaf
+              ? " to prevent consecutive user turns. "
+              : " without removing the active session leaf. ") +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
           if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
             log.warn(orphanRepairMessage);
@@ -2694,6 +2762,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               provider: params.provider,
               model: params.modelId,
+              resolvedRef: `${params.provider}/${params.modelId}`,
               assistantTexts,
               lastAssistant,
               usage: attemptUsage,
@@ -2835,18 +2904,40 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
-      await cleanupEmbeddedAttemptResources({
-        removeToolResultContextGuard,
-        flushPendingToolResultsAfterIdle,
-        session,
-        sessionManager,
-        releaseWsSession,
-        sessionId: params.sessionId,
-        bundleLspRuntime,
-        sessionLock,
-      });
+      let cleanupError: unknown;
+      try {
+        await cleanupEmbeddedAttemptResources({
+          removeToolResultContextGuard,
+          flushPendingToolResultsAfterIdle,
+          session,
+          sessionManager,
+          releaseWsSession,
+          allowWsSessionPool:
+            !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
+          sessionId: params.sessionId,
+          bundleLspRuntime,
+          sessionLock,
+        });
+      } catch (err) {
+        cleanupError = err;
+      }
+      emitDiagnosticRunCompleted?.(
+        cleanupError || promptError
+          ? "error"
+          : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
+            ? "aborted"
+            : "completed",
+        cleanupError ?? promptError,
+      );
+      if (cleanupError) {
+        await Promise.reject(cleanupError);
+      }
     }
   } finally {
+    emitDiagnosticRunCompleted?.(
+      aborted ? "aborted" : "error",
+      promptError ?? new Error("run exited before diagnostic completion"),
+    );
     restoreSkillEnv?.();
   }
 }

@@ -888,9 +888,11 @@ Generated channel catalog entries and provider install catalog entries expose
 normalized install-source facts next to the raw `openclaw.install` block. The
 normalized facts identify whether the npm spec is an exact version or floating
 selector, whether expected integrity metadata is present, and whether a local
-source path is also available. Consumers should treat `installSource` as an
-additive optional field so older hand-built entries and compatibility shims do
-not have to synthesize it. This lets onboarding and diagnostics explain
+source path is also available. They also warn when `defaultChoice` is invalid
+or points at a source that is not available, and when npm integrity metadata is
+present without a valid npm source. Consumers should treat `installSource` as
+an additive optional field so older hand-built entries and compatibility shims
+do not have to synthesize it. This lets onboarding and diagnostics explain
 source-plane state without importing plugin runtime.
 
 Official external npm entries should prefer an exact `npmSpec` plus

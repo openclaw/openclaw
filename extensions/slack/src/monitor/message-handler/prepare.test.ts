@@ -14,7 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
-import { resetSlackThreadStarterCacheForTest } from "../media.js";
+import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
