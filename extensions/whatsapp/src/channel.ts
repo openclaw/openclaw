@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -7,6 +8,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import { getActiveWebListener } from "./active-listener.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
@@ -14,6 +16,7 @@ import {
   describeWhatsAppMessageActions,
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
+import { createActionGate } from "./channel-actions.runtime.js";
 import { whatsappChannelOutbound } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
@@ -134,10 +137,57 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
-        supportsAction: ({ action }) => action === "react",
-        resolveExecutionMode: ({ action }) => (action === "react" ? "gateway" : "local"),
-        handleAction: async ({ action, params, cfg, accountId, requesterSenderId, toolContext }) =>
-          await (
+        supportsAction: ({ action }) => action === "react" || action === "history",
+        resolveExecutionMode: ({ action }) =>
+          action === "react" || action === "history" ? "gateway" : "local",
+        handleAction: async ({
+          action,
+          params,
+          cfg,
+          accountId,
+          requesterSenderId,
+          toolContext,
+        }) => {
+          if (action === "history") {
+            const gate = createActionGate(cfg.channels?.whatsapp?.actions);
+            if (!gate("history")) {
+              throw new Error(
+                "WhatsApp message history is disabled (channels.whatsapp.actions.history).",
+              );
+            }
+            const resolvedAccountId =
+              accountId?.trim() ||
+              whatsappPlugin.config.defaultAccountId?.(cfg) ||
+              DEFAULT_ACCOUNT_ID;
+            const fetchFn = getActiveWebListener(resolvedAccountId)?.fetchMessages;
+            if (!fetchFn) {
+              throw new Error(
+                `WhatsApp history requires an active web listener (account: ${resolvedAccountId}).`,
+              );
+            }
+            const chatJid =
+              readStringParam(params, "chatJid") ??
+              readStringParam(params, "to", { required: true });
+            const count = typeof params.count === "number" ? params.count : 20;
+            const before = typeof params.before === "number" ? params.before : undefined;
+            const messages = await fetchFn(chatJid, count, before);
+            return jsonResult({
+              chatJid,
+              count: messages.length,
+              messages,
+              summary:
+                messages.length > 0
+                  ? messages
+                      .map((m) => {
+                        const time = new Date(m.messageTimestamp * 1000).toISOString();
+                        const sender = m.key.fromMe ? "me" : (m.pushName ?? m.key.remoteJid);
+                        return `[${time}] ${sender}: ${m.message ?? "(media/empty)"}`;
+                      })
+                      .join("\n")
+                  : "No messages found (history sync may not be available for this chat).",
+            });
+          }
+          return await (
             await loadWhatsAppChannelReactAction()
           ).handleWhatsAppReactAction({
             action,
@@ -146,7 +196,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             accountId,
             requesterSenderId,
             toolContext,
-          }),
+          });
+        },
       },
       approvalCapability: whatsappApprovalAuth,
       auth: {

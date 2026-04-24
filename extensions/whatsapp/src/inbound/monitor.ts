@@ -607,6 +607,107 @@ export async function attachWebInboxToSocket(
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
+
+  const pendingHistoryRequests = new Map<
+    string,
+    {
+      resolve: (msgs: WAMessage[]) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+
+  const handleMessagingHistorySet = (payload: unknown) => {
+    const data = payload as { messages?: WAMessage[] };
+    const messages = data.messages;
+    if (!messages?.length) {
+      return;
+    }
+    const byChat = new Map<string, WAMessage[]>();
+    for (const msg of messages) {
+      const jid = msg.key?.remoteJid;
+      if (!jid) {
+        continue;
+      }
+      const arr = byChat.get(jid) ?? [];
+      arr.push(msg);
+      byChat.set(jid, arr);
+    }
+    for (const [jid, msgs] of byChat) {
+      const pending = pendingHistoryRequests.get(jid);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingHistoryRequests.delete(jid);
+        pending.resolve(msgs);
+      }
+    }
+  };
+
+  const fetchMessages = async (
+    chatJid: string,
+    count: number,
+    beforeTimestamp?: number,
+  ): Promise<
+    Array<{
+      key: { remoteJid: string; fromMe: boolean; id: string };
+      message: string | null;
+      messageTimestamp: number;
+      pushName?: string;
+    }>
+  > => {
+    const sockWithHistory = sock as unknown as {
+      fetchMessageHistory?: (
+        n: number,
+        key: { remoteJid: string; fromMe: boolean; id: string },
+        tsMs: number,
+      ) => Promise<unknown>;
+    };
+    if (typeof sockWithHistory.fetchMessageHistory !== "function") {
+      return [];
+    }
+    const ts = beforeTimestamp ?? Math.floor(Date.now() / 1000);
+    const oldestMsgKey = {
+      remoteJid: chatJid,
+      fromMe: false,
+      id: "FFFFFFFFFFFFFFFF",
+    };
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingHistoryRequests.delete(chatJid);
+        resolve([]);
+      }, 15_000);
+
+      pendingHistoryRequests.set(chatJid, {
+        resolve: (messages) => {
+          clearTimeout(timer);
+          pendingHistoryRequests.delete(chatJid);
+          const simplified = messages.map((m) => ({
+            key: {
+              remoteJid: m.key.remoteJid ?? chatJid,
+              fromMe: m.key.fromMe ?? false,
+              id: m.key.id ?? "",
+            },
+            message: extractText(m.message ?? undefined) ?? null,
+            messageTimestamp:
+              typeof m.messageTimestamp === "number"
+                ? m.messageTimestamp
+                : Number(m.messageTimestamp ?? 0),
+            pushName: m.pushName ?? undefined,
+          }));
+          resolve(simplified);
+        },
+        timer,
+      });
+
+      void sockWithHistory.fetchMessageHistory!(count, oldestMsgKey, ts * 1000).catch(
+        (err: unknown) => {
+          clearTimeout(timer);
+          pendingHistoryRequests.delete(chatJid);
+          reject(err);
+        },
+      );
+    });
+  };
+
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -645,6 +746,15 @@ export async function attachWebInboxToSocket(
     "connection.update",
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
   );
+  const detachMessagingHistorySet = attachEmitterListener(
+    sock.ev as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void;
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+    },
+    "messaging-history.set",
+    handleMessagingHistorySet as unknown as (...args: unknown[]) => void,
+  );
 
   void (async () => {
     try {
@@ -679,6 +789,7 @@ export async function attachWebInboxToSocket(
       try {
         detachMessagesUpsert();
         detachConnectionUpdate();
+        detachMessagingHistorySet();
         closeInboundMonitorSocket(sock);
       } catch (err) {
         logVerbose(`Socket close failed: ${String(err)}`);
@@ -688,6 +799,7 @@ export async function attachWebInboxToSocket(
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    fetchMessages,
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,
   } as const;

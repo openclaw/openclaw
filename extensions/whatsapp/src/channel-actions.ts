@@ -80,5 +80,8 @@ export function describeWhatsAppMessageActions(params: {
   if (gate("polls")) {
     actions.add("poll");
   }
+  if (gate("history")) {
+    actions.add("history");
+  }
   return { actions: Array.from(actions) };
 }

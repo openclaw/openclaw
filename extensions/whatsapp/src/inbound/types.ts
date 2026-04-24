@@ -15,6 +15,13 @@ export type ActiveWebSendOptions = {
   fileName?: string;
 };
 
+export type WhatsAppHistoryMessage = {
+  key: { remoteJid: string; fromMe: boolean; id: string };
+  message: string | null;
+  messageTimestamp: number;
+  pushName?: string;
+};
+
 export type ActiveWebListener = {
   sendMessage: (
     to: string,
@@ -32,6 +39,12 @@ export type ActiveWebListener = {
     participant?: string,
   ) => Promise<void>;
   sendComposingTo: (to: string) => Promise<void>;
+  /** Optional: Baileys-backed message history fetch when linked. */
+  fetchMessages?: (
+    chatJid: string,
+    count: number,
+    beforeTimestamp?: number,
+  ) => Promise<WhatsAppHistoryMessage[]>;
   close?: () => Promise<void>;
 };
 

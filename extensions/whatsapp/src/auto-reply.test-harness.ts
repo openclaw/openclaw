@@ -7,6 +7,7 @@ import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env"
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
+import type { WhatsAppHistoryMessage } from "./inbound/types.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
@@ -24,6 +25,7 @@ type MockWebListener = {
   sendPoll: () => Promise<{ messageId: string }>;
   sendReaction: () => Promise<void>;
   sendComposingTo: () => Promise<void>;
+  fetchMessages: () => Promise<WhatsAppHistoryMessage[]>;
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -201,6 +203,7 @@ export function createMockWebListener(): MockWebListener {
     sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
     sendReaction: vi.fn(async () => undefined),
     sendComposingTo: vi.fn(async () => undefined),
+    fetchMessages: vi.fn(async () => []),
   };
 }
 

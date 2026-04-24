@@ -125,6 +125,7 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
       reactions: z.boolean().optional(),
       sendMessage: z.boolean().optional(),
       polls: z.boolean().optional(),
+      history: z.boolean().optional(),
     })
     .strict()
     .optional(),

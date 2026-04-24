@@ -17,6 +17,7 @@ export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   polls?: boolean;
+  history?: boolean;
 };
 
 export type WhatsAppReactionLevel = ReactionLevel;
