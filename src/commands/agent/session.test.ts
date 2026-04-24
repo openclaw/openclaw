@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn(),
   listAgentIds: vi.fn(),
+  resolveExplicitAgentSessionKey: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/main-session.js", async () => {
@@ -14,7 +15,7 @@ vi.mock("../../config/sessions/main-session.js", async () => {
   );
   return {
     ...actual,
-    resolveExplicitAgentSessionKey: () => undefined,
+    resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
   };
 });
 
@@ -55,6 +56,7 @@ describe("resolveSessionKeyForRequest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listAgentIds.mockReturnValue(["main"]);
+    mocks.resolveExplicitAgentSessionKey.mockReturnValue(undefined);
   });
 
   const baseCfg: OpenClawConfig = {};
@@ -98,6 +100,29 @@ describe("resolveSessionKeyForRequest", () => {
       sessionId: "target-session-id",
     });
     expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("does not let --agent short-circuit --session-id back to the agent main session", async () => {
+    setupMainAndMybotStorePaths();
+    mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:mybot:main");
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {
+        "agent:mybot:main": { sessionId: "other-session-id", updatedAt: 0 },
+        "agent:mybot:whatsapp:direct:+15551234567": {
+          sessionId: "target-session-id",
+          updatedAt: 1,
+        },
+      },
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      sessionId: "target-session-id",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:whatsapp:direct:+15551234567");
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 

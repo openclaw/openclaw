@@ -502,10 +502,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     let requestedSessionKey =
       requestedSessionKeyRaw ??
-      resolveExplicitAgentSessionKey({
-        cfg,
-        agentId,
-      });
+      (!request.sessionId
+        ? resolveExplicitAgentSessionKey({
+            cfg,
+            agentId,
+          })
+        : undefined);
     if (agentId && requestedSessionKeyRaw) {
       const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
       if (sessionAgentId !== agentId) {

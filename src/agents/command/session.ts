@@ -137,13 +137,16 @@ export function resolveSessionKeyForRequest(opts: {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
+  const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const explicitSessionKey =
     opts.sessionKey?.trim() ||
-    resolveExplicitAgentSessionKey({
-      cfg: opts.cfg,
-      agentId: opts.agentId,
-    });
-  const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
+    (!opts.sessionId
+      ? resolveExplicitAgentSessionKey({
+          cfg: opts.cfg,
+          agentId: requestedAgentId,
+        })
+      : undefined);
+  const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey) ?? requestedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
   });

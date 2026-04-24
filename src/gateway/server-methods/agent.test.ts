@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   performGatewaySessionReset: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
+  resolveExplicitAgentSessionKey: vi.fn(),
   resolveBareResetBootstrapFileAccess: vi.fn(() => true),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
@@ -44,7 +45,7 @@ vi.mock("../../config/sessions.js", async () => {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
     resolveAgentIdFromSessionKey: () => "main",
-    resolveExplicitAgentSessionKey: () => undefined,
+    resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
     resolveAgentMainSessionKey: ({
       cfg,
       agentId,
@@ -334,6 +335,7 @@ describe("gateway agent handler", () => {
     }
     resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
+    mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
   });
 
@@ -994,6 +996,33 @@ describe("gateway agent handler", () => {
         status: "running",
       });
     });
+  });
+
+  it("does not let --agent force the agent main session when --session-id is provided", async () => {
+    mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+    mockMainSessionEntry({ sessionId: "resume-whatsapp-session" });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "resume channel session",
+        agentId: "main",
+        sessionId: "resume-whatsapp-session",
+        idempotencyKey: "session-id-agent-resume",
+      },
+      { reqId: "session-id-agent-resume" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      sessionId?: string;
+      sessionKey?: string;
+    };
+    expect(call?.sessionId).toBe("resume-whatsapp-session");
+    expect(call?.sessionKey).toBeUndefined();
   });
 
   it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
