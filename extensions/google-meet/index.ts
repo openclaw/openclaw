@@ -11,6 +11,7 @@ import {
   type GoogleMeetTransport,
 } from "./src/config.js";
 import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./src/meet.js";
+import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
 
@@ -30,7 +31,7 @@ const googleMeetConfigSchema = {
     },
     defaultTransport: {
       label: "Default Transport",
-      help: "Chrome uses a signed-in browser profile. Twilio uses Meet dial-in numbers.",
+      help: "Chrome uses a signed-in browser profile. Chrome-node runs Chrome on a paired node. Twilio uses Meet dial-in numbers.",
     },
     defaultMode: {
       label: "Default Mode",
@@ -55,6 +56,11 @@ const googleMeetConfigSchema = {
     "chrome.audioBridgeCommand": { label: "Audio Bridge Command", advanced: true },
     "chrome.audioBridgeHealthCommand": {
       label: "Audio Bridge Health Command",
+      advanced: true,
+    },
+    "chromeNode.node": {
+      label: "Chrome Node",
+      help: "Node id/name/IP that owns Chrome, BlackHole, and SoX for chrome-node transport.",
       advanced: true,
     },
     "twilio.defaultDialInNumber": {
@@ -110,7 +116,7 @@ const GoogleMeetToolSchema = Type.Object({
   }),
   url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
   transport: Type.Optional(
-    Type.String({ enum: ["chrome", "twilio"], description: "Join transport" }),
+    Type.String({ enum: ["chrome", "chrome-node", "twilio"], description: "Join transport" }),
   ),
   mode: Type.Optional(Type.String({ enum: ["realtime", "transcribe"], description: "Join mode" })),
   dialInNumber: Type.Optional(Type.String({ description: "Meet dial-in number for Twilio" })),
@@ -139,7 +145,7 @@ function json(payload: unknown) {
 }
 
 function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
-  return value === "chrome" || value === "twilio" ? value : undefined;
+  return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
 }
 
 function normalizeMode(value: unknown): GoogleMeetMode | undefined {
@@ -319,6 +325,12 @@ export default definePluginEntry({
           return json({ error: formatErrorMessage(err) });
         }
       },
+    });
+
+    api.registerNodeHostCommand({
+      command: "googlemeet.chrome",
+      cap: "google-meet",
+      handle: handleGoogleMeetNodeHostCommand,
     });
 
     api.registerCli(

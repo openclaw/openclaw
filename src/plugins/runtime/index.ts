@@ -146,12 +146,14 @@ const GATEWAY_SUBAGENT_SYMBOL: unique symbol = Symbol.for(
 
 type GatewaySubagentState = {
   subagent: PluginRuntime["subagent"] | undefined;
+  nodes: PluginRuntime["nodes"] | undefined;
 };
 
 const gatewaySubagentState = resolveGlobalSingleton<GatewaySubagentState>(
   GATEWAY_SUBAGENT_SYMBOL,
   () => ({
     subagent: undefined,
+    nodes: undefined,
   }),
 );
 
@@ -165,12 +167,17 @@ export function setGatewaySubagentRuntime(subagent: PluginRuntime["subagent"]): 
   gatewaySubagentState.subagent = subagent;
 }
 
+export function setGatewayNodesRuntime(nodes: PluginRuntime["nodes"]): void {
+  gatewaySubagentState.nodes = nodes;
+}
+
 /**
  * Reset the process-global gateway subagent runtime.
  * Used by tests to avoid leaking gateway state across module reloads.
  */
 export function clearGatewaySubagentRuntime(): void {
   gatewaySubagentState.subagent = undefined;
+  gatewaySubagentState.nodes = undefined;
 }
 
 /**
@@ -200,6 +207,29 @@ function createLateBindingSubagent(
   });
 }
 
+function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
+  const unavailable = () => {
+    throw new Error("Plugin node runtime is only available inside the Gateway.");
+  };
+  return {
+    list: unavailable,
+    invoke: unavailable,
+  };
+}
+
+function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nodes"] {
+  const unavailable = createUnavailableNodesRuntime();
+  if (!allowGatewayBinding) {
+    return unavailable;
+  }
+  return new Proxy(unavailable, {
+    get(_target, prop, _receiver) {
+      const resolved = gatewaySubagentState.nodes ?? unavailable;
+      return Reflect.get(resolved, prop, resolved);
+    },
+  });
+}
+
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -216,6 +246,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       _options.subagent,
       _options.allowGatewaySubagentBinding === true,
     ),
+    nodes: createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     webSearch: {
