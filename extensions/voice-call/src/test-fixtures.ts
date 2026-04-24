@@ -1,4 +1,5 @@
 import type { VoiceCallConfig } from "./config.js";
+import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 export function createVoiceCallBaseConfig(params?: {
   provider?: "telnyx" | "twilio" | "plivo" | "mock";
@@ -46,8 +47,7 @@ export function createVoiceCallBaseConfig(params?: {
     realtime: {
       enabled: false,
       streamPath: "/voice/stream/realtime",
-      instructions:
-        "You are OpenClaw's phone-call realtime voice interface. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call openclaw_agent_consult before answering.",
+      instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
       toolPolicy: "safe-read-only",
       tools: [],
       providers: {},

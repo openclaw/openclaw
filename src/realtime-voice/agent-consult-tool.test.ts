@@ -4,6 +4,10 @@ import {
   buildRealtimeVoiceAgentConsultPrompt,
   collectRealtimeVoiceAgentConsultVisibleText,
   parseRealtimeVoiceAgentConsultArgs,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  resolveRealtimeVoiceAgentConsultToolPolicy,
+  resolveRealtimeVoiceAgentConsultTools,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-tool.js";
 
 describe("realtime voice agent consult tool", () => {
@@ -51,5 +55,44 @@ describe("realtime voice agent consult tool", () => {
         { text: "second" },
       ]),
     ).toBe("first\n\nsecond");
+  });
+
+  it("normalizes policy values and resolves shared tool exposure", () => {
+    expect(resolveRealtimeVoiceAgentConsultToolPolicy(" OWNER ", "safe-read-only")).toBe("owner");
+    expect(resolveRealtimeVoiceAgentConsultToolPolicy("bad", "safe-read-only")).toBe(
+      "safe-read-only",
+    );
+    expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toEqual([
+      expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
+    ]);
+    expect(resolveRealtimeVoiceAgentConsultTools("none")).toEqual([]);
+    expect(resolveRealtimeVoiceAgentConsultToolsAllow("safe-read-only")).toEqual([
+      "read",
+      "web_search",
+      "web_fetch",
+      "x_search",
+      "memory_search",
+      "memory_get",
+    ]);
+    expect(resolveRealtimeVoiceAgentConsultToolsAllow("owner")).toBeUndefined();
+    expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toEqual([]);
+  });
+
+  it("keeps the shared consult tool ahead of custom realtime tools and dedupes by name", () => {
+    const customTool = {
+      type: "function" as const,
+      name: "custom_lookup",
+      description: "Custom lookup",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    const duplicateConsultTool = { ...customTool, name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME };
+
+    expect(
+      resolveRealtimeVoiceAgentConsultTools("safe-read-only", [duplicateConsultTool, customTool]),
+    ).toEqual([
+      expect.objectContaining({ name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME }),
+      customTool,
+    ]);
+    expect(resolveRealtimeVoiceAgentConsultTools("none", [customTool])).toEqual([customTool]);
   });
 });

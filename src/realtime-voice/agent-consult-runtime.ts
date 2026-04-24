@@ -5,41 +5,15 @@ import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-
 import {
   buildRealtimeVoiceAgentConsultPrompt,
   collectRealtimeVoiceAgentConsultVisibleText,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL,
-  type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
-import type { RealtimeVoiceTool } from "./provider-types.js";
 
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 export type RealtimeVoiceAgentConsultResult = { text: string };
-
-const SAFE_READ_ONLY_TOOLS = [
-  "read",
-  "web_search",
-  "web_fetch",
-  "x_search",
-  "memory_search",
-  "memory_get",
-] as const;
-
-export function resolveRealtimeVoiceAgentConsultTools(
-  policy: RealtimeVoiceAgentConsultToolPolicy,
-): RealtimeVoiceTool[] {
-  return policy === "none" ? [] : [REALTIME_VOICE_AGENT_CONSULT_TOOL];
-}
-
-export function resolveRealtimeVoiceAgentConsultToolsAllow(
-  policy: RealtimeVoiceAgentConsultToolPolicy,
-): string[] | undefined {
-  if (policy === "owner") {
-    return undefined;
-  }
-  if (policy === "safe-read-only") {
-    return [...SAFE_READ_ONLY_TOOLS];
-  }
-  return [];
-}
+export {
+  resolveRealtimeVoiceAgentConsultTools,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+} from "./agent-consult-tool.js";
 
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;

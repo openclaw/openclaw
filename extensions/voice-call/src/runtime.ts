@@ -6,7 +6,6 @@ import {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultTranscriptEntry,
-  type RealtimeVoiceTool,
   type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
@@ -83,19 +82,6 @@ function loadRealtimeVoiceRuntime(): Promise<RealtimeVoiceRuntimeModule> {
 function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
   realtimeHandlerPromise ??= import("./webhook/realtime-handler.js");
   return realtimeHandlerPromise;
-}
-
-function resolveRealtimeTools(config: VoiceCallConfig): RealtimeVoiceTool[] {
-  const tools = new Map<string, RealtimeVoiceTool>();
-  for (const tool of resolveRealtimeVoiceAgentConsultTools(config.realtime.toolPolicy)) {
-    tools.set(tool.name, tool);
-  }
-  for (const tool of config.realtime.tools) {
-    if (!tools.has(tool.name)) {
-      tools.set(tool.name, tool);
-    }
-  }
-  return [...tools.values()];
 }
 
 function resolveVoiceCallConsultSessionKey(call: {
@@ -298,7 +284,10 @@ export async function createVoiceCallRuntime(params: {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
     const realtimeConfig = {
       ...config.realtime,
-      tools: resolveRealtimeTools(config),
+      tools: resolveRealtimeVoiceAgentConsultTools(
+        config.realtime.toolPolicy,
+        config.realtime.tools,
+      ),
     };
     const realtimeHandler = new RealtimeCallHandler(
       realtimeConfig,
