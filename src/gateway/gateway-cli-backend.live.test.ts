@@ -70,6 +70,43 @@ function logCliBackendLiveStep(step: string, details?: Record<string, unknown>):
   console.error(`[gateway-cli-live] ${step}${suffix}`);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isProviderCapacityError(error: unknown): boolean {
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("529") &&
+    (normalized.includes("overloaded") || normalized.includes("capacity"))
+  );
+}
+
+async function requestWithProviderCapacityRetry<T>(
+  providerId: string,
+  label: string,
+  request: () => Promise<T>,
+): Promise<T | undefined> {
+  const maxAttempts = providerId === "claude-cli" ? 3 : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!isProviderCapacityError(error) || attempt >= maxAttempts) {
+        if (providerId === "claude-cli" && isProviderCapacityError(error)) {
+          console.warn(`SKIP: ${label} skipped because Claude API stayed overloaded.`);
+          return undefined;
+        }
+        throw error;
+      }
+      logCliBackendLiveStep("provider-capacity-retry", { label, attempt });
+      await sleep(15_000 * attempt);
+    }
+  }
+  return undefined;
+}
+
 async function createMcpSchemaProbePlugin(tempDir: string): Promise<string> {
   const pluginDir = path.join(tempDir, MCP_SCHEMA_PROBE_PLUGIN_ID);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -310,21 +347,26 @@ describeLive("gateway live (cli backend)", () => {
         const memoryNonce = randomBytes(3).toString("hex").toUpperCase();
         const memoryToken = `CLI-MEM-${memoryNonce}`;
         logCliBackendLiveStep("agent-request:start", { sessionKey, nonce });
-        const payload = await client.request(
-          "agent",
-          {
-            sessionKey,
-            idempotencyKey: `idem-${randomUUID()}`,
-            message: enableCliModelSwitchProbe
-              ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
-                ` Also remember this session note for later: ${memoryToken}.` +
-                " Do not include the note in your reply."
-              : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
-            deliver: false,
-            timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
-          },
-          { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+        const payload = await requestWithProviderCapacityRetry(providerId, "agent request", () =>
+          client.request(
+            "agent",
+            {
+              sessionKey,
+              idempotencyKey: `idem-${randomUUID()}`,
+              message: enableCliModelSwitchProbe
+                ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
+                  ` Also remember this session note for later: ${memoryToken}.` +
+                  " Do not include the note in your reply."
+                : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
+              deliver: false,
+              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
+            },
+            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+          ),
         );
+        if (!payload) {
+          return;
+        }
         if (payload?.status !== "ok") {
           throw new Error(`agent status=${String(payload?.status)}`);
         }
@@ -367,20 +409,28 @@ describeLive("gateway live (cli backend)", () => {
               `sessions.patch failed for model switch: ${JSON.stringify(patchPayload)}`,
             );
           }
-          const switchPayload = await client.request(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${randomUUID()}`,
-              message:
-                "We just switched from Claude Sonnet to Claude Opus in the same session. " +
-                `What session note did I ask you to remember earlier? ` +
-                `Reply with exactly: CLI backend SWITCH OK ${switchNonce} <remembered-note>.`,
-              deliver: false,
-              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
-            },
-            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+          const switchPayload = await requestWithProviderCapacityRetry(
+            providerId,
+            "agent model-switch request",
+            () =>
+              client.request(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${randomUUID()}`,
+                  message:
+                    "We just switched from Claude Sonnet to Claude Opus in the same session. " +
+                    `What session note did I ask you to remember earlier? ` +
+                    `Reply with exactly: CLI backend SWITCH OK ${switchNonce} <remembered-note>.`,
+                  deliver: false,
+                  timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
+                },
+                { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+              ),
           );
+          if (!switchPayload) {
+            return;
+          }
           if (switchPayload?.status !== "ok") {
             throw new Error(`switch status=${String(switchPayload?.status)}`);
           }
@@ -395,20 +445,28 @@ describeLive("gateway live (cli backend)", () => {
         } else if (CLI_RESUME) {
           const resumeNonce = randomBytes(3).toString("hex").toUpperCase();
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
-          const resumePayload = await client.request(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${randomUUID()}`,
-              message:
-                providerId === "codex-cli"
-                  ? `Please include the token CLI-RESUME-${resumeNonce} in your reply.`
-                  : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`,
-              deliver: false,
-              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
-            },
-            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+          const resumePayload = await requestWithProviderCapacityRetry(
+            providerId,
+            "agent resume request",
+            () =>
+              client.request(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${randomUUID()}`,
+                  message:
+                    providerId === "codex-cli"
+                      ? `Please include the token CLI-RESUME-${resumeNonce} in your reply.`
+                      : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`,
+                  deliver: false,
+                  timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
+                },
+                { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+              ),
           );
+          if (!resumePayload) {
+            return;
+          }
           if (resumePayload?.status !== "ok") {
             throw new Error(`resume status=${String(resumePayload?.status)}`);
           }
