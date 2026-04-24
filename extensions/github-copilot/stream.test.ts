@@ -6,6 +6,14 @@ import {
   wrapCopilotProviderStream,
 } from "./stream.js";
 
+function requireStreamFn(streamFn: ReturnType<typeof wrapCopilotProviderStream>) {
+  expect(streamFn).toBeTypeOf("function");
+  if (!streamFn) {
+    throw new Error("expected stream fn");
+  }
+  return streamFn;
+}
+
 describe("wrapCopilotAnthropicStream", () => {
   it("adds Copilot headers and Anthropic cache markers for Claude payloads", async () => {
     const payloads: Array<{
@@ -28,7 +36,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = wrapCopilotAnthropicStream(baseStreamFn);
+    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
     const messages = [
       {
         role: "user",
@@ -77,7 +85,7 @@ describe("wrapCopilotAnthropicStream", () => {
 
   it("leaves non-Anthropic Copilot models untouched", () => {
     const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
-    const wrapped = wrapCopilotAnthropicStream(baseStreamFn);
+    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
     const options = { headers: { Existing: "1" } };
 
     void wrapped(
@@ -105,7 +113,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = wrapCopilotOpenAIResponsesStream(baseStreamFn);
+    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
     const messages = [
       {
         role: "toolResult",
@@ -149,7 +157,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = wrapCopilotOpenAIResponsesStream(baseStreamFn);
+    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
 
     await wrapped(
       {
@@ -171,9 +179,11 @@ describe("wrapCopilotAnthropicStream", () => {
   it("adapts provider stream context without changing wrapper behavior", () => {
     const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
 
-    const wrapped = wrapCopilotProviderStream({
-      streamFn: baseStreamFn,
-    } as never);
+    const wrapped = requireStreamFn(
+      wrapCopilotProviderStream({
+        streamFn: baseStreamFn,
+      } as never),
+    );
 
     void wrapped(
       {
@@ -186,5 +196,13 @@ describe("wrapCopilotAnthropicStream", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("does not claim provider transport before OpenClaw chooses one", () => {
+    expect(
+      wrapCopilotProviderStream({
+        streamFn: undefined,
+      } as never),
+    ).toBeUndefined();
   });
 });
