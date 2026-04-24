@@ -106,6 +106,13 @@ runs the same lanes before release approval.
     endpoint.
   - Use `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` to run the same packaged-install
     lane with Discord.
+- `pnpm test:docker:npm-telegram-live`
+  - Installs a published OpenClaw package in Docker, runs installed-package
+    onboarding, configures Telegram through the installed CLI, then reuses the
+    live Telegram QA lane with that installed package as the SUT Gateway.
+  - Defaults to `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta`.
+  - Uses the same Telegram env credentials or Convex credential source as
+    `pnpm openclaw qa telegram`.
 - `pnpm test:docker:bundled-channel-deps`
   - Packs and installs the current OpenClaw build in Docker, starts the Gateway
     with OpenAI configured, then enables bundled channel/plugins via config
