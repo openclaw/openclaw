@@ -158,6 +158,11 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async getTable(): Promise<LanceDB.Table> {
+    await this.ensureInitialized();
+    return this.table!;
+  }
 }
 
 // ============================================================================
@@ -561,6 +566,44 @@ export default definePluginEntry({
               score: r.score,
             }));
             console.log(JSON.stringify(output, null, 2));
+          });
+
+        memory
+          .command("query")
+          .description("Query memories (non-vector search)")
+          .option("--cols <columns>", "Columns to select, comma-separated")
+          .option("--filter <condition>", "Filter condition")
+          .option("--limit <n>", "Limit number of results", "10")
+          .option("--order-by <order>", "Order by column and direction (e.g., createdAt:desc)")
+          .action(async (opts) => {
+            const table = await db.getTable();
+            let query = table.query();
+            if (opts.cols) {
+              const columns = (opts.cols as string).split(",").map((c: string) => c.trim());
+              query = query.select(columns);
+            }
+            if (opts.filter) {
+              query = query.where(opts.filter);
+            }
+            const limit = parseInt(opts.limit, 10);
+            if (!isNaN(limit) && limit > 0) {
+              query = query.limit(limit);
+            }
+            let rows = await query.toArray();
+            if (opts.orderBy) {
+              const [col, dir] = opts.orderBy.split(":");
+              const direction = dir?.toLowerCase() === "desc" ? -1 : 1;
+              rows.sort((a, b) => {
+                if (a[col] < b[col]) {
+                  return -1 * direction;
+                }
+                if (a[col] > b[col]) {
+                  return 1 * direction;
+                }
+                return 0;
+              });
+            }
+            console.log(JSON.stringify(rows, null, 2));
           });
 
         memory
