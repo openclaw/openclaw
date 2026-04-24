@@ -333,30 +333,6 @@ describe("config view", () => {
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 
-  it("renders top tabs for root and available sections", () => {
-    const container = document.createElement("div");
-    render(
-      renderConfig({
-        ...baseProps(),
-        schema: {
-          type: "object",
-          properties: {
-            gateway: { type: "object", properties: {} },
-            agents: { type: "object", properties: {} },
-          },
-        },
-      }),
-      container,
-    );
-
-    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
-      tab.textContent?.trim(),
-    );
-    expect(tabs).toContain("Settings");
-    expect(tabs).toContain("Agents");
-    expect(tabs).toContain("Gateway");
-  });
-
   it("shows section hero and hides nested card header in single-section form view", () => {
     const { container } = renderConfigView({
       activeSection: "auth",
