@@ -820,9 +820,8 @@ describe("loginGeminiCliOAuth", () => {
     );
 
     const { requests } = installGeminiOAuthFetchMock(() => undefined);
-
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    const result = await exchangeCodeForTokens("oauth-code", "pkce-verifier");
 
     expect(result.projectId).toBeUndefined();
     expect(requests.map(({ url }) => url)).toEqual([TOKEN_URL, USERINFO_URL]);
