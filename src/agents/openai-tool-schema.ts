@@ -10,14 +10,14 @@ type ToolWithParameters = {
 };
 
 export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
-  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}));
+  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}), 0);
 }
 
-function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
+function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry);
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
       changed ||= next !== entry;
       return next;
     });
@@ -31,7 +31,10 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
   let changed = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    const next = normalizeStrictOpenAIJsonSchemaRecursive(value);
+    const next = normalizeStrictOpenAIJsonSchemaRecursive(
+      value,
+      key === "properties" ? depth : depth + 1,
+    );
     normalized[key] = next;
     changed ||= next !== value;
   }
@@ -47,7 +50,7 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
       normalized.required = [];
       changed = true;
     }
-    if (!("additionalProperties" in normalized)) {
+    if (depth === 0 && !("additionalProperties" in normalized)) {
       normalized.additionalProperties = false;
       changed = true;
     }
