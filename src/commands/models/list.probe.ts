@@ -407,9 +407,7 @@ export async function buildProbeTargets(params: {
     const source = envKey ? "env" : "models.json";
     const mode = envKey?.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
 
-    const validModels = models.filter(
-      (m): m is { provider: string; model: string } => m !== null,
-    );
+    const validModels = models.filter((m): m is { provider: string; model: string } => m !== null);
     if (validModels.length === 0) {
       results.push({
         provider: providerKey,

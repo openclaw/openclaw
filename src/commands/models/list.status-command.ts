@@ -159,7 +159,9 @@ export async function modelsStatusCommand(
     throw new Error("--probe cannot be used with --plain output.");
   }
   if (opts.probeAll && !opts.probe) {
-    runtime.error("Warning: --all has no effect without --probe. Add --probe to enable per-model health checks.");
+    runtime.error(
+      "Warning: --all has no effect without --probe. Add --probe to enable per-model health checks.",
+    );
   }
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });

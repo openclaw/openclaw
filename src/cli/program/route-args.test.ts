@@ -202,9 +202,38 @@ describe("route-args", () => {
       plain: true,
       check: true,
       probe: true,
+      probeAll: false,
     });
     expect(
       parseModelsStatusRouteArgs(["node", "openclaw", "models", "status", "--probe-profile"]),
     ).toBeNull();
+  });
+
+  it("parses --probe --all combined with --probe-provider and --json", () => {
+    expect(
+      parseModelsStatusRouteArgs([
+        "node",
+        "openclaw",
+        "models",
+        "status",
+        "--probe",
+        "--all",
+        "--probe-provider",
+        "anthropic",
+        "--json",
+      ]),
+    ).toEqual({
+      probeProvider: "anthropic",
+      probeTimeout: undefined,
+      probeConcurrency: undefined,
+      probeMaxTokens: undefined,
+      agent: undefined,
+      probeProfile: undefined,
+      json: true,
+      plain: false,
+      check: false,
+      probe: true,
+      probeAll: true,
+    });
   });
 });
