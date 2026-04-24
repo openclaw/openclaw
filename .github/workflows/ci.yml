@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -215,20 +215,15 @@ jobs:
                 requires_dist: shard.requiresDist,
               }))
             : [];
-          const blacksmith8vcpuCoreShardNames = new Set([
+          const blacksmith4vcpuCoreShardNames = new Set([
             "agentic-agents",
+            "agentic-plugin-sdk",
+            "agentic-plugins",
             "core-runtime-infra",
             "core-runtime-media-ui",
           ]);
-          const blacksmith4vcpuCoreShardNames = new Set([
-            "agentic-plugin-sdk",
-            "agentic-plugins",
-          ]);
           const resolveCoreShardRunner = (shardName) => {
             if (!isCanonicalRepository) return "ubuntu-24.04";
-            if (blacksmith8vcpuCoreShardNames.has(shardName)) {
-              return "blacksmith-8vcpu-ubuntu-2404";
-            }
             if (blacksmith4vcpuCoreShardNames.has(shardName)) {
               return "blacksmith-4vcpu-ubuntu-2404";
             }
@@ -1544,7 +1539,7 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
             runner: ubuntu-24.04
