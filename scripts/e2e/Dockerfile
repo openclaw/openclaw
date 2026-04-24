@@ -14,6 +14,9 @@ RUN useradd --create-home --shell /bin/bash appuser \
 
 ENV HOME="/home/appuser"
 ENV NODE_OPTIONS="--disable-warning=ExperimentalWarning"
+# Docker E2E lanes start many loopback gateways concurrently; mDNS advertising
+# is unrelated to those checks and can flap under container CPU/network load.
+ENV OPENCLAW_DISABLE_BONJOUR="1"
 
 USER appuser
 WORKDIR /app

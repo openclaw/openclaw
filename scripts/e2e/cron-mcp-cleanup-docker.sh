@@ -53,7 +53,7 @@ docker run --rm \
     trap cleanup_inner EXIT
     trap dump_gateway_log_on_error ERR
     gateway_ready=0
-    for _ in \$(seq 1 160); do
+    for _ in \$(seq 1 300); do
       if grep -q '\[gateway\] ready' /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null; then
         gateway_ready=1
         break
