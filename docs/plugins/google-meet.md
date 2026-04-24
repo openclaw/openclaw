@@ -26,12 +26,15 @@ The plugin is explicit by design:
 
 ## Quick start
 
-Install the local audio dependencies and make sure the realtime provider can use
-OpenAI:
+Install the local audio dependencies and configure a backend realtime voice
+provider. OpenAI is the default; Google Gemini Live also works with
+`realtime.provider: "google"`:
 
 ```bash
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
+# or
+export GEMINI_API_KEY=...
 ```
 
 `blackhole-2ch` installs the `BlackHole 2ch` virtual audio device. Homebrew's
@@ -319,11 +322,14 @@ Workspace Developer Preview Program for Meet media APIs.
 ## Config
 
 The common Chrome realtime path only needs the plugin enabled, BlackHole, SoX,
-and an OpenAI key:
+and a backend realtime voice provider key. OpenAI is the default; set
+`realtime.provider: "google"` to use Google Gemini Live:
 
 ```bash
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
+# or
+export GEMINI_API_KEY=...
 ```
 
 Set the plugin config under `plugins.entries.google-meet.config`:
@@ -372,8 +378,15 @@ Optional overrides:
     node: "parallels-macos",
   },
   realtime: {
+    provider: "google",
     toolPolicy: "owner",
     introMessage: "Say exactly: I'm here.",
+    providers: {
+      google: {
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        voice: "Kore",
+      },
+    },
   },
 }
 ```
