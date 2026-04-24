@@ -230,7 +230,7 @@ describe("recoverOrphanedMainSessions", () => {
     expect(gateway.callGateway).not.toHaveBeenCalled();
   });
 
-  it("skips subagent entries (handled by subagent orphan recovery)", async () => {
+  it("skips subagent entries by spawnDepth (handled by subagent orphan recovery)", async () => {
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:abc": {
         sessionId: "session-sub-1",
@@ -249,6 +249,67 @@ describe("recoverOrphanedMainSessions", () => {
 
     expect(result.recovered).toBe(0);
     expect(result.skipped).toBe(0);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("skips subagent entries by subagentRole when spawnDepth is unset", async () => {
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:other:xyz": {
+        sessionId: "session-sub-2",
+        updatedAt: Date.now(),
+        status: "running",
+        subagentRole: "leaf",
+      } as sessions.SessionEntry,
+    });
+    vi.mocked(sessionUtils.readSessionMessages).mockReturnValue([
+      userText("leaf task"),
+      assistantText("running"),
+      toolResultTurn(),
+    ]);
+
+    const result = await recoverOrphanedMainSessions({ nowMs: Date.now() });
+
+    expect(result.recovered).toBe(0);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("skips cron runs (lifecycle owned by cron scheduler)", async () => {
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:cron:daily:run:abc": {
+        sessionId: "session-cron-1",
+        updatedAt: Date.now(),
+        status: "running",
+      } as sessions.SessionEntry,
+    });
+    vi.mocked(sessionUtils.readSessionMessages).mockReturnValue([
+      userText("cron prompt"),
+      assistantText("running"),
+      toolResultTurn(),
+    ]);
+
+    const result = await recoverOrphanedMainSessions({ nowMs: Date.now() });
+
+    expect(result.recovered).toBe(0);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("skips ACP sessions (lifecycle owned by ACP control plane)", async () => {
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:acp:some-acp-id": {
+        sessionId: "session-acp-1",
+        updatedAt: Date.now(),
+        status: "running",
+      } as sessions.SessionEntry,
+    });
+    vi.mocked(sessionUtils.readSessionMessages).mockReturnValue([
+      userText("acp request"),
+      assistantText("running"),
+      toolResultTurn(),
+    ]);
+
+    const result = await recoverOrphanedMainSessions({ nowMs: Date.now() });
+
+    expect(result.recovered).toBe(0);
     expect(gateway.callGateway).not.toHaveBeenCalled();
   });
 

@@ -29,6 +29,7 @@ import { callGateway } from "../gateway/call.js";
 import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
+import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 
 const log = createSubsystemLogger("main-session-orphan-recovery");
@@ -56,11 +57,23 @@ export type MainSessionRecoveryResult = {
   expired: number;
 };
 
-function isSubagentSessionEntry(entry: SessionEntry, sessionKey: string): boolean {
+/**
+ * Exclude session keys that already have their own recovery (subagent) or
+ * lifecycle ownership (cron, ACP). Also treat any entry with a non-null
+ * `subagentRole` or positive `spawnDepth` as out-of-scope, so callers of
+ * `acp-spawn` / `subagent-spawn` whose key shape drifts from the canonical
+ * `:subagent:` format are still skipped.
+ */
+function shouldSkipForMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
     return true;
   }
-  return sessionKey.includes(":subagent:");
+  if (entry.subagentRole != null) {
+    return true;
+  }
+  return (
+    isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) || isAcpSessionKey(sessionKey)
+  );
 }
 
 function getMessageRole(msg: unknown): string | undefined {
@@ -250,7 +263,7 @@ async function processAgentSessionStore(params: {
     if (!entry || entry.status !== "running") {
       continue;
     }
-    if (isSubagentSessionEntry(entry, sessionKey)) {
+    if (shouldSkipForMainRecovery(entry, sessionKey)) {
       continue;
     }
     if (resumedSessionKeys.has(sessionKey)) {
