@@ -313,4 +313,57 @@ describe("schema validator", () => {
       });
     },
   );
+
+  describe("draft-2020-12 schema support", () => {
+    const draft2020Schema = {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        url: { type: "string" },
+        timeout: { type: "integer" },
+      },
+      required: ["url"],
+    } as const;
+
+    it("validates a valid object against a draft-2020-12 schema", () => {
+      expectValidationSuccess({
+        cacheKey: "schema-validator.test.draft2020.valid",
+        schema: draft2020Schema,
+        value: { url: "https://example.com", timeout: 30 },
+      });
+    });
+
+    it("reports a missing required property in a draft-2020-12 schema", () => {
+      const result = expectValidationFailure({
+        cacheKey: "schema-validator.test.draft2020.missing-required",
+        schema: draft2020Schema,
+        value: { timeout: 30 },
+      });
+      const issue = expectValidationIssue(result, "url");
+      expect(issue?.message).toContain("required");
+    });
+
+    it("reports a type mismatch in a draft-2020-12 schema", () => {
+      const result = expectValidationFailure({
+        cacheKey: "schema-validator.test.draft2020.type-mismatch",
+        schema: draft2020Schema,
+        value: { url: "https://example.com", timeout: "not-a-number" },
+      });
+      const issue = expectValidationIssue(result, "timeout");
+      expect(issue?.message).toContain("integer");
+    });
+
+    it("does not throw when compiling a draft-2020-12 schema (regression: no schema with key or ref)", () => {
+      expect(() =>
+        validateJsonSchemaValue({
+          cacheKey: "schema-validator.test.draft2020.no-throw",
+          schema: {
+            $schema: "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+          } as const,
+          value: {},
+        }),
+      ).not.toThrow();
+    });
+  });
 });

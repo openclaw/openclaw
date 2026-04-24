@@ -17,18 +17,32 @@ type AjvLike = {
   ) => AjvLike;
   compile: (schema: JsonSchemaObject) => ValidateFunction;
 };
-const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
 
-function getAjv(mode: "default" | "defaults"): AjvLike {
-  const cached = ajvSingletons.get(mode);
+const DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+
+type AjvMode = "default" | "defaults";
+type AjvVariant = "draft07" | "draft2020";
+type AjvSingletonKey = `${AjvMode}:${AjvVariant}`;
+
+const ajvSingletons = new Map<AjvSingletonKey, AjvLike>();
+
+function loadAjvCtor(variant: AjvVariant): new (opts?: object) => AjvLike {
+  const mod =
+    variant === "draft2020"
+      ? (require("ajv/dist/2020") as { default?: new (opts?: object) => AjvLike })
+      : (require("ajv") as { default?: new (opts?: object) => AjvLike });
+  return typeof mod.default === "function"
+    ? mod.default
+    : (mod as unknown as new (opts?: object) => AjvLike);
+}
+
+function getAjv(mode: AjvMode, variant: AjvVariant = "draft07"): AjvLike {
+  const key: AjvSingletonKey = `${mode}:${variant}`;
+  const cached = ajvSingletons.get(key);
   if (cached) {
     return cached;
   }
-  const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
-  const AjvCtor =
-    typeof ajvModule.default === "function"
-      ? ajvModule.default
-      : (ajvModule as unknown as new (opts?: object) => AjvLike);
+  const AjvCtor = loadAjvCtor(variant);
   const instance = new AjvCtor({
     allErrors: true,
     strict: false,
@@ -43,8 +57,12 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
       return URL.canParse(value);
     },
   });
-  ajvSingletons.set(mode, instance);
+  ajvSingletons.set(key, instance);
   return instance;
+}
+
+function resolveAjvVariant(schema: JsonSchemaObject): AjvVariant {
+  return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12 ? "draft2020" : "draft07";
 }
 
 type CachedValidator = {
@@ -167,7 +185,9 @@ export function validateJsonSchemaValue(params: {
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
   let cached = schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
-    const validate = getAjv(params.applyDefaults ? "defaults" : "default").compile(params.schema);
+    const mode: AjvMode = params.applyDefaults ? "defaults" : "default";
+    const variant = resolveAjvVariant(params.schema);
+    const validate = getAjv(mode, variant).compile(params.schema);
     cached = { validate, schema: params.schema };
     schemaCache.set(cacheKey, cached);
   }
