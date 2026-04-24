@@ -8,7 +8,8 @@ export type PluginInstallSourceWarning =
   | "default-choice-missing-source"
   | "npm-integrity-without-source"
   | "npm-spec-floating"
-  | "npm-spec-missing-integrity";
+  | "npm-spec-missing-integrity"
+  | "npm-spec-package-name-mismatch";
 
 export type PluginInstallNpmPinState =
   | "exact-with-integrity"
@@ -19,6 +20,7 @@ export type PluginInstallNpmPinState =
 export type PluginInstallNpmSourceInfo = {
   spec: string;
   packageName: string;
+  expectedPackageName?: string;
   selector?: string;
   selectorKind: ParsedRegistryNpmSpec["selectorKind"];
   exactVersion: boolean;
@@ -37,6 +39,10 @@ export type PluginInstallSourceInfo = {
   warnings: readonly PluginInstallSourceWarning[];
 };
 
+export type DescribePluginInstallSourceOptions = {
+  expectedPackageName?: string | null;
+};
+
 function resolveNpmPinState(params: {
   exactVersion: boolean;
   hasIntegrity: boolean;
@@ -51,13 +57,23 @@ function resolveDefaultChoice(value: unknown): PluginPackageInstall["defaultChoi
   return value === "npm" || value === "local" ? value : undefined;
 }
 
+function normalizeExpectedPackageName(value: string | null | undefined): string | undefined {
+  const expected = normalizeOptionalString(value);
+  if (!expected) {
+    return undefined;
+  }
+  return parseRegistryNpmSpec(expected)?.name ?? expected;
+}
+
 export function describePluginInstallSource(
   install: PluginPackageInstall,
+  options?: DescribePluginInstallSourceOptions,
 ): PluginInstallSourceInfo {
   const npmSpec = normalizeOptionalString(install.npmSpec);
   const localPath = normalizeOptionalString(install.localPath);
   const defaultChoice = resolveDefaultChoice(install.defaultChoice);
   const expectedIntegrity = normalizeOptionalString(install.expectedIntegrity);
+  const expectedPackageName = normalizeExpectedPackageName(options?.expectedPackageName);
   const warnings: PluginInstallSourceWarning[] = [];
   let npm: PluginInstallNpmSourceInfo | undefined;
 
@@ -76,9 +92,15 @@ export function describePluginInstallSource(
       if (!hasIntegrity) {
         warnings.push("npm-spec-missing-integrity");
       }
+      if (expectedPackageName && parsed.name !== expectedPackageName) {
+        warnings.push("npm-spec-package-name-mismatch");
+      }
       npm = {
         spec: parsed.raw,
         packageName: parsed.name,
+        ...(expectedPackageName && parsed.name !== expectedPackageName
+          ? { expectedPackageName }
+          : {}),
         selectorKind: parsed.selectorKind,
         exactVersion,
         pinState: resolveNpmPinState({ exactVersion, hasIntegrity }),
