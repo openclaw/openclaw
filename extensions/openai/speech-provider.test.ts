@@ -12,6 +12,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
     response: await globalThis.fetch(url, init),
     release: vi.fn(async () => {}),
   }),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
 function isSpeechRequestBody(value: unknown): value is { response_format?: string } {

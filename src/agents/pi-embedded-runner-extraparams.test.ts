@@ -538,6 +538,7 @@ describe("applyExtraParamsToAgent", () => {
     model:
       | Model<"openai-completions">
       | Model<"openai-responses">
+      | Model<"openai-codex-responses">
       | Model<"azure-openai-responses">
       | Model<"anthropic-messages">;
     cfg?: Record<string, unknown>;
@@ -818,6 +819,34 @@ describe("applyExtraParamsToAgent", () => {
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
       } as unknown as Model<"openai-responses">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
+  });
+
+  it("injects parallel_tool_calls for openai-codex-responses payloads when configured", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  parallelToolCalls: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      } as unknown as Model<"openai-codex-responses">,
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
@@ -1551,7 +1580,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto with websocket warm-up", () => {
+  it("defaults OpenAI transport to auto without websocket warm-up", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1566,7 +1595,7 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
-    expect(calls[0]?.openaiWsWarmup).toBe(true);
+    expect(calls[0]?.openaiWsWarmup).toBe(false);
   });
 
   it("injects GPT-5 default parallel tool calls and low verbosity for OpenAI Responses payloads", () => {
@@ -1578,6 +1607,22 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5.4",
       } as Model<"openai-responses">,
+      payload: {},
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
+    expect(payload.text).toEqual({ verbosity: "low" });
+  });
+
+  it("injects GPT-5 default parallel tool calls for Codex Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+      } as Model<"openai-codex-responses">,
       payload: {},
     });
 
