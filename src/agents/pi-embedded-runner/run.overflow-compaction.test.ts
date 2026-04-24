@@ -32,36 +32,36 @@ import {
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
-const internalEvents: AgentInternalEvent[] = [];
 type RuntimePlanOverrides = Partial<Omit<AgentRuntimePlan, "auth" | "resolvedRef">> & {
   auth?: Partial<AgentRuntimePlan["auth"]>;
   resolvedRef?: Partial<AgentRuntimePlan["resolvedRef"]>;
 };
-const forwardingCase = {
-  runId: "forward-attempt-params",
-  params: {
-    toolsAllow: ["exec", "read"],
-    bootstrapContextMode: "lightweight",
-    bootstrapContextRunKind: "cron",
-    disableMessageTool: true,
-    forceMessageTool: true,
-    requireExplicitMessageTarget: true,
-    internalEvents,
-  },
-  expected: {
-    toolsAllow: ["exec", "read"],
-    bootstrapContextMode: "lightweight",
-    bootstrapContextRunKind: "cron",
-    disableMessageTool: true,
-    forceMessageTool: true,
-    requireExplicitMessageTarget: true,
-    internalEvents,
-  },
-} satisfies {
-  runId: string;
-  params: Partial<RunEmbeddedPiAgentParams>;
-  expected: Record<string, unknown>;
-};
+function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
+  return {
+    runId: "forward-attempt-params",
+    params: {
+      toolsAllow: ["exec", "read"],
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+      disableMessageTool: true,
+      forceMessageTool: true,
+      requireExplicitMessageTarget: true,
+      internalEvents,
+    },
+    expected: {
+      toolsAllow: ["exec", "read"],
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+      disableMessageTool: true,
+      forceMessageTool: true,
+      requireExplicitMessageTarget: true,
+    },
+  } satisfies {
+    runId: string;
+    params: Partial<RunEmbeddedPiAgentParams>;
+    expected: Record<string, unknown>;
+  };
+}
 
 function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRuntimePlan {
   const transcriptPolicy = {
@@ -189,6 +189,8 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   });
 
   it("forwards optional attempt params and the runtime plan into one attempt call", async () => {
+    const internalEvents: AgentInternalEvent[] = [];
+    const forwardingCase = makeForwardingCase(internalEvents);
     const runtimePlan = makeForwardedRuntimePlan();
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
@@ -199,6 +201,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       runId: forwardingCase.runId,
     });
 
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -217,6 +220,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         }),
       }),
     );
+    const attemptParams = mockedRunEmbeddedAttempt.mock.calls[0]?.[0];
+    expect(attemptParams?.runtimePlan).toBe(runtimePlan);
+    expect(attemptParams?.internalEvents).toBe(internalEvents);
   });
 
   it("forwards explicit OpenAI Codex auth profiles to codex plugin harnesses", async () => {
@@ -265,6 +271,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -284,6 +291,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         }),
       }),
     );
+    expect(pluginRunAttempt.mock.calls[0]?.[0].runtimePlan).toBe(runtimePlan);
   });
 
   it("forwards OpenAI Codex auth profiles when openai/* is forced through codex", async () => {
@@ -332,6 +340,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -352,6 +361,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         }),
       }),
     );
+    expect(pluginRunAttempt.mock.calls[0]?.[0].runtimePlan).toBe(runtimePlan);
   });
 
   it("blocks undersized models before dispatching a provider attempt", async () => {
