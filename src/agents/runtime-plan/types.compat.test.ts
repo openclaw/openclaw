@@ -17,7 +17,8 @@ describe("AgentRuntimePlan structural type compatibility", () => {
     expectTypeOf<AgentRuntimePromptMode>().toEqualTypeOf<PromptMode>();
   });
 
-  it("keeps real reply payloads assignable to the runtime leaf payload shape", () => {
+  it("keeps reply payload shapes structurally compatible with the runtime leaf payload shape", () => {
     expectTypeOf<ReplyPayload>().toMatchTypeOf<AgentRuntimeReplyPayload>();
+    expectTypeOf<AgentRuntimeReplyPayload>().toMatchTypeOf<ReplyPayload>();
   });
 });

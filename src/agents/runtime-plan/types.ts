@@ -49,13 +49,93 @@ export type AgentRuntimeModel = {
   compat?: unknown;
 };
 
+export type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
+
+export type AgentRuntimeInteractiveReplyButton = {
+  label: string;
+  value?: string;
+  url?: string;
+  style?: AgentRuntimeInteractiveButtonStyle;
+};
+
+export type AgentRuntimeInteractiveReplyOption = {
+  label: string;
+  value: string;
+};
+
+export type AgentRuntimeInteractiveReplyBlock =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "buttons";
+      buttons: AgentRuntimeInteractiveReplyButton[];
+    }
+  | {
+      type: "select";
+      placeholder?: string;
+      options: AgentRuntimeInteractiveReplyOption[];
+    };
+
+export type AgentRuntimeInteractiveReply = {
+  blocks: AgentRuntimeInteractiveReplyBlock[];
+};
+
+export type AgentRuntimeMessagePresentationTone =
+  | "info"
+  | "success"
+  | "warning"
+  | "danger"
+  | "neutral";
+
+export type AgentRuntimeMessagePresentationBlock =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "context";
+      text: string;
+    }
+  | {
+      type: "divider";
+    }
+  | {
+      type: "buttons";
+      buttons: AgentRuntimeInteractiveReplyButton[];
+    }
+  | {
+      type: "select";
+      placeholder?: string;
+      options: AgentRuntimeInteractiveReplyOption[];
+    };
+
+export type AgentRuntimeMessagePresentation = {
+  title?: string;
+  tone?: AgentRuntimeMessagePresentationTone;
+  blocks: AgentRuntimeMessagePresentationBlock[];
+};
+
+export type AgentRuntimeReplyPayloadDeliveryPin = {
+  enabled: boolean;
+  notify?: boolean;
+  required?: boolean;
+};
+
+export type AgentRuntimeReplyPayloadDelivery = {
+  pin?: boolean | AgentRuntimeReplyPayloadDeliveryPin;
+};
+
 export type AgentRuntimeReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
-  presentation?: unknown;
-  delivery?: unknown;
-  interactive?: unknown;
+  trustedLocalMedia?: boolean;
+  sensitiveMedia?: boolean;
+  presentation?: AgentRuntimeMessagePresentation;
+  delivery?: AgentRuntimeReplyPayloadDelivery;
+  interactive?: AgentRuntimeInteractiveReply;
   btw?: {
     question: string;
   };

@@ -3,7 +3,6 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { TSchema } from "typebox";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -57,7 +56,7 @@ export function buildAgentRuntimeDeliveryPlan(
           workspaceDir: params.workspaceDir,
           provider: params.provider,
           modelId: params.modelId,
-          payload: routeParams.payload as ReplyPayload,
+          payload: routeParams.payload,
           originatingChannel: routeParams.originatingChannel,
           originatingTo: routeParams.originatingTo,
           originRoutable: routeParams.originRoutable,
