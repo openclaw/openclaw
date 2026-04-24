@@ -2330,20 +2330,17 @@ public struct TalkRealtimeSessionParams: Codable, Sendable {
     public let provider: String?
     public let model: String?
     public let voice: String?
-    public let instructions: String?
 
     public init(
         sessionkey: String?,
         provider: String?,
         model: String?,
-        voice: String?,
-        instructions: String?)
+        voice: String?)
     {
         self.sessionkey = sessionkey
         self.provider = provider
         self.model = model
         self.voice = voice
-        self.instructions = instructions
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2351,7 +2348,6 @@ public struct TalkRealtimeSessionParams: Codable, Sendable {
         case provider
         case model
         case voice
-        case instructions
     }
 }
 
