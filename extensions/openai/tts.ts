@@ -108,6 +108,10 @@ export async function openaiTTS(params: {
       ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
     });
     const requestUrl = `${baseUrl}/audio/speech`;
+    const isGlobalFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
+    const guardedFetchImpl = isGlobalFetchPatchInstalled
+      ? globalThis.fetch.bind(globalThis)
+      : undefined;
     const { response, release } = await fetchWithSsrFGuard({
       url: requestUrl,
       init: {
@@ -116,10 +120,12 @@ export async function openaiTTS(params: {
         body: requestBody,
         signal: controller.signal,
       },
+      ...(guardedFetchImpl ? { fetchImpl: guardedFetchImpl } : {}),
+      capture: false,
       auditContext: "openai-tts",
     });
     try {
-      if (!isDebugProxyGlobalFetchPatchInstalled()) {
+      if (!isGlobalFetchPatchInstalled) {
         captureHttpExchange({
           url: requestUrl,
           method: "POST",
