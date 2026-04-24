@@ -588,10 +588,10 @@ importers:
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
+    devDependencies:
       '@mariozechner/pi-ai':
         specifier: 0.70.2
         version: 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-    devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
