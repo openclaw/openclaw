@@ -481,4 +481,10 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe("    code line");
     expect(result.mediaUrls).toEqual(["/tmp/a"]);
   });
+
+  it("preserves tab-indented code line as first line after MEDIA removal", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/a\n\n\tMEDIA:/tmp/code.png");
+    expect(result.text).toBe("\tMEDIA:/tmp/code.png");
+    expect(result.mediaUrls).toEqual(["/tmp/a"]);
+  });
 });

@@ -721,13 +721,21 @@ export function splitMediaFromOutput(
     prevLineBlankOrIndentedCode = false;
   }
 
+  // Determine whether the first surviving content line is code — if so,
+  // preserve its leading whitespace (it is structurally significant).
+  const firstContentIdx = keptLines.findIndex((l) => l.trim().length > 0);
+  const firstLineIsCode = firstContentIdx >= 0 && keptLineIsCode[firstContentIdx];
+  const leadingNormRegex = firstLineIsCode
+    ? /^(?:[ \t]*\n)*/
+    : /^(?:[ \t]*\n)*(?:[ \t]{0,3}(?=\S))?/;
+
   let cleanedText = keptLines
     .map((line, i) =>
       keptLineIsCode[i] ? line : line.replace(/[ \t]+$/, "").replace(/[ \t]{2,}/g, " "),
     )
     .join("\n")
     .replace(/\n{2,}/g, "\n")
-    .replace(/^(?:[ \t]*\n)*(?:[ \t]{0,3}(?=\S))?/, "")
+    .replace(leadingNormRegex, "")
     .trimEnd();
 
   // Detect and strip [[audio_as_voice]] tag
