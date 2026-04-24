@@ -15,6 +15,9 @@ describe("buildBareSessionResetPrompt", () => {
     expect(prompt).toContain("read the required files before responding to the user");
     expect(prompt).toContain("If BOOTSTRAP.md exists in the provided Project Context");
     expect(prompt).toContain("read it and follow its instructions first");
+    expect(prompt).toContain(
+      "Do not mention current or default model identity unless the user asked",
+    );
     expect(prompt).not.toContain(
       "If runtime-provided startup context is included for this first turn",
     );
@@ -30,6 +33,9 @@ describe("buildBareSessionResetPrompt", () => {
     expect(prompt).toContain("offer the simplest next step");
     expect(prompt).toContain("Do not pretend bootstrap is complete when it is not.");
     expect(prompt).toContain("Your first user-visible reply must follow BOOTSTRAP.md");
+    expect(prompt).toContain(
+      "Do not mention current or default model identity unless the user asked.",
+    );
     expect(prompt).not.toContain("Then greet the user in your configured persona");
   });
 
@@ -40,6 +46,9 @@ describe("buildBareSessionResetPrompt", () => {
     expect(prompt).toContain("Do not claim bootstrap is complete");
     expect(prompt).toContain("do not use a generic first greeting");
     expect(prompt).toContain("switching to a primary interactive run with normal workspace access");
+    expect(prompt).toContain(
+      "Do not mention current or default model identity unless the user asked.",
+    );
     expect(prompt).not.toContain("Please read BOOTSTRAP.md from the workspace now");
   });
 
