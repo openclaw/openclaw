@@ -136,6 +136,22 @@ Start the node host in the VM:
 openclaw node run --host <gateway-host> --port 18789 --display-name parallels-macos
 ```
 
+If `<gateway-host>` is a LAN IP and you are not using TLS, the node refuses the
+plaintext WebSocket unless you opt in for that trusted private network:
+
+```bash
+OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 \
+  openclaw node run --host <gateway-lan-ip> --port 18789 --display-name parallels-macos
+```
+
+Use the same environment variable when installing the node as a LaunchAgent:
+
+```bash
+OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 \
+  openclaw node install --host <gateway-lan-ip> --port 18789 --display-name parallels-macos --force
+openclaw node restart
+```
+
 Approve the node from the Gateway host:
 
 ```bash
