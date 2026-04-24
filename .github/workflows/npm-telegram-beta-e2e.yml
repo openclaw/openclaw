@@ -34,8 +34,8 @@ env:
   PNPM_VERSION: "10.33.0"
 
 jobs:
-  authorize_actor:
-    name: Authorize workflow actor
+  validate_dispatch_ref:
+    name: Validate dispatch ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Require main workflow ref
@@ -48,28 +48,20 @@ jobs:
             exit 1
           fi
 
-      - name: Require release manager team membership
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const { owner } = context.repo;
-            const teamSlug = "openclaw-release-managers";
-            const members = await github.paginate(github.rest.teams.listMembersInOrg, {
-              org: owner,
-              team_slug: teamSlug,
-              per_page: 100,
-            });
-            const memberLogins = new Set(members.map((member) => member.login));
-            core.info(`${teamSlug} members loaded: ${memberLogins.size}`);
-            if (!memberLogins.has(context.actor)) {
-              core.setFailed(
-                `Workflow requires active ${teamSlug} membership. Actor "${context.actor}" is not a member of ${owner}/${teamSlug}.`,
-              );
-            }
+  approve_release_manager:
+    name: Approve release manager run
+    needs: validate_dispatch_ref
+    runs-on: ubuntu-latest
+    environment: npm-release
+    steps:
+      - name: Approve npm Telegram beta E2E
+        env:
+          PACKAGE_SPEC: ${{ inputs.package_spec }}
+        run: echo "Approved npm Telegram beta E2E for ${PACKAGE_SPEC}"
 
   run_npm_telegram_beta_e2e:
     name: Run published npm Telegram E2E
-    needs: authorize_actor
+    needs: approve_release_manager
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
