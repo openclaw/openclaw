@@ -33,6 +33,7 @@ export async function startOrResumeThread(params: {
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  config?: JsonObject;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
   const binding = await readCodexAppServerBinding(params.params.sessionFile);
@@ -59,6 +60,7 @@ export async function startOrResumeThread(params: {
               threadId: binding.threadId,
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
+              config: params.config,
             }),
           ),
         );
@@ -102,6 +104,7 @@ export async function startOrResumeThread(params: {
       sandbox: params.appServer.sandbox,
       ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
       serviceName: "OpenClaw",
+      ...(params.config ? { config: params.config } : {}),
       developerInstructions:
         params.developerInstructions ?? buildDeveloperInstructions(params.params),
       dynamicTools: params.dynamicTools,
@@ -139,6 +142,7 @@ export function buildThreadResumeParams(
     threadId: string;
     appServer: CodexAppServerRuntimeOptions;
     developerInstructions?: string;
+    config?: JsonObject;
   },
 ): CodexThreadResumeParams {
   const modelProvider = resolveCodexAppServerModelProvider(params.provider);
@@ -150,6 +154,7 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.config ? { config: options.config } : {}),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };

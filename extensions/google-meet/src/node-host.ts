@@ -112,10 +112,11 @@ end tell`;
     };
   }
   const [browserUrl = "", browserTitle = ""] = result.stdout.split(/\r?\n/u);
+  const trimmedBrowserTitle = browserTitle.trim();
   return {
-    inCall: Boolean(browserUrl.trim()) && !/Meet$/u.test(browserTitle.trim()),
+    inCall: Boolean(browserUrl.trim()) && !trimmedBrowserTitle.endsWith("Meet"),
     browserUrl: browserUrl.trim() || undefined,
-    browserTitle: browserTitle.trim() || undefined,
+    browserTitle: trimmedBrowserTitle || undefined,
     status: "ok",
   };
 }

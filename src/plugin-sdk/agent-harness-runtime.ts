@@ -37,6 +37,11 @@ export type {
   CodexAppServerToolResultEvent,
   CodexAppServerToolResultHandlerResult,
 } from "../plugins/codex-app-server-extension-types.js";
+export type {
+  NativeHookRelayEvent,
+  NativeHookRelayProvider,
+  NativeHookRelayRegistrationHandle,
+} from "../agents/harness/native-hook-relay.js";
 
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
@@ -97,6 +102,10 @@ export {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "../agents/harness/lifecycle-hook-helpers.js";
+export {
+  buildNativeHookRelayCommand,
+  registerNativeHookRelay,
+} from "../agents/harness/native-hook-relay.js";
 
 /**
  * Derive the same compact user-facing tool detail that Pi uses for progress logs.
