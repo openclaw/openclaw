@@ -25,9 +25,10 @@ vi.mock("../config/sessions.js", () => ({
       `/tmp/openclaw-test-state/agents/${opts?.agentId ?? "main"}/agent/sessions.json`,
   ),
   updateSessionStore: vi.fn(
-    async (_storePath: string, mutator: (store: Record<string, unknown>) => void) => {
+    (_storePath: string, mutator: (store: Record<string, unknown>) => void) => {
       // Invoke the mutator with an empty store so the code path stays exercised.
-      await mutator({});
+      mutator({});
+      return Promise.resolve();
     },
   ),
 }));
@@ -340,9 +341,7 @@ describe("recoverOrphanedMainSessions", () => {
         status: "running",
       } as sessions.SessionEntry,
     };
-    await (mutator as (s: Record<string, sessions.SessionEntry>) => Promise<void> | void)(
-      simulated,
-    );
+    (mutator as (s: Record<string, sessions.SessionEntry>) => void)(simulated);
     expect(simulated["agent:main:main"]?.status).toBe("failed");
     expect(simulated["agent:main:main"]?.abortedLastRun).toBe(true);
     expect(simulated["agent:main:main"]?.updatedAt).toBe(now);
