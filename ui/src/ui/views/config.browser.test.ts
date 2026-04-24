@@ -1,7 +1,14 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import { renderConfig, resetConfigViewStateForTests, type ConfigProps } from "./config.ts";
+
+function nextFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -495,5 +502,43 @@ describe("config view", () => {
     input.value = "local";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormPatch).toHaveBeenCalledWith(["gateway", "mode"], "local");
+  });
+
+  it("rotates the pending changes chevron when the diff panel opens", async () => {
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          gateway: {
+            type: "object",
+            properties: {
+              mode: { type: "string" },
+            },
+          },
+        },
+      },
+      formValue: { gateway: { mode: "local" } },
+      originalValue: {},
+    });
+    document.body.append(container);
+    await nextFrame();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    const summary = details?.querySelector<HTMLElement>(".config-diff__summary");
+    const chevron = details?.querySelector<HTMLElement>(".config-diff__chevron");
+    expect(details).not.toBeNull();
+    expect(summary).not.toBeNull();
+    expect(chevron).not.toBeNull();
+    if (!details || !summary || !chevron) {
+      return;
+    }
+
+    expect(getComputedStyle(chevron).display).toMatch(/flex/);
+    expect(getComputedStyle(chevron).transform).toBe("none");
+
+    summary.click();
+    await nextFrame();
+    expect(details.open).toBe(true);
+    expect(getComputedStyle(chevron).transform).not.toBe("none");
   });
 });

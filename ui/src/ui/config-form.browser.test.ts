@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import "../styles.css";
 import { analyzeConfigSchema, renderConfigForm } from "./views/config-form.ts";
 
 const rootSchema = {
@@ -12,6 +13,12 @@ const rootSchema = {
           type: "object",
           properties: {
             token: { type: "string" },
+            rateLimit: {
+              type: "object",
+              properties: {
+                maxAttempts: { type: "number" },
+              },
+            },
           },
         },
       },
@@ -33,6 +40,18 @@ const rootSchema = {
   },
 };
 const rootAnalysis = analyzeConfigSchema(rootSchema);
+
+function nextFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+function waitMs(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(() => resolve(), ms);
+  });
+}
 
 describe("config form renderer", () => {
   it("renders inputs and patches values", () => {
@@ -364,5 +383,48 @@ describe("config form renderer", () => {
     expect(removeButton).not.toBeNull();
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
+  });
+
+  it("rotates only the current nested object chevron when details are toggled", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+    await nextFrame();
+
+    const details = Array.from(
+      container.querySelectorAll<HTMLDetailsElement>("#config-section-gateway details.cfg-object"),
+    ).find(
+      (node) => node.querySelector(".cfg-object__title")?.textContent?.trim() === "Rate Limit",
+    );
+    const chevron = details?.querySelector<HTMLElement>(
+      ":scope > .cfg-object__header .cfg-object__chevron",
+    );
+    expect(details).not.toBeUndefined();
+    expect(chevron).not.toBeUndefined();
+    if (!details || !chevron) {
+      return;
+    }
+
+    expect(details.open).toBe(false);
+    expect(getComputedStyle(chevron).display).toMatch(/flex/);
+    expect(getComputedStyle(chevron).transform).toBe("none");
+
+    details.open = true;
+    await nextFrame();
+    expect(getComputedStyle(chevron).transform).not.toBe("none");
+
+    details.open = false;
+    await waitMs(250);
+    expect(getComputedStyle(chevron).transform).toBe("none");
   });
 });
