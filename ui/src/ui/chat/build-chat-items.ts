@@ -1,4 +1,4 @@
-import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
+import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
@@ -194,6 +194,14 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+function hasRenderableHistoryMessage(normalized: NormalizedMessage): boolean {
+  const role = normalized.role.toLowerCase();
+  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
+    return true;
+  }
+  return normalized.content.length > 0;
+}
+
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
@@ -229,6 +237,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
 
     if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
+    if (!hasRenderableHistoryMessage(normalized)) {
       continue;
     }
 

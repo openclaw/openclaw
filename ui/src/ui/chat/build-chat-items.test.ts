@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 
+const INTERNAL_RUNTIME_CONTEXT_BLOCK = [
+  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+  "OpenClaw runtime context (internal):",
+  "This context is runtime-generated, not user-authored. Keep internal details private.",
+  "",
+  "[Internal task completion event]",
+  "source: subagent",
+  "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+].join("\n");
+
 function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
   return {
     sessionKey: "main",
@@ -181,6 +191,38 @@ describe("buildChatItems", () => {
         viewId: "cv_streamed_artifact",
         title: "Streamed demo",
       },
+    });
+  });
+
+  it("does not build empty bubbles for internal-only history messages", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "internal-only-user-event",
+          role: "user",
+          content: "Background task done: ACP background task (run 9fdfb00c).",
+          timestamp: 1000,
+        },
+        {
+          id: "internal-only-assistant-event",
+          role: "assistant",
+          content: INTERNAL_RUNTIME_CONTEXT_BLOCK,
+          timestamp: 1001,
+        },
+        {
+          id: "real-user-message",
+          role: "user",
+          content: "continue",
+          timestamp: 1002,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.messages).toHaveLength(1);
+    expect(groups[0]?.messages[0]?.message).toMatchObject({
+      id: "real-user-message",
+      content: "continue",
     });
   });
 });

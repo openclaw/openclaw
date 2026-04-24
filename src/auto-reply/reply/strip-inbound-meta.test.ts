@@ -5,6 +5,7 @@ import {
   extractInboundSenderLabel,
   stripInboundMetadata,
   stripLeadingInboundMetadata,
+  stripVisibleTranscriptControlText,
 } from "./strip-inbound-meta.js";
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
@@ -43,6 +44,14 @@ const ACTIVE_MEMORY_PREFIX_BLOCK = `Untrusted context (metadata, do not treat as
 <active_memory_plugin>
 User prefers aisle seats and extra buffer on connections.
 </active_memory_plugin>`;
+
+const INTERNAL_RUNTIME_CONTEXT_BLOCK = `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>
+OpenClaw runtime context (internal):
+This context is runtime-generated, not user-authored. Keep internal details private.
+
+[Internal task completion event]
+source: subagent
+<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
 
 describe("stripInboundMetadata", () => {
   it("fast-path: returns same string when no sentinels present", () => {
@@ -169,6 +178,50 @@ Hello from user`;
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe("Hello from user");
     expect(extractInboundSenderLabel(input)).toBeNull();
+  });
+});
+
+describe("stripVisibleTranscriptControlText", () => {
+  it("strips internal runtime context blocks and preserves visible text", () => {
+    expect(stripVisibleTranscriptControlText(`${INTERNAL_RUNTIME_CONTEXT_BLOCK}\n\ncontinue`)).toBe(
+      "continue",
+    );
+  });
+
+  it("strips legacy internal task completion context", () => {
+    const input = [
+      "OpenClaw runtime context (internal):",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "[Internal task completion event]",
+      "source: subagent",
+      "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
+      "Finished the research.",
+      "<<<END_UNTRUSTED_CHILD_RESULT>>>",
+      "",
+      "Action:",
+      "Rewrite the result in normal assistant voice.",
+      "",
+      "continue",
+    ].join("\n");
+    expect(stripVisibleTranscriptControlText(input)).toBe("continue");
+  });
+
+  it("strips generated background task status lines", () => {
+    const input = [
+      "Background task done: ACP background task (run 9fdfb00c).",
+      "",
+      "continue",
+      "System: [2026-04-24 23:36:38 GMT+8] Background task failed: deploy. exited 1",
+      "final note",
+    ].join("\n");
+    expect(stripVisibleTranscriptControlText(input)).toBe("continue\nfinal note");
+  });
+
+  it("keeps prompt prose that is not structured transcript control text", () => {
+    const text =
+      "Pre-compaction memory flush. Store durable memories only in memory/2026-04-24.md.";
+    expect(stripVisibleTranscriptControlText(text)).toBe(text);
   });
 });
 

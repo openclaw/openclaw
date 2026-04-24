@@ -1,5 +1,15 @@
 import { describe, expect, test } from "vitest";
-import { stripEnvelopeFromMessage } from "./chat-sanitize.js";
+import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "./chat-sanitize.js";
+
+const INTERNAL_RUNTIME_CONTEXT_BLOCK = [
+  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+  "OpenClaw runtime context (internal):",
+  "This context is runtime-generated, not user-authored. Keep internal details private.",
+  "",
+  "[Internal task completion event]",
+  "source: subagent",
+  "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+].join("\n");
 
 describe("stripEnvelopeFromMessage", () => {
   test("removes message_id hint lines from user messages", () => {
@@ -89,5 +99,38 @@ describe("stripEnvelopeFromMessage", () => {
     };
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("hello");
+  });
+
+  test("preserves mixed visible text after internal runtime context", () => {
+    const result = stripEnvelopeFromMessage({
+      role: "user",
+      content: `${INTERNAL_RUNTIME_CONTEXT_BLOCK}\n\ncontinue`,
+    }) as { content?: string };
+    expect(result.content).toBe("continue");
+  });
+
+  test("drops transcript messages that become empty after control stripping", () => {
+    const result = stripEnvelopeFromMessages([
+      {
+        role: "user",
+        content: "Background task done: ACP background task (run 9fdfb00c).",
+      },
+      {
+        role: "assistant",
+        content: "Ready.",
+      },
+    ]);
+    expect(result).toEqual([{ role: "assistant", content: "Ready." }]);
+  });
+
+  test("removes empty text blocks while preserving non-text content", () => {
+    const result = stripEnvelopeFromMessage({
+      role: "user",
+      content: [
+        { type: "text", text: "Background task done: ACP background task (run 9fdfb00c)." },
+        { type: "image", url: "https://example.test/image.png" },
+      ],
+    }) as { content?: unknown[] };
+    expect(result.content).toEqual([{ type: "image", url: "https://example.test/image.png" }]);
   });
 });

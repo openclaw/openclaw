@@ -2,7 +2,7 @@
  * Message normalization utilities for chat rendering.
  */
 
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { stripVisibleTranscriptControlText } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
@@ -369,13 +369,23 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const senderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
-  // Strip AI-injected metadata prefix blocks from user messages before display.
-  if (role === "user" || role === "User") {
-    content = content.map((item) => {
+  // Strip AI-injected metadata and internal runtime-control text before display.
+  if (
+    role === "user" ||
+    role === "User" ||
+    role === "assistant" ||
+    role === "system" ||
+    role === "unknown"
+  ) {
+    content = content.flatMap((item) => {
       if (item.type === "text" && typeof item.text === "string") {
-        return { ...item, text: stripInboundMetadata(item.text) };
+        const stripped = stripVisibleTranscriptControlText(item.text);
+        if (stripped !== item.text && stripped.trim().length === 0) {
+          return [];
+        }
+        return [{ ...item, text: stripped }];
       }
-      return item;
+      return [item];
     });
   }
 

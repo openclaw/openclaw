@@ -12,7 +12,11 @@
  * do not show AI-facing envelope metadata as user text.
  */
 
+import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
+
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+const GENERATED_TASK_STATUS_LINE_RE =
+  /^(?:(?:System:\s*)?\[[^\]\r\n]*\]\s*)?Background task (?:done|blocked|failed|timed out|lost|cancelled|started|update):[^\r\n]*$/;
 
 /**
  * Sentinel strings that identify the start of an injected metadata block.
@@ -163,6 +167,38 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
   }
 
   return result;
+}
+
+function stripGeneratedTaskStatusLines(text: string): string {
+  if (!text.includes("Background task ")) {
+    return text;
+  }
+  const lines = text.split("\n");
+  let changed = false;
+  const kept = lines.filter((line) => {
+    const normalizedLine = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (!GENERATED_TASK_STATUS_LINE_RE.test(normalizedLine)) {
+      return true;
+    }
+    changed = true;
+    return false;
+  });
+  if (!changed) {
+    return text;
+  }
+  return kept
+    .join("\n")
+    .replace(/^\s*\n+/, "")
+    .replace(/\n+\s*$/, "");
+}
+
+export function stripVisibleTranscriptControlText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const withoutInboundMetadata = stripInboundMetadata(text);
+  const withoutInternalRuntimeContext = stripInternalRuntimeContext(withoutInboundMetadata);
+  return stripGeneratedTaskStatusLines(withoutInternalRuntimeContext);
 }
 
 /**

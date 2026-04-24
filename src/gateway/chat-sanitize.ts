@@ -1,6 +1,7 @@
 import {
   extractInboundSenderLabel,
   stripInboundMetadata,
+  stripVisibleTranscriptControlText,
 } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -38,30 +39,48 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
 function stripEnvelopeFromContentWithRole(
   content: unknown[],
   stripUserEnvelope: boolean,
+  stripVisibleControls: boolean,
 ): { content: unknown[]; changed: boolean } {
   let changed = false;
-  const next = content.map((item) => {
+  const next = content.flatMap((item) => {
     if (!item || typeof item !== "object") {
-      return item;
+      return [item];
     }
     const entry = item as Record<string, unknown>;
     if (entry.type !== "text" || typeof entry.text !== "string") {
-      return item;
+      return [item];
     }
-    const inboundStripped = stripInboundMetadata(entry.text);
+    const inboundStripped = stripVisibleControls
+      ? stripVisibleTranscriptControlText(entry.text)
+      : stripInboundMetadata(entry.text);
     const stripped = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
     if (stripped === entry.text) {
-      return item;
+      return [item];
     }
     changed = true;
-    return {
-      ...entry,
-      text: stripped,
-    };
+    if (!stripped.trim()) {
+      return [];
+    }
+    return [
+      {
+        ...entry,
+        text: stripped,
+      },
+    ];
   });
   return { content: next, changed };
+}
+
+function shouldStripVisibleTranscriptText(role: string): boolean {
+  return (
+    role === "" ||
+    role === "unknown" ||
+    role === "user" ||
+    role === "assistant" ||
+    role === "system"
+  );
 }
 
 export function stripEnvelopeFromMessage(message: unknown): unknown {
@@ -71,6 +90,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   const entry = message as Record<string, unknown>;
   const role = typeof entry.role === "string" ? normalizeLowercaseStringOrEmpty(entry.role) : "";
   const stripUserEnvelope = role === "user";
+  const stripVisibleControls = shouldStripVisibleTranscriptText(role);
 
   let changed = false;
   const next: Record<string, unknown> = { ...entry };
@@ -81,7 +101,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   }
 
   if (typeof entry.content === "string") {
-    const inboundStripped = stripInboundMetadata(entry.content);
+    const inboundStripped = stripVisibleControls
+      ? stripVisibleTranscriptControlText(entry.content)
+      : stripInboundMetadata(entry.content);
     const stripped = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
@@ -90,13 +112,19 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (Array.isArray(entry.content)) {
-    const updated = stripEnvelopeFromContentWithRole(entry.content, stripUserEnvelope);
+    const updated = stripEnvelopeFromContentWithRole(
+      entry.content,
+      stripUserEnvelope,
+      stripVisibleControls,
+    );
     if (updated.changed) {
       next.content = updated.content;
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const inboundStripped = stripInboundMetadata(entry.text);
+    const inboundStripped = stripVisibleControls
+      ? stripVisibleTranscriptControlText(entry.text)
+      : stripInboundMetadata(entry.text);
     const stripped = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
@@ -109,17 +137,52 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   return changed ? next : message;
 }
 
+function isEmptyVisibleTranscriptMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = typeof entry.role === "string" ? normalizeLowercaseStringOrEmpty(entry.role) : "";
+  if (!shouldStripVisibleTranscriptText(role)) {
+    return false;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content.trim().length === 0;
+  }
+  if (typeof entry.text === "string") {
+    return entry.text.trim().length === 0;
+  }
+  if (!Array.isArray(entry.content)) {
+    return false;
+  }
+  if (entry.content.length === 0) {
+    return true;
+  }
+  return entry.content.every((item) => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    const block = item as Record<string, unknown>;
+    return block.type === "text" && typeof block.text === "string" && block.text.trim() === "";
+  });
+}
+
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
   let changed = false;
-  const next = messages.map((message) => {
+  const next: unknown[] = [];
+  for (const message of messages) {
     const stripped = stripEnvelopeFromMessage(message);
     if (stripped !== message) {
       changed = true;
     }
-    return stripped;
-  });
+    if (isEmptyVisibleTranscriptMessage(stripped)) {
+      changed = true;
+      continue;
+    }
+    next.push(stripped);
+  }
   return changed ? next : messages;
 }

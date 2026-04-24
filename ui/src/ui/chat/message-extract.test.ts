@@ -6,6 +6,19 @@ import {
   extractThinkingCached,
 } from "./message-extract.ts";
 
+const INTERNAL_RUNTIME_CONTEXT_BLOCK = [
+  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+  "OpenClaw runtime context (internal):",
+  "This context is runtime-generated, not user-authored. Keep internal details private.",
+  "",
+  "[Internal task completion event]",
+  "source: subagent",
+  "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+].join("\n");
+
+const PROMPT_PROSE =
+  "Pre-compaction memory flush. Store durable memories only in memory/2026-04-24.md.";
+
 describe("extractTextCached", () => {
   it("matches extractText output", () => {
     const message = {
@@ -76,6 +89,26 @@ describe("extractTextCached", () => {
     };
     expect(extractText(message)).toBeNull();
     expect(extractTextCached(message)).toBeNull();
+  });
+
+  it("does not expose assistant internal runtime context", () => {
+    const message = {
+      role: "assistant",
+      content: INTERNAL_RUNTIME_CONTEXT_BLOCK,
+    };
+
+    expect(extractText(message)).toBe("");
+    expect(extractTextCached(message)).toBe("");
+  });
+
+  it("preserves assistant prompt prose that is not structured control text", () => {
+    const message = {
+      role: "assistant",
+      content: PROMPT_PROSE,
+    };
+
+    expect(extractText(message)).toBe(PROMPT_PROSE);
+    expect(extractTextCached(message)).toBe(PROMPT_PROSE);
   });
 });
 

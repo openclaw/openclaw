@@ -5,6 +5,19 @@ import {
   isToolResultMessage,
 } from "./message-normalizer.ts";
 
+const INTERNAL_RUNTIME_CONTEXT_BLOCK = [
+  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+  "OpenClaw runtime context (internal):",
+  "This context is runtime-generated, not user-authored. Keep internal details private.",
+  "",
+  "[Internal task completion event]",
+  "source: subagent",
+  "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+].join("\n");
+
+const PROMPT_PROSE =
+  "Pre-compaction memory flush. Store durable memories only in memory/2026-04-24.md.";
+
 describe("message-normalizer", () => {
   describe("normalizeMessage", () => {
     beforeEach(() => {
@@ -388,6 +401,42 @@ describe("message-normalizer", () => {
       });
 
       expect(result.senderLabel).toBe("Iris");
+    });
+
+    it("preserves real user text after stripped internal runtime context", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: `${INTERNAL_RUNTIME_CONTEXT_BLOCK}\n\ncontinue`,
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "continue" }]);
+    });
+
+    it("removes text blocks that become empty after generated status stripping", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: "Background task done: ACP background task (run 9fdfb00c).",
+      });
+
+      expect(result.content).toEqual([]);
+    });
+
+    it("removes assistant internal runtime context before display", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: INTERNAL_RUNTIME_CONTEXT_BLOCK,
+      });
+
+      expect(result.content).toEqual([]);
+    });
+
+    it("keeps assistant prompt prose that is not structured control text", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: PROMPT_PROSE,
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: PROMPT_PROSE }]);
     });
   });
 
