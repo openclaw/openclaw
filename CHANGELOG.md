@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/catalog: pin the official external WeCom channel source to an exact npm release plus dist integrity, with a guard that official external sources stay integrity-pinned. (#70997) Thanks @vincentkoc.
 - Plugins/source metadata: warn when `openclaw.install.defaultChoice` is invalid or points at a missing source, keeping catalog diagnostics explicit without breaking existing plugins. Thanks @vincentkoc.
 - Plugins/source metadata: warn when `openclaw.install.expectedIntegrity` is present without a valid npm source, keeping orphaned integrity metadata visible without rejecting existing plugins. Thanks @vincentkoc.
+- Plugins/source metadata: warn when provider or channel catalog package identity drifts from `openclaw.install.npmSpec`, keeping diagnostics visible without rejecting compatible external catalogs. Thanks @vincentkoc.
 - Diagnostics/OTEL: add a lightweight diagnostic trace-context carrier for future span correlation without adding OTEL SDK state to core. Thanks @vincentkoc.
 - Dependencies/SBOM: add an ownership-backed dependency risk report for root closure size, native/build-risk packages, and missing owner records. Thanks @vincentkoc.
 - Diagnostics/OTEL: attach diagnostic trace context to exported OTEL logs so log records can correlate with future spans without adding retained process state. Thanks @vincentkoc.
