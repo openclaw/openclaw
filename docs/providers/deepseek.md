@@ -26,7 +26,7 @@ read_when:
     openclaw onboard --auth-choice deepseek-api-key
     ```
 
-    This will prompt for your API key and set `deepseek/deepseek-chat` as the default model.
+    This will prompt for your API key and set `deepseek/deepseek-v4-flash` as the default model.
 
   </Step>
   <Step title="Verify models are available">
@@ -60,13 +60,17 @@ is available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Built-in catalog
 
-| Model ref                    | Name              | Input | Context | Max output | Notes                                             |
-| ---------------------------- | ----------------- | ----- | ------- | ---------- | ------------------------------------------------- |
-| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 131,072 | 8,192      | Default model; DeepSeek V3.2 non-thinking surface |
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 131,072 | 65,536     | Reasoning-enabled V3.2 surface                    |
+| Model ref                    | Name              | Input | Context   | Max output | Notes                                      |
+| ---------------------------- | ----------------- | ----- | --------- | ---------- | ------------------------------------------ |
+| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Default model; V4 thinking-capable surface |
+| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | V4 thinking-capable surface                |
+| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 131,072   | 8,192      | DeepSeek V3.2 non-thinking surface         |
+| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 131,072   | 65,536     | Reasoning-enabled V3.2 surface             |
 
 <Tip>
-Both bundled models currently advertise streaming usage compatibility in source.
+V4 models support DeepSeek's `thinking` control. OpenClaw also replays
+DeepSeek `reasoning_content` on follow-up turns so thinking sessions with tool
+calls can continue.
 </Tip>
 
 ## Config example
@@ -76,7 +80,7 @@ Both bundled models currently advertise streaming usage compatibility in source.
   env: { DEEPSEEK_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "deepseek/deepseek-chat" },
+      model: { primary: "deepseek/deepseek-v4-flash" },
     },
   },
 }
