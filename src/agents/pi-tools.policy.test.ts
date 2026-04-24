@@ -105,13 +105,14 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
       tools: {
         subagents: {
           tools: {
-            deny: ["memory_search", "memory_get"],
+            deny: ["group:memory"],
           },
         },
       },
     } as unknown as OpenClawConfig;
     const policy = resolveSubagentToolPolicy(cfg, 1);
     expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_add", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
   });
 

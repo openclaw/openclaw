@@ -31,7 +31,8 @@ import {
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
-const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get", "memory_add"]);
+const PLUGIN_BACKED_CATALOG_TOOL_NAMES = new Set(["memory_add"]);
 
 type ToolsInvokeBody = {
   tool?: unknown;
@@ -236,7 +237,8 @@ export async function handleToolsInvokeHttpRequest(
     allowGatewaySubagentBinding: true,
     allowMediaInvokeCommands: true,
     surface: "http",
-    disablePluginTools: isKnownCoreToolId(toolName),
+    disablePluginTools:
+      isKnownCoreToolId(toolName) && !PLUGIN_BACKED_CATALOG_TOOL_NAMES.has(toolName),
     senderIsOwner,
   });
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);

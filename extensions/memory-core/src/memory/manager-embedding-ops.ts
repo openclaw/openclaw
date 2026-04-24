@@ -38,6 +38,7 @@ import { deleteMemoryFtsRows } from "./manager-fts-state.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
+import { parseMemoryBlocks } from "./memory-blocks.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -53,6 +54,42 @@ const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
+
+function shouldParseMemoryBlockMarkdown(
+  entry: MemoryFileEntry | SessionFileEntry,
+  source: MemorySource,
+): boolean {
+  return (
+    source === "memory" &&
+    !("kind" in entry && entry.kind === "multimodal") &&
+    /^memory\/\d{4}-\d{2}-\d{2}\.md$/.test(entry.path)
+  );
+}
+
+function buildMemoryBlockChunks(
+  content: string,
+  settings: { tokens: number; overlap: number },
+): MemoryChunk[] {
+  const chunks: MemoryChunk[] = [];
+  for (const block of parseMemoryBlocks(content)) {
+    const blockChunks = filterNonEmptyMemoryChunks(chunkMarkdown(block.text, settings));
+    remapChunkLines(blockChunks, block.lineNumbers);
+    chunks.push(...blockChunks);
+  }
+  return chunks;
+}
+
+function chunkMemoryTextForIndex(params: {
+  entry: MemoryFileEntry | SessionFileEntry;
+  source: MemorySource;
+  content: string;
+  settings: { tokens: number; overlap: number };
+}): MemoryChunk[] {
+  if (shouldParseMemoryBlockMarkdown(params.entry, params.source)) {
+    return buildMemoryBlockChunks(params.content, params.settings);
+  }
+  return filterNonEmptyMemoryChunks(chunkMarkdown(params.content, params.settings));
+}
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureCount: number;
@@ -591,7 +628,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         return;
       }
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-      const chunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
+      const chunks = chunkMemoryTextForIndex({
+        entry,
+        source: options.source,
+        content,
+        settings: this.settings.chunking,
+      });
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
       }
@@ -621,7 +663,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       chunks = [multimodalChunk.chunk];
     } else {
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-      const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
+      const baseChunks = chunkMemoryTextForIndex({
+        entry,
+        source: options.source,
+        content,
+        settings: this.settings.chunking,
+      });
       chunks = this.provider
         ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)
         : baseChunks;

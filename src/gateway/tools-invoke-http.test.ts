@@ -157,6 +157,25 @@ vi.mock("../agents/openclaw-tools.js", () => {
         return { ok: true };
       },
     },
+    ...(lastCreateOpenClawToolsContext?.disablePluginTools
+      ? []
+      : [
+          {
+            name: "memory_add",
+            parameters: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+              },
+              required: ["text"],
+              additionalProperties: false,
+            },
+            execute: async (_toolCallId: string, args: unknown) => ({
+              ok: true,
+              text: (args as { text?: unknown }).text,
+            }),
+          },
+        ]),
     {
       name: "diffs_compat_test",
       parameters: {
@@ -425,7 +444,7 @@ describe("POST /tools/invoke", () => {
     expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
   });
 
-  it("keeps plugin tools enabled for non-core tool invokes", async () => {
+  it("keeps plugin tools enabled for plugin-backed tool invokes", async () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
 
     const res = await invokeToolAuthed({
@@ -435,6 +454,16 @@ describe("POST /tools/invoke", () => {
     });
 
     expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+    setMainAllowedTools({ allow: ["memory_add"] });
+
+    const memoryRes = await invokeToolAuthed({
+      tool: "memory_add",
+      args: { text: "remember this" },
+      sessionKey: "main",
+    });
+
+    expect(memoryRes.status).toBe(200);
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
   });
 
