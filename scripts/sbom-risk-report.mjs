@@ -9,6 +9,7 @@ import { collectRootDependencyOwnershipAudit } from "./root-dependency-ownership
 const DEFAULT_OWNERSHIP_PATH = "scripts/lib/dependency-ownership.json";
 const PROD_IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
 const TRANSITIVE_SECTIONS = ["dependencies", "optionalDependencies"];
+const compareStrings = (left, right) => left.localeCompare(right);
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -95,7 +96,10 @@ function collectClosure(lockfile, rootKeys) {
       }
     }
   }
-  return { missing: [...missing].toSorted(), packageKeys: [...seen].toSorted() };
+  return {
+    missing: [...missing].toSorted(compareStrings),
+    packageKeys: [...seen].toSorted(compareStrings),
+  };
 }
 
 function collectBuildRiskPackages(lockfile) {
@@ -184,10 +188,10 @@ export function collectSbomRiskReport(params = {}) {
   const ownershipGaps = rootDependencies
     .filter((dependency) => !ownershipFor(dependencyOwnership, dependency.name))
     .map((dependency) => dependency.name)
-    .toSorted();
+    .toSorted(compareStrings);
   const staleOwnershipRecords = Object.keys(dependencyOwnership.dependencies ?? {})
     .filter((name) => !rootDependencyNames.has(name))
-    .toSorted();
+    .toSorted(compareStrings);
   const ownershipWarnings = rootDependencyRows
     .filter(
       (dependency) =>
