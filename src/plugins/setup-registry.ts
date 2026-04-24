@@ -46,11 +46,26 @@ type SetupAutoEnableProbeEntry = {
   probe: PluginSetupAutoEnableProbe;
 };
 
+export type PluginSetupRegistryDiagnosticCode =
+  | "setup-descriptor-provider-missing-runtime"
+  | "setup-descriptor-provider-runtime-undeclared"
+  | "setup-descriptor-cli-backend-missing-runtime"
+  | "setup-descriptor-cli-backend-runtime-undeclared";
+
+export type PluginSetupRegistryDiagnostic = {
+  pluginId: string;
+  code: PluginSetupRegistryDiagnosticCode;
+  declaredId?: string;
+  runtimeId?: string;
+  message: string;
+};
+
 type PluginSetupRegistry = {
   providers: SetupProviderEntry[];
   cliBackends: SetupCliBackendEntry[];
   configMigrations: SetupConfigMigrationEntry[];
   autoEnableProbes: SetupAutoEnableProbeEntry[];
+  diagnostics: PluginSetupRegistryDiagnostic[];
 };
 
 type SetupAutoEnableReason = {
@@ -372,6 +387,75 @@ function findUniqueSetupManifestOwner(params: {
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+function mapNormalizedIds(ids: readonly string[]): Map<string, string> {
+  const mapped = new Map<string, string>();
+  for (const id of ids) {
+    const normalized = normalizeProviderId(id);
+    if (!normalized || mapped.has(normalized)) {
+      continue;
+    }
+    mapped.set(normalized, id);
+  }
+  return mapped;
+}
+
+function pushSetupDescriptorDriftDiagnostics(params: {
+  record: PluginManifestRecord;
+  providers: readonly ProviderPlugin[];
+  cliBackends: readonly CliBackendPlugin[];
+  diagnostics: PluginSetupRegistryDiagnostic[];
+}): void {
+  const declaredProviderIds = params.record.setup?.providers?.map((entry) => entry.id);
+  if (declaredProviderIds) {
+    for (const declaredId of declaredProviderIds) {
+      if (!params.providers.some((provider) => matchesProvider(provider, declaredId))) {
+        params.diagnostics.push({
+          pluginId: params.record.id,
+          code: "setup-descriptor-provider-missing-runtime",
+          declaredId,
+          message: `setup.providers declares "${declaredId}" but setup runtime did not register a matching provider.`,
+        });
+      }
+    }
+    for (const provider of params.providers) {
+      if (!declaredProviderIds.some((declaredId) => matchesProvider(provider, declaredId))) {
+        params.diagnostics.push({
+          pluginId: params.record.id,
+          code: "setup-descriptor-provider-runtime-undeclared",
+          runtimeId: provider.id,
+          message: `setup runtime registered provider "${provider.id}" but setup.providers does not declare it.`,
+        });
+      }
+    }
+  }
+
+  const declaredCliBackendIds = params.record.setup?.cliBackends;
+  if (declaredCliBackendIds) {
+    const declaredCliBackends = mapNormalizedIds(declaredCliBackendIds);
+    const runtimeCliBackends = mapNormalizedIds(params.cliBackends.map((backend) => backend.id));
+    for (const [normalized, declaredId] of declaredCliBackends) {
+      if (!runtimeCliBackends.has(normalized)) {
+        params.diagnostics.push({
+          pluginId: params.record.id,
+          code: "setup-descriptor-cli-backend-missing-runtime",
+          declaredId,
+          message: `setup.cliBackends declares "${declaredId}" but setup runtime did not register a matching CLI backend.`,
+        });
+      }
+    }
+    for (const [normalized, runtimeId] of runtimeCliBackends) {
+      if (!declaredCliBackends.has(normalized)) {
+        params.diagnostics.push({
+          pluginId: params.record.id,
+          code: "setup-descriptor-cli-backend-runtime-undeclared",
+          runtimeId,
+          message: `setup runtime registered CLI backend "${runtimeId}" but setup.cliBackends does not declare it.`,
+        });
+      }
+    }
+  }
+}
+
 export function resolvePluginSetupRegistry(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -397,6 +481,7 @@ export function resolvePluginSetupRegistry(params?: {
       cliBackends: [],
       configMigrations: [],
       autoEnableProbes: [],
+      diagnostics: [],
     } satisfies PluginSetupRegistry;
     setCachedSetupValue(setupRegistryCache, cacheKey, empty);
     return empty;
@@ -406,6 +491,7 @@ export function resolvePluginSetupRegistry(params?: {
   const cliBackends: SetupCliBackendEntry[] = [];
   const configMigrations: SetupConfigMigrationEntry[] = [];
   const autoEnableProbes: SetupAutoEnableProbeEntry[] = [];
+  const diagnostics: PluginSetupRegistryDiagnostic[] = [];
   const providerKeys = new Set<string>();
   const cliBackendKeys = new Set<string>();
 
@@ -423,6 +509,8 @@ export function resolvePluginSetupRegistry(params?: {
       continue;
     }
 
+    const recordProviders: ProviderPlugin[] = [];
+    const recordCliBackends: CliBackendPlugin[] = [];
     const api = buildSetupPluginApi({
       record,
       setupSource: setupRegistration.setupSource,
@@ -437,6 +525,7 @@ export function resolvePluginSetupRegistry(params?: {
             pluginId: record.id,
             provider,
           });
+          recordProviders.push(provider);
         },
         registerCliBackend(backend) {
           const key = `${record.id}:${normalizeProviderId(backend.id)}`;
@@ -448,6 +537,7 @@ export function resolvePluginSetupRegistry(params?: {
             pluginId: record.id,
             backend,
           });
+          recordCliBackends.push(backend);
         },
         registerConfigMigration(migrate) {
           configMigrations.push({
@@ -473,6 +563,12 @@ export function resolvePluginSetupRegistry(params?: {
     } catch {
       continue;
     }
+    pushSetupDescriptorDriftDiagnostics({
+      record,
+      providers: recordProviders,
+      cliBackends: recordCliBackends,
+      diagnostics,
+    });
   }
 
   const registry = {
@@ -480,6 +576,7 @@ export function resolvePluginSetupRegistry(params?: {
     cliBackends,
     configMigrations,
     autoEnableProbes,
+    diagnostics,
   } satisfies PluginSetupRegistry;
   setCachedSetupValue(setupRegistryCache, cacheKey, registry);
   return registry;
