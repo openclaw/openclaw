@@ -11,7 +11,7 @@ type FakeSession = {
   detach: ReturnType<typeof vi.fn>;
 };
 
-function createPage(opts: { targetId: string; snapshotFull?: string; hasSnapshotForAI?: boolean }) {
+function createPage(opts: { targetId: string; snapshotFull?: string; hasAriaSnapshot?: boolean }) {
   const session: FakeSession = {
     send: vi.fn().mockResolvedValue({
       targetInfo: { targetId: opts.targetId },
@@ -33,10 +33,10 @@ function createPage(opts: { targetId: string; snapshotFull?: string; hasSnapshot
     locator,
     on: vi.fn(),
     url: vi.fn(() => `https://example.test/${opts.targetId}`),
-    ...(opts.hasSnapshotForAI === false
+    ...(opts.hasAriaSnapshot === false
       ? {}
       : {
-          _snapshotForAI: vi.fn().mockResolvedValue({ full: opts.snapshotFull ?? "SNAP" }),
+          ariaSnapshot: vi.fn().mockResolvedValue(opts.snapshotFull ?? "SNAP"),
         }),
   };
 
@@ -151,17 +151,21 @@ describe("pw-ai", () => {
     expect(p1.click).toHaveBeenCalledTimes(1);
   });
 
-  it("fails with a clear error when _snapshotForAI is missing", async () => {
-    const p1 = createPage({ targetId: "T1", hasSnapshotForAI: false });
+  it("uses Playwright's public AI aria snapshot API", async () => {
+    const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
     const browser = createBrowser([p1.page]);
     (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
-    await expect(
-      snapshotAiViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-      }),
-    ).rejects.toThrow(/_snapshotForAI/i);
+    await snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      timeoutMs: 1234,
+    });
+
+    expect("ariaSnapshot" in p1.page ? p1.page.ariaSnapshot : undefined).toHaveBeenCalledWith({
+      mode: "ai",
+      timeout: 1234,
+    });
   });
 
   it("reuses the CDP connection for repeated calls", async () => {
