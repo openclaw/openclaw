@@ -21749,6 +21749,92 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Image fetch/validation controls for OpenAI-compatible `image_url` parts.",
                       },
+                      audio: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          maxParts: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          maxBytes: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          maxTotalBytes: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          allowedMimes: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                      files: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          maxParts: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          allowedMimes: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          maxBytes: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          maxTotalBytes: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          maxChars: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          pdf: {
+                            type: "object",
+                            properties: {
+                              maxPages: {
+                                type: "integer",
+                                exclusiveMinimum: 0,
+                                maximum: 9007199254740991,
+                              },
+                              maxPixels: {
+                                type: "integer",
+                                exclusiveMinimum: 0,
+                                maximum: 9007199254740991,
+                              },
+                              minTextChars: {
+                                type: "integer",
+                                minimum: 0,
+                                maximum: 9007199254740991,
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
                     },
                     additionalProperties: false,
                   },

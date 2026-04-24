@@ -237,6 +237,10 @@ export type GatewayHttpChatCompletionsConfig = {
   maxTotalImageBytes?: number;
   /** Image input controls for `image_url` parts. */
   images?: GatewayHttpChatCompletionsImagesConfig;
+  /** Audio input controls for `input_audio` parts (transcribed via STT). */
+  audio?: GatewayHttpChatCompletionsAudioConfig;
+  /** File input controls for `file` parts (text extraction). */
+  files?: GatewayHttpChatCompletionsFilesConfig;
 };
 
 export type GatewayHttpChatCompletionsImagesConfig = {
@@ -255,6 +259,44 @@ export type GatewayHttpChatCompletionsImagesConfig = {
   maxRedirects?: number;
   /** Fetch timeout in ms. Default: 10s. */
   timeoutMs?: number;
+};
+
+export type GatewayHttpChatCompletionsAudioConfig = {
+  /**
+   * If false, `input_audio` parts are rejected with 400. Default: true when
+   * chatCompletions is enabled. Audio is transcribed via the same STT pipeline
+   * used by Telegram voice preflight (`cfg.tools.media.audio`), so at least one
+   * audio provider must be configured for this to work.
+   */
+  enabled?: boolean;
+  /** Max number of `input_audio` parts per request. Default: 4. */
+  maxParts?: number;
+  /** Max bytes per audio attachment (base64-decoded). Default: 25MB. */
+  maxBytes?: number;
+  /** Max cumulative decoded audio bytes in one request. Default: 50MB. */
+  maxTotalBytes?: number;
+  /** Allowed MIME types (case-insensitive). Default: common audio formats. */
+  allowedMimes?: string[];
+};
+
+export type GatewayHttpChatCompletionsFilesConfig = {
+  /**
+   * If false, `file` parts are rejected with 400. Default: true when
+   * chatCompletions is enabled.
+   */
+  enabled?: boolean;
+  /** Max number of `file` parts per request. Default: 5. */
+  maxParts?: number;
+  /** Allowed MIME types (case-insensitive). */
+  allowedMimes?: string[];
+  /** Max bytes per file (base64-decoded). Default: 20MB. */
+  maxBytes?: number;
+  /** Max cumulative decoded file bytes in one request. Default: 50MB. */
+  maxTotalBytes?: number;
+  /** Max decoded characters per file after extraction. Default: 200k. */
+  maxChars?: number;
+  /** PDF handling (application/pdf). */
+  pdf?: GatewayHttpResponsesPdfConfig;
 };
 
 export type GatewayHttpResponsesConfig = {

@@ -805,6 +805,35 @@ export const OpenClawSchema = z
                       })
                       .strict()
                       .optional(),
+                    audio: z
+                      .object({
+                        enabled: z.boolean().optional(),
+                        maxParts: z.number().int().nonnegative().optional(),
+                        maxBytes: z.number().int().positive().optional(),
+                        maxTotalBytes: z.number().int().positive().optional(),
+                        allowedMimes: z.array(z.string()).optional(),
+                      })
+                      .strict()
+                      .optional(),
+                    files: z
+                      .object({
+                        enabled: z.boolean().optional(),
+                        maxParts: z.number().int().nonnegative().optional(),
+                        allowedMimes: z.array(z.string()).optional(),
+                        maxBytes: z.number().int().positive().optional(),
+                        maxTotalBytes: z.number().int().positive().optional(),
+                        maxChars: z.number().int().positive().optional(),
+                        pdf: z
+                          .object({
+                            maxPages: z.number().int().positive().optional(),
+                            maxPixels: z.number().int().positive().optional(),
+                            minTextChars: z.number().int().nonnegative().optional(),
+                          })
+                          .strict()
+                          .optional(),
+                      })
+                      .strict()
+                      .optional(),
                   })
                   .strict()
                   .optional(),
