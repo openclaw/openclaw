@@ -5,6 +5,7 @@ import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   normalizeProviderId,
+  resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
@@ -94,9 +95,17 @@ export async function buildModelsProviderData(
     if (!trimmed) {
       return;
     }
+    const defaultProvider = !trimmed.includes("/")
+      ? resolveBareModelDefaultProvider({
+          cfg,
+          catalog,
+          model: trimmed,
+          defaultProvider: resolvedDefault.provider,
+        })
+      : resolvedDefault.provider;
     const resolved = resolveModelRefFromString({
       raw: trimmed,
-      defaultProvider: resolvedDefault.provider,
+      defaultProvider,
       aliasIndex,
     });
     if (!resolved) {
