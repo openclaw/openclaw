@@ -31,6 +31,7 @@ let mockedNativeStreaming = false;
 let mockedBlockStreamingEnabled: boolean | undefined = false;
 let capturedReplyOptions: { disableBlockStreaming?: boolean } | undefined;
 let mockedReplyThreadTs: string | undefined = THREAD_TS;
+let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
 let mockedDispatchSequence: Array<{
   kind: "tool" | "block" | "final";
   payload: { text: string; isError?: boolean; mediaUrl?: string; mediaUrls?: string[] };
@@ -258,12 +259,19 @@ vi.mock("../config.runtime.js", () => ({
 
 vi.mock("../replies.js", () => ({
   createSlackReplyDeliveryPlan: () => ({
-    peekThreadTs: () => mockedReplyThreadTs,
-    nextThreadTs: () => mockedReplyThreadTs,
+    peekThreadTs: () => mockedReplyThreadTsSequence?.[0] ?? mockedReplyThreadTs,
+    nextThreadTs: () =>
+      mockedReplyThreadTsSequence ? mockedReplyThreadTsSequence.shift() : mockedReplyThreadTs,
     markSent: () => {},
   }),
   deliverReplies: deliverRepliesMock,
   readSlackReplyBlocks: () => undefined,
+  resolveDeliveredSlackReplyThreadTs: (params: {
+    replyToMode: "off" | "first" | "all" | "batched";
+    payloadReplyToId?: string;
+    replyThreadTs?: string;
+  }) =>
+    (params.replyToMode === "off" ? undefined : params.payloadReplyToId) ?? params.replyThreadTs,
   resolveSlackThreadTs: () => mockedReplyThreadTs,
 }));
 
@@ -322,6 +330,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedBlockStreamingEnabled = false;
     capturedReplyOptions = undefined;
     mockedReplyThreadTs = THREAD_TS;
+    mockedReplyThreadTsSequence = undefined;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
@@ -402,6 +411,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       expect.objectContaining({
         replyThreadTs: THREAD_TS,
         replies: [expect.objectContaining({ text: SAME_TEXT })],
+      }),
+    );
+  });
+
+  it("keeps multi-part block replies in the first reply thread after the plan is consumed", async () => {
+    mockedReplyThreadTsSequence = [THREAD_TS, undefined];
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "first block" } },
+      { kind: "block", payload: { text: "second block" } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        replyToMode: "first",
+      }),
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: "first block" })],
+      }),
+    );
+    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: "second block" })],
       }),
     );
   });
