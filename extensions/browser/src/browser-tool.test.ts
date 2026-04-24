@@ -512,9 +512,7 @@ describe("browser tool snapshot maxChars", () => {
   it("falls back to role refs when a node snapshot cannot provide aria refs", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool
-      .mockRejectedValueOnce(
-        new Error("INVALID_REQUEST: Error: refs=aria requires Playwright _snapshotForAI support."),
-      )
+      .mockRejectedValueOnce(new Error("INVALID_REQUEST: Error: refs=aria not supported."))
       .mockResolvedValueOnce({
         ok: true,
         payload: {
