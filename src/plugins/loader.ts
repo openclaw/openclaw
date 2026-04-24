@@ -59,7 +59,7 @@ import {
   type PluginActivationState,
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
-import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import {
   clearPluginInteractiveHandlers,
   listPluginInteractiveHandlers,
@@ -1953,8 +1953,14 @@ function activatePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
 ): void {
+  const preserveGatewayHookRunner =
+    runtimeSubagentMode === "default" &&
+    getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
+    getGlobalHookRunner() !== null;
   setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
-  initializeGlobalHookRunner(registry);
+  if (!preserveGatewayHookRunner) {
+    initializeGlobalHookRunner(registry);
+  }
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {

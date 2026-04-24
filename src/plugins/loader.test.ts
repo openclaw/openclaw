@@ -23,7 +23,11 @@ import {
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
-import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import {
+  getGlobalHookRunner,
+  getGlobalPluginRegistry,
+  resetGlobalHookRunner,
+} from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import {
   clearPluginInteractiveHandlerRegistrations,
@@ -3592,6 +3596,66 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("preserves the gateway-bindable hook runner across later default-mode activating loads", () => {
+    useNoBundledPlugins();
+    const gatewayPlugin = writePlugin({
+      id: "gateway-hook-surface",
+      filename: "gateway-hook-surface.cjs",
+      body: `module.exports = { id: "gateway-hook-surface", register(api) {
+        api.on("subagent_ended", () => undefined);
+      } };`,
+    });
+    const defaultPlugin = writePlugin({
+      id: "default-hook-surface",
+      filename: "default-hook-surface.cjs",
+      body: `module.exports = { id: "default-hook-surface", register(api) {
+        api.on("message_sent", () => undefined);
+      } };`,
+    });
+
+    const gatewayRegistry = loadOpenClawPlugins({
+      workspaceDir: gatewayPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [gatewayPlugin.file] },
+          allow: ["gateway-hook-surface"],
+          entries: {
+            "gateway-hook-surface": {
+              enabled: true,
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
+
+    const defaultRegistry = loadOpenClawPlugins({
+      workspaceDir: defaultPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [defaultPlugin.file] },
+          allow: ["default-hook-surface"],
+          entries: {
+            "default-hook-surface": {
+              enabled: true,
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(getActivePluginRegistry()).toBe(defaultRegistry);
+    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
+    expect(getGlobalHookRunner()?.hasHooks("message_sent")).toBe(false);
   });
 
   it.each([
