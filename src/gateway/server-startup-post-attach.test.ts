@@ -154,6 +154,9 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: vi.fn(() => ["default"]),
+  resolveAgentDir: vi.fn(() => "/tmp/openclaw-state/agents/default/agent"),
+  resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
 }));
@@ -166,6 +169,7 @@ vi.mock("../agents/defaults.js", () => ({
 vi.mock("../agents/model-selection.js", () => ({
   isCliProvider: hoisted.isCliProvider,
   resolveConfiguredModelRef: hoisted.resolveConfiguredModelRef,
+  resolveDefaultModelForAgent: hoisted.resolveConfiguredModelRef,
 }));
 
 vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
