@@ -1050,7 +1050,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const { getGlobalDispatcher, setGlobalDispatcher } = await import("undici");
     const previousDispatcher = getGlobalDispatcher();
     try {
-      ensureGlobalUndiciStreamTimeouts({ timeoutMs: 456_789 });
+      ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
       (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
         Agent: agentCtor,
         EnvHttpProxyAgent: envHttpProxyAgentCtor,
@@ -1071,8 +1071,8 @@ describe("fetchWithSsrFGuard hardening", () => {
           lookup: expect.any(Function),
         }),
         allowH2: false,
-        bodyTimeout: 456_789,
-        headersTimeout: 456_789,
+        bodyTimeout: 1_900_000,
+        headersTimeout: 1_900_000,
       });
       await result.release();
     } finally {
