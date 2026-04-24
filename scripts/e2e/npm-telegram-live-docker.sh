@@ -63,7 +63,7 @@ docker_env=(
 forward_env_if_set() {
   local key="$1"
   if [ -n "${!key:-}" ]; then
-    docker_env+=(-e "$key=${!key}")
+    docker_env+=(-e "$key")
   fi
 }
 
