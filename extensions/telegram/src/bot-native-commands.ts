@@ -30,7 +30,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount, resolveTelegramReplyToMode } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -822,12 +822,25 @@ export const registerTelegramNativeCommands = ({
             );
           }
           const replyMarkup = buildInlineKeyboard(rows);
+          const effectiveReplyToMode = resolveTelegramReplyToMode(
+            executionCfg,
+            route.accountId,
+            isGroup ? "group" : "direct",
+          );
+          const menuReplyParams =
+            effectiveReplyToMode === "off"
+              ? {}
+              : {
+                  reply_to_message_id: msg.message_id,
+                  allow_sending_without_reply: true as const,
+                };
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, title, {
                 ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+                ...menuReplyParams,
                 ...threadParams,
               }),
           });
