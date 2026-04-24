@@ -54,6 +54,20 @@ describe("resolveWhatsAppGroupSystemPrompt", () => {
     ).toBeUndefined();
   });
 
+  it("suppresses wildcard when specific group entry sets systemPrompt to whitespace-only string", () => {
+    expect(
+      resolveWhatsAppGroupSystemPrompt({
+        groupId: "g1",
+        accountConfig: {
+          groups: {
+            g1: { systemPrompt: "   " },
+            "*": { systemPrompt: "wildcard prompt" },
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("trims whitespace from specific group systemPrompt", () => {
     expect(
       resolveWhatsAppGroupSystemPrompt({
@@ -130,6 +144,20 @@ describe("resolveWhatsAppDirectSystemPrompt", () => {
         accountConfig: {
           direct: {
             p1: { systemPrompt: "" },
+            "*": { systemPrompt: "wildcard prompt" },
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("suppresses wildcard when specific peer entry sets systemPrompt to whitespace-only string", () => {
+    expect(
+      resolveWhatsAppDirectSystemPrompt({
+        peerId: "p1",
+        accountConfig: {
+          direct: {
+            p1: { systemPrompt: "   " },
             "*": { systemPrompt: "wildcard prompt" },
           },
         },
