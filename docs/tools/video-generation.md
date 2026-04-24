@@ -249,22 +249,80 @@ entries.
 
 ## Provider notes
 
-| Provider              | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Alibaba               | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| BytePlus (1.0)        | Provider id `byteplus`. Models: `seedance-1-0-pro-250528` (default), `seedance-1-0-pro-t2v-250528`, `seedance-1-0-pro-fast-251015`, `seedance-1-0-lite-t2v-250428`, `seedance-1-0-lite-i2v-250428`. T2V models (`*-t2v-*`) do not accept image inputs; I2V models and general `*-pro-*` models support a single reference image (first frame). Pass the image positionally or set `role: "first_frame"`. T2V model IDs are automatically switched to the corresponding I2V variant when an image is provided. Supported `providerOptions` keys: `seed` (number), `draft` (boolean, forces 480p), `camera_fixed` (boolean).                                                                       |
-| BytePlus Seedance 1.5 | Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark) plugin. Provider id `byteplus-seedance15`. Model: `seedance-1-5-pro-251215`. Uses the unified `content[]` API. Supports at most 2 input images (first_frame + last_frame). All inputs must be remote `https://` URLs. Set `role: "first_frame"` / `"last_frame"` on each image, or pass images positionally. `aspectRatio: "adaptive"` auto-detects ratio from the input image. `audio: true` maps to `generate_audio`. `providerOptions.seed` (number) is forwarded.                                                                                                                    |
-| BytePlus Seedance 2.0 | Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark) plugin. Provider id `byteplus-seedance2`. Models: `dreamina-seedance-2-0-260128`, `dreamina-seedance-2-0-fast-260128`. Uses the unified `content[]` API. Supports up to 9 reference images, 3 reference videos, and 3 reference audios. All inputs must be remote `https://` URLs. Set `role` on each asset — supported values: `"first_frame"`, `"last_frame"`, `"reference_image"`, `"reference_video"`, `"reference_audio"`. `aspectRatio: "adaptive"` auto-detects ratio from the input image. `audio: true` maps to `generate_audio`. `providerOptions.seed` (number) is forwarded. |
-| ComfyUI               | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| fal                   | Uses queue-backed flow for long-running jobs. Single image reference only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Google                | Uses Gemini/Veo. Supports one image or one video reference.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| MiniMax               | Single image reference only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| OpenAI                | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Qwen                  | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Runway                | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Together              | Single image reference only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Vydra                 | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| xAI                   | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+<AccordionGroup>
+  <Accordion title="Alibaba">
+    Uses DashScope / Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.
+  </Accordion>
+
+  <Accordion title="BytePlus (1.0)">
+    Provider id: `byteplus`.
+
+    Models: `seedance-1-0-pro-250528` (default), `seedance-1-0-pro-t2v-250528`, `seedance-1-0-pro-fast-251015`, `seedance-1-0-lite-t2v-250428`, `seedance-1-0-lite-i2v-250428`.
+
+    T2V models (`*-t2v-*`) do not accept image inputs; I2V models and general `*-pro-*` models support a single reference image (first frame). Pass the image positionally or set `role: "first_frame"`. T2V model IDs are automatically switched to the corresponding I2V variant when an image is provided.
+
+    Supported `providerOptions` keys: `seed` (number), `draft` (boolean — forces 480p), `camera_fixed` (boolean).
+
+  </Accordion>
+
+  <Accordion title="BytePlus Seedance 1.5">
+    Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark) plugin. Provider id: `byteplus-seedance15`. Model: `seedance-1-5-pro-251215`.
+
+    Uses the unified `content[]` API. Supports at most 2 input images (`first_frame` + `last_frame`). All inputs must be remote `https://` URLs. Set `role: "first_frame"` / `"last_frame"` on each image, or pass images positionally.
+
+    `aspectRatio: "adaptive"` auto-detects ratio from the input image. `audio: true` maps to `generate_audio`. `providerOptions.seed` (number) is forwarded.
+
+  </Accordion>
+
+  <Accordion title="BytePlus Seedance 2.0">
+    Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark) plugin. Provider id: `byteplus-seedance2`. Models: `dreamina-seedance-2-0-260128`, `dreamina-seedance-2-0-fast-260128`.
+
+    Uses the unified `content[]` API. Supports up to 9 reference images, 3 reference videos, and 3 reference audios. All inputs must be remote `https://` URLs. Set `role` on each asset — supported values: `"first_frame"`, `"last_frame"`, `"reference_image"`, `"reference_video"`, `"reference_audio"`.
+
+    `aspectRatio: "adaptive"` auto-detects ratio from the input image. `audio: true` maps to `generate_audio`. `providerOptions.seed` (number) is forwarded.
+
+  </Accordion>
+
+  <Accordion title="ComfyUI">
+    Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.
+  </Accordion>
+
+  <Accordion title="fal">
+    Uses a queue-backed flow for long-running jobs. Single image reference only.
+  </Accordion>
+
+  <Accordion title="Google (Gemini / Veo)">
+    Supports one image or one video reference.
+  </Accordion>
+
+  <Accordion title="MiniMax">
+    Single image reference only.
+  </Accordion>
+
+  <Accordion title="OpenAI">
+    Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.
+  </Accordion>
+
+  <Accordion title="Qwen">
+    Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.
+  </Accordion>
+
+  <Accordion title="Runway">
+    Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.
+  </Accordion>
+
+  <Accordion title="Together">
+    Single image reference only.
+  </Accordion>
+
+  <Accordion title="Vydra">
+    Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL.
+  </Accordion>
+
+  <Accordion title="xAI">
+    Supports text-to-video, image-to-video, and remote video edit/extend flows.
+  </Accordion>
+</AccordionGroup>
 
 ## Provider capability modes
 
