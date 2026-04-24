@@ -1,22 +1,14 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createDiscordOutboundHoisted,
-  createDiscordSendModuleMock,
-  createDiscordThreadBindingsModuleMock,
   expectDiscordThreadBotSend,
+  installDiscordOutboundModuleSpies,
   mockDiscordBoundThreadManager,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
 
 const hoisted = createDiscordOutboundHoisted();
-
-vi.mock("./send.js", async (importOriginal) => {
-  return await createDiscordSendModuleMock(hoisted, importOriginal);
-});
-
-vi.mock("./monitor/thread-bindings.js", async (importOriginal) => {
-  return await createDiscordThreadBindingsModuleMock(hoisted, importOriginal);
-});
+await installDiscordOutboundModuleSpies(hoisted);
 
 let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
@@ -207,19 +199,29 @@ describe("discordOutbound", () => {
       channelId: "ch-1",
     });
 
+    const payload = await discordOutbound.renderPresentation?.({
+      payload: {
+        text: "hello",
+        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+      },
+      presentation: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+      },
+      ctx: {
+        cfg: {},
+        to: "channel:123456",
+      },
+    } as never);
+
+    if (!payload) {
+      throw new Error("expected Discord presentation payload");
+    }
+
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:123456",
       text: "",
-      payload: {
-        text: "hello",
-        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-        channelData: {
-          discord: {
-            components: { text: "hello", components: [] },
-          },
-        },
-      },
+      payload,
       accountId: "default",
       mediaLocalRoots: ["/tmp/media"],
     });
@@ -247,5 +249,80 @@ describe("discordOutbound", () => {
       messageId: "msg-2",
       channelId: "ch-1",
     });
+  });
+
+  it("renders channelData Discord components on payload sends", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "native component text",
+        channelData: {
+          discord: {
+            components: {
+              blocks: [{ type: "text", text: "Native component body" }],
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(hoisted.sendDiscordComponentMessageMock).toHaveBeenCalledWith(
+      "channel:123456",
+      expect.objectContaining({
+        text: "native component text",
+        blocks: [{ type: "text", text: "Native component body" }],
+      }),
+      expect.objectContaining({ accountId: "default" }),
+    );
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it("neutralizes approval mentions only for approval payloads", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "Approval @everyone <@123> <#456>",
+        channelData: {
+          execApproval: {
+            approvalId: "req-1",
+            approvalSlug: "req-1",
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "Approval @\u200beveryone <@\u200b123> <#\u200b456>",
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+  });
+
+  it("leaves non-approval mentions unchanged", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "Hello @everyone",
+      },
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "Hello @everyone",
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
   });
 });

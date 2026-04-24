@@ -1,5 +1,5 @@
-import { normalizeChatChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export function setPluginEnabledInConfig(
   config: OpenClawConfig,

@@ -1,4 +1,32 @@
+import {
+  drainPendingDeliveries as coreDrainPendingDeliveries,
+  type DeliverFn,
+} from "../infra/outbound/delivery-queue.js";
+
 // Public runtime/transport helpers for plugins that need shared infra behavior.
+
+type OutboundDeliverRuntimeModule = typeof import("../infra/outbound/deliver-runtime.js");
+type DrainPendingDeliveriesOptions = Omit<
+  Parameters<typeof coreDrainPendingDeliveries>[0],
+  "deliver"
+> & {
+  deliver?: DeliverFn;
+};
+
+let outboundDeliverRuntimePromise: Promise<OutboundDeliverRuntimeModule> | null = null;
+
+async function loadOutboundDeliverRuntime(): Promise<OutboundDeliverRuntimeModule> {
+  outboundDeliverRuntimePromise ??= import("../infra/outbound/deliver-runtime.js");
+  return await outboundDeliverRuntimePromise;
+}
+
+export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions): Promise<void> {
+  const deliver = opts.deliver ?? (await loadOutboundDeliverRuntime()).deliverOutboundPayloads;
+  await coreDrainPendingDeliveries({
+    ...opts,
+    deliver,
+  });
+}
 
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
@@ -8,14 +36,19 @@ export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
 export * from "../infra/errors.js";
 export * from "../infra/exec-approval-command-display.ts";
+export * from "../infra/exec-approval-channel-runtime.ts";
 export * from "../infra/exec-approval-reply.ts";
 export * from "../infra/exec-approval-session-target.ts";
 export * from "../infra/exec-approvals.ts";
+export * from "../infra/approval-native-delivery.ts";
+export * from "../infra/approval-native-runtime.ts";
+export * from "../infra/plugin-approvals.ts";
 export * from "../infra/fetch.js";
 export * from "../infra/file-lock.js";
 export * from "../infra/format-time/format-duration.ts";
 export * from "../infra/fs-safe.ts";
 export * from "../infra/heartbeat-events.ts";
+export * from "../infra/heartbeat-summary.ts";
 export * from "../infra/heartbeat-visibility.ts";
 export * from "../infra/home-dir.js";
 export * from "../infra/http-body.js";
@@ -29,6 +62,8 @@ export * from "../infra/net/proxy-fetch.js";
 export * from "../infra/net/undici-global-dispatcher.js";
 export * from "../infra/net/ssrf.js";
 export * from "../infra/outbound/identity.js";
+export * from "../infra/outbound/sanitize-text.js";
+export * from "../infra/parse-finite-number.js";
 export * from "../infra/outbound/send-deps.js";
 export * from "../infra/retry.js";
 export * from "../infra/retry-policy.js";
@@ -41,5 +76,6 @@ export * from "../infra/tmp-openclaw-dir.js";
 export * from "../infra/transport-ready.js";
 export * from "../infra/wsl.ts";
 export * from "../utils/fetch-timeout.js";
+export * from "../utils/run-with-concurrency.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
 export * from "./ssrf-policy.js";

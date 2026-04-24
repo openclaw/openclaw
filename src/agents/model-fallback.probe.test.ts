@@ -1,37 +1,58 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
-// Mock auth-profiles module — must be before importing model-fallback
-vi.mock("./auth-profiles.js", () => ({
+// Mock auth-profile submodules — must be before importing model-fallback
+vi.mock("./auth-profiles/store.js", () => ({
   ensureAuthProfileStore: vi.fn(),
+  loadAuthProfileStoreForRuntime: vi.fn(),
+}));
+
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: vi.fn(),
+}));
+
+vi.mock("./auth-profiles/usage.js", () => ({
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
   resolveProfilesUnavailableReason: vi.fn(),
+}));
+
+vi.mock("./auth-profiles/order.js", () => ({
   resolveAuthProfileOrder: vi.fn(),
 }));
 
-type AuthProfilesModule = typeof import("./auth-profiles.js");
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: vi.fn(() => true),
+}));
+
+type AuthProfilesStoreModule = typeof import("./auth-profiles/store.js");
+type AuthProfilesSourceCheckModule = typeof import("./auth-profiles/source-check.js");
+type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
+type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");
 type ModelFallbackModule = typeof import("./model-fallback.js");
 type LoggerModule = typeof import("../logging/logger.js");
 
 let mockedEnsureAuthProfileStore: ReturnType<
-  typeof vi.mocked<AuthProfilesModule["ensureAuthProfileStore"]>
+  typeof vi.mocked<AuthProfilesStoreModule["ensureAuthProfileStore"]>
+>;
+let mockedHasAnyAuthProfileStoreSource: ReturnType<
+  typeof vi.mocked<AuthProfilesSourceCheckModule["hasAnyAuthProfileStoreSource"]>
 >;
 let mockedGetSoonestCooldownExpiry: ReturnType<
-  typeof vi.mocked<AuthProfilesModule["getSoonestCooldownExpiry"]>
+  typeof vi.mocked<AuthProfilesUsageModule["getSoonestCooldownExpiry"]>
 >;
 let mockedIsProfileInCooldown: ReturnType<
-  typeof vi.mocked<AuthProfilesModule["isProfileInCooldown"]>
+  typeof vi.mocked<AuthProfilesUsageModule["isProfileInCooldown"]>
 >;
 let mockedResolveProfilesUnavailableReason: ReturnType<
-  typeof vi.mocked<AuthProfilesModule["resolveProfilesUnavailableReason"]>
+  typeof vi.mocked<AuthProfilesUsageModule["resolveProfilesUnavailableReason"]>
 >;
 let mockedResolveAuthProfileOrder: ReturnType<
-  typeof vi.mocked<AuthProfilesModule["resolveAuthProfileOrder"]>
+  typeof vi.mocked<AuthProfilesOrderModule["resolveAuthProfileOrder"]>
 >;
 let runWithModelFallback: ModelFallbackModule["runWithModelFallback"];
 let _probeThrottleInternals: ModelFallbackModule["_probeThrottleInternals"];
@@ -43,23 +64,30 @@ const makeCfg = makeModelFallbackCfg;
 let unregisterLogTransport: (() => void) | undefined;
 
 async function loadModelFallbackProbeModules() {
-  vi.resetModules();
-  const authProfilesModule = await import("./auth-profiles.js");
+  const authProfilesStoreModule = await import("./auth-profiles/store.js");
+  const authProfilesSourceCheckModule = await import("./auth-profiles/source-check.js");
+  const authProfilesUsageModule = await import("./auth-profiles/usage.js");
+  const authProfilesOrderModule = await import("./auth-profiles/order.js");
   const loggerModule = await import("../logging/logger.js");
   const modelFallbackModule = await import("./model-fallback.js");
-  mockedEnsureAuthProfileStore = vi.mocked(authProfilesModule.ensureAuthProfileStore);
-  mockedGetSoonestCooldownExpiry = vi.mocked(authProfilesModule.getSoonestCooldownExpiry);
-  mockedIsProfileInCooldown = vi.mocked(authProfilesModule.isProfileInCooldown);
-  mockedResolveProfilesUnavailableReason = vi.mocked(
-    authProfilesModule.resolveProfilesUnavailableReason,
+  mockedEnsureAuthProfileStore = vi.mocked(authProfilesStoreModule.ensureAuthProfileStore);
+  mockedHasAnyAuthProfileStoreSource = vi.mocked(
+    authProfilesSourceCheckModule.hasAnyAuthProfileStoreSource,
   );
-  mockedResolveAuthProfileOrder = vi.mocked(authProfilesModule.resolveAuthProfileOrder);
+  mockedGetSoonestCooldownExpiry = vi.mocked(authProfilesUsageModule.getSoonestCooldownExpiry);
+  mockedIsProfileInCooldown = vi.mocked(authProfilesUsageModule.isProfileInCooldown);
+  mockedResolveProfilesUnavailableReason = vi.mocked(
+    authProfilesUsageModule.resolveProfilesUnavailableReason,
+  );
+  mockedResolveAuthProfileOrder = vi.mocked(authProfilesOrderModule.resolveAuthProfileOrder);
   runWithModelFallback = modelFallbackModule.runWithModelFallback;
   _probeThrottleInternals = modelFallbackModule._probeThrottleInternals;
   registerLogTransport = loggerModule.registerLogTransport;
   resetLogger = loggerModule.resetLogger;
   setLoggerOverride = loggerModule.setLoggerOverride;
 }
+
+beforeAll(loadModelFallbackProbeModules);
 
 function expectFallbackUsed(
   result: { result: unknown; attempts: Array<{ reason?: string }> },
@@ -159,8 +187,19 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
-  beforeEach(async () => {
-    await loadModelFallbackProbeModules();
+  async function expectPrimarySkippedAfterLongCooldown(reason: "billing" | "rate_limit") {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue(reason);
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+    expectPrimarySkippedForReason(result, run, reason);
+  }
+
+  beforeEach(() => {
     realDateNow = Date.now;
     Date.now = vi.fn(() => NOW);
 
@@ -172,6 +211,7 @@ describe("runWithModelFallback – probe logic", () => {
       version: 1,
       profiles: {},
     };
+    mockedHasAnyAuthProfileStoreSource.mockReturnValue(true);
     mockedEnsureAuthProfileStore.mockReturnValue(fakeStore);
 
     // Default: resolveAuthProfileOrder returns profiles only for "openai" provider
@@ -218,15 +258,7 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("uses inferred unavailable reason when skipping a cooldowned primary model", async () => {
-    const cfg = makeCfg();
-    const expiresIn30Min = NOW + 30 * 60 * 1000;
-    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
-    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
-
-    const run = vi.fn().mockResolvedValue("ok");
-
-    const result = await runPrimaryCandidate(cfg, run);
-    expectPrimarySkippedForReason(result, run, "billing");
+    await expectPrimarySkippedAfterLongCooldown("billing");
   });
 
   it("probes primary model when within 2-min margin of cooldown expiry", async () => {
@@ -507,7 +539,7 @@ describe("runWithModelFallback – probe logic", () => {
   it("handles NaN soonest safely (treats as probe-worthy)", async () => {
     const cfg = makeCfg();
 
-    mockedGetSoonestCooldownExpiry.mockReturnValue(NaN);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(Number.NaN);
 
     const run = vi.fn().mockResolvedValue("ok-nan");
 
@@ -634,22 +666,10 @@ describe("runWithModelFallback – probe logic", () => {
 
     const result = await runPrimaryCandidate(cfg, run);
 
-    expect(result.result).toBe("billing-probe-ok");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
-      allowTransientCooldownProbe: true,
-    });
+    expectPrimaryProbeSuccess(result, run, "billing-probe-ok");
   });
 
   it("skips billing-cooldowned primary with fallbacks when far from cooldown expiry", async () => {
-    const cfg = makeCfg();
-    const expiresIn30Min = NOW + 30 * 60 * 1000;
-    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
-    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
-
-    const run = vi.fn().mockResolvedValue("ok");
-
-    const result = await runPrimaryCandidate(cfg, run);
-    expectPrimarySkippedForReason(result, run, "billing");
+    await expectPrimarySkippedAfterLongCooldown("billing");
   });
 });

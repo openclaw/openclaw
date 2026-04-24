@@ -1,4 +1,4 @@
-import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
+import { resolveLegacyAuthChoiceAliasesForCli } from "./auth-choice-legacy.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 export type { AuthChoiceGroupId };
@@ -10,6 +10,8 @@ export type AuthChoiceOption = {
   groupId?: AuthChoiceGroupId;
   groupLabel?: string;
   groupHint?: string;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
 };
 
 export type AuthChoiceGroup = {
@@ -20,21 +22,6 @@ export type AuthChoiceGroup = {
 };
 
 export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
-  {
-    value: "chutes",
-    label: "Chutes (OAuth)",
-    groupId: "chutes",
-    groupLabel: "Chutes",
-    groupHint: "OAuth",
-  },
-  {
-    value: "litellm-api-key",
-    label: "LiteLLM API key",
-    hint: "Unified gateway for 100+ LLM providers",
-    groupId: "litellm",
-    groupLabel: "LiteLLM",
-    groupHint: "Unified LLM gateway (100+ providers)",
-  },
   {
     value: "custom-api-key",
     label: "Custom Provider",
@@ -48,6 +35,9 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
 export function formatStaticAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;
+  config?: import("../config/config.js").OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
   const includeSkip = params?.includeSkip ?? true;
   const includeLegacyAliases = params?.includeLegacyAliases ?? false;
@@ -57,7 +47,7 @@ export function formatStaticAuthChoiceChoicesForCli(params?: {
     values.push("skip");
   }
   if (includeLegacyAliases) {
-    values.push(...AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI);
+    values.push(...resolveLegacyAuthChoiceAliasesForCli(params));
   }
 
   return values.join("|");

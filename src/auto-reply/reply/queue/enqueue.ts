@@ -1,4 +1,5 @@
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
@@ -16,7 +17,7 @@ const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_I
 });
 
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeOptionalString(run.messageId);
   if (!messageId) {
     return undefined;
   }
@@ -44,9 +45,11 @@ function isRunAlreadyQueued(
     item.originatingAccountId === run.originatingAccountId &&
     item.originatingThreadId === run.originatingThreadId;
 
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {
-    return items.some((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
+    return items.some(
+      (item) => normalizeOptionalString(item.messageId) === messageId && hasSameRouting(item),
+    );
   }
   if (!allowPromptFallback) {
     return false;
@@ -84,7 +87,7 @@ export function enqueueFollowupRun(
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
-    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
+    summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
   });
   if (!shouldEnqueue) {
     return false;

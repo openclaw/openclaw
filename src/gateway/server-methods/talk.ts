@@ -1,61 +1,73 @@
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
-import { buildTalkConfigResponse, resolveActiveTalkProviderConfig } from "../../config/talk.js";
-import type { TalkProviderConfig } from "../../config/types.gateway.js";
-import type { OpenClawConfig, TtsConfig } from "../../config/types.js";
-import { normalizeSpeechProviderId } from "../../tts/provider-registry.js";
+import {
+  buildTalkConfigResponse,
+  normalizeTalkSection,
+  resolveActiveTalkProviderConfig,
+} from "../../config/talk.js";
+import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.gateway.js";
+import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} from "../../realtime-voice/agent-consult-tool.js";
+import { getRealtimeVoiceProvider } from "../../realtime-voice/provider-registry.js";
+import { resolveConfiguredRealtimeVoiceProvider } from "../../realtime-voice/provider-resolver.js";
+import type { RealtimeVoiceProviderConfig } from "../../realtime-voice/provider-types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
+import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  type TalkSpeakParams,
   validateTalkConfigParams,
   validateTalkModeParams,
+  validateTalkRealtimeSessionParams,
   validateTalkSpeakParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import { asRecord } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-const ADMIN_SCOPE = "operator.admin";
-const TALK_SECRETS_SCOPE = "operator.talk.secrets";
-type ElevenLabsVoiceSettings = NonNullable<NonNullable<TtsConfig["elevenlabs"]>["voiceSettings"]>;
+type TalkSpeakReason =
+  | "talk_unconfigured"
+  | "talk_provider_unsupported"
+  | "method_unavailable"
+  | "synthesis_failed"
+  | "invalid_audio_result";
 
+type TalkSpeakErrorDetails = {
+  reason: TalkSpeakReason;
+  fallbackEligible: boolean;
+};
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
 }
 
-function trimString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
+function asStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = asRecord(value);
+  if (!record) {
     return undefined;
   }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function optionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function plainObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function normalizeTextNormalization(value: unknown): "auto" | "on" | "off" | undefined {
-  const normalized = trimString(value)?.toLowerCase();
-  return normalized === "auto" || normalized === "on" || normalized === "off"
-    ? normalized
-    : undefined;
+  const next: Record<string, string> = {};
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (typeof entryValue === "string") {
+      next[key] = entryValue;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function normalizeAliasKey(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function resolveTalkVoiceId(
@@ -65,7 +77,7 @@ function resolveTalkVoiceId(
   if (!requested) {
     return undefined;
   }
-  const aliases = providerConfig.voiceAliases;
+  const aliases = asStringRecord(providerConfig.voiceAliases);
   if (!aliases) {
     return requested;
   }
@@ -78,100 +90,46 @@ function resolveTalkVoiceId(
   return requested;
 }
 
-function readTalkVoiceSettings(
-  providerConfig: TalkProviderConfig,
-): ElevenLabsVoiceSettings | undefined {
-  const source = plainObject(providerConfig.voiceSettings);
-  if (!source) {
-    return undefined;
-  }
-  const stability = finiteNumber(source.stability);
-  const similarityBoost = finiteNumber(source.similarityBoost);
-  const style = finiteNumber(source.style);
-  const useSpeakerBoost = optionalBoolean(source.useSpeakerBoost);
-  const speed = finiteNumber(source.speed);
-  const voiceSettings = {
-    ...(stability == null ? {} : { stability }),
-    ...(similarityBoost == null ? {} : { similarityBoost }),
-    ...(style == null ? {} : { style }),
-    ...(useSpeakerBoost == null ? {} : { useSpeakerBoost }),
-    ...(speed == null ? {} : { speed }),
-  };
-  return Object.keys(voiceSettings).length > 0 ? voiceSettings : undefined;
-}
-
 function buildTalkTtsConfig(
   config: OpenClawConfig,
 ):
   | { cfg: OpenClawConfig; provider: string; providerConfig: TalkProviderConfig }
-  | { error: string } {
+  | { error: string; reason: TalkSpeakReason } {
   const resolved = resolveActiveTalkProviderConfig(config.talk);
-  const provider = normalizeSpeechProviderId(resolved?.provider);
+  const provider = canonicalizeSpeechProviderId(resolved?.provider, config);
   if (!resolved || !provider) {
-    return { error: "talk.speak unavailable: talk provider not configured" };
+    return {
+      error: "talk.speak unavailable: talk provider not configured",
+      reason: "talk_unconfigured",
+    };
+  }
+
+  const speechProvider = getSpeechProvider(provider, config);
+  if (!speechProvider) {
+    return {
+      error: `talk.speak unavailable: speech provider "${provider}" does not support Talk mode`,
+      reason: "talk_provider_unsupported",
+    };
   }
 
   const baseTts = config.messages?.tts ?? {};
   const providerConfig = resolved.config;
+  const resolvedProviderConfig =
+    speechProvider.resolveTalkConfig?.({
+      cfg: config,
+      baseTtsConfig: baseTts as Record<string, unknown>,
+      talkProviderConfig: providerConfig,
+      timeoutMs: baseTts.timeoutMs ?? 30_000,
+    }) ?? providerConfig;
   const talkTts: TtsConfig = {
     ...baseTts,
     auto: "always",
     provider,
+    providers: {
+      ...((asRecord(baseTts.providers) ?? {}) as TtsProviderConfigMap),
+      [provider]: resolvedProviderConfig,
+    },
   };
-  const baseUrl = trimString(providerConfig.baseUrl);
-  const voiceId = trimString(providerConfig.voiceId);
-  const modelId = trimString(providerConfig.modelId);
-  const languageCode = trimString(providerConfig.languageCode);
-
-  if (provider === "elevenlabs") {
-    const seed = finiteNumber(providerConfig.seed);
-    const applyTextNormalization = normalizeTextNormalization(
-      providerConfig.applyTextNormalization,
-    );
-    const voiceSettings = readTalkVoiceSettings(providerConfig);
-    talkTts.elevenlabs = {
-      ...baseTts.elevenlabs,
-      ...(providerConfig.apiKey === undefined ? {} : { apiKey: providerConfig.apiKey }),
-      ...(baseUrl == null ? {} : { baseUrl }),
-      ...(voiceId == null ? {} : { voiceId }),
-      ...(modelId == null ? {} : { modelId }),
-      ...(seed == null ? {} : { seed }),
-      ...(applyTextNormalization == null ? {} : { applyTextNormalization }),
-      ...(languageCode == null ? {} : { languageCode }),
-      ...(voiceSettings == null ? {} : { voiceSettings }),
-    };
-  } else if (provider === "openai") {
-    const speed = finiteNumber(providerConfig.speed);
-    const instructions = trimString(providerConfig.instructions);
-    talkTts.openai = {
-      ...baseTts.openai,
-      ...(providerConfig.apiKey === undefined ? {} : { apiKey: providerConfig.apiKey }),
-      ...(baseUrl == null ? {} : { baseUrl }),
-      ...(modelId == null ? {} : { model: modelId }),
-      ...(voiceId == null ? {} : { voice: voiceId }),
-      ...(speed == null ? {} : { speed }),
-      ...(instructions == null ? {} : { instructions }),
-    };
-  } else if (provider === "microsoft") {
-    const outputFormat = trimString(providerConfig.outputFormat);
-    const pitch = trimString(providerConfig.pitch);
-    const rate = trimString(providerConfig.rate);
-    const volume = trimString(providerConfig.volume);
-    const proxy = trimString(providerConfig.proxy);
-    const timeoutMs = finiteNumber(providerConfig.timeoutMs);
-    talkTts.microsoft = {
-      ...baseTts.microsoft,
-      enabled: true,
-      ...(voiceId == null ? {} : { voice: voiceId }),
-      ...(languageCode == null ? {} : { lang: languageCode }),
-      ...(outputFormat == null ? {} : { outputFormat }),
-      ...(pitch == null ? {} : { pitch }),
-      ...(rate == null ? {} : { rate }),
-      ...(volume == null ? {} : { volume }),
-      ...(proxy == null ? {} : { proxy }),
-      ...(timeoutMs == null ? {} : { timeoutMs }),
-    };
-  }
 
   return {
     provider,
@@ -186,71 +144,131 @@ function buildTalkTtsConfig(
   };
 }
 
+function getRecord(value: unknown): Record<string, unknown> | undefined {
+  return asRecord(value) ?? undefined;
+}
+
+function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
+  provider?: string;
+  providers?: Record<string, RealtimeVoiceProviderConfig>;
+} {
+  const plugins = getRecord(config.plugins);
+  const entries = getRecord(plugins?.entries);
+  const voiceCall = getRecord(entries?.["voice-call"]);
+  const pluginConfig = getRecord(voiceCall?.config);
+  const realtime = getRecord(pluginConfig?.realtime);
+  const providersRaw = getRecord(realtime?.providers);
+  const providers: Record<string, RealtimeVoiceProviderConfig> = {};
+  if (providersRaw) {
+    for (const [providerId, providerConfig] of Object.entries(providersRaw)) {
+      const record = getRecord(providerConfig);
+      if (record) {
+        providers[providerId] = record;
+      }
+    }
+  }
+  return {
+    provider: normalizeOptionalString(realtime?.provider),
+    providers: Object.keys(providers).length > 0 ? providers : undefined,
+  };
+}
+
+function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: string) {
+  const voiceCallRealtime = getVoiceCallRealtimeConfig(config);
+  const talkProviderConfigs = config.talk?.providers as
+    | Record<string, RealtimeVoiceProviderConfig>
+    | undefined;
+  const talkProvider = normalizeOptionalString(config.talk?.provider);
+  const talkProviderSupportsRealtime = talkProvider
+    ? Boolean(getRealtimeVoiceProvider(talkProvider, config))
+    : false;
+  const provider =
+    normalizeOptionalString(requestedProvider) ??
+    (talkProviderSupportsRealtime ? talkProvider : undefined) ??
+    voiceCallRealtime.provider;
+  return {
+    provider,
+    providers: {
+      ...voiceCallRealtime.providers,
+      ...talkProviderConfigs,
+    },
+  };
+}
+
+function buildRealtimeInstructions(): string {
+  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
+}
+
+function isFallbackEligibleTalkReason(reason: TalkSpeakReason): boolean {
+  return (
+    reason === "talk_unconfigured" ||
+    reason === "talk_provider_unsupported" ||
+    reason === "method_unavailable"
+  );
+}
+
+function talkSpeakError(reason: TalkSpeakReason, message: string) {
+  const details: TalkSpeakErrorDetails = {
+    reason,
+    fallbackEligible: isFallbackEligibleTalkReason(reason),
+  };
+  return errorShape(ErrorCodes.UNAVAILABLE, message, { details });
+}
+
+function resolveTalkSpeed(params: TalkSpeakParams): number | undefined {
+  if (typeof params.speed === "number") {
+    return params.speed;
+  }
+  if (typeof params.rateWpm !== "number" || params.rateWpm <= 0) {
+    return undefined;
+  }
+  const resolved = params.rateWpm / 175;
+  if (resolved <= 0.5 || resolved >= 2.0) {
+    return undefined;
+  }
+  return resolved;
+}
+
 function buildTalkSpeakOverrides(
   provider: string,
   providerConfig: TalkProviderConfig,
-  params: Record<string, unknown>,
+  config: OpenClawConfig,
+  params: TalkSpeakParams,
 ): TtsDirectiveOverrides {
-  const voiceId = resolveTalkVoiceId(providerConfig, trimString(params.voiceId));
-  const modelId = trimString(params.modelId);
-  const outputFormat = trimString(params.outputFormat);
-  const speed = finiteNumber(params.speed);
-  const seed = finiteNumber(params.seed);
-  const normalize = normalizeTextNormalization(params.normalize);
-  const language = trimString(params.language)?.toLowerCase();
-  const overrides: TtsDirectiveOverrides = { provider };
-
-  if (provider === "elevenlabs") {
-    const voiceSettings = {
-      ...(speed == null ? {} : { speed }),
-      ...(finiteNumber(params.stability) == null
-        ? {}
-        : { stability: finiteNumber(params.stability) }),
-      ...(finiteNumber(params.similarity) == null
-        ? {}
-        : { similarityBoost: finiteNumber(params.similarity) }),
-      ...(finiteNumber(params.style) == null ? {} : { style: finiteNumber(params.style) }),
-      ...(optionalBoolean(params.speakerBoost) == null
-        ? {}
-        : { useSpeakerBoost: optionalBoolean(params.speakerBoost) }),
-    };
-    overrides.elevenlabs = {
-      ...(voiceId == null ? {} : { voiceId }),
-      ...(modelId == null ? {} : { modelId }),
-      ...(outputFormat == null ? {} : { outputFormat }),
-      ...(seed == null ? {} : { seed }),
-      ...(normalize == null ? {} : { applyTextNormalization: normalize }),
-      ...(language == null ? {} : { languageCode: language }),
-      ...(Object.keys(voiceSettings).length === 0 ? {} : { voiceSettings }),
-    };
-    return overrides;
+  const speechProvider = getSpeechProvider(provider, config);
+  if (!speechProvider?.resolveTalkOverrides) {
+    return { provider };
   }
-
-  if (provider === "openai") {
-    overrides.openai = {
-      ...(voiceId == null ? {} : { voice: voiceId }),
-      ...(modelId == null ? {} : { model: modelId }),
-      ...(speed == null ? {} : { speed }),
-    };
-    return overrides;
+  const resolvedSpeed = resolveTalkSpeed(params);
+  const resolvedVoiceId = resolveTalkVoiceId(
+    providerConfig,
+    normalizeOptionalString(params.voiceId),
+  );
+  const providerOverrides = speechProvider.resolveTalkOverrides({
+    talkProviderConfig: providerConfig,
+    params: {
+      ...params,
+      ...(resolvedVoiceId == null ? {} : { voiceId: resolvedVoiceId }),
+      ...(resolvedSpeed == null ? {} : { speed: resolvedSpeed }),
+    },
+  });
+  if (!providerOverrides || Object.keys(providerOverrides).length === 0) {
+    return { provider };
   }
-
-  if (provider === "microsoft") {
-    overrides.microsoft = {
-      ...(voiceId == null ? {} : { voice: voiceId }),
-      ...(outputFormat == null ? {} : { outputFormat }),
-    };
-  }
-
-  return overrides;
+  return {
+    provider,
+    providerOverrides: {
+      [provider]: providerOverrides,
+    },
+  };
 }
 
 function inferMimeType(
   outputFormat: string | undefined,
   fileExtension: string | undefined,
 ): string | undefined {
-  const normalizedOutput = outputFormat?.trim().toLowerCase();
-  const normalizedExtension = fileExtension?.trim().toLowerCase();
+  const normalizedOutput = normalizeOptionalLowercaseString(outputFormat);
+  const normalizedExtension = normalizeOptionalLowercaseString(fileExtension);
   if (
     normalizedOutput === "mp3" ||
     normalizedOutput?.startsWith("mp3_") ||
@@ -274,6 +292,60 @@ function inferMimeType(
     return "audio/webm";
   }
   return undefined;
+}
+
+function resolveTalkResponseFromConfig(params: {
+  includeSecrets: boolean;
+  sourceConfig: OpenClawConfig;
+  runtimeConfig: OpenClawConfig;
+}): TalkConfigResponse | undefined {
+  const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
+  if (!normalizedTalk) {
+    return undefined;
+  }
+
+  const payload = buildTalkConfigResponse(normalizedTalk);
+  if (!payload) {
+    return undefined;
+  }
+
+  if (params.includeSecrets) {
+    return payload;
+  }
+
+  const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
+  const runtimeResolved = resolveActiveTalkProviderConfig(params.runtimeConfig.talk);
+  const activeProviderId = sourceResolved?.provider ?? runtimeResolved?.provider;
+  const provider = canonicalizeSpeechProviderId(activeProviderId, params.runtimeConfig);
+  if (!provider) {
+    return payload;
+  }
+
+  const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
+  const sourceBaseTts = asRecord(params.sourceConfig.messages?.tts) ?? {};
+  const runtimeBaseTts = asRecord(params.runtimeConfig.messages?.tts) ?? {};
+  const talkProviderConfig = sourceResolved?.config ?? runtimeResolved?.config ?? {};
+  const resolvedConfig =
+    speechProvider?.resolveTalkConfig?.({
+      cfg: params.runtimeConfig,
+      baseTtsConfig: Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
+      talkProviderConfig,
+      timeoutMs:
+        typeof sourceBaseTts.timeoutMs === "number"
+          ? sourceBaseTts.timeoutMs
+          : typeof runtimeBaseTts.timeoutMs === "number"
+            ? runtimeBaseTts.timeoutMs
+            : 30_000,
+    }) ?? talkProviderConfig;
+
+  return {
+    ...payload,
+    provider,
+    resolved: {
+      provider,
+      config: resolvedConfig,
+    },
+  };
 }
 
 export const talkHandlers: GatewayRequestHandlers = {
@@ -301,14 +373,16 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     const snapshot = await readConfigFileSnapshot();
+    const runtimeConfig = loadConfig();
     const configPayload: Record<string, unknown> = {};
 
-    const talkSource = includeSecrets
-      ? snapshot.config.talk
-      : redactConfigObject(snapshot.config.talk);
-    const talk = buildTalkConfigResponse(talkSource);
+    const talk = resolveTalkResponseFromConfig({
+      includeSecrets,
+      sourceConfig: snapshot.config,
+      runtimeConfig,
+    });
     if (talk) {
-      configPayload.talk = talk;
+      configPayload.talk = includeSecrets ? talk : redactConfigObject(talk);
     }
 
     const sessionMainKey = snapshot.config.session?.mainKey;
@@ -323,6 +397,66 @@ export const talkHandlers: GatewayRequestHandlers = {
 
     respond(true, { config: configPayload }, undefined);
   },
+  "talk.realtime.session": async ({ params, respond }) => {
+    if (!validateTalkRealtimeSessionParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.realtime.session params: ${formatValidationErrors(validateTalkRealtimeSessionParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const typedParams = params as {
+      provider?: string;
+      model?: string;
+      voice?: string;
+    };
+    try {
+      const runtimeConfig = loadConfig();
+      const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, typedParams.provider);
+      const resolution = resolveConfiguredRealtimeVoiceProvider({
+        configuredProviderId: realtimeConfig.provider,
+        providerConfigs: realtimeConfig.providers,
+        cfg: runtimeConfig,
+        cfgForResolve: runtimeConfig,
+        noRegisteredProviderMessage: "No realtime voice provider registered",
+      });
+      if (!resolution.provider.createBrowserSession) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Realtime voice provider "${resolution.provider.id}" does not support browser WebRTC sessions`,
+          ),
+        );
+        return;
+      }
+      const session = await resolution.provider.createBrowserSession({
+        providerConfig: resolution.providerConfig,
+        instructions: buildRealtimeInstructions(),
+        tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+        model: normalizeOptionalString(typedParams.model),
+        voice: normalizeOptionalString(typedParams.voice),
+      });
+      respond(
+        true,
+        {
+          provider: session.provider,
+          clientSecret: session.clientSecret,
+          ...(session.model ? { model: session.model } : {}),
+          ...(session.voice ? { voice: session.voice } : {}),
+          ...(typeof session.expiresAt === "number" ? { expiresAt: session.expiresAt } : {}),
+        },
+        undefined,
+      );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
   "talk.speak": async ({ params, respond }) => {
     if (!validateTalkSpeakParams(params)) {
       respond(
@@ -336,21 +470,43 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const text = trimString((params as { text?: unknown }).text);
+    const typedParams = params;
+    const text = normalizeOptionalString(typedParams.text);
     if (!text) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "talk.speak requires text"));
       return;
     }
 
+    if (
+      typedParams.speed == null &&
+      typedParams.rateWpm != null &&
+      resolveTalkSpeed(typedParams) == null
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.speak params: rateWpm must resolve to speed between 0.5 and 2.0`,
+        ),
+      );
+      return;
+    }
+
     try {
-      const snapshot = await readConfigFileSnapshot();
-      const setup = buildTalkTtsConfig(snapshot.config);
+      const runtimeConfig = loadConfig();
+      const setup = buildTalkTtsConfig(runtimeConfig);
       if ("error" in setup) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, setup.error));
+        respond(false, undefined, talkSpeakError(setup.reason, setup.error));
         return;
       }
 
-      const overrides = buildTalkSpeakOverrides(setup.provider, setup.providerConfig, params);
+      const overrides = buildTalkSpeakOverrides(
+        setup.provider,
+        setup.providerConfig,
+        runtimeConfig,
+        typedParams,
+      );
       const result = await synthesizeSpeech({
         text,
         cfg: setup.cfg,
@@ -361,7 +517,23 @@ export const talkHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, result.error ?? "talk synthesis failed"),
+          talkSpeakError("synthesis_failed", result.error ?? "talk synthesis failed"),
+        );
+        return;
+      }
+      if ((result.provider ?? setup.provider).trim().length === 0) {
+        respond(
+          false,
+          undefined,
+          talkSpeakError("invalid_audio_result", "talk synthesis returned empty provider"),
+        );
+        return;
+      }
+      if (result.audioBuffer.length === 0) {
+        respond(
+          false,
+          undefined,
+          talkSpeakError("invalid_audio_result", "talk synthesis returned empty audio"),
         );
         return;
       }
@@ -379,7 +551,7 @@ export const talkHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(false, undefined, talkSpeakError("synthesis_failed", formatForLog(err)));
     }
   },
   "talk.mode": ({ params, respond, context, client, isWebchatConnect }) => {

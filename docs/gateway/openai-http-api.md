@@ -2,7 +2,7 @@
 summary: "Expose an OpenAI-compatible /v1/chat/completions HTTP endpoint from the Gateway"
 read_when:
   - Integrating tools that expect OpenAI Chat Completions
-title: "OpenAI Chat Completions"
+title: "OpenAI chat completions"
 ---
 
 # OpenAI Chat Completions (HTTP)
@@ -25,14 +25,25 @@ Under the hood, requests are executed as a normal Gateway agent run (same codepa
 
 ## Authentication
 
-Uses the Gateway auth configuration. Send a bearer token:
+Uses the Gateway auth configuration.
 
-- `Authorization: Bearer <token>`
+Common HTTP auth paths:
+
+- shared-secret auth (`gateway.auth.mode="token"` or `"password"`):
+  `Authorization: Bearer <token-or-password>`
+- trusted identity-bearing HTTP auth (`gateway.auth.mode="trusted-proxy"`):
+  route through the configured identity-aware proxy and let it inject the
+  required identity headers
+- private-ingress open auth (`gateway.auth.mode="none"`):
+  no auth header required
 
 Notes:
 
 - When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+- When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
+  configured non-loopback trusted proxy source; same-host loopback proxies do
+  not satisfy this mode.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)
@@ -43,8 +54,25 @@ Treat this endpoint as a **full operator-access** surface for the gateway instan
 - A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
 - Requests run through the same control-plane agent path as trusted operator actions.
 - There is no separate non-owner/per-user tool boundary on this endpoint; once a caller passes Gateway auth here, OpenClaw treats that caller as a trusted operator for this gateway.
+- For shared-secret auth modes (`token` and `password`), the endpoint restores the normal full operator defaults even if the caller sends a narrower `x-openclaw-scopes` header.
+- Trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`) honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set.
 - If the target agent policy allows sensitive tools, this endpoint can use them.
 - Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
+
+Auth matrix:
+
+- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
+  - proves possession of the shared gateway operator secret
+  - ignores narrower `x-openclaw-scopes`
+  - restores the full default operator scope set:
+    `operator.admin`, `operator.approvals`, `operator.pairing`,
+    `operator.read`, `operator.talk.secrets`, `operator.write`
+  - treats chat turns on this endpoint as owner-sender turns
+- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
+  - authenticate some outer trusted identity or deployment boundary
+  - honor `x-openclaw-scopes` when the header is present
+  - fall back to the normal operator default scope set when the header is absent
+  - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
 See [Security](/gateway/security) and [Remote access](/gateway/remote).
 
@@ -142,7 +170,7 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
 
     Examples:
     `x-openclaw-model: openai/gpt-5.4`
-    `x-openclaw-model: gpt-5.4`
+    `x-openclaw-model: gpt-5.5`
 
     If you omit it, the selected agent runs with its normal configured model choice.
 
@@ -164,6 +192,30 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - `Content-Type: text/event-stream`
 - Each event line is `data: <json>`
 - Stream ends with `data: [DONE]`
+
+## Open WebUI quick setup
+
+For a basic Open WebUI connection:
+
+- Base URL: `http://127.0.0.1:18789/v1`
+- Docker on macOS base URL: `http://host.docker.internal:18789/v1`
+- API key: your Gateway bearer token
+- Model: `openclaw/default`
+
+Expected behavior:
+
+- `GET /v1/models` should list `openclaw/default`
+- Open WebUI should use `openclaw/default` as the chat model id
+- If you want a specific backend provider/model for that agent, set the agent's normal default model or send `x-openclaw-model`
+
+Quick smoke:
+
+```bash
+curl -sS http://127.0.0.1:18789/v1/models \
+  -H 'Authorization: Bearer YOUR_TOKEN'
+```
+
+If that returns `openclaw/default`, most Open WebUI setups can connect with the same base URL and token.
 
 ## Examples
 
@@ -226,3 +278,8 @@ Notes:
 - `openclaw/default` is always present so one stable id works across environments.
 - Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field.
 - `/v1/embeddings` supports `input` as a string or array of strings.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [OpenAI](/providers/openai)

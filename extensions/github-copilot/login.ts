@@ -1,8 +1,11 @@
 import { intro, note, outro, spinner } from "@clack/prompts";
-import { ensureAuthProfileStore, upsertAuthProfile } from "openclaw/plugin-sdk/agent-runtime";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-runtime";
-import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth";
+import {
+  applyAuthProfileConfig,
+  ensureAuthProfileStore,
+  upsertAuthProfile,
+} from "openclaw/plugin-sdk/provider-auth";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
@@ -29,11 +32,11 @@ type DeviceTokenResponse =
       error_uri?: string;
     };
 
-function parseJsonResponse<T>(value: unknown): T {
+function parseJsonResponse(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error("Unexpected response from GitHub");
   }
-  return value as T;
+  return value as Record<string, unknown>;
 }
 
 async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeResponse> {
@@ -55,7 +58,7 @@ async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeR
     throw new Error(`GitHub device code failed: HTTP ${res.status}`);
   }
 
-  const json = parseJsonResponse<DeviceCodeResponse>(await res.json());
+  const json = parseJsonResponse(await res.json()) as DeviceCodeResponse;
   if (!json.device_code || !json.user_code || !json.verification_uri) {
     throw new Error("GitHub device code response missing fields");
   }
@@ -87,7 +90,7 @@ async function pollForAccessToken(params: {
       throw new Error(`GitHub device token failed: HTTP ${res.status}`);
     }
 
-    const json = parseJsonResponse<DeviceTokenResponse>(await res.json());
+    const json = parseJsonResponse(await res.json()) as DeviceTokenResponse;
     if ("access_token" in json && typeof json.access_token === "string") {
       return json.access_token;
     }

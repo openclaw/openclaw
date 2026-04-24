@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { PluginRuntime } from "../runtime-api.js";
-import { nostrPlugin } from "./channel.js";
+import { startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
 import { buildResolvedNostrAccount } from "./test-fixtures.js";
 
@@ -17,9 +17,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./nostr-bus.js", () => ({
   DEFAULT_RELAYS: ["wss://relay.example.com"],
+  startNostrBus: mocks.startNostrBus,
+}));
+
+vi.mock("./nostr-key-utils.js", () => ({
   getPublicKeyFromPrivate: vi.fn(() => "bot-pubkey"),
   normalizePubkey: mocks.normalizePubkey,
-  startNostrBus: mocks.startNostrBus,
 }));
 
 function createMockBus() {
@@ -88,7 +91,7 @@ async function startGatewayHarness(params: {
   setNostrRuntime(harness.runtime);
   mocks.startNostrBus.mockResolvedValueOnce(bus as never);
 
-  const cleanup = (await nostrPlugin.gateway!.startAccount!(
+  const cleanup = (await startNostrGatewayAccount(
     createStartAccountContext({
       account: params.account,
       cfg: params.cfg,

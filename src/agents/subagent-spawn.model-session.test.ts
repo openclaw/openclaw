@@ -1,7 +1,9 @@
 import os from "node:os";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
+  expectPersistedRuntimeModel,
+  installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
@@ -14,7 +16,7 @@ let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").reset
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 describe("spawnSubagentDirect runtime model persistence", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       loadConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
@@ -22,6 +24,9 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),
     }));
+  });
+
+  beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     updateSessionStoreMock.mockReset();
@@ -56,18 +61,12 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       return {};
     });
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    updateSessionStoreMock.mockImplementation(
-      async (
-        _storePath: string,
-        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
-      ) => {
-        operations.push("store:update");
-        const store: Record<string, Record<string, unknown>> = {};
-        await mutator(store);
+    installSessionStoreCaptureMock(updateSessionStoreMock, {
+      operations,
+      onStore: (store) => {
         persistedStore = store;
-        return store;
       },
-    );
+    });
 
     const result = await spawnSubagentDirect(
       {
@@ -76,7 +75,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       },
       {
         agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
+        agentChannel: "guildchat",
       },
     );
 
@@ -85,10 +84,10 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       modelApplied: true,
     });
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const [persistedKey, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
-    expect(persistedKey).toMatch(/^agent:main:subagent:/);
-    expect(persistedEntry).toMatchObject({
-      modelProvider: "openai-codex",
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "openai-codex",
       model: "gpt-5.4",
     });
     expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(1);

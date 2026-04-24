@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-wizard.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
+import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
+import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import deepseekPlugin from "./index.js";
 
 describe("deepseek provider plugin", () => {
-  it("registers DeepSeek with api-key auth wizard metadata", () => {
-    const provider = registerSingleProviderPlugin(deepseekPlugin);
+  it("registers DeepSeek with api-key auth wizard metadata", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
     const resolved = resolveProviderPluginChoice({
       providers: [provider],
       choice: "deepseek-api-key",
@@ -21,33 +22,52 @@ describe("deepseek provider plugin", () => {
   });
 
   it("builds the static DeepSeek model catalog", async () => {
-    const provider = registerSingleProviderPlugin(deepseekPlugin);
-    expect(provider.catalog).toBeDefined();
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const catalogProvider = await runSingleProviderCatalog(provider);
 
-    const catalog = await provider.catalog!.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: "test-key" }),
-      resolveProviderAuth: () => ({
-        apiKey: "test-key",
-        mode: "api_key",
-        source: "env",
-      }),
-    } as never);
-
-    expect(catalog && "provider" in catalog).toBe(true);
-    if (!catalog || !("provider" in catalog)) {
-      throw new Error("expected single-provider catalog");
-    }
-
-    expect(catalog.provider.api).toBe("openai-completions");
-    expect(catalog.provider.baseUrl).toBe("https://api.deepseek.com");
-    expect(catalog.provider.models?.map((model) => model.id)).toEqual([
+    expect(catalogProvider.api).toBe("openai-completions");
+    expect(catalogProvider.baseUrl).toBe("https://api.deepseek.com");
+    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
       "deepseek-chat",
       "deepseek-reasoner",
     ]);
     expect(
-      catalog.provider.models?.find((model) => model.id === "deepseek-reasoner")?.reasoning,
+      catalogProvider.models?.find((model) => model.id === "deepseek-reasoner")?.reasoning,
     ).toBe(true);
+  });
+
+  it("publishes configured DeepSeek models through plugin-owned catalog augmentation", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+
+    expect(
+      provider.augmentModelCatalog?.({
+        config: {
+          models: {
+            providers: {
+              deepseek: {
+                models: [
+                  {
+                    id: "deepseek-chat",
+                    name: "DeepSeek Chat",
+                    input: ["text"],
+                    reasoning: false,
+                    contextWindow: 65536,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      } as never),
+    ).toEqual([
+      {
+        provider: "deepseek",
+        id: "deepseek-chat",
+        name: "DeepSeek Chat",
+        input: ["text"],
+        reasoning: false,
+        contextWindow: 65536,
+      },
+    ]);
   });
 });

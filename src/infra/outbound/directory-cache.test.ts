@@ -1,27 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DirectoryCache, buildDirectoryCacheKey } from "./directory-cache.js";
+import type { DirectoryCacheKey } from "./directory-cache.js";
 
 describe("buildDirectoryCacheKey", () => {
-  it("includes account and signature fallbacks", () => {
-    expect(
-      buildDirectoryCacheKey({
-        channel: "slack",
+  it.each([
+    {
+      input: {
+        channel: "workspace",
         kind: "channel",
         source: "cache",
-      }),
-    ).toBe("slack:default:channel:cache:default");
-
-    expect(
-      buildDirectoryCacheKey({
-        channel: "discord",
+      },
+      expected: "workspace:default:channel:cache:default",
+    },
+    {
+      input: {
+        channel: "richchat",
         accountId: "work",
         kind: "user",
         source: "live",
         signature: "v2",
-      }),
-    ).toBe("discord:work:user:live:v2");
-  });
+      },
+      expected: "richchat:work:user:live:v2",
+    },
+  ] satisfies Array<{ input: DirectoryCacheKey; expected: string }>)(
+    "includes account and signature fallbacks for %j",
+    ({ input, expected }) => {
+      expect(buildDirectoryCacheKey(input)).toBe(expected);
+    },
+  );
 });
 
 describe("DirectoryCache", () => {

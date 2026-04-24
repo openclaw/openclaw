@@ -6,6 +6,10 @@ describe("parseCommand", () => {
     expect(parseCommand("/elev full")).toEqual({ name: "elevated", args: "full" });
   });
 
+  it("normalizes gateway-status aliases", () => {
+    expect(parseCommand("/gwstatus")).toEqual({ name: "gateway-status", args: "" });
+  });
+
   it("returns empty name for empty input", () => {
     expect(parseCommand("   ")).toEqual({ name: "", args: "" });
   });
@@ -24,6 +28,14 @@ describe("getSlashCommands", () => {
       { value: "always", label: "always" },
     ]);
   });
+
+  it("keeps session status on the shared command path and exposes gateway status separately", () => {
+    const commands = getSlashCommands();
+    const status = commands.find((command) => command.name === "status");
+    const gatewayStatus = commands.find((command) => command.name === "gateway-status");
+    expect(status?.description).toBe("Show current status.");
+    expect(gatewayStatus?.description).toBe("Show gateway status summary");
+  });
 });
 
 describe("helpText", () => {
@@ -31,5 +43,7 @@ describe("helpText", () => {
     const output = helpText();
     expect(output).toContain("/elevated <on|off|ask|full>");
     expect(output).toContain("/elev <on|off|ask|full>");
+    expect(output).toContain("/gateway-status");
+    expect(output).toContain("/gwstatus");
   });
 });

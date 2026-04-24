@@ -7,8 +7,6 @@ read_when:
 title: "Windows"
 ---
 
-# Windows
-
 OpenClaw supports both **native Windows** and **WSL2**. WSL2 is the more
 stable path and recommended for the full experience — the CLI, Gateway, and
 tooling run inside Linux with full compatibility. Native Windows works for
@@ -133,8 +131,8 @@ wsl --list --verbose
 After a reboot (before Windows sign-in), check from WSL:
 
 ```bash
-systemctl --user is-enabled openclaw-gateway
-systemctl --user status openclaw-gateway --no-pager
+systemctl --user is-enabled openclaw-gateway.service
+systemctl --user status openclaw-gateway.service --no-pager
 ```
 
 ## Advanced: expose WSL services over LAN (portproxy)
@@ -222,15 +220,25 @@ systemctl --user status
 
 ### 3) Install OpenClaw (inside WSL)
 
-Follow the Linux Getting Started flow inside WSL:
+For a normal first-time setup inside WSL, follow the Linux Getting Started flow:
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 pnpm install
-pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-openclaw onboard
+pnpm ui:build
+pnpm openclaw onboard --install-daemon
+```
+
+If you are developing from source instead of doing first-time onboarding, use the
+source dev loop from [Setup](/start/setup):
+
+```bash
+pnpm install
+# First run only (or after resetting local OpenClaw config/workspace)
+pnpm openclaw setup
+pnpm gateway:watch
 ```
 
 Full guide: [Getting Started](/start/getting-started)
@@ -239,3 +247,8 @@ Full guide: [Getting Started](/start/getting-started)
 
 We do not have a Windows companion app yet. Contributions are welcome if you want
 contributions to make it happen.
+
+## Related
+
+- [Install overview](/install)
+- [Platforms](/platforms)

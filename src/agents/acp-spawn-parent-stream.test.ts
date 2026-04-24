@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
@@ -10,64 +11,63 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-}));
+vi.mock("../infra/heartbeat-wake.js", async () => {
+  return await mergeMockedModule(
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
+    () => ({
+      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+    }),
+  );
+});
 
-vi.mock("../acp/runtime/session-meta.js", () => ({
-  readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
-}));
+vi.mock("../acp/runtime/session-meta.js", async () => {
+  return await mergeMockedModule(
+    await vi.importActual<typeof import("../acp/runtime/session-meta.js")>(
+      "../acp/runtime/session-meta.js",
+    ),
+    () => ({
+      readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
+    }),
+  );
+});
 
-vi.mock("../config/sessions/paths.js", () => ({
-  resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
-  resolveSessionFilePathOptions: (...args: unknown[]) => resolveSessionFilePathOptionsMock(...args),
-}));
+vi.mock("../config/sessions/paths.js", async () => {
+  return await mergeMockedModule(
+    await vi.importActual<typeof import("../config/sessions/paths.js")>(
+      "../config/sessions/paths.js",
+    ),
+    () => ({
+      resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
+      resolveSessionFilePathOptions: (...args: unknown[]) =>
+        resolveSessionFilePathOptionsMock(...args),
+    }),
+  );
+});
 
 let emitAgentEvent: typeof import("../infra/agent-events.js").emitAgentEvent;
 let resolveAcpSpawnStreamLogPath: typeof import("./acp-spawn-parent-stream.js").resolveAcpSpawnStreamLogPath;
 let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
-
-async function loadFreshAcpSpawnParentStreamModulesForTest() {
-  vi.resetModules();
-  vi.doMock("../infra/system-events.js", () => ({
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-  }));
-  vi.doMock("../infra/heartbeat-wake.js", () => ({
-    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-  }));
-  vi.doMock("../acp/runtime/session-meta.js", () => ({
-    readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
-  }));
-  vi.doMock("../config/sessions/paths.js", () => ({
-    resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
-    resolveSessionFilePathOptions: (...args: unknown[]) =>
-      resolveSessionFilePathOptionsMock(...args),
-  }));
-  const [agentEvents, relayModule] = await Promise.all([
-    import("../infra/agent-events.js"),
-    import("./acp-spawn-parent-stream.js"),
-  ]);
-  return {
-    emitAgentEvent: agentEvents.emitAgentEvent,
-    resolveAcpSpawnStreamLogPath: relayModule.resolveAcpSpawnStreamLogPath,
-    startAcpSpawnParentStreamRelay: relayModule.startAcpSpawnParentStreamRelay,
-  };
-}
 
 function collectedTexts() {
   return enqueueSystemEventMock.mock.calls.map((call) => String(call[0] ?? ""));
 }
 
 describe("startAcpSpawnParentStreamRelay", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ emitAgentEvent } = await import("../infra/agent-events.js"));
+    ({ resolveAcpSpawnStreamLogPath, startAcpSpawnParentStreamRelay } =
+      await import("./acp-spawn-parent-stream.js"));
+  });
+
+  beforeEach(() => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
     resolveSessionFilePathOptionsMock.mockImplementation((value: unknown) => value);
-    ({ emitAgentEvent, resolveAcpSpawnStreamLogPath, startAcpSpawnParentStreamRelay } =
-      await loadFreshAcpSpawnParentStreamModulesForTest());
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });
@@ -77,11 +77,18 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("relays assistant progress and completion to the parent session", () => {
+    const deliveryContext = {
+      channel: "forum",
+      to: "-1001234567890",
+      accountId: "default",
+      threadId: 1122,
+    };
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-1",
       parentSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:child-1",
       agentId: "codex",
+      deliveryContext,
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
     });
@@ -109,6 +116,19 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
     expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
     expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
+    expect(
+      enqueueSystemEventMock.mock.calls.every(
+        (call) => (call[1] as { trusted?: boolean } | undefined)?.trusted === false,
+      ),
+    ).toBe(true);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliveryContext,
+        trusted: false,
+      }),
+    );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "acp:spawn:stream",
@@ -206,6 +226,39 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("can keep background relays out of the parent session while still logging", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-quiet",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-quiet",
+      agentId: "codex",
+      surfaceUpdates: false,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    relay.notifyStarted();
+    emitAgentEvent({
+      runId: "run-quiet",
+      stream: "assistant",
+      data: {
+        delta: "hello from child",
+      },
+    });
+    vi.advanceTimersByTime(15);
+    emitAgentEvent({
+      runId: "run-quiet",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+      },
+    });
+
+    expect(collectedTexts()).toEqual([]);
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
   it("preserves delta whitespace boundaries in progress relays", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-5",
@@ -234,6 +287,66 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("suppresses commentary-phase assistant relay text", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-commentary",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-commentary",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-commentary",
+      stream: "assistant",
+      data: {
+        delta: "checking thread context; then post a tight progress reply here.",
+        phase: "commentary",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
+    expect(texts.some((text) => text.includes("post a tight progress reply here"))).toBe(false);
+    relay.dispose();
+  });
+
+  it("still relays final_answer assistant text after suppressed commentary", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-final",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-final",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-final",
+      stream: "assistant",
+      data: {
+        delta: "checking thread context; then post a tight progress reply here.",
+        phase: "commentary",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-final",
+      stream: "assistant",
+      data: {
+        delta: "final answer ready",
+        phase: "final_answer",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
+    expect(texts.some((text) => text.includes("codex: final answer ready"))).toBe(true);
     relay.dispose();
   });
 

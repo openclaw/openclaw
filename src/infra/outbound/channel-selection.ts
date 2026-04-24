@@ -1,6 +1,6 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   listDeliverableMessageChannels,
@@ -8,6 +8,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
 export type MessageChannelId = DeliverableMessageChannel;
@@ -33,7 +34,7 @@ function resolveKnownChannel(value?: string | null): MessageChannelId | undefine
   if (!isKnownChannel(normalized)) {
     return undefined;
   }
-  return normalized as MessageChannelId;
+  return normalized;
 }
 
 function resolveAvailableKnownChannel(params: {
@@ -68,7 +69,7 @@ function logChannelSelectionError(params: {
   operation: "resolveAccount" | "isConfigured";
   error: unknown;
 }) {
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = formatErrorMessage(params.error);
   const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
   if (loggedChannelSelectionErrors.has(key)) {
     return;
@@ -170,9 +171,9 @@ export async function resolveMessageChannelSelection(params: {
         };
       }
       if (!isKnownChannel(normalized)) {
-        throw new Error(`Unknown channel: ${String(normalized)}`);
+        throw new Error(`Unknown channel: ${normalized}`);
       }
-      throw new Error(`Channel is unavailable: ${String(normalized)}`);
+      throw new Error(`Channel is unavailable: ${normalized}`);
     }
     return {
       channel: availableExplicit,

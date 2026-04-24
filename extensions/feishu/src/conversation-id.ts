@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 export type FeishuGroupSessionScope =
   | "group"
   | "group_sender"
@@ -50,7 +52,7 @@ export function parseFeishuTargetId(raw: unknown): string | undefined {
   if (!withoutProvider) {
     return undefined;
   }
-  const lowered = withoutProvider.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(withoutProvider);
   for (const prefix of ["chat:", "group:", "channel:", "user:", "dm:", "open_id:"]) {
     if (lowered.startsWith(prefix)) {
       return normalizeText(withoutProvider.slice(prefix.length));
@@ -68,7 +70,7 @@ export function parseFeishuDirectConversationId(raw: unknown): string | undefine
   if (!withoutProvider) {
     return undefined;
   }
-  const lowered = withoutProvider.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(withoutProvider);
   for (const prefix of ["user:", "dm:", "open_id:"]) {
     if (lowered.startsWith(prefix)) {
       return normalizeText(withoutProvider.slice(prefix.length));
@@ -100,7 +102,7 @@ export function parseFeishuConversationId(params: {
     return null;
   }
 
-  const topicSenderMatch = conversationId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/);
+  const topicSenderMatch = conversationId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
   if (topicSenderMatch) {
     const [, chatId, topicId, senderOpenId] = topicSenderMatch;
     return {
@@ -117,7 +119,7 @@ export function parseFeishuConversationId(params: {
     };
   }
 
-  const topicMatch = conversationId.match(/^(.+):topic:([^:]+)$/);
+  const topicMatch = conversationId.match(/^(.+):topic:([^:]+)$/i);
   if (topicMatch) {
     const [, chatId, topicId] = topicMatch;
     return {
@@ -132,7 +134,7 @@ export function parseFeishuConversationId(params: {
     };
   }
 
-  const senderMatch = conversationId.match(/^(.+):sender:([^:]+)$/);
+  const senderMatch = conversationId.match(/^(.+):sender:([^:]+)$/i);
   if (senderMatch) {
     const [, chatId, senderOpenId] = senderMatch;
     return {
@@ -165,4 +167,33 @@ export function parseFeishuConversationId(params: {
     chatId: conversationId,
     scope: "group",
   };
+}
+
+export function buildFeishuModelOverrideParentCandidates(
+  parentConversationId?: string | null,
+): string[] {
+  const rawId = normalizeText(parentConversationId);
+  if (!rawId) {
+    return [];
+  }
+  const topicSenderMatch = rawId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  if (topicSenderMatch) {
+    const chatId = normalizeLowercaseStringOrEmpty(topicSenderMatch[1]);
+    const topicId = normalizeLowercaseStringOrEmpty(topicSenderMatch[2]);
+    if (chatId && topicId) {
+      return [`${chatId}:topic:${topicId}`, chatId];
+    }
+    return [];
+  }
+  const topicMatch = rawId.match(/^(.+):topic:([^:]+)$/i);
+  if (topicMatch) {
+    const chatId = normalizeLowercaseStringOrEmpty(topicMatch[1]);
+    return chatId ? [chatId] : [];
+  }
+  const senderMatch = rawId.match(/^(.+):sender:([^:]+)$/i);
+  if (senderMatch) {
+    const chatId = normalizeLowercaseStringOrEmpty(senderMatch[1]);
+    return chatId ? [chatId] : [];
+  }
+  return [];
 }

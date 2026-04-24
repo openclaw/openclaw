@@ -1,6 +1,9 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
@@ -36,15 +39,16 @@ function parseCopilotTokenResponse(value: unknown): {
   }
 
   // GitHub returns a unix timestamp (seconds), but we defensively accept ms too.
+  // Use a 1e11 threshold so large seconds-epoch values are not misread as ms.
   let expiresAtMs: number;
   if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
-    expiresAtMs = expiresAt > 10_000_000_000 ? expiresAt : expiresAt * 1000;
+    expiresAtMs = expiresAt < 100_000_000_000 ? expiresAt * 1000 : expiresAt;
   } else if (typeof expiresAt === "string" && expiresAt.trim().length > 0) {
     const parsed = Number.parseInt(expiresAt, 10);
     if (!Number.isFinite(parsed)) {
       throw new Error("Copilot token response has invalid expires_at");
     }
-    expiresAtMs = parsed > 10_000_000_000 ? parsed : parsed * 1000;
+    expiresAtMs = parsed < 100_000_000_000 ? parsed * 1000 : parsed;
   } else {
     throw new Error("Copilot token response missing expires_at");
   }
@@ -53,6 +57,24 @@ function parseCopilotTokenResponse(value: unknown): {
 }
 
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
+
+function resolveCopilotProxyHost(proxyEp: string): string | null {
+  const trimmed = proxyEp.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const urlText = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(urlText);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return normalizeLowercaseStringOrEmpty(url.hostname);
+  } catch {
+    return null;
+  }
+}
 
 export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   const trimmed = token.trim();
@@ -70,12 +92,14 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
 
   // pi-ai expects converting proxy.* -> api.*
   // (see upstream getGitHubCopilotBaseUrl).
-  const host = proxyEp.replace(/^https?:\/\//, "").replace(/^proxy\./i, "api.");
-  if (!host) {
+  const proxyHost = resolveCopilotProxyHost(proxyEp);
+  if (!proxyHost) {
     return null;
   }
+  const host = proxyHost.replace(/^proxy\./i, "api.");
 
-  return `https://${host}`;
+  const baseUrl = `https://${host}`;
+  return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
 }
 
 export async function resolveCopilotApiToken(params: {
@@ -113,6 +137,7 @@ export async function resolveCopilotApiToken(params: {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      ...buildCopilotIdeHeaders({ includeApiVersion: true }),
     },
   });
 

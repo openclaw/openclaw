@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveStateDir } from "./api.js";
 
 type LanceDbModule = typeof import("@lancedb/lancedb");
@@ -20,8 +20,16 @@ type RuntimeManifest = {
   dependencies: Record<string, string>;
 };
 
+type PackageJsonWithDependencies = {
+  dependencies?: Record<string, string>;
+};
+
+type ReadPackageJson = (manifestPath: string) => PackageJsonWithDependencies | null;
+
 type LanceDbRuntimeLoaderDeps = {
   env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  arch: NodeJS.Architecture;
   resolveStateDir: (env?: NodeJS.ProcessEnv, homedir?: () => string) => string;
   runtimeManifest: RuntimeManifest;
   importBundled: () => Promise<LanceDbModule>;
@@ -35,16 +43,47 @@ type LanceDbRuntimeLoaderDeps = {
   }) => Promise<string>;
 };
 
-const MEMORY_LANCEDB_RUNTIME_MANIFEST: RuntimeManifest = (() => {
-  const packageJson = JSON.parse(
-    fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
-  ) as {
-    dependencies?: Record<string, string>;
-  };
-  const lanceDbSpec = packageJson.dependencies?.["@lancedb/lancedb"];
-  if (!lanceDbSpec) {
-    throw new Error('memory-lancedb package.json is missing "@lancedb/lancedb"');
+function defaultReadPackageJson(manifestPath: string): PackageJsonWithDependencies | null {
+  try {
+    return JSON.parse(fs.readFileSync(manifestPath, "utf8")) as PackageJsonWithDependencies;
+  } catch {
+    return null;
   }
+}
+
+function buildMemoryLanceDbManifestCandidates(modulePath: string): string[] {
+  const moduleDir = path.dirname(modulePath);
+  const candidates = new Set<string>();
+  candidates.add(path.join(moduleDir, "package.json"));
+
+  let cursor = moduleDir;
+  while (true) {
+    candidates.add(path.join(cursor, "extensions", "memory-lancedb", "package.json"));
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+
+  return [...candidates];
+}
+
+export function resolveLanceDbDependencySpec(
+  modulePath: string,
+  readPackageJson: ReadPackageJson = defaultReadPackageJson,
+): string {
+  for (const manifestPath of buildMemoryLanceDbManifestCandidates(modulePath)) {
+    const lanceDbSpec = readPackageJson(manifestPath)?.dependencies?.["@lancedb/lancedb"];
+    if (lanceDbSpec) {
+      return lanceDbSpec;
+    }
+  }
+  throw new Error('memory-lancedb package.json is missing "@lancedb/lancedb"');
+}
+
+const MEMORY_LANCEDB_RUNTIME_MANIFEST: RuntimeManifest = (() => {
+  const lanceDbSpec = resolveLanceDbDependencySpec(fileURLToPath(import.meta.url));
   return {
     name: "openclaw-memory-lancedb-runtime",
     private: true,
@@ -181,11 +220,31 @@ function buildLoadFailureMessage(prefix: string, error: unknown): string {
   return `memory-lancedb: ${prefix}. ${String(error)}`;
 }
 
+function isUnsupportedNativePlatform(params: {
+  platform: NodeJS.Platform;
+  arch: NodeJS.Architecture;
+}): boolean {
+  return params.platform === "darwin" && params.arch === "x64";
+}
+
+function buildUnsupportedNativePlatformMessage(params: {
+  platform: NodeJS.Platform;
+  arch: NodeJS.Architecture;
+}): string {
+  return [
+    `memory-lancedb: LanceDB runtime is unavailable on ${params.platform}-${params.arch}.`,
+    "The bundled @lancedb/lancedb dependency does not publish a native package for this platform.",
+    "Disable memory-lancedb or switch to a supported memory backend/platform.",
+  ].join(" ");
+}
+
 export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoaderDeps> = {}): {
   load: (logger?: LanceDbRuntimeLogger) => Promise<LanceDbModule>;
 } {
   const deps: LanceDbRuntimeLoaderDeps = {
     env: overrides.env ?? process.env,
+    platform: overrides.platform ?? process.platform,
+    arch: overrides.arch ?? process.arch,
     resolveStateDir: overrides.resolveStateDir ?? resolveStateDir,
     runtimeManifest: overrides.runtimeManifest ?? MEMORY_LANCEDB_RUNTIME_MANIFEST,
     importBundled: overrides.importBundled ?? (() => import("@lancedb/lancedb")),
@@ -203,6 +262,15 @@ export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoad
           try {
             return await deps.importBundled();
           } catch (bundledError) {
+            if (isUnsupportedNativePlatform({ platform: deps.platform, arch: deps.arch })) {
+              throw new Error(
+                buildUnsupportedNativePlatformMessage({
+                  platform: deps.platform,
+                  arch: deps.arch,
+                }),
+                { cause: bundledError },
+              );
+            }
             const runtimeDir = resolveRuntimeDir(
               deps.resolveStateDir(deps.env, () =>
                 deps.env.HOME?.trim() ? deps.env.HOME : os.homedir(),

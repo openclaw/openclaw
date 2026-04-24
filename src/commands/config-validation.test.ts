@@ -1,18 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
+import { requireValidConfigSnapshot } from "./config-validation.js";
 
-const readConfigFileSnapshot = vi.fn();
-const buildPluginCompatibilityNotices = vi.fn<(_params?: unknown) => PluginCompatibilityNotice[]>(
-  () => [],
-);
+const { readConfigFileSnapshot, buildPluginCompatibilitySnapshotNotices } = vi.hoisted(() => ({
+  readConfigFileSnapshot: vi.fn(),
+  buildPluginCompatibilitySnapshotNotices: vi.fn<
+    (_params?: unknown) => PluginCompatibilityNotice[]
+  >(() => []),
+}));
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot,
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice: (notice: { pluginId: string; message: string }) =>
     `${notice.pluginId} ${notice.message}`,
 }));
@@ -29,7 +32,7 @@ describe("requireValidConfigSnapshot", () => {
       config: { plugins: {} },
       issues: [],
     });
-    buildPluginCompatibilityNotices.mockReturnValue([
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
   }
@@ -46,13 +49,12 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime);
 
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+    expect(buildPluginCompatibilitySnapshotNotices).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
@@ -60,7 +62,6 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
       includeCompatibilityAdvisory: true,
     });
@@ -83,7 +84,6 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
       includeCompatibilityAdvisory: true,
     });

@@ -4,10 +4,8 @@ read_when:
   - Setting up autonomous agent workflows that run without per-task prompting
   - Defining what the agent can do independently vs. what needs human approval
   - Structuring multi-program agents with clear boundaries and escalation rules
-title: "Standing Orders"
+title: "Standing orders"
 ---
-
-# Standing Orders
 
 Standing orders grant your agent **permanent operating authority** for defined programs. Instead of giving individual task instructions each time, you define programs with clear scope, triggers, and escalation rules — and the agent executes autonomously within those boundaries.
 
@@ -247,5 +245,8 @@ Each program should have:
 
 ## Related
 
-- [Cron Jobs](/automation/cron-jobs) — Schedule enforcement for standing orders
-- [Agent Workspace](/concepts/agent-workspace) — Where standing orders live, including the full list of auto-injected bootstrap files (AGENTS.md, SOUL.md, etc.)
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Cron Jobs](/automation/cron-jobs) — schedule enforcement for standing orders
+- [Hooks](/automation/hooks) — event-driven scripts for agent lifecycle events
+- [Webhooks](/automation/cron-jobs#webhooks) — inbound HTTP event triggers
+- [Agent Workspace](/concepts/agent-workspace) — where standing orders live, including the full list of auto-injected bootstrap files (AGENTS.md, SOUL.md, etc.)

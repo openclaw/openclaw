@@ -48,7 +48,22 @@ vi.mock("./twiml.js", () => ({
   generateNotifyTwiml: generateNotifyTwimlMock,
 }));
 
-import { endCall, initiateCall, speak } from "./outbound.js";
+import { endCall, initiateCall, sendDtmf, speak } from "./outbound.js";
+
+function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn> } = {}) {
+  const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+  const hangupCall = params.hangupCall ?? vi.fn(async () => {});
+  const ctx = {
+    activeCalls: new Map([["call-1", call]]),
+    providerCallIdMap: new Map([["provider-1", "call-1"]]),
+    provider: { hangupCall },
+    storePath: "/tmp/voice-call.json",
+    transcriptWaiters: new Map(),
+    maxDurationTimers: new Map(),
+  };
+
+  return { call, ctx, hangupCall };
+}
 
 describe("voice-call outbound helpers", () => {
   beforeEach(() => {
@@ -125,7 +140,7 @@ describe("voice-call outbound helpers", () => {
         maxConcurrentCalls: 3,
         outbound: { defaultMode: "conversation" },
         fromNumber: "+14155550100",
-        tts: { openai: { voice: "nova" } },
+        tts: { provider: "openai", providers: { openai: { voice: "nova" } } },
       },
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
@@ -187,7 +202,7 @@ describe("voice-call outbound helpers", () => {
       activeCalls: new Map([["call-1", call]]),
       providerCallIdMap: new Map(),
       provider: { name: "twilio", playTts },
-      config: { tts: { openai: { voice: "alloy" } } },
+      config: { tts: { provider: "openai", providers: { openai: { voice: "alloy" } } } },
       storePath: "/tmp/voice-call.json",
     };
 
@@ -211,17 +226,49 @@ describe("voice-call outbound helpers", () => {
     expect(transitionStateMock).toHaveBeenLastCalledWith(call, "listening");
   });
 
-  it("ends connected calls, clears timers, and rejects pending transcripts", async () => {
+  it("sends DTMF through connected provider calls", async () => {
     const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
-    const hangupCall = vi.fn(async () => {});
+    const sendDtmfProvider = vi.fn(async () => {});
     const ctx = {
       activeCalls: new Map([["call-1", call]]),
-      providerCallIdMap: new Map([["provider-1", "call-1"]]),
-      provider: { hangupCall },
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", sendDtmf: sendDtmfProvider },
+      config: {},
       storePath: "/tmp/voice-call.json",
-      transcriptWaiters: new Map(),
-      maxDurationTimers: new Map(),
     };
+
+    await expect(sendDtmf(ctx as never, "call-1", "ww123#")).resolves.toEqual({
+      success: true,
+    });
+    expect(sendDtmfProvider).toHaveBeenCalledWith({
+      callId: "call-1",
+      providerCallId: "provider-1",
+      digits: "ww123#",
+    });
+  });
+
+  it("rejects invalid or unsupported outbound DTMF", async () => {
+    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map(),
+      provider: { name: "telnyx" },
+      config: {},
+      storePath: "/tmp/voice-call.json",
+    };
+
+    await expect(sendDtmf(ctx as never, "call-1", "abc")).resolves.toEqual({
+      success: false,
+      error: "digits may only contain digits, *, #, comma, w, p",
+    });
+    await expect(sendDtmf(ctx as never, "call-1", "123#")).resolves.toEqual({
+      success: false,
+      error: "telnyx does not support outbound DTMF",
+    });
+  });
+
+  it("ends connected calls, clears timers, and rejects pending transcripts", async () => {
+    const { call, ctx, hangupCall } = createActiveCallContext();
 
     await expect(endCall(ctx as never, "call-1")).resolves.toEqual({ success: true });
     expect(hangupCall).toHaveBeenCalledWith({
@@ -231,18 +278,47 @@ describe("voice-call outbound helpers", () => {
     });
     expect(call).toEqual(
       expect.objectContaining({
-        state: "hangup-bot",
         endReason: "hangup-bot",
+        endedAt: expect.any(Number),
       }),
     );
-    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(ctx, "call-1");
+    expect(transitionStateMock).toHaveBeenCalledWith(call, "hangup-bot");
+    expect(clearMaxDurationTimerMock).toHaveBeenCalledWith(
+      { maxDurationTimers: ctx.maxDurationTimers },
+      "call-1",
+    );
     expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
-      ctx,
+      { transcriptWaiters: ctx.transcriptWaiters },
       "call-1",
       "Call ended: hangup-bot",
     );
     expect(ctx.activeCalls.size).toBe(0);
     expect(ctx.providerCallIdMap.size).toBe(0);
+  });
+
+  it("preserves timeout reasons when ending timed out calls", async () => {
+    const { call, ctx, hangupCall } = createActiveCallContext();
+
+    await expect(endCall(ctx as never, "call-1", { reason: "timeout" })).resolves.toEqual({
+      success: true,
+    });
+    expect(hangupCall).toHaveBeenCalledWith({
+      callId: "call-1",
+      providerCallId: "provider-1",
+      reason: "timeout",
+    });
+    expect(call).toEqual(
+      expect.objectContaining({
+        endReason: "timeout",
+        endedAt: expect.any(Number),
+      }),
+    );
+    expect(transitionStateMock).toHaveBeenCalledWith(call, "timeout");
+    expect(rejectTranscriptWaiterMock).toHaveBeenCalledWith(
+      { transcriptWaiters: ctx.transcriptWaiters },
+      "call-1",
+      "Call ended: timeout",
+    );
   });
 
   it("handles missing, disconnected, and already-ended calls", async () => {

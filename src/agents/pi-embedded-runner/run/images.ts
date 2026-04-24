@@ -1,7 +1,11 @@
 import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
@@ -37,6 +41,37 @@ const MESSAGE_IMAGE_REGEX_SOURCE =
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
 const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
+const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
+const MEDIA_ATTACHED_PATH_PATTERN = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
+const MESSAGE_IMAGE_PATTERN = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
+const FILE_URL_PATTERN = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
+
+/**
+ * Matches the opaque media URI written by the Gateway's claim-check offload:
+ *   media://inbound/<uuid-or-id>
+ *
+ * Uses an exclusion-based character class rather than a whitelist so that
+ * Unicode filenames (e.g. Chinese characters) preserved by sanitizeFilename
+ * in store.ts are matched correctly.
+ *
+ * Explicitly excluded from the ID segment:
+ *   ]      — closes the surrounding [media attached: ...] bracket
+ *   \s     — any whitespace (space, newline, tab) — terminates the token
+ *   /      — forward slash path separator (traversal prevention)
+ *   \      — back slash path separator (traversal prevention)
+ *   \x00   — null byte (path injection prevention)
+ *
+ * resolveMediaBufferPath applies its own guards against these characters, but
+ * excluding them here provides defence-in-depth at the parsing layer.
+ *
+ * Example valid IDs:
+ *   "1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ *   "photo---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ *   "图片---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ */
+// eslint-disable-next-line no-control-regex
+const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\\x00]+)/;
 
 /**
  * Result of detecting an image reference in text.
@@ -45,8 +80,8 @@ export interface DetectedImageRef {
   /** The raw matched string from the prompt */
   raw: string;
   /** The type of reference */
-  type: "path";
-  /** The resolved/normalized path */
+  type: "path" | "media-uri";
+  /** The resolved/normalized path, or the raw media URI for media-uri type */
   resolved: string;
 }
 
@@ -54,12 +89,111 @@ export interface DetectedImageRef {
  * Checks if a file extension indicates an image file.
  */
 function isImageExtension(filePath: string): boolean {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return IMAGE_EXTENSIONS.has(ext);
 }
 
 function normalizeRefForDedupe(raw: string): string {
-  return process.platform === "win32" ? raw.toLowerCase() : raw;
+  return process.platform === "win32" ? normalizeLowercaseStringOrEmpty(raw) : raw;
+}
+
+export function mergePromptAttachmentImages(params: {
+  imageOrder?: PromptImageOrderEntry[];
+  existingImages?: ImageContent[];
+  offloadedImages?: Array<ImageContent | null>;
+  promptRefImages?: ImageContent[];
+}): ImageContent[] {
+  const promptImages: ImageContent[] = [];
+  const existingImages = params.existingImages ?? [];
+  const offloadedImages = params.offloadedImages ?? [];
+
+  if (params.imageOrder && params.imageOrder.length > 0) {
+    let inlineIndex = 0;
+    let offloadedIndex = 0;
+    for (const entry of params.imageOrder) {
+      if (entry === "inline") {
+        const image = existingImages[inlineIndex++];
+        if (image) {
+          promptImages.push(image);
+        }
+        continue;
+      }
+      const image = offloadedImages[offloadedIndex++];
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+    while (inlineIndex < existingImages.length) {
+      promptImages.push(existingImages[inlineIndex++]);
+    }
+    while (offloadedIndex < offloadedImages.length) {
+      const image = offloadedImages[offloadedIndex++];
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+  } else {
+    promptImages.push(...existingImages);
+    for (const image of offloadedImages) {
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+  }
+
+  promptImages.push(...(params.promptRefImages ?? []));
+  return promptImages;
+}
+
+function extractTrailingAttachmentMediaUris(prompt: string, count: number): string[] {
+  if (count <= 0) {
+    return [];
+  }
+
+  const lines = prompt.split(/\r?\n/);
+  const uris: string[] = [];
+  for (let index = lines.length - 1; index >= 0 && uris.length < count; index--) {
+    const line = lines[index]?.trim();
+    if (!line || line.includes("\0")) {
+      break;
+    }
+    const match = line.match(/^\[media attached:\s*(media:\/\/inbound\/[^\]\s/\\]+)\]$/);
+    if (!match?.[1]) {
+      break;
+    }
+    uris.unshift(match[1]);
+  }
+  return uris;
+}
+
+export function splitPromptAndAttachmentRefs(params: {
+  prompt: string;
+  refs: DetectedImageRef[];
+  imageOrder?: PromptImageOrderEntry[];
+}): {
+  promptRefs: DetectedImageRef[];
+  attachmentRefs: DetectedImageRef[];
+} {
+  const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
+  if (offloadedCount === 0) {
+    return { promptRefs: params.refs, attachmentRefs: [] };
+  }
+
+  const attachmentUris = new Set(extractTrailingAttachmentMediaUris(params.prompt, offloadedCount));
+  if (attachmentUris.size === 0) {
+    return { promptRefs: params.refs, attachmentRefs: [] };
+  }
+
+  const promptRefs: DetectedImageRef[] = [];
+  const attachmentRefs: DetectedImageRef[] = [];
+  for (const ref of params.refs) {
+    if (ref.type === "media-uri" && attachmentUris.has(ref.resolved)) {
+      attachmentRefs.push(ref);
+      continue;
+    }
+    promptRefs.push(ref);
+  }
+  return { promptRefs, attachmentRefs };
 }
 
 async function sanitizeImagesWithLog(
@@ -87,6 +221,7 @@ async function sanitizeImagesWithLog(
  * - Home paths: ~/Pictures/screenshot.png
  * - file:// URLs: file:///path/to/image.png
  * - Message attachments: [Image: source: /path/to/image.jpg]
+ * - Gateway claim-check URIs: [media attached: media://inbound/<id>]
  *
  * @param prompt The user prompt text to scan
  * @returns Array of detected image references
@@ -121,13 +256,12 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Pattern for [media attached: path (type) | url] or [media attached N/M: path (type) | url] format
   // Each bracket = ONE file. The | separates path from URL, not multiple files.
   // Multi-file format uses separate brackets on separate lines.
-  const mediaAttachedPattern = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
-  const mediaAttachedPathPattern = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
-  const messageImagePattern = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
-  const fileUrlPattern = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
-  const pathPattern = new RegExp(PATH_REGEX_SOURCE, "gi");
+  MEDIA_ATTACHED_PATTERN.lastIndex = 0;
+  MESSAGE_IMAGE_PATTERN.lastIndex = 0;
+  FILE_URL_PATTERN.lastIndex = 0;
+  PATH_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = mediaAttachedPattern.exec(prompt)) !== null) {
+  while ((match = MEDIA_ATTACHED_PATTERN.exec(prompt)) !== null) {
     const content = match[1];
 
     // Skip "[media attached: N files]" header lines
@@ -135,18 +269,32 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
       continue;
     }
 
+    // Check for a Gateway claim-check URI first (media://inbound/<id>).
+    // This must be tested before the extension-based path regex because the
+    // URI has no file extension suffix in its base form.
+    const mediaUriMatch = content.match(MEDIA_URI_REGEX);
+    if (mediaUriMatch) {
+      const uri = `media://inbound/${mediaUriMatch[1]}`;
+      const dedupeKey = normalizeRefForDedupe(uri);
+      if (!seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
+        refs.push({ raw: uri, type: "media-uri", resolved: uri });
+      }
+      continue;
+    }
+
     // Extract path before the (mime/type) or | delimiter
     // Format is: path (type) | url  OR  just: path (type)
     // Path may contain spaces (e.g., "ChatGPT Image Apr 21.png")
     // Use non-greedy .+? to stop at first image extension
-    const pathMatch = content.match(mediaAttachedPathPattern);
+    const pathMatch = content.match(MEDIA_ATTACHED_PATH_PATTERN);
     if (pathMatch?.[1]) {
       addPathRef(pathMatch[1].trim());
     }
   }
 
   // Pattern for [Image: source: /path/...] format from messaging systems
-  while ((match = messageImagePattern.exec(prompt)) !== null) {
+  while ((match = MESSAGE_IMAGE_PATTERN.exec(prompt)) !== null) {
     const raw = match[1]?.trim();
     if (raw) {
       addPathRef(raw);
@@ -156,7 +304,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
 
   // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
-  while ((match = fileUrlPattern.exec(prompt)) !== null) {
+  while ((match = FILE_URL_PATTERN.exec(prompt)) !== null) {
     const raw = match[0];
     const dedupeKey = normalizeRefForDedupe(raw);
     if (seen.has(dedupeKey)) {
@@ -178,7 +326,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // - ./relative/path.ext
   // - ../parent/path.ext
   // - ~/home/path.ext
-  while ((match = pathPattern.exec(prompt)) !== null) {
+  while ((match = PATH_PATTERN.exec(prompt)) !== null) {
     // Use capture group 1 (the path without delimiter prefix); skip if undefined
     if (match[1]) {
       addPathRef(match[1]);
@@ -205,6 +353,44 @@ export async function loadImageFromRef(
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
+  // Handle Gateway claim-check URIs (media://inbound/<id>).
+  // These are written by the Gateway's offload path and point to files that
+  // the Gateway has already validated and persisted. They are intentionally
+  // exempt from workspaceOnly checks because they live in the media store
+  // managed by the Gateway, not in the agent workspace.
+  if (ref.type === "media-uri") {
+    const uriMatch = ref.resolved.match(MEDIA_URI_REGEX);
+    if (!uriMatch) {
+      log.debug(`Native image: malformed media URI, skipping: ${ref.resolved}`);
+      return null;
+    }
+    const mediaId = uriMatch[1];
+    try {
+      // resolveMediaBufferPath accepts the media ID (with optional extension
+      // and original-filename prefix) and returns the absolute path of the
+      // persisted file. It applies its own guards against path traversal,
+      // symlinks, and null bytes.
+      const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
+      const media = await loadWebMedia(physicalPath, {
+        maxBytes: options?.maxBytes,
+        localRoots: [getMediaDir()],
+      });
+      if (media.kind !== "image") {
+        log.debug(`Native image: media store entry is not an image: ${mediaId}`);
+        return null;
+      }
+      const mimeType = media.contentType ?? "image/jpeg";
+      const data = media.buffer.toString("base64");
+      log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
+      return { type: "image", data, mimeType };
+    } catch (err) {
+      log.debug(
+        `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
+      );
+      return null;
+    }
+  }
+
   try {
     let targetPath = ref.resolved;
 
@@ -222,7 +408,7 @@ export async function loadImageFromRef(
         targetPath = resolved.resolved;
       } catch (err) {
         log.debug(
-          `Native image: sandbox validation failed for ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+          `Native image: sandbox validation failed for ${ref.resolved}: ${formatErrorMessage(err)}`,
         );
         return null;
       }
@@ -260,9 +446,7 @@ export async function loadImageFromRef(
     return { type: "image", data, mimeType };
   } catch (err) {
     // Log the actual error for debugging (size limits, network failures, etc.)
-    log.debug(
-      `Native image: failed to load ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    log.debug(`Native image: failed to load ${ref.resolved}: ${formatErrorMessage(err)}`);
     return null;
   }
 }
@@ -292,6 +476,7 @@ export async function detectAndLoadPromptImages(params: {
   workspaceDir: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
@@ -326,26 +511,53 @@ export async function detectAndLoadPromptImages(params: {
   }
 
   log.debug(`Native image: detected ${allRefs.length} image refs in prompt`);
-
-  const promptImages: ImageContent[] = [...(params.existingImages ?? [])];
+  const { promptRefs, attachmentRefs } = splitPromptAndAttachmentRefs({
+    prompt: params.prompt,
+    refs: allRefs,
+    imageOrder: params.imageOrder,
+  });
+  const promptRefImages: ImageContent[] = [];
+  const offloadedImages: Array<ImageContent | null> = [];
 
   let loadedCount = 0;
   let skippedCount = 0;
 
-  for (const ref of allRefs) {
+  for (const ref of promptRefs) {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
       sandbox: params.sandbox,
     });
     if (image) {
-      promptImages.push(image);
+      promptRefImages.push(image);
       loadedCount++;
       log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     } else {
       skippedCount++;
     }
   }
+
+  for (const ref of attachmentRefs) {
+    const image = await loadImageFromRef(ref, params.workspaceDir, {
+      maxBytes: params.maxBytes,
+      workspaceOnly: params.workspaceOnly,
+      sandbox: params.sandbox,
+    });
+    offloadedImages.push(image);
+    if (image) {
+      loadedCount++;
+      log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
+    } else {
+      skippedCount++;
+    }
+  }
+
+  const promptImages = mergePromptAttachmentImages({
+    imageOrder: params.imageOrder,
+    existingImages: params.existingImages,
+    offloadedImages,
+    promptRefImages,
+  });
 
   const imageSanitization: ImageSanitizationLimits = {
     maxDimensionPx: params.maxDimensionPx,

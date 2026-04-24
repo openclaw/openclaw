@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn());
 const parseStrictPositiveInteger = vi.hoisted(() => vi.fn());
@@ -10,15 +10,19 @@ const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("./runtime-api.js", () => ({
   listSkillCommandsForAgents,
   parseStrictPositiveInteger,
 }));
 
-vi.mock("./client.js", () => ({
-  fetchMattermostUserTeams,
-  normalizeMattermostBaseUrl,
-}));
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return {
+    ...actual,
+    fetchMattermostUserTeams,
+    normalizeMattermostBaseUrl,
+  };
+});
 
 vi.mock("./slash-commands.js", () => ({
   DEFAULT_COMMAND_SPECS: [
@@ -36,6 +40,24 @@ vi.mock("./slash-state.js", () => ({
 }));
 
 describe("mattermost monitor slash", () => {
+  let registerMattermostMonitorSlashCommands: typeof import("./monitor-slash.js").registerMattermostMonitorSlashCommands;
+
+  beforeAll(async () => {
+    ({ registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js"));
+  });
+
+  beforeEach(() => {
+    listSkillCommandsForAgents.mockReset();
+    parseStrictPositiveInteger.mockReset();
+    fetchMattermostUserTeams.mockReset();
+    normalizeMattermostBaseUrl.mockClear();
+    isSlashCommandsEnabled.mockReset();
+    registerSlashCommands.mockReset();
+    resolveCallbackUrl.mockReset();
+    resolveSlashCommandConfig.mockReset();
+    activateSlashCommands.mockReset();
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -43,7 +65,6 @@ describe("mattermost monitor slash", () => {
   it("returns early when slash commands are disabled", async () => {
     resolveSlashCommandConfig.mockReturnValue({ enabled: false });
     isSlashCommandsEnabled.mockReturnValue(false);
-    const { registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js");
 
     await registerMattermostMonitorSlashCommands({
       client: {} as never,
@@ -77,8 +98,6 @@ describe("mattermost monitor slash", () => {
       log: vi.fn(),
       error: vi.fn(),
     };
-
-    const { registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js");
 
     await registerMattermostMonitorSlashCommands({
       client: {} as never,
@@ -139,8 +158,6 @@ describe("mattermost monitor slash", () => {
       log: vi.fn(),
       error: vi.fn(),
     };
-
-    const { registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js");
 
     await registerMattermostMonitorSlashCommands({
       client: {} as never,

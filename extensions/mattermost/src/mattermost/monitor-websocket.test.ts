@@ -1,11 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
   type MattermostWebSocketLike,
   WebSocketClosedBeforeOpenError,
 } from "./monitor-websocket.js";
-import { runWithReconnect } from "./reconnect.js";
 
 class FakeWebSocket implements MattermostWebSocketLike {
   public readonly sent: string[] = [];
@@ -84,6 +83,10 @@ const testRuntime = (): RuntimeEnv =>
   }) as RuntimeEnv;
 
 describe("mattermost websocket monitor", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("rejects when websocket closes before open", async () => {
     const socket = new FakeWebSocket();
     const connectOnce = createMattermostConnectOnce({
@@ -107,12 +110,8 @@ describe("mattermost websocket monitor", () => {
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
-    const abort = new AbortController();
-    const reconnectDelays: number[] = [];
-    const onError = vi.fn();
     const patches: Array<Record<string, unknown>> = [];
     const sockets: FakeWebSocket[] = [];
-    let disconnects = 0;
 
     const connectOnce = createMattermostConnectOnce({
       wsUrl: "wss://example.invalid/api/v4/websocket",
@@ -123,15 +122,8 @@ describe("mattermost websocket monitor", () => {
         return () => seq++;
       })(),
       onPosted: async () => {},
-      abortSignal: abort.signal,
       statusSink: (patch) => {
         patches.push(patch as Record<string, unknown>);
-        if (patch.lastDisconnect) {
-          disconnects++;
-          if (disconnects >= 2) {
-            abort.abort();
-          }
-        }
       },
       webSocketFactory: () => {
         const socket = new FakeWebSocket();
@@ -150,12 +142,10 @@ describe("mattermost websocket monitor", () => {
       },
     });
 
-    await runWithReconnect(connectOnce, {
-      abortSignal: abort.signal,
-      initialDelayMs: 1,
-      onError,
-      onReconnect: (delay) => reconnectDelays.push(delay),
-    });
+    const firstAttempt = connectOnce();
+    await expect(firstAttempt).rejects.toBeInstanceOf(WebSocketClosedBeforeOpenError);
+
+    await connectOnce();
 
     expect(sockets).toHaveLength(2);
     expect(sockets[0].closeCalls).toBe(1);
@@ -165,8 +155,6 @@ describe("mattermost websocket monitor", () => {
       data: { token: "token" },
       seq: 1,
     });
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(reconnectDelays).toEqual([1]);
     expect(patches.some((patch) => patch.connected === true)).toBe(true);
     expect(patches.filter((patch) => patch.connected === false)).toHaveLength(2);
   });
@@ -227,6 +215,193 @@ describe("mattermost websocket monitor", () => {
         emoji_name: "thumbsup",
       }),
     );
-    expect(payload.data?.reaction).toBeDefined();
+  });
+
+  it("terminates when bot update_at changes (disable/enable cycle)", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    let updateAt = 1000;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => updateAt,
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    // Let initial getBotUpdateAt resolve
+    await vi.advanceTimersByTimeAsync(0);
+
+    // update_at unchanged — no terminate
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(0);
+
+    // Simulate disable/enable — update_at changes
+    updateAt = 2000;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
+    );
+
+    socket.emitClose(1006);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("keeps connection alive when update_at stays the same", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => 1000,
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(socket.terminateCalls).toBe(0);
+
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("does not terminate when getBotUpdateAt throws", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    let shouldThrow = false;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => {
+        if (shouldThrow) {
+          throw new Error("network error");
+        }
+        return 1000;
+      },
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // API error — should log but not terminate
+    shouldThrow = true;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(0);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: health check error: Error: network error",
+    );
+
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("keeps polling when the initial getBotUpdateAt call fails", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    const responses: Array<number | Error> = [new Error("network error"), 1000, 2000];
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => {
+        const next = responses.shift();
+        if (next instanceof Error) {
+          throw next;
+        }
+        return next ?? 2000;
+      },
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: failed to get initial update_at: Error: network error",
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.terminateCalls).toBe(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
+    );
+
+    socket.emitClose(1006);
+    await connected;
+    vi.useRealTimers();
+  });
+
+  it("does not overlap health checks when a prior poll is still running", async () => {
+    vi.useFakeTimers();
+    const socket = new FakeWebSocket();
+    const resolvers: Array<(value: number) => void> = [];
+    let pollCount = 0;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: () => socket,
+      getBotUpdateAt: async () => {
+        pollCount++;
+        return await new Promise<number>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+      healthCheckIntervalMs: 100,
+    });
+
+    const connected = connectOnce();
+    socket.emitOpen();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pollCount).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(pollCount).toBe(1);
+
+    resolvers[0]?.(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(pollCount).toBe(2);
+
+    socket.emitClose(1000);
+    await connected;
+    vi.useRealTimers();
   });
 });

@@ -1,4 +1,3 @@
-import { buildBrowseProvidersButton } from "../../../extensions/telegram/api.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import {
   type ModelAliasIndex,
@@ -7,8 +6,13 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -34,7 +38,7 @@ function pushUniqueCatalogEntry(params: {
   fallbackNameToId: boolean;
 }) {
   const provider = normalizeProviderId(params.provider);
-  const id = String(params.id ?? "").trim();
+  const id = normalizeOptionalString(params.id) ?? "";
   if (!provider || !id) {
     return;
   }
@@ -79,7 +83,7 @@ function buildModelPickerCatalog(params: {
     };
 
     const pushRaw = (raw?: string) => {
-      const value = String(raw ?? "").trim();
+      const value = normalizeOptionalString(raw) ?? "";
       if (!value) {
         return;
       }
@@ -100,14 +104,14 @@ function buildModelPickerCatalog(params: {
     const modelFallbacks =
       modelConfig && typeof modelConfig === "object" ? (modelConfig.fallbacks ?? []) : [];
     for (const fallback of modelFallbacks) {
-      pushRaw(String(fallback ?? ""));
+      pushRaw(fallback ?? "");
     }
 
     const imageConfig = params.cfg.agents?.defaults?.imageModel;
     if (imageConfig && typeof imageConfig === "object") {
       pushRaw(imageConfig.primary);
       for (const fallback of imageConfig.fallbacks ?? []) {
-        pushRaw(String(fallback ?? ""));
+        pushRaw(fallback ?? "");
       }
     }
 
@@ -126,7 +130,7 @@ function buildModelPickerCatalog(params: {
       keys,
       out,
       provider: entry.provider,
-      id: String(entry.id ?? ""),
+      id: entry.id ?? "",
       name: entry.name,
       fallbackNameToId: false,
     });
@@ -160,7 +164,7 @@ function buildModelPickerCatalog(params: {
   // Merge any configured allowlist keys that the catalog doesn't know about.
   for (const raw of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
     const resolved = resolveModelRefFromString({
-      raw: String(raw),
+      raw,
       defaultProvider: params.defaultProvider,
       aliasIndex: params.aliasIndex,
     });
@@ -205,8 +209,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
     return undefined;
   }
 
-  const rawDirective = params.directives.rawModelDirective?.trim();
-  const directive = rawDirective?.toLowerCase();
+  const rawDirective = normalizeOptionalString(params.directives.rawModelDirective);
+  const directive = rawDirective ? normalizeLowercaseStringOrEmpty(rawDirective) : undefined;
   const wantsStatus = directive === "status";
   const wantsSummary = !rawDirective;
   const wantsLegacyList = directive === "list";
@@ -230,6 +234,11 @@ export async function maybeHandleModelDirectiveInfo(params: {
     const reply = await resolveModelsCommandReply({
       cfg: params.cfg,
       commandBodyNormalized: "/models",
+      surface: params.surface,
+      currentModel: `${params.provider}/${params.model}`,
+      agentId: params.activeAgentId,
+      agentDir: params.agentDir,
+      sessionEntry: isCompleteSessionEntry(params.sessionEntry) ? params.sessionEntry : undefined,
     });
     return reply ?? { text: "No models available." };
   }
@@ -241,13 +250,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
       sessionEntry: params.sessionEntry,
     });
     const current = modelRefs.selected.label;
-    const isTelegram = params.surface === "telegram";
     const activeRuntimeLine = modelRefs.activeDiffers
       ? `Active: ${modelRefs.active.label} (runtime)`
       : null;
-
-    if (isTelegram) {
-      const buttons = buildBrowseProvidersButton();
+    const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
+    const channelData = commandPlugin?.commands?.buildModelBrowseChannelData?.();
+    if (channelData) {
       return {
         text: [
           `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
@@ -259,7 +267,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         ]
           .filter(Boolean)
           .join("\n"),
-        channelData: { telegram: { buttons } },
+        channelData,
       };
     }
 
@@ -350,4 +358,14 @@ export async function maybeHandleModelDirectiveInfo(params: {
     }
   }
   return { text: lines.join("\n") };
+}
+
+function isCompleteSessionEntry(
+  entry: Pick<SessionEntry, "modelProvider" | "model"> | undefined,
+): entry is SessionEntry {
+  return Boolean(
+    entry &&
+    typeof (entry as Partial<SessionEntry>).sessionId === "string" &&
+    typeof (entry as Partial<SessionEntry>).updatedAt === "number",
+  );
 }

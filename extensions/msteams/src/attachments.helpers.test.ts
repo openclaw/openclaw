@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
@@ -8,7 +7,7 @@ import {
 } from "./attachments.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
-const GRAPH_HOST = "graph.microsoft.com";
+const _GRAPH_HOST = "graph.microsoft.com";
 const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
@@ -30,7 +29,13 @@ type AttachmentPlaceholderInput = Parameters<typeof buildMSTeamsAttachmentPlaceh
 type GraphMessageUrlParams = Parameters<typeof buildMSTeamsGraphMessageUrls>[0];
 type MSTeamsMediaPayload = ReturnType<typeof buildMSTeamsMediaPayload>;
 
-const runtimeStub: PluginRuntime = createPluginRuntimeMock();
+const runtimeStub = {
+  channel: {
+    text: {
+      chunkText: (text: string) => (text ? [text] : []),
+    },
+  },
+} as unknown as PluginRuntime;
 const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
 const formatImagePlaceholder = (count: number) =>
@@ -178,12 +183,48 @@ describe("msteams attachment helpers", () => {
     it.each(ATTACHMENT_PLACEHOLDER_CASES)("$label", ({ attachments, expected }) => {
       expect(buildMSTeamsAttachmentPlaceholder(attachments)).toBe(expected);
     });
+
+    it("respects inline image limits when counting placeholder images", () => {
+      const attachments = [
+        {
+          contentType: "text/html",
+          content: `<img src="data:image/png;base64,${"A".repeat(16)}" />`,
+        },
+      ];
+
+      expect(
+        buildMSTeamsAttachmentPlaceholder(attachments, {
+          maxInlineBytes: 4,
+          maxInlineTotalBytes: 4,
+        }),
+      ).toBe("<media:document>");
+    });
   });
 
   describe("buildMSTeamsGraphMessageUrls", () => {
     it.each(GRAPH_URL_EXPECTATION_CASES)("$label", ({ params, expectedPath }) => {
       const urls = buildMSTeamsGraphMessageUrls(params);
       expect(urls[0]).toContain(expectedPath);
+    });
+
+    it("uses resolved Graph chat ID for personal DMs instead of Bot Framework a: ID", () => {
+      const urls = buildMSTeamsGraphMessageUrls({
+        conversationType: "personal",
+        conversationId: "19:real-graph-chat-id@unq.gbl.spaces",
+        messageId: "msg-1",
+      });
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain("/chats/19%3Areal-graph-chat-id%40unq.gbl.spaces/messages/msg-1");
+    });
+
+    it("still builds URLs when a: conversation ID is passed (caller did not resolve)", () => {
+      const urls = buildMSTeamsGraphMessageUrls({
+        conversationType: "personal",
+        conversationId: "a:1dRsHCobZ1AxURzY",
+        messageId: "msg-1",
+      });
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain("/chats/a%3A1dRsHCobZ1AxURzY/messages/msg-1");
     });
   });
 

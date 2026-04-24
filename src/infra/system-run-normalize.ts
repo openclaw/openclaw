@@ -1,11 +1,8 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export function normalizeNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
+  return typeof value === "string" ? (normalizeOptionalString(value) ?? null) : null;
 }
 
 export function normalizeStringArray(value: unknown): string[] {

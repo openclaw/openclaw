@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../string-coerce.ts";
+
 export type ExecApprovalRequestPayload = {
   command: string;
   cwd?: string | null;
@@ -11,7 +13,12 @@ export type ExecApprovalRequestPayload = {
 
 export type ExecApprovalRequest = {
   id: string;
+  kind: "exec" | "plugin";
   request: ExecApprovalRequestPayload;
+  pluginTitle?: string;
+  pluginDescription?: string | null;
+  pluginSeverity?: string | null;
+  pluginId?: string | null;
   createdAtMs: number;
   expiresAtMs: number;
 };
@@ -31,12 +38,12 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
   if (!isRecord(payload)) {
     return null;
   }
-  const id = typeof payload.id === "string" ? payload.id.trim() : "";
+  const id = normalizeOptionalString(payload.id) ?? "";
   const request = payload.request;
   if (!id || !isRecord(request)) {
     return null;
   }
-  const command = typeof request.command === "string" ? request.command.trim() : "";
+  const command = normalizeOptionalString(request.command) ?? "";
   if (!command) {
     return null;
   }
@@ -47,6 +54,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
   }
   return {
     id,
+    kind: "exec",
     request: {
       command,
       cwd: typeof request.cwd === "string" ? request.cwd : null,
@@ -66,7 +74,7 @@ export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolve
   if (!isRecord(payload)) {
     return null;
   }
-  const id = typeof payload.id === "string" ? payload.id.trim() : "";
+  const id = normalizeOptionalString(payload.id) ?? "";
   if (!id) {
     return null;
   }
@@ -75,6 +83,46 @@ export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolve
     decision: typeof payload.decision === "string" ? payload.decision : null,
     resolvedBy: typeof payload.resolvedBy === "string" ? payload.resolvedBy : null,
     ts: typeof payload.ts === "number" ? payload.ts : null,
+  };
+}
+
+export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const id = normalizeOptionalString(payload.id) ?? "";
+  if (!id) {
+    return null;
+  }
+  const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
+  const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
+  if (!createdAtMs || !expiresAtMs) {
+    return null;
+  }
+  // title, description, severity, pluginId, agentId, sessionKey live inside payload.request
+  const request = isRecord(payload.request) ? payload.request : {};
+  const title = normalizeOptionalString(request.title) ?? "";
+  if (!title) {
+    return null;
+  }
+  const description = typeof request.description === "string" ? request.description : null;
+  const severity = typeof request.severity === "string" ? request.severity : null;
+  const pluginId = typeof request.pluginId === "string" ? request.pluginId : null;
+
+  return {
+    id,
+    kind: "plugin",
+    request: {
+      command: title,
+      agentId: typeof request.agentId === "string" ? request.agentId : null,
+      sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+    },
+    pluginTitle: title,
+    pluginDescription: description,
+    pluginSeverity: severity,
+    pluginId,
+    createdAtMs,
+    expiresAtMs,
   };
 }
 
@@ -88,7 +136,7 @@ export function addExecApproval(
   entry: ExecApprovalRequest,
 ): ExecApprovalRequest[] {
   const next = pruneExecApprovalQueue(queue).filter((item) => item.id !== entry.id);
-  next.push(entry);
+  next.unshift(entry);
   return next;
 }
 

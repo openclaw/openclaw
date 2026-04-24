@@ -1,91 +1,43 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
-import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
+import {
+  buildGetReplyCtx,
+  createGetReplySessionState,
+  expectResolvedTelegramTimezone,
+  registerGetReplyRuntimeOverrides,
+} from "./get-reply.test-fixtures.js";
+import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import "./get-reply.test-runtime-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
   initSessionState: vi.fn(),
 }));
-
-registerGetReplyCommonMocks();
-
-vi.mock("../../link-understanding/apply.runtime.js", () => ({
-  applyLinkUnderstanding: vi.fn(async () => undefined),
-}));
-vi.mock("../../media-understanding/apply.runtime.js", () => ({
-  applyMediaUnderstanding: vi.fn(async () => undefined),
-}));
-vi.mock("./directive-handling.defaults.js", () => ({
-  resolveDefaultModel: vi.fn(() => ({
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
-    aliasIndex: new Map(),
-  })),
-}));
-vi.mock("./get-reply-directives.js", () => ({
-  resolveReplyDirectives: (...args: unknown[]) => mocks.resolveReplyDirectives(...args),
-}));
-vi.mock("./get-reply-inline-actions.js", () => ({
-  handleInlineActions: vi.fn(async () => ({ kind: "reply", reply: { text: "ok" } })),
-}));
-vi.mock("./session.js", () => ({
-  initSessionState: (...args: unknown[]) => mocks.initSessionState(...args),
-}));
+registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let loadConfigMock: typeof import("../../config/config.js").loadConfig;
 
-async function loadFreshGetReplyModuleForTest() {
-  vi.resetModules();
-  ({ getReplyFromConfig } = await import("./get-reply.js"));
+async function loadGetReplyRuntimeForTest() {
+  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ loadConfig: loadConfigMock } = await import("../../config/config.js"));
-}
-
-function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
-  return {
-    Provider: "telegram",
-    Surface: "telegram",
-    ChatType: "direct",
-    Body: "hello",
-    BodyForAgent: "hello",
-    RawBody: "hello",
-    CommandBody: "hello",
-    SessionKey: "agent:main:telegram:123",
-    From: "telegram:user:42",
-    To: "telegram:123",
-    Timestamp: 1710000000000,
-    ...overrides,
-  };
 }
 
 describe("getReplyFromConfig configOverride", () => {
   beforeEach(async () => {
-    await loadFreshGetReplyModuleForTest();
+    await loadGetReplyRuntimeForTest();
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.resolveReplyDirectives.mockReset();
     mocks.initSessionState.mockReset();
     vi.mocked(loadConfigMock).mockReset();
 
     vi.mocked(loadConfigMock).mockReturnValue({});
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
-    mocks.initSessionState.mockResolvedValue({
-      sessionCtx: {},
-      sessionEntry: {},
-      previousSessionEntry: {},
-      sessionStore: {},
-      sessionKey: "agent:main:telegram:123",
-      sessionId: "session-1",
-      isNewSession: false,
-      resetTriggered: false,
-      systemSent: false,
-      abortedLastRun: false,
-      storePath: "/tmp/sessions.json",
-      sessionScope: "per-chat",
-      groupResolution: undefined,
-      isGroup: false,
-      triggerBodyNormalized: "",
-      bodyStripped: "",
-    });
+    mocks.initSessionState.mockResolvedValue(createGetReplySessionState());
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("merges configOverride over fresh loadConfig()", async () => {
@@ -102,7 +54,7 @@ describe("getReplyFromConfig configOverride", () => {
       },
     } satisfies OpenClawConfig);
 
-    await getReplyFromConfig(buildCtx(), undefined, {
+    await getReplyFromConfig(buildGetReplyCtx(), undefined, {
       agents: {
         defaults: {
           userTimezone: "America/New_York",
@@ -110,21 +62,6 @@ describe("getReplyFromConfig configOverride", () => {
       },
     } as OpenClawConfig);
 
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          channels: expect.objectContaining({
-            telegram: expect.objectContaining({
-              botToken: "resolved-telegram-token",
-            }),
-          }),
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              userTimezone: "America/New_York",
-            }),
-          }),
-        }),
-      }),
-    );
+    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
 });

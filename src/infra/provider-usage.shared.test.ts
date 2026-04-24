@@ -1,13 +1,24 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   clampPercent,
   resolveLegacyPiAgentAccessToken,
   resolveUsageProviderId,
   withTimeout,
 } from "./provider-usage.shared.js";
+
+async function withLegacyPiAuthFile(
+  contents: string,
+  run: (home: string) => Promise<void> | void,
+): Promise<void> {
+  await withTempDir({ prefix: "openclaw-provider-usage-" }, async (home) => {
+    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+    await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), contents, "utf8");
+    await run(home);
+  });
+}
 
 describe("provider-usage.shared", () => {
   afterEach(() => {
@@ -18,6 +29,9 @@ describe("provider-usage.shared", () => {
   it.each([
     { value: "z-ai", expected: "zai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
+    { value: "minimax-portal", expected: "minimax" },
+    { value: "minimax-cn", expected: "minimax" },
+    { value: "minimax-portal-cn", expected: "minimax" },
     { value: "unknown-provider", expected: undefined },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },
@@ -35,14 +49,23 @@ describe("provider-usage.shared", () => {
     expect(clampPercent(value)).toBe(expected);
   });
 
-  it("returns work result when it resolves before timeout", async () => {
-    await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
-  });
-
-  it("propagates work errors before timeout", async () => {
-    await expect(withTimeout(Promise.reject(new Error("boom")), 100, "fallback")).rejects.toThrow(
-      "boom",
-    );
+  it.each([
+    {
+      name: "returns work result when it resolves before timeout",
+      promise: () => Promise.resolve("ok"),
+      expected: "ok",
+    },
+    {
+      name: "propagates work errors before timeout",
+      promise: () => Promise.reject(new Error("boom")),
+      error: "boom",
+    },
+  ])("$name", async ({ promise, expected, error }) => {
+    if (error) {
+      await expect(withTimeout(promise(), 100, "fallback")).rejects.toThrow(error);
+      return;
+    }
+    await expect(withTimeout(promise(), 100, "fallback")).resolves.toBe(expected);
   });
 
   it("returns fallback when timeout wins", async () => {
@@ -61,33 +84,20 @@ describe("provider-usage.shared", () => {
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("reads legacy pi auth tokens for known provider aliases", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
-    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-    await fs.writeFile(
-      path.join(home, ".pi", "agent", "auth.json"),
-      `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
-      "utf8",
-    );
-
-    try {
-      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBe(
-        "legacy-zai-key",
-      );
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
-  });
-
-  it("returns undefined for invalid legacy pi auth files", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
-    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-    await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), "{not-json", "utf8");
-
-    try {
-      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBeUndefined();
-    } finally {
-      await fs.rm(home, { recursive: true, force: true });
-    }
+  it.each([
+    {
+      name: "reads legacy pi auth tokens for known provider aliases",
+      contents: `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
+      expected: "legacy-zai-key",
+    },
+    {
+      name: "returns undefined for invalid legacy pi auth files",
+      contents: "{not-json",
+      expected: undefined,
+    },
+  ])("$name", async ({ contents, expected }) => {
+    await withLegacyPiAuthFile(contents, async (home) => {
+      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBe(expected);
+    });
   });
 });

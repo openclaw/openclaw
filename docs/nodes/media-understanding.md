@@ -3,7 +3,7 @@ summary: "Inbound image/audio/video understanding (optional) with provider + CLI
 read_when:
   - Designing or refactoring media understanding
   - Tuning inbound audio/video/image preprocessing
-title: "Media Understanding"
+title: "Media understanding"
 ---
 
 # Media Understanding - Inbound (2026-01-17)
@@ -81,7 +81,7 @@ Each `models[]` entry can be **provider** or **CLI**:
 {
   type: "provider", // default if omitted
   provider: "openai",
-  model: "gpt-5.2",
+  model: "gpt-5.5",
   prompt: "Describe the image in <= 500 chars.",
   maxChars: 500,
   maxBytes: 10485760,
@@ -133,6 +133,15 @@ Rules:
 - Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
+- If the active primary image model already supports vision natively, OpenClaw
+  skips the `[Image]` summary block and passes the original image into the
+  model instead.
+- If a Gateway/WebChat primary model is text-only, image attachments are
+  preserved as offloaded `media://inbound/*` refs so the image tool or configured
+  image model can still inspect them instead of losing the attachment.
+- Explicit `openclaw infer image describe --model <provider/model>` requests
+  are different: they run that image-capable provider/model directly, including
+  Ollama refs such as `ollama/qwen2.5vl:7b`.
 - If `<capability>.enabled: true` but no models are configured, OpenClaw tries the
   **active reply model** when its provider supports the capability.
 
@@ -142,15 +151,25 @@ If `tools.media.<capability>.enabled` is **not** set to `false` and you haven’
 configured models, OpenClaw auto-detects in this order and **stops at the first
 working option**:
 
-1. **Local CLIs** (audio only; if installed)
+1. **Active reply model** when its provider supports the capability.
+2. **`agents.defaults.imageModel`** primary/fallback refs (image only).
+3. **Local CLIs** (audio only; if installed)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
    - `whisper-cli` (`whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)
    - `whisper` (Python CLI; downloads models automatically)
-2. **Gemini CLI** (`gemini`) using `read_many_files`
-3. **Provider keys**
-   - Audio: OpenAI → Groq → Deepgram → Google
-   - Image: OpenAI → Anthropic → Google → MiniMax
-   - Video: Google
+4. **Gemini CLI** (`gemini`) using `read_many_files`
+5. **Provider auth**
+   - Configured `models.providers.*` entries that support the capability are
+     tried before the bundled fallback order.
+   - Image-only config providers with an image-capable model auto-register for
+     media understanding even when they are not a bundled vendor plugin.
+   - Ollama image understanding is available when selected explicitly, for
+     example through `agents.defaults.imageModel` or
+     `openclaw infer image describe --model ollama/<vision-model>`.
+   - Bundled fallback order:
+     - Audio: OpenAI → Groq → xAI → Deepgram → Google → Mistral
+     - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
+     - Video: Google → Qwen → Moonshot
 
 To disable auto-detection, set:
 
@@ -188,23 +207,36 @@ If you set `capabilities`, the entry only runs for those media types. For shared
 lists, OpenClaw can infer defaults:
 
 - `openai`, `anthropic`, `minimax`: **image**
+- `minimax-portal`: **image**
 - `moonshot`: **image + video**
+- `openrouter`: **image**
 - `google` (Gemini API): **image + audio + video**
+- `qwen`: **image + video**
 - `mistral`: **audio**
 - `zai`: **image**
 - `groq`: **audio**
+- `xai`: **audio**
 - `deepgram`: **audio**
+- Any `models.providers.<id>.models[]` catalog with an image-capable model:
+  **image**
 
 For CLI entries, **set `capabilities` explicitly** to avoid surprising matches.
 If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                               | Notes                                                                   |
-| ---------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| Image      | OpenAI, Anthropic, Google, MiniMax, Moonshot, Z.AI | Vendor plugins register image support against core media understanding. |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral            | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).               |
-| Video      | Google, Moonshot                                   | Provider video understanding via vendor plugins.                        |
+| Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                   |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai-codex/*` uses OAuth provider plumbing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                                                                      | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                                                                                                               |
+| Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                        |
+
+MiniMax note:
+
+- `minimax` and `minimax-portal` image understanding comes from the plugin-owned
+  `MiniMax-VL-01` media provider.
+- The bundled MiniMax text catalog still starts text-only; explicit
+  `models.providers.minimax` entries materialize image-capable M2.7 chat refs.
 
 ## Model selection guidance
 
@@ -224,6 +256,22 @@ Per‑capability `attachments` controls which attachments are processed:
 
 When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 
+File-attachment extraction behavior:
+
+- Extracted file text is wrapped as **untrusted external content** before it is
+  appended to the media prompt.
+- The injected block uses explicit boundary markers like
+  `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` /
+  `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` and includes a
+  `Source: External` metadata line.
+- This attachment-extraction path intentionally omits the long
+  `SECURITY NOTICE:` banner to avoid bloating the media prompt; the boundary
+  markers and metadata still remain.
+- If a file has no extractable text, OpenClaw injects `[No extractable text]`.
+- If a PDF falls back to rendered page images in this path, the media prompt keeps
+  the placeholder `[PDF content rendered to images; images not forwarded to model]`
+  because this attachment-extraction step forwards text blocks, not the rendered PDF images.
+
 ## Config examples
 
 ### 1) Shared models list + overrides
@@ -233,7 +281,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
   tools: {
     media: {
       models: [
-        { provider: "openai", model: "gpt-5.2", capabilities: ["image"] },
+        { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
         {
           provider: "google",
           model: "gemini-3-flash-preview",
@@ -314,7 +362,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
         maxBytes: 10485760,
         maxChars: 500,
         models: [
-          { provider: "openai", model: "gpt-5.2" },
+          { provider: "openai", model: "gpt-5.5" },
           { provider: "anthropic", model: "claude-opus-4-6" },
           {
             type: "cli",
@@ -377,7 +425,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 When media understanding runs, `/status` includes a short summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)
+📎 Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)
 ```
 
 This shows per‑capability outcomes and the chosen provider/model when applicable.

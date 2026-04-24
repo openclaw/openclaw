@@ -219,6 +219,7 @@ export async function emitSlackModalLifecycleEvent(params: {
     channelId: sessionRouting.channelId,
     channelType: sessionRouting.channelType,
     expectedSenderId: expectedUserId,
+    interactiveEvent: true,
   });
   if (!auth.allowed) {
     params.ctx.runtime.log?.(
@@ -237,6 +238,7 @@ export function registerModalLifecycleHandler(params: {
   register: RegisterSlackModalHandler;
   matcher: RegExp;
   ctx: SlackMonitorContext;
+  trackEvent?: () => void;
   interactionType: SlackModalInteractionKind;
   contextPrefix: SlackInteractionContextPrefix;
   summarizeViewState: (values: unknown) => ModalInputSummary[];
@@ -250,6 +252,7 @@ export function registerModalLifecycleHandler(params: {
       );
       return;
     }
+    params.trackEvent?.();
     await emitSlackModalLifecycleEvent({
       ctx: params.ctx,
       body: body as SlackModalBody,

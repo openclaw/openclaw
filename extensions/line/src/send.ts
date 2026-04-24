@@ -1,14 +1,17 @@
 import { messagingApi } from "@line/bot-sdk";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
+import { validateLineMediaUrl } from "./outbound-media.js";
 import type { LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
 type ImageMessage = messagingApi.ImageMessage;
+type VideoMessage = messagingApi.VideoMessage & { trackingId?: string };
+type AudioMessage = messagingApi.AudioMessage;
 type LocationMessage = messagingApi.LocationMessage;
 type FlexMessage = messagingApi.FlexMessage;
 type FlexContainer = messagingApi.FlexContainer;
@@ -23,11 +26,15 @@ const userProfileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface LineSendOpts {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   channelAccessToken?: string;
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  mediaKind?: "image" | "video" | "audio";
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
   replyToken?: string;
 }
 
@@ -62,11 +69,15 @@ function normalizeTarget(to: string): string {
   return normalized;
 }
 
+function isLineUserChatId(chatId: string): boolean {
+  return /^U/i.test(chatId);
+}
+
 function createLineMessagingClient(opts: LineClientOpts): {
   account: ReturnType<typeof resolveLineAccount>;
   client: messagingApi.MessagingApiClient;
 } {
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "LINE send");
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,
@@ -103,6 +114,27 @@ export function createImageMessage(
     type: "image",
     originalContentUrl,
     previewImageUrl: previewImageUrl ?? originalContentUrl,
+  };
+}
+
+export function createVideoMessage(
+  originalContentUrl: string,
+  previewImageUrl: string,
+  trackingId?: string,
+): VideoMessage {
+  return {
+    type: "video",
+    originalContentUrl,
+    previewImageUrl,
+    ...(trackingId ? { trackingId } : {}),
+  };
+}
+
+export function createAudioMessage(originalContentUrl: string, durationMs: number): AudioMessage {
+  return {
+    type: "audio",
+    originalContentUrl,
+    duration: durationMs,
   };
 }
 
@@ -147,7 +179,7 @@ function recordLineOutboundActivity(accountId: string): void {
 async function pushLineMessages(
   to: string,
   messages: Message[],
-  opts: LinePushOpts = {},
+  opts: LinePushOpts,
   behavior: LinePushBehavior = {},
 ): Promise<LineSendResult> {
   if (messages.length === 0) {
@@ -187,7 +219,7 @@ async function pushLineMessages(
 async function replyLineMessages(
   replyToken: string,
   messages: Message[],
-  opts: LinePushOpts = {},
+  opts: LinePushOpts,
   behavior: LineReplyBehavior = {},
 ): Promise<void> {
   const { account, client } = createLineMessagingClient(opts);
@@ -210,13 +242,38 @@ async function replyLineMessages(
 export async function sendMessageLine(
   to: string,
   text: string,
-  opts: LineSendOpts = {},
+  opts: LineSendOpts,
 ): Promise<LineSendResult> {
   const chatId = normalizeTarget(to);
   const messages: Message[] = [];
 
-  if (opts.mediaUrl?.trim()) {
-    messages.push(createImageMessage(opts.mediaUrl.trim()));
+  const mediaUrl = opts.mediaUrl?.trim();
+  if (mediaUrl) {
+    await validateLineMediaUrl(mediaUrl);
+    switch (opts.mediaKind) {
+      case "video": {
+        const previewImageUrl = opts.previewImageUrl?.trim();
+        if (!previewImageUrl) {
+          throw new Error("LINE video messages require previewImageUrl to reference an image URL");
+        }
+        await validateLineMediaUrl(previewImageUrl);
+        const trackingId = isLineUserChatId(chatId) ? opts.trackingId : undefined;
+        messages.push(createVideoMessage(mediaUrl, previewImageUrl, trackingId));
+        break;
+      }
+      case "audio":
+        messages.push(createAudioMessage(mediaUrl, opts.durationMs ?? 60000));
+        break;
+      case "image":
+      default:
+        // Backward compatibility: keep image as default when media kind is unspecified.
+        {
+          const previewImageUrl = opts.previewImageUrl?.trim() || mediaUrl;
+          await validateLineMediaUrl(previewImageUrl);
+          messages.push(createImageMessage(mediaUrl, previewImageUrl));
+        }
+        break;
+    }
   }
 
   if (text?.trim()) {
@@ -246,7 +303,7 @@ export async function sendMessageLine(
 export async function pushMessageLine(
   to: string,
   text: string,
-  opts: LineSendOpts = {},
+  opts: LineSendOpts,
 ): Promise<LineSendResult> {
   return sendMessageLine(to, text, { ...opts, replyToken: undefined });
 }
@@ -254,7 +311,7 @@ export async function pushMessageLine(
 export async function replyMessageLine(
   replyToken: string,
   messages: Message[],
-  opts: LinePushOpts = {},
+  opts: LinePushOpts,
 ): Promise<void> {
   await replyLineMessages(replyToken, messages, opts);
 }
@@ -262,7 +319,7 @@ export async function replyMessageLine(
 export async function pushMessagesLine(
   to: string,
   messages: Message[],
-  opts: LinePushOpts = {},
+  opts: LinePushOpts,
 ): Promise<LineSendResult> {
   return pushLineMessages(to, messages, opts, {
     errorContext: "push message",
@@ -283,9 +340,13 @@ export function createFlexMessage(
 export async function pushImageMessage(
   to: string,
   originalContentUrl: string,
-  previewImageUrl?: string,
-  opts: LinePushOpts = {},
+  previewImageUrl: string | undefined,
+  opts: LinePushOpts,
 ): Promise<LineSendResult> {
+  await validateLineMediaUrl(originalContentUrl);
+  if (previewImageUrl) {
+    await validateLineMediaUrl(previewImageUrl);
+  }
   return pushLineMessages(to, [createImageMessage(originalContentUrl, previewImageUrl)], opts, {
     verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
   });
@@ -299,7 +360,7 @@ export async function pushLocationMessage(
     latitude: number;
     longitude: number;
   },
-  opts: LinePushOpts = {},
+  opts: LinePushOpts,
 ): Promise<LineSendResult> {
   return pushLineMessages(to, [createLocationMessage(location)], opts, {
     verboseMessage: (chatId) => `line: pushed location to ${chatId}`,
@@ -310,7 +371,7 @@ export async function pushFlexMessage(
   to: string,
   altText: string,
   contents: FlexContainer,
-  opts: LinePushOpts = {},
+  opts: LinePushOpts,
 ): Promise<LineSendResult> {
   const flexMessage: FlexMessage = {
     type: "flex",
@@ -327,7 +388,7 @@ export async function pushFlexMessage(
 export async function pushTemplateMessage(
   to: string,
   template: TemplateMessage,
-  opts: LinePushOpts = {},
+  opts: LinePushOpts,
 ): Promise<LineSendResult> {
   return pushLineMessages(to, [template], opts, {
     verboseMessage: (chatId) => `line: pushed template message to ${chatId}`,
@@ -338,7 +399,7 @@ export async function pushTextMessageWithQuickReplies(
   to: string,
   text: string,
   quickReplyLabels: string[],
-  opts: LinePushOpts = {},
+  opts: LinePushOpts,
 ): Promise<LineSendResult> {
   const message = createTextMessageWithQuickReplies(text, quickReplyLabels);
 
@@ -372,7 +433,7 @@ export function createTextMessageWithQuickReplies(
 
 export async function showLoadingAnimation(
   chatId: string,
-  opts: { channelAccessToken?: string; accountId?: string; loadingSeconds?: number } = {},
+  opts: LineClientOpts & { loadingSeconds?: number },
 ): Promise<void> {
   const { client } = createLineMessagingClient(opts);
 
@@ -389,7 +450,7 @@ export async function showLoadingAnimation(
 
 export async function getUserProfile(
   userId: string,
-  opts: { channelAccessToken?: string; accountId?: string; useCache?: boolean } = {},
+  opts: LineClientOpts & { useCache?: boolean },
 ): Promise<{ displayName: string; pictureUrl?: string } | null> {
   const useCache = opts.useCache ?? true;
 
@@ -421,10 +482,7 @@ export async function getUserProfile(
   }
 }
 
-export async function getUserDisplayName(
-  userId: string,
-  opts: { channelAccessToken?: string; accountId?: string } = {},
-): Promise<string> {
+export async function getUserDisplayName(userId: string, opts: LineClientOpts): Promise<string> {
   const profile = await getUserProfile(userId, opts);
   return profile?.displayName ?? userId;
 }

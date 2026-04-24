@@ -1,8 +1,9 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveZaloAccount } from "./accounts.js";
 import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveZaloToken } from "./token.js";
 
 export type ZaloSendOptions = {
@@ -39,7 +40,7 @@ async function runZaloSend(
     const result = toZaloSendResult(await send());
     return result.ok ? result : { ok: false, error: failureMessage };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -138,14 +139,15 @@ export async function sendPhotoZalo(
   }
 
   return await runZaloSend("Failed to send photo", () =>
-    sendPhoto(
-      context.token,
-      {
-        chat_id: context.chatId,
-        photo: photoUrl.trim(),
-        caption: options.caption?.slice(0, 2000),
-      },
-      context.fetcher,
-    ),
+    (async () =>
+      sendPhoto(
+        context.token,
+        {
+          chat_id: context.chatId,
+          photo: photoUrl.trim(),
+          caption: options.caption?.slice(0, 2000),
+        },
+        context.fetcher,
+      ))(),
   );
 }

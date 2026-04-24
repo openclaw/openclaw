@@ -4,6 +4,12 @@ export type {
   BaseTokenResolution,
   ChannelAgentTool,
   ChannelAccountSnapshot,
+  ChannelApprovalAdapter,
+  ChannelApprovalCapability,
+  ChannelCommandConversationContext,
+  ChannelDirectoryEntry,
+  ChannelResolveKind,
+  ChannelResolveResult,
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
@@ -11,7 +17,22 @@ export type {
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
+  ChannelStructuredComponents,
   ChannelStatusIssue,
   ChannelThreadingContext,
   ChannelThreadingToolContext,
-} from "../channels/plugins/types.js";
+  ChannelToolSend,
+} from "../channels/plugins/types.public.js";
+export type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
+
+export type {
+  ChannelDirectoryAdapter,
+  ChannelDoctorAdapter,
+  ChannelDoctorConfigMutation,
+  ChannelDoctorEmptyAllowlistAccountContext,
+  ChannelDoctorLegacyConfigRule,
+  ChannelDoctorSequenceResult,
+  ChannelGatewayContext,
+  ChannelOutboundAdapter,
+} from "../channels/plugins/types.adapters.js";
+export type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";

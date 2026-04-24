@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CallManagerContext } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
@@ -9,6 +10,7 @@ import {
   continueCall as continueCallWithContext,
   endCall as endCallWithContext,
   initiateCall as initiateCallWithContext,
+  sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
 } from "./manager/outbound.js";
@@ -116,7 +118,7 @@ export class CallManager {
           ctx: this.getContext(),
           callId,
           onTimeout: async (id) => {
-            await endCallWithContext(this.getContext(), id);
+            await endCallWithContext(this.getContext(), id, { reason: "timeout" });
           },
         });
         console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);
@@ -221,6 +223,13 @@ export class CallManager {
   }
 
   /**
+   * Send DTMF digits to an active call.
+   */
+  async sendDtmf(callId: CallId, digits: string): Promise<{ success: boolean; error?: string }> {
+    return sendDtmfWithContext(this.getContext(), callId, digits);
+  }
+
+  /**
    * Speak the initial message for a call (called when media stream connects).
    */
   async speakInitialMessage(providerCallId: string): Promise<void> {
@@ -287,8 +296,7 @@ export class CallManager {
   }
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
-    const initialMessage =
-      typeof call.metadata?.initialMessage === "string" ? call.metadata.initialMessage.trim() : "";
+    const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
 
     if (!initialMessage) {
       return;

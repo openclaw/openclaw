@@ -4,6 +4,10 @@ import { randomUUID } from "node:crypto";
  * Twitch-specific utility functions
  */
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 /**
  * Normalize Twitch channel names.
  *
@@ -18,7 +22,7 @@ import { randomUUID } from "node:crypto";
  * normalizeTwitchChannel("MyChannel") // "mychannel"
  */
 export function normalizeTwitchChannel(channel: string): string {
-  const trimmed = channel.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(channel);
   return trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
 }
 

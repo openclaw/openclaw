@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { WhatsAppStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -22,42 +23,41 @@ export function renderWhatsAppCard(params: {
     subtitle: "Link WhatsApp Web and monitor connection health.",
     accountCountLabel,
     statusRows: [
-      { label: "Configured", value: formatNullableBoolean(configured) },
-      { label: "Linked", value: whatsapp?.linked ? "Yes" : "No" },
-      { label: "Running", value: whatsapp?.running ? "Yes" : "No" },
-      { label: "Connected", value: whatsapp?.connected ? "Yes" : "No" },
+      { label: t("common.configured"), value: formatNullableBoolean(configured) },
+      { label: t("common.linked"), value: whatsapp?.linked ? t("common.yes") : t("common.no") },
+      { label: t("common.running"), value: whatsapp?.running ? t("common.yes") : t("common.no") },
       {
-        label: "Last connect",
+        label: t("common.connected"),
+        value: whatsapp?.connected ? t("common.yes") : t("common.no"),
+      },
+      {
+        label: t("common.lastConnect"),
         value: whatsapp?.lastConnectedAt
           ? formatRelativeTimestamp(whatsapp.lastConnectedAt)
-          : "n/a",
+          : t("common.na"),
       },
       {
-        label: "Last message",
-        value: whatsapp?.lastMessageAt ? formatRelativeTimestamp(whatsapp.lastMessageAt) : "n/a",
+        label: t("common.lastMessage"),
+        value: whatsapp?.lastMessageAt
+          ? formatRelativeTimestamp(whatsapp.lastMessageAt)
+          : t("common.na"),
       },
       {
-        label: "Auth age",
-        value: whatsapp?.authAgeMs != null ? formatDurationHuman(whatsapp.authAgeMs) : "n/a",
+        label: t("common.authAge"),
+        value:
+          whatsapp?.authAgeMs != null ? formatDurationHuman(whatsapp.authAgeMs) : t("common.na"),
       },
     ],
     lastError: whatsapp?.lastError,
     extraContent: html`
-      ${
-        props.whatsappMessage
-          ? html`<div class="callout" style="margin-top: 12px;">
-              ${props.whatsappMessage}
-            </div>`
-          : nothing
-      }
-
-      ${
-        props.whatsappQrDataUrl
-          ? html`<div class="qr-wrap">
-              <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
-            </div>`
-          : nothing
-      }
+      ${props.whatsappMessage
+        ? html`<div class="callout" style="margin-top: 12px;">${props.whatsappMessage}</div>`
+        : nothing}
+      ${props.whatsappQrDataUrl
+        ? html`<div class="qr-wrap">
+            <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
+          </div>`
+        : nothing}
     `,
     configSection: renderChannelConfigSection({ channelId: "whatsapp", props }),
     footer: html`<div class="row" style="margin-top: 14px; flex-wrap: wrap;">
@@ -66,32 +66,26 @@ export function renderWhatsAppCard(params: {
         ?disabled=${props.whatsappBusy}
         @click=${() => props.onWhatsAppStart(false)}
       >
-        ${props.whatsappBusy ? "Working…" : "Show QR"}
+        ${props.whatsappBusy ? t("common.working") : t("common.showQr")}
       </button>
       <button
         class="btn"
         ?disabled=${props.whatsappBusy}
         @click=${() => props.onWhatsAppStart(true)}
       >
-        Relink
+        ${t("common.relink")}
       </button>
-      <button
-        class="btn"
-        ?disabled=${props.whatsappBusy}
-        @click=${() => props.onWhatsAppWait()}
-      >
-        Wait for scan
+      <button class="btn" ?disabled=${props.whatsappBusy} @click=${() => props.onWhatsAppWait()}>
+        ${t("common.waitForScan")}
       </button>
       <button
         class="btn danger"
         ?disabled=${props.whatsappBusy}
         @click=${() => props.onWhatsAppLogout()}
       >
-        Logout
+        ${t("common.logout")}
       </button>
-      <button class="btn" @click=${() => props.onRefresh(true)}>
-        Refresh
-      </button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.refresh")}</button>
     </div>`,
   });
 }

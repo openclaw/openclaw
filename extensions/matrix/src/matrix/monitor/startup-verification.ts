@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../runtime-api.js";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import type { MatrixConfig } from "../../types.js";
 import { resolveMatrixStoragePaths } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";
+import { formatMatrixErrorMessage } from "../errors.js";
 import type { MatrixClient, MatrixOwnDeviceVerificationStatus } from "../sdk.js";
 
 const STARTUP_VERIFICATION_STATE_FILENAME = "startup-verification.json";
@@ -134,8 +135,7 @@ function hasPendingSelfVerification(
   }>,
 ): boolean {
   return verifications.some(
-    (entry) =>
-      entry.isSelfVerification === true && entry.completed !== true && entry.pending !== false,
+    (entry) => entry.isSelfVerification && !entry.completed && entry.pending,
   );
 }
 
@@ -220,7 +220,7 @@ export async function ensureMatrixStartupVerification(params: {
       transactionId: request.transactionId ?? undefined,
     };
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
+    const error = formatMatrixErrorMessage(err);
     await writeJsonFileAtomically(statePath, {
       userId: verification.userId,
       deviceId: verification.deviceId,

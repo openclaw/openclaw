@@ -1,37 +1,56 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveBrewExecutable } from "../infra/brew.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBrewExecutable as defaultResolveBrewExecutable } from "../infra/brew.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import {
+  type InstallSafetyOverrides,
+  scanSkillInstallSource,
+  type SkillInstallSpecMetadata,
+} from "../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
-import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
+import type { SkillInstallResult } from "./skills-install.types.js";
 import {
-  hasBinary,
-  loadWorkspaceSkillEntries,
-  resolveSkillsInstallPreferences,
+  hasBinary as defaultHasBinary,
+  loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries,
+  resolveSkillsInstallPreferences as defaultResolveSkillsInstallPreferences,
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+import { resolveSkillSource } from "./skills/source.js";
 
-export type SkillInstallRequest = {
+export type SkillInstallRequest = InstallSafetyOverrides & {
   workspaceDir: string;
   skillName: string;
   installId: string;
   timeoutMs?: number;
   config?: OpenClawConfig;
 };
+export type { SkillInstallResult } from "./skills-install.types.js";
 
-export type SkillInstallResult = {
-  ok: boolean;
-  message: string;
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  warnings?: string[];
+type SkillsInstallDeps = {
+  hasBinary: (bin: string) => boolean;
+  loadWorkspaceSkillEntries: typeof defaultLoadWorkspaceSkillEntries;
+  resolveBrewExecutable: () => string | undefined;
+  resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
 };
+
+const defaultSkillsInstallDeps: SkillsInstallDeps = {
+  hasBinary: defaultHasBinary,
+  loadWorkspaceSkillEntries: defaultLoadWorkspaceSkillEntries,
+  resolveBrewExecutable: defaultResolveBrewExecutable,
+  resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
+};
+
+let skillsInstallDeps = defaultSkillsInstallDeps;
+
+function getSkillsInstallDeps(): SkillsInstallDeps {
+  return skillsInstallDeps;
+}
 
 function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInstallResult {
   if (warnings.length === 0) {
@@ -41,47 +60,6 @@ function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInst
     ...result,
     warnings: warnings.slice(),
   };
-}
-
-function formatScanFindingDetail(
-  rootDir: string,
-  finding: { message: string; file: string; line: number },
-): string {
-  const relativePath = path.relative(rootDir, finding.file);
-  const filePath =
-    relativePath && relativePath !== "." && !relativePath.startsWith("..")
-      ? relativePath
-      : path.basename(finding.file);
-  return `${finding.message} (${filePath}:${finding.line})`;
-}
-
-async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<string[]> {
-  const warnings: string[] = [];
-  const skillName = entry.skill.name;
-  const skillDir = path.resolve(entry.skill.baseDir);
-
-  try {
-    const summary = await scanDirectoryWithSummary(skillDir);
-    if (summary.critical > 0) {
-      const criticalDetails = summary.findings
-        .filter((finding) => finding.severity === "critical")
-        .map((finding) => formatScanFindingDetail(skillDir, finding))
-        .join("; ");
-      warnings.push(
-        `WARNING: Skill "${skillName}" contains dangerous code patterns: ${criticalDetails}`,
-      );
-    } else if (summary.warn > 0) {
-      warnings.push(
-        `Skill "${skillName}" has ${summary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
-      );
-    }
-  } catch (err) {
-    warnings.push(
-      `Skill "${skillName}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
-    );
-  }
-
-  return warnings;
 }
 
 function resolveInstallId(spec: SkillInstallSpec, index: number): string {
@@ -96,6 +74,24 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
     }
   }
   return undefined;
+}
+
+function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpecMetadata {
+  return {
+    ...(spec.id ? { id: spec.id } : {}),
+    kind: spec.kind,
+    ...(spec.label ? { label: spec.label } : {}),
+    ...(spec.bins ? { bins: spec.bins.slice() } : {}),
+    ...(spec.os ? { os: spec.os.slice() } : {}),
+    ...(spec.formula ? { formula: spec.formula } : {}),
+    ...(spec.package ? { package: spec.package } : {}),
+    ...(spec.module ? { module: spec.module } : {}),
+    ...(spec.url ? { url: spec.url } : {}),
+    ...(spec.archive ? { archive: spec.archive } : {}),
+    ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
+    ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
+    ...(spec.targetDir ? { targetDir: spec.targetDir } : {}),
+  };
 }
 
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
@@ -188,7 +184,8 @@ function buildInstallCommand(
 }
 
 async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
-  const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
+  const deps = getSkillsInstallDeps();
+  const exe = brewExe ?? (deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable());
   if (!exe) {
     return undefined;
   }
@@ -266,7 +263,7 @@ async function runCommandSafely(
     return {
       code: null,
       stdout: "",
-      stderr: err instanceof Error ? err.message : String(err),
+      stderr: formatErrorMessage(err),
     };
   }
 }
@@ -292,7 +289,7 @@ async function ensureUvInstalled(params: {
   brewExe?: string;
   timeoutMs: number;
 }): Promise<SkillInstallResult | undefined> {
-  if (params.spec.kind !== "uv" || hasBinary("uv")) {
+  if (params.spec.kind !== "uv" || getSkillsInstallDeps().hasBinary("uv")) {
     return undefined;
   }
 
@@ -336,7 +333,7 @@ async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | 
     });
   }
 
-  if (!hasBinary("sudo")) {
+  if (!getSkillsInstallDeps().hasBinary("sudo")) {
     return createInstallFailure({
       message:
         "go not installed — apt-get is available but sudo is not installed. Install manually: https://go.dev/doc/install",
@@ -374,7 +371,7 @@ async function ensureGoInstalled(params: {
   brewExe?: string;
   timeoutMs: number;
 }): Promise<SkillInstallResult | undefined> {
-  if (params.spec.kind !== "go" || hasBinary("go")) {
+  if (params.spec.kind !== "go" || getSkillsInstallDeps().hasBinary("go")) {
     return undefined;
   }
 
@@ -391,7 +388,7 @@ async function ensureGoInstalled(params: {
     });
   }
 
-  if (hasBinary("apt-get")) {
+  if (getSkillsInstallDeps().hasBinary("apt-get")) {
     return installGoViaApt(params.timeoutMs);
   }
 
@@ -426,7 +423,8 @@ async function executeInstallCommand(params: {
 export async function installSkill(params: SkillInstallRequest): Promise<SkillInstallResult> {
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
-  const entries = loadWorkspaceSkillEntries(workspaceDir);
+  const deps = getSkillsInstallDeps();
+  const entries = deps.loadWorkspaceSkillEntries(workspaceDir);
   const entry = entries.find((item) => item.skill.name === params.skillName);
   if (!entry) {
     return {
@@ -439,14 +437,38 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const spec = findInstallSpec(entry, params.installId);
-  const warnings = await collectSkillInstallScanWarnings(entry);
-
+  const warnings: string[] = [];
+  const skillSource = resolveSkillSource(entry.skill);
+  const normalizedSpec = spec ? normalizeSkillInstallSpec(spec) : undefined;
+  const scanResult = await scanSkillInstallSource({
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    installId: params.installId,
+    ...(normalizedSpec ? { installSpec: normalizedSpec } : {}),
+    logger: {
+      warn: (message) => warnings.push(message),
+    },
+    origin: skillSource,
+    skillName: params.skillName,
+    sourceDir: path.resolve(entry.skill.baseDir),
+  });
+  if (scanResult?.blocked) {
+    return withWarnings(
+      {
+        ok: false,
+        message: scanResult.blocked.reason,
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
+    );
+  }
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
   const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);
-  if (!trustedInstallSources.has(entry.skill.source)) {
+  if (!trustedInstallSources.has(skillSource)) {
     warnings.push(
-      `WARNING: Skill "${params.skillName}" install triggered from non-bundled source "${entry.skill.source}". Verify the install recipe is trusted.`,
+      `WARNING: Skill "${params.skillName}" install triggered from non-bundled source "${skillSource}". Verify the install recipe is trusted.`,
     );
   }
   if (!spec) {
@@ -466,7 +488,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     return withWarnings(downloadResult, warnings);
   }
 
-  const prefs = resolveSkillsInstallPreferences(params.config);
+  const prefs = deps.resolveSkillsInstallPreferences(params.config);
   const command = buildInstallCommand(spec, prefs);
   if (command.error) {
     return withWarnings(
@@ -481,7 +503,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     );
   }
 
-  const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
+  const brewExe = deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
     return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
@@ -501,13 +523,23 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     argv[0] = brewExe;
   }
 
-  let env: NodeJS.ProcessEnv | undefined;
+  const envOverrides: NodeJS.ProcessEnv = {};
   if (spec.kind === "go" && brewExe) {
     const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
     if (brewBin) {
-      env = { GOBIN: brewBin };
+      envOverrides.GOBIN = brewBin;
     }
   }
+  const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
   return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
+    skillsInstallDeps = {
+      ...defaultSkillsInstallDeps,
+      ...overrides,
+    };
+  },
+};

@@ -1,5 +1,16 @@
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
+import type { MattermostFetch } from "./client.js";
+
+export function requestUrl(url: string | URL | Request): string {
+  if (typeof url === "string") {
+    return url;
+  }
+  if (url instanceof URL) {
+    return url.toString();
+  }
+  return url.url;
+}
 
 export function createMattermostTestConfig(): OpenClawConfig {
   return {
@@ -29,17 +40,22 @@ export function createMattermostReactionFetchMock(params: {
   const removeStatus = params.status ?? 204;
   const removePath = `/api/v4/users/${userId}/posts/${params.postId}/reactions/${encodeURIComponent(params.emojiName)}`;
 
-  return vi.fn(async (url: any, init?: any) => {
-    if (String(url).endsWith("/api/v4/users/me")) {
+  return vi.fn<typeof fetch>(async (url, init) => {
+    const urlText = requestUrl(url);
+    if (urlText.endsWith("/api/v4/users/me")) {
       return new Response(JSON.stringify({ id: userId }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
     }
 
-    if (allowAdd && String(url).endsWith("/api/v4/reactions")) {
+    if (allowAdd && urlText.endsWith("/api/v4/reactions")) {
       expect(init?.method).toBe("POST");
-      expect(JSON.parse(init?.body)).toEqual({
+      const requestBody = init?.body;
+      if (typeof requestBody !== "string") {
+        throw new Error("expected string POST body");
+      }
+      expect(JSON.parse(requestBody)).toEqual({
         user_id: userId,
         post_id: params.postId,
         emoji_name: params.emojiName,
@@ -54,7 +70,7 @@ export function createMattermostReactionFetchMock(params: {
       );
     }
 
-    if (allowRemove && String(url).endsWith(removePath)) {
+    if (allowRemove && urlText.endsWith(removePath)) {
       expect(init?.method).toBe("DELETE");
       const responseBody = params.body === undefined ? null : params.body;
       return new Response(
@@ -65,19 +81,19 @@ export function createMattermostReactionFetchMock(params: {
       );
     }
 
-    throw new Error(`unexpected url: ${url}`);
+    throw new Error(`unexpected url: ${urlText}`);
   });
 }
 
 export async function withMockedGlobalFetch<T>(
-  fetchImpl: typeof fetch,
+  fetchImpl: MattermostFetch,
   run: () => Promise<T>,
 ): Promise<T> {
   const prevFetch = globalThis.fetch;
-  (globalThis as any).fetch = fetchImpl;
+  globalThis.fetch = fetchImpl;
   try {
     return await run();
   } finally {
-    (globalThis as any).fetch = prevFetch;
+    globalThis.fetch = prevFetch;
   }
 }

@@ -1,19 +1,29 @@
-import { ChannelType, type Client } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
+import { ChannelType, type Client, type MessageCreateListener } from "@buape/carbon";
+import { Routes, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import {
   resolveChannelModelOverride,
   type OpenClawConfig,
   type ReplyToMode,
 } from "openclaw/plugin-sdk/config-runtime";
-import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
-import type { DiscordMessageEvent } from "./listeners.js";
+import {
+  resolveDiscordChannelIdSafe,
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentIdSafe,
+  resolveDiscordChannelParentSafe,
+} from "./channel-access.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordEmbedText,
+  resolveDiscordForwardedMessagesTextFromSnapshots,
   resolveDiscordMessageChannelId,
 } from "./message-utils.js";
 import { generateThreadTitle } from "./thread-title.js";
@@ -29,6 +39,10 @@ export type DiscordThreadChannel = {
 export type DiscordThreadStarter = {
   text: string;
   author: string;
+  authorId?: string;
+  authorName?: string;
+  authorTag?: string;
+  memberRoleIds?: string[];
   timestamp?: number;
 };
 
@@ -37,6 +51,40 @@ type DiscordThreadParentInfo = {
   name?: string;
   type?: ChannelType;
 };
+
+type DiscordThreadStarterRestEmbed = {
+  title?: string | null;
+  description?: string | null;
+};
+
+type DiscordThreadStarterRestSnapshotMessage = {
+  content?: string | null;
+  attachments?: APIAttachment[] | null;
+  embeds?: DiscordThreadStarterRestEmbed[] | null;
+  sticker_items?: APIStickerItem[] | null;
+};
+
+type DiscordThreadStarterRestAuthor = {
+  id?: string | null;
+  username?: string | null;
+  discriminator?: string | null;
+};
+
+type DiscordThreadStarterRestMember = {
+  nick?: string | null;
+  displayName?: string | null;
+  roles?: string[];
+};
+
+type DiscordThreadStarterRestMessage = {
+  content?: string | null;
+  embeds?: DiscordThreadStarterRestEmbed[] | null;
+  message_snapshots?: Array<{ message?: DiscordThreadStarterRestSnapshotMessage | null }> | null;
+  member?: DiscordThreadStarterRestMember | null;
+  author?: DiscordThreadStarterRestAuthor | null;
+  timestamp?: string | null;
+};
+type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
 // Cache entry with timestamp for TTL-based eviction
 type DiscordThreadStarterCacheEntry = {
@@ -92,6 +140,10 @@ function isDiscordThreadType(type: ChannelType | undefined): boolean {
     type === ChannelType.PrivateThread ||
     type === ChannelType.AnnouncementThread
   );
+}
+
+function isDiscordForumParentType(parentType: ChannelType | undefined): boolean {
+  return parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
 }
 
 function resolveTrimmedDiscordMessageChannelId(params: {
@@ -152,8 +204,12 @@ export async function resolveDiscordThreadParentInfo(params: {
   channelInfo: import("./message-utils.js").DiscordChannelInfo | null;
 }): Promise<DiscordThreadParentInfo> {
   const { threadChannel, channelInfo, client } = params;
+  const parent = resolveDiscordChannelParentSafe(threadChannel);
   let parentId =
-    threadChannel.parentId ?? threadChannel.parent?.id ?? channelInfo?.parentId ?? undefined;
+    resolveDiscordChannelParentIdSafe(threadChannel) ??
+    resolveDiscordChannelIdSafe(parent) ??
+    channelInfo?.parentId ??
+    undefined;
   if (!parentId && threadChannel.id) {
     const threadInfo = await resolveDiscordChannelInfo(client, threadChannel.id);
     parentId = threadInfo?.parentId ?? undefined;
@@ -161,7 +217,7 @@ export async function resolveDiscordThreadParentInfo(params: {
   if (!parentId) {
     return {};
   }
-  let parentName = threadChannel.parent?.name;
+  let parentName = resolveDiscordChannelNameSafe(parent);
   const parentInfo = await resolveDiscordChannelInfo(client, parentId);
   parentName = parentName ?? parentInfo?.name;
   const parentType = parentInfo?.type;
@@ -182,54 +238,113 @@ export async function resolveDiscordThreadStarter(params: {
     return cached;
   }
   try {
-    const parentType = params.parentType;
-    const isForumParent =
-      parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
-    const messageChannelId = isForumParent ? params.channel.id : params.parentId;
+    const messageChannelId = resolveDiscordThreadStarterMessageChannelId(params);
     if (!messageChannelId) {
       return null;
     }
-    const starter = (await params.client.rest.get(
-      Routes.channelMessage(messageChannelId, params.channel.id),
-    )) as {
-      content?: string | null;
-      embeds?: Array<{ title?: string | null; description?: string | null }>;
-      member?: { nick?: string | null; displayName?: string | null };
-      author?: {
-        id?: string | null;
-        username?: string | null;
-        discriminator?: string | null;
-      };
-      timestamp?: string | null;
-    };
+    const starter = await fetchDiscordThreadStarterMessage({
+      client: params.client,
+      messageChannelId,
+      threadId: params.channel.id,
+    });
     if (!starter) {
       return null;
     }
-    const content = starter.content?.trim() ?? "";
-    const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
-    const text = content || embedText;
-    if (!text) {
+    const payload = buildDiscordThreadStarterPayload({
+      starter,
+      resolveTimestampMs: params.resolveTimestampMs,
+    });
+    if (!payload) {
       return null;
     }
-    const author =
-      starter.member?.nick ??
-      starter.member?.displayName ??
-      (starter.author
-        ? starter.author.discriminator && starter.author.discriminator !== "0"
-          ? `${starter.author.username ?? "Unknown"}#${starter.author.discriminator}`
-          : (starter.author.username ?? starter.author.id ?? "Unknown")
-        : "Unknown");
-    const timestamp = params.resolveTimestampMs(starter.timestamp);
-    const payload: DiscordThreadStarter = {
-      text,
-      author,
-      timestamp: timestamp ?? undefined,
-    };
     setCachedThreadStarter(cacheKey, payload, Date.now());
     return payload;
   } catch {
     return null;
   }
+}
+
+function resolveDiscordThreadStarterMessageChannelId(params: {
+  channel: DiscordThreadChannel;
+  parentId?: string;
+  parentType?: ChannelType;
+}): string | undefined {
+  return isDiscordForumParentType(params.parentType) ? params.channel.id : params.parentId;
+}
+
+async function fetchDiscordThreadStarterMessage(params: {
+  client: Client;
+  messageChannelId: string;
+  threadId: string;
+}): Promise<DiscordThreadStarterRestMessage | null> {
+  const starter = await params.client.rest.get(
+    Routes.channelMessage(params.messageChannelId, params.threadId),
+  );
+  return starter ? (starter as DiscordThreadStarterRestMessage) : null;
+}
+
+function buildDiscordThreadStarterPayload(params: {
+  starter: DiscordThreadStarterRestMessage;
+  resolveTimestampMs: (value?: string | null) => number | undefined;
+}): DiscordThreadStarter | null {
+  const text = resolveDiscordThreadStarterText(params.starter);
+  if (!text) {
+    return null;
+  }
+  return {
+    text,
+    ...resolveDiscordThreadStarterIdentity(params.starter),
+    timestamp: params.resolveTimestampMs(params.starter.timestamp) ?? undefined,
+  };
+}
+
+function resolveDiscordThreadStarterText(starter: DiscordThreadStarterRestMessage): string {
+  const content = normalizeOptionalString(starter.content) ?? "";
+  const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
+  const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(starter.message_snapshots);
+  return content || embedText || forwardedText;
+}
+
+function resolveDiscordThreadStarterIdentity(
+  starter: DiscordThreadStarterRestMessage,
+): Omit<DiscordThreadStarter, "text" | "timestamp"> {
+  const author = resolveDiscordThreadStarterAuthor(starter);
+  return {
+    author,
+    authorId: starter.author?.id ?? undefined,
+    authorName: starter.author?.username ?? undefined,
+    authorTag: resolveDiscordThreadStarterAuthorTag(starter.author),
+    memberRoleIds: resolveDiscordThreadStarterRoleIds(starter.member),
+  };
+}
+
+function resolveDiscordThreadStarterAuthor(starter: DiscordThreadStarterRestMessage): string {
+  return (
+    starter.member?.nick ??
+    starter.member?.displayName ??
+    resolveDiscordThreadStarterAuthorTag(starter.author) ??
+    starter.author?.username ??
+    starter.author?.id ??
+    "Unknown"
+  );
+}
+
+function resolveDiscordThreadStarterAuthorTag(
+  author: DiscordThreadStarterRestAuthor | null | undefined,
+): string | undefined {
+  if (!author?.username || !author.discriminator) {
+    return undefined;
+  }
+  if (author.discriminator !== "0") {
+    return `${author.username}#${author.discriminator}`;
+  }
+  return author.username;
+}
+
+function resolveDiscordThreadStarterRoleIds(
+  member: DiscordThreadStarterRestMember | null | undefined,
+): string[] | undefined {
+  return Array.isArray(member?.roles) ? member.roles : undefined;
 }
 
 export function resolveDiscordReplyTarget(opts: {
@@ -240,7 +355,7 @@ export function resolveDiscordReplyTarget(opts: {
   if (opts.replyToMode === "off") {
     return undefined;
   }
-  const replyToId = opts.replyToId?.trim();
+  const replyToId = normalizeOptionalString(opts.replyToId);
   if (!replyToId) {
     return undefined;
   }
@@ -274,7 +389,7 @@ export type DiscordAutoThreadContext = {
   To: string;
   OriginatingTo: string;
   SessionKey: string;
-  ParentSessionKey: string;
+  ParentSessionKey?: string;
 };
 
 export function resolveDiscordAutoThreadContext(params: {
@@ -282,12 +397,13 @@ export function resolveDiscordAutoThreadContext(params: {
   channel: string;
   messageChannelId: string;
   createdThreadId?: string | null;
+  parentInheritanceEnabled?: boolean;
 }): DiscordAutoThreadContext | null {
-  const createdThreadId = String(params.createdThreadId ?? "").trim();
+  const createdThreadId = normalizeOptionalStringifiedId(params.createdThreadId) ?? "";
   if (!createdThreadId) {
     return null;
   }
-  const messageChannelId = params.messageChannelId.trim();
+  const messageChannelId = normalizeOptionalString(params.messageChannelId) ?? "";
   if (!messageChannelId) {
     return null;
   }
@@ -297,11 +413,14 @@ export function resolveDiscordAutoThreadContext(params: {
     channel: params.channel,
     peer: { kind: "channel", id: createdThreadId },
   });
-  const parentSessionKey = buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: params.channel,
-    peer: { kind: "channel", id: messageChannelId },
-  });
+  const parentSessionKey =
+    params.parentInheritanceEnabled === true
+      ? buildAgentSessionKey({
+          agentId: params.agentId,
+          channel: params.channel,
+          peer: { kind: "channel", id: messageChannelId },
+        })
+      : undefined;
 
   return {
     createdThreadId,
@@ -309,7 +428,7 @@ export function resolveDiscordAutoThreadContext(params: {
     To: `channel:${createdThreadId}`,
     OriginatingTo: `channel:${createdThreadId}`,
     SessionKey: threadSessionKey,
-    ParentSessionKey: parentSessionKey,
+    ...(parentSessionKey ? { ParentSessionKey: parentSessionKey } : {}),
   };
 }
 
@@ -341,6 +460,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
     agentId: string;
     channel: string;
     cfg?: OpenClawConfig;
+    threadParentInheritanceEnabled?: boolean;
   },
 ): Promise<DiscordAutoThreadReplyPlan> {
   const messageChannelId = resolveTrimmedDiscordMessageChannelId(params);
@@ -376,6 +496,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
         channel: params.channel,
         messageChannelId,
         createdThreadId,
+        parentInheritanceEnabled: params.threadParentInheritanceEnabled,
       })
     : null;
   return { ...deliveryPlan, createdThreadId, autoThreadContext };
@@ -425,7 +546,7 @@ export async function maybeCreateDiscordAutoThread(
         },
       },
     )) as { id?: string };
-    const createdId = created?.id ? String(created.id) : "";
+    const createdId = created?.id || "";
     if (
       createdId &&
       params.channelConfig?.autoThreadName === "generated" &&
@@ -464,7 +585,7 @@ export async function maybeCreateDiscordAutoThread(
       const msg = (await params.client.rest.get(
         Routes.channelMessage(messageChannelId, params.message.id),
       )) as { thread?: { id?: string } };
-      const existingThreadId = msg?.thread?.id ? String(msg.thread.id) : "";
+      const existingThreadId = msg?.thread?.id || "";
       if (existingThreadId) {
         logVerbose(
           `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,
@@ -501,6 +622,7 @@ function resolveDiscordThreadTitleModelRef(params: {
     cfg: params.cfg,
     channel,
     groupId: params.threadId,
+    groupChatType: "channel",
     groupChannel,
     groupSubject: groupChannel,
     parentSessionKey,

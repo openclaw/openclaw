@@ -19,12 +19,18 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
   };
 });
 
-import { isOversizedForSummary, summarizeWithFallback } from "./compaction.js";
+let isOversizedForSummary: typeof import("./compaction.js").isOversizedForSummary;
+let summarizeWithFallback: typeof import("./compaction.js").summarizeWithFallback;
+
+async function loadFreshCompactionModuleForTest() {
+  vi.resetModules();
+  ({ isOversizedForSummary, summarizeWithFallback } = await import("./compaction.js"));
+}
 
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
     content: [{ type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } }],
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason: "toolUse",
     timestamp,
   });
@@ -43,8 +49,12 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 }
 
 describe("compaction toolResult details stripping", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    await loadFreshCompactionModuleForTest();
+    piCodingAgentMocks.generateSummary.mockReset();
+    piCodingAgentMocks.generateSummary.mockResolvedValue("summary");
+    piCodingAgentMocks.estimateTokens.mockReset();
+    piCodingAgentMocks.estimateTokens.mockImplementation((_message: unknown) => 1);
   });
 
   it("does not pass toolResult.details into generateSummary", async () => {

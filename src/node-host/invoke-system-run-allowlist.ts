@@ -17,6 +17,7 @@ export type SystemRunAllowlistAnalysis = {
   allowlistMatches: ExecAllowlistEntry[];
   allowlistSatisfied: boolean;
   segments: ExecCommandSegment[];
+  segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
 };
 
 export function evaluateSystemRunAllowlist(params: {
@@ -53,6 +54,7 @@ export function evaluateSystemRunAllowlist(params: {
           ? allowlistEval.allowlistSatisfied
           : false,
       segments: allowlistEval.segments,
+      segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
     };
   }
 
@@ -73,6 +75,7 @@ export function evaluateSystemRunAllowlist(params: {
     allowlistSatisfied:
       params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
     segments: analysis.segments,
+    segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
   };
 }
 

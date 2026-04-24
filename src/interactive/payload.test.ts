@@ -4,15 +4,19 @@ import {
   hasReplyContent,
   hasReplyPayloadContent,
   normalizeInteractiveReply,
+  presentationToInteractiveReply,
+  renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
 } from "./payload.js";
 
 describe("hasReplyChannelData", () => {
-  it("accepts non-empty objects only", () => {
-    expect(hasReplyChannelData(undefined)).toBe(false);
-    expect(hasReplyChannelData({})).toBe(false);
-    expect(hasReplyChannelData([])).toBe(false);
-    expect(hasReplyChannelData({ slack: { blocks: [] } })).toBe(true);
+  it.each([
+    { value: undefined, expected: false },
+    { value: {}, expected: false },
+    { value: [], expected: false },
+    { value: { slack: { blocks: [] } }, expected: true },
+  ] as const)("accepts non-empty objects only: %j", ({ value, expected }) => {
+    expect(hasReplyChannelData(value)).toBe(expected);
   });
 });
 
@@ -28,20 +32,24 @@ describe("hasReplyContent", () => {
     ).toBe(false);
   });
 
-  it("accepts shared interactive blocks and explicit extra content", () => {
-    expect(
-      hasReplyContent({
+  it.each([
+    {
+      name: "shared interactive blocks",
+      input: {
         interactive: {
           blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
         },
-      }),
-    ).toBe(true);
-    expect(
-      hasReplyContent({
+      },
+    },
+    {
+      name: "explicit extra content",
+      input: {
         text: "   ",
         extraContent: true,
-      }),
-    ).toBe(true);
+      },
+    },
+  ] as const)("accepts $name", ({ input }) => {
+    expect(hasReplyContent(input)).toBe(true);
   });
 });
 
@@ -55,28 +63,28 @@ describe("hasReplyPayloadContent", () => {
     ).toBe(true);
   });
 
-  it("accepts explicit channel-data overrides and extra content", () => {
-    expect(
-      hasReplyPayloadContent(
-        {
-          text: "   ",
-          channelData: {},
-        },
-        {
-          hasChannelData: true,
-        },
-      ),
-    ).toBe(true);
-    expect(
-      hasReplyPayloadContent(
-        {
-          text: "   ",
-        },
-        {
-          extraContent: true,
-        },
-      ),
-    ).toBe(true);
+  it.each([
+    {
+      name: "explicit channel-data overrides",
+      payload: {
+        text: "   ",
+        channelData: {},
+      },
+      options: {
+        hasChannelData: true,
+      },
+    },
+    {
+      name: "extra content",
+      payload: {
+        text: "   ",
+      },
+      options: {
+        extraContent: true,
+      },
+    },
+  ] as const)("accepts $name", ({ payload, options }) => {
+    expect(hasReplyPayloadContent(payload, options)).toBe(true);
   });
 });
 
@@ -98,5 +106,28 @@ describe("interactive payload helpers", () => {
       ],
     });
     expect(resolveInteractiveTextFallback({ interactive })).toBe("First\n\nSecond");
+  });
+
+  it("preserves URL-only presentation buttons for native link renderers and fallback text", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Docs", url: "https://example.com/docs" }],
+        },
+      ],
+    };
+
+    expect(presentationToInteractiveReply(presentation)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Docs", url: "https://example.com/docs" }],
+        },
+      ],
+    });
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      "- Docs: https://example.com/docs",
+    );
   });
 });

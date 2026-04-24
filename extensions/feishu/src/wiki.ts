@@ -217,7 +217,6 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
               case "rename":
                 return jsonToolResult(await renameNode(client, p.space_id, p.node_token, p.title));
               default:
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return unknownToolActionResult((p as { action?: unknown }).action);
             }
           } catch (err) {
@@ -229,5 +228,5 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
     { name: "feishu_wiki" },
   );
 
-  api.logger.info?.(`feishu_wiki: Registered feishu_wiki tool`);
+  api.logger.debug?.(`feishu_wiki: Registered feishu_wiki tool`);
 }

@@ -49,6 +49,7 @@ const MAX_LOCK_HOLD_MS = 2_147_000_000;
 
 type CleanupState = {
   registered: boolean;
+  exitHandler?: () => void;
   cleanupHandlers: Map<CleanupSignal, () => void>;
 };
 
@@ -72,6 +73,7 @@ function resolveCleanupState(): CleanupState {
   if (!proc[CLEANUP_STATE_KEY]) {
     proc[CLEANUP_STATE_KEY] = {
       registered: false,
+      exitHandler: undefined,
       cleanupHandlers: new Map<CleanupSignal, () => void>(),
     };
   }
@@ -198,9 +200,8 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       continue;
     }
 
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`,
+    process.stderr.write(
+      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}\n`,
     );
 
     const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
@@ -220,7 +221,14 @@ function stopWatchdogTimer(): void {
   watchdogState.started = false;
 }
 
+function shouldStartBackgroundWatchdog(): boolean {
+  return process.env.VITEST !== "true" || process.env.OPENCLAW_TEST_SESSION_LOCK_WATCHDOG === "1";
+}
+
 function ensureWatchdogStarted(intervalMs: number): void {
+  if (!shouldStartBackgroundWatchdog()) {
+    return;
+  }
   const watchdogState = resolveWatchdogState();
   if (watchdogState.started) {
     return;
@@ -255,12 +263,13 @@ function handleTerminationSignal(signal: CleanupSignal): void {
 
 function registerCleanupHandlers(): void {
   const cleanupState = resolveCleanupState();
-  if (!cleanupState.registered) {
-    cleanupState.registered = true;
+  cleanupState.registered = true;
+  if (!cleanupState.exitHandler) {
     // Cleanup on normal exit and process.exit() calls
-    process.on("exit", () => {
+    cleanupState.exitHandler = () => {
       releaseAllLocksSync();
-    });
+    };
+    process.on("exit", cleanupState.exitHandler);
   }
 
   ensureWatchdogStarted(DEFAULT_WATCHDOG_INTERVAL_MS);
@@ -282,6 +291,10 @@ function registerCleanupHandlers(): void {
 
 function unregisterCleanupHandlers(): void {
   const cleanupState = resolveCleanupState();
+  if (cleanupState.exitHandler) {
+    process.off("exit", cleanupState.exitHandler);
+    cleanupState.exitHandler = undefined;
+  }
   for (const [signal, handler] of cleanupState.cleanupHandlers) {
     process.off(signal, handler);
   }
@@ -469,6 +482,7 @@ export async function acquireSessionWriteLock(params: {
   release: () => Promise<void>;
 }> {
   registerCleanupHandlers();
+  const allowReentrant = params.allowReentrant ?? false;
   const timeoutMs = resolvePositiveMs(params.timeoutMs, 10_000, { allowInfinity: true });
   const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
@@ -484,7 +498,6 @@ export async function acquireSessionWriteLock(params: {
   const normalizedSessionFile = path.join(normalizedDir, path.basename(sessionFile));
   const lockPath = `${normalizedSessionFile}.lock`;
 
-  const allowReentrant = params.allowReentrant ?? true;
   const held = HELD_LOCKS.get(normalizedSessionFile);
   if (allowReentrant && held) {
     held.count += 1;
@@ -560,7 +573,11 @@ export async function acquireSessionWriteLock(params: {
         continue;
       }
 
-      const delay = Math.min(1000, 50 * attempt);
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        break;
+      }
+      const delay = Math.min(1000, 50 * attempt, remainingMs);
       await new Promise((r) => setTimeout(r, delay));
     }
   }

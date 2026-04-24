@@ -2,10 +2,8 @@
 summary: "Hubs that link to every OpenClaw doc"
 read_when:
   - You want a complete map of the documentation
-title: "Docs Hubs"
+title: "Docs hubs"
 ---
-
-# Docs hubs
 
 <Note>
 If you are new to OpenClaw, start with [Getting Started](/start/getting-started).
@@ -73,14 +71,15 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Telegram](/channels/telegram)
 - [Slack](/channels/slack)
 - [Discord](/channels/discord)
-- [Mattermost](/channels/mattermost) (plugin)
+- [Mattermost](/channels/mattermost)
 - [Signal](/channels/signal)
 - [BlueBubbles (iMessage)](/channels/bluebubbles)
+- [QQ Bot](/channels/qqbot)
 - [iMessage (legacy)](/channels/imessage)
 - [Location parsing](/channels/location)
 - [WebChat](/web/webchat)
-- [Webhooks](/automation/webhook)
-- [Gmail Pub/Sub](/automation/gmail-pubsub)
+- [Webhooks](/automation/cron-jobs#webhooks)
+- [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration)
 
 ## Gateway + operations
 
@@ -111,7 +110,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [PDF tool](/tools/pdf)
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat)
+- [Automation & Tasks](/automation)
 - [Thinking + verbose](/tools/thinking)
 - [Models](/concepts/models)
 - [Sub-agents](/tools/subagents)
@@ -119,7 +118,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Terminal UI](/web/tui)
 - [Browser control](/tools/browser)
 - [Browser (Linux troubleshooting)](/tools/browser-linux-troubleshooting)
-- [Polls](/automation/poll)
+- [Polls](/cli/message)
 
 ## Nodes, media, voice
 
@@ -161,7 +160,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
 
-## Extensions + plugins
+## Plugins
 
 - [Plugins overview](/tools/plugin)
 - [Building plugins](/plugins/building-plugins)
@@ -196,3 +195,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Testing](/reference/test)
 - [Release policy](/reference/RELEASING)
 - [Device models](/reference/device-models)
+
+## Related
+
+- [Getting started](/start/getting-started)

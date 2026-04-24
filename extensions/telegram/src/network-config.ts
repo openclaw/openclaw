@@ -1,7 +1,7 @@
 import process from "node:process";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/infra-runtime";
-import { isWSL2Sync } from "openclaw/plugin-sdk/infra-runtime";
+import { isTruthyEnvValue, isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV =
   "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";
@@ -80,15 +80,15 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
       : Number(process.versions.node.split(".")[0]);
 
   // Check environment variable
-  const envValue = env[TELEGRAM_DNS_RESULT_ORDER_ENV]?.trim().toLowerCase();
+  const envValue = normalizeOptionalLowercaseString(env[TELEGRAM_DNS_RESULT_ORDER_ENV]);
   if (envValue === "ipv4first" || envValue === "verbatim") {
     return { value: envValue, source: `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}` };
   }
 
   // Check config
-  const configValue = (params?.network as { dnsResultOrder?: string } | undefined)?.dnsResultOrder
-    ?.trim()
-    .toLowerCase();
+  const configValue = normalizeOptionalLowercaseString(
+    (params?.network as { dnsResultOrder?: string } | undefined)?.dnsResultOrder,
+  );
   if (configValue === "ipv4first" || configValue === "verbatim") {
     return { value: configValue, source: "config" };
   }

@@ -1,12 +1,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
 async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
-  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-launcher-"));
-  fixtureRoots.push(fixtureRoot);
+  const fixtureRoot = makeTempDir(fixtureRoots, "openclaw-launcher-");
   await fs.copyFile(
     path.resolve(process.cwd(), "openclaw.mjs"),
     path.join(fixtureRoot, "openclaw.mjs"),
@@ -24,11 +23,7 @@ describe("openclaw launcher", () => {
   const fixtureRoots: string[] = [];
 
   afterEach(async () => {
-    await Promise.all(
-      fixtureRoots.splice(0).map(async (fixtureRoot) => {
-        await fs.rm(fixtureRoot, { recursive: true, force: true });
-      }),
-    );
+    cleanupTempDirs(fixtureRoots);
   });
 
   it("surfaces transitive entry import failures instead of masking them as missing dist", async () => {

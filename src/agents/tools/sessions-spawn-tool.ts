@@ -1,14 +1,32 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
+import { loadConfig } from "../../config/config.js";
+import { callGateway } from "../../gateway/call.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import { registerSubagentRun } from "../subagent-registry.js";
+import {
+  SUBAGENT_SPAWN_CONTEXT_MODES,
+  SUBAGENT_SPAWN_MODES,
+  spawnSubagentDirect,
+} from "../subagent-spawn.js";
+import {
+  describeSessionsSpawnTool,
+  SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
+import {
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./sessions-helpers.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+// Keep the schema local to avoid a circular import through acp-spawn/openclaw-tools.
+const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
   "transport",
@@ -19,6 +37,65 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
+
+type AcpSpawnModule = typeof import("../acp-spawn.js");
+
+let acpSpawnModulePromise: Promise<AcpSpawnModule> | undefined;
+
+async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
+  acpSpawnModulePromise ??= import("../acp-spawn.js");
+  return await acpSpawnModulePromise;
+}
+
+function summarizeError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  return "error";
+}
+
+function addRoleToFailureResult<T extends { status: string }>(
+  result: T,
+  role: string | undefined,
+): T | (T & { role: string }) {
+  if (!role || (result.status !== "error" && result.status !== "forbidden")) {
+    return result;
+  }
+  return { ...result, role };
+}
+
+function resolveTrackedSpawnMode(params: {
+  requestedMode?: "run" | "session";
+  threadRequested: boolean;
+}): "run" | "session" {
+  if (params.requestedMode === "run" || params.requestedMode === "session") {
+    return params.requestedMode;
+  }
+  return params.threadRequested ? "session" : "run";
+}
+
+async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
+  const key = sessionKey.trim();
+  if (!key) {
+    return;
+  }
+  try {
+    await callGateway({
+      method: "sessions.delete",
+      params: {
+        key,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -41,7 +118,17 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
+  context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
+    description:
+      'Native subagent context mode. Omit or use "isolated" for a clean child session; use "fork" only when the child needs the requester transcript context.',
+  }),
+  streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
+  lightContext: Type.Optional(
+    Type.Boolean({
+      description:
+        "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
+    }),
+  ),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -80,8 +167,8 @@ export function createSessionsSpawnTool(
   return {
     label: "Sessions",
     name: "sessions_spawn",
-    description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+    displaySummary: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsSpawnTool(),
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -94,7 +181,7 @@ export function createSessionsSpawnTool(
         );
       }
       const task = readStringParam(params, "task", { required: true });
-      const label = typeof params.label === "string" ? params.label.trim() : "";
+      const label = readStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
@@ -104,8 +191,18 @@ export function createSessionsSpawnTool(
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+      const expectsCompletionMessage = params.expectsCompletionMessage !== false;
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
+      const context =
+        params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const lightContext = params.lightContext === true;
+      if (runtime === "acp" && lightContext) {
+        throw new Error("lightContext is only supported for runtime='subagent'.");
+      }
+      if (runtime === "acp" && context === "fork") {
+        throw new Error('context="fork" is only supported for runtime="subagent".');
+      }
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -127,10 +224,13 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
+      const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+
       if (streamTo && runtime !== "acp") {
         return jsonResult({
           status: "error",
           error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
+          ...roleContext,
         });
       }
 
@@ -138,15 +238,18 @@ export function createSessionsSpawnTool(
         return jsonResult({
           status: "error",
           error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
+          ...roleContext,
         });
       }
 
       if (runtime === "acp") {
+        const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
             status: "error",
             error:
               "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
+            ...roleContext,
           });
         }
         const result = await spawnAcpDirect(
@@ -155,8 +258,9 @@ export function createSessionsSpawnTool(
             label: label || undefined,
             agentId: requestedAgentId,
             resumeSessionId,
+            model: modelOverride,
             cwd,
-            mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+            mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,
             sandbox,
             streamTo,
@@ -167,10 +271,73 @@ export function createSessionsSpawnTool(
             agentAccountId: opts?.agentAccountId,
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
+            agentGroupId: opts?.agentGroupId ?? undefined,
+            agentGroupSpace: opts?.agentGroupSpace,
+            agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
           },
         );
-        return jsonResult(result);
+        const childSessionKey = result.childSessionKey?.trim();
+        const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
+        const shouldTrackViaRegistry =
+          result.status === "accepted" &&
+          Boolean(childSessionKey) &&
+          Boolean(childRunId) &&
+          streamTo !== "parent";
+        if (shouldTrackViaRegistry && childSessionKey && childRunId) {
+          const cfg = loadConfig();
+          const trackedSpawnMode = resolveTrackedSpawnMode({
+            requestedMode: result.mode,
+            threadRequested: thread,
+          });
+          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
+          const { mainKey, alias } = resolveMainSessionAlias(cfg);
+          const requesterInternalKey = opts?.agentSessionKey
+            ? resolveInternalSessionKey({
+                key: opts.agentSessionKey,
+                alias,
+                mainKey,
+              })
+            : alias;
+          const requesterDisplayKey = resolveDisplaySessionKey({
+            key: requesterInternalKey,
+            alias,
+            mainKey,
+          });
+          const requesterOrigin = normalizeDeliveryContext({
+            channel: opts?.agentChannel,
+            accountId: opts?.agentAccountId,
+            to: opts?.agentTo,
+            threadId: opts?.agentThreadId,
+          });
+          try {
+            registerSubagentRun({
+              runId: childRunId,
+              childSessionKey,
+              requesterSessionKey: requesterInternalKey,
+              requesterOrigin,
+              requesterDisplayKey,
+              task,
+              cleanup: trackedCleanup,
+              label: label || undefined,
+              runTimeoutSeconds,
+              expectsCompletionMessage,
+              spawnMode: trackedSpawnMode,
+            });
+          } catch (err) {
+            // Best-effort only: the ACP turn was already started above, so deleting the
+            // child session record here does not guarantee the in-flight run was aborted.
+            await cleanupUntrackedAcpSession(childSessionKey);
+            return jsonResult({
+              status: "error",
+              error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
+              childSessionKey,
+              runId: childRunId,
+              ...roleContext,
+            });
+          }
+        }
+        return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
 
       const result = await spawnSubagentDirect(
@@ -185,7 +352,9 @@ export function createSessionsSpawnTool(
           mode,
           cleanup,
           sandbox,
-          expectsCompletionMessage: true,
+          context,
+          lightContext,
+          expectsCompletionMessage,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
@@ -201,12 +370,13 @@ export function createSessionsSpawnTool(
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
+          agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
         },
       );
 
-      return jsonResult(result);
+      return jsonResult(addRoleToFailureResult(result, requestedAgentId));
     },
   };
 }

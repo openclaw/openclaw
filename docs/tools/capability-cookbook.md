@@ -4,11 +4,9 @@ read_when:
   - Adding a new core capability and plugin registration surface
   - Deciding whether code belongs in core, a vendor plugin, or a feature plugin
   - Wiring a new runtime helper for channels or tools
-title: "Adding Capabilities (Contributor Guide)"
+title: "Adding capabilities (contributor guide)"
 sidebarTitle: "Adding Capabilities"
 ---
-
-# Adding Capabilities
 
 <Info>
   This is a **contributor guide** for OpenClaw core developers. If you are
@@ -56,7 +54,7 @@ Core:
 - request/response types
 - provider registry + resolution
 - fallback behavior
-- config schema and labels/help
+- config schema plus propagated `title` / `description` docs metadata on nested object, wildcard, array-item, and composition nodes
 - runtime helper surface
 
 Vendor plugin:
@@ -85,7 +83,7 @@ For a new capability, expect to touch these areas:
 - `src/plugins/runtime/index.ts`
 - `src/plugin-sdk/<capability>.ts`
 - `src/plugin-sdk/<capability>-runtime.ts`
-- one or more `extensions/<vendor>/...`
+- one or more bundled plugin packages
 - config/docs/tests
 
 ## Example: image generation
@@ -95,7 +93,7 @@ Image generation follows the standard shape:
 1. core defines `ImageGenerationProvider`
 2. core exposes `registerImageGenerationProvider(...)`
 3. core exposes `runtime.imageGeneration.generate(...)`
-4. the `openai` and `google` plugins register vendor-backed implementations
+4. the `openai`, `google`, `fal`, and `minimax` plugins register vendor-backed implementations
 5. future vendors can register the same contract without changing channels/tools
 
 The config key is separate from vision-analysis routing:
@@ -117,3 +115,9 @@ Before shipping a new capability, verify:
 
 If a PR skips the capability layer and hardcodes vendor behavior into a
 channel/tool, send it back and define the contract first.
+
+## Related
+
+- [Plugin](/tools/plugin)
+- [Creating skills](/tools/creating-skills)
+- [Tools and plugins](/tools)

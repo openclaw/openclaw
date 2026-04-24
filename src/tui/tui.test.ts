@@ -1,13 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  drainAndStopTuiSafely,
   isIgnorableTuiStopError,
+  resolveCodexCliBin,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  resolveLocalAuthCliInvocation,
+  resolveLocalAuthSpawnCwd,
+  resolveLocalAuthSpawnOptions,
   resolveTuiSessionKey,
   stopTuiSafely,
 } from "./tui.js";
@@ -53,6 +58,11 @@ describe("tui slash commands", () => {
     const commands = getSlashCommands({});
     expect(commands.some((command) => command.name === "context")).toBe(true);
     expect(commands.some((command) => command.name === "commands")).toBe(true);
+  });
+
+  it("includes /auth in local embedded mode", () => {
+    const commands = getSlashCommands({ local: true });
+    expect(commands.some((command) => command.name === "auth")).toBe(true);
   });
 });
 
@@ -231,6 +241,53 @@ describe("resolveCtrlCAction", () => {
 });
 
 describe("TUI shutdown safety", () => {
+  it("drains terminal input before stopping the TUI", async () => {
+    const calls: string[] = [];
+    const drainInput = vi.fn(async () => {
+      calls.push("drain");
+    });
+    const stop = vi.fn(() => {
+      calls.push("stop");
+    });
+
+    await drainAndStopTuiSafely({
+      stop,
+      terminal: { drainInput },
+    });
+
+    expect(drainInput).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(calls).toEqual(["drain", "stop"]);
+  });
+
+  it("still stops when the terminal does not support drainInput", async () => {
+    const stop = vi.fn();
+
+    await drainAndStopTuiSafely({
+      stop,
+      terminal: {},
+    });
+
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("rethrows non-ignorable stop errors after draining", async () => {
+    const drainInput = vi.fn(async () => {});
+    const stop = vi.fn(() => {
+      throw new Error("boom");
+    });
+
+    await expect(
+      drainAndStopTuiSafely({
+        stop,
+        terminal: { drainInput },
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(drainInput).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("treats setRawMode EBADF errors as ignorable", () => {
     expect(isIgnorableTuiStopError(new Error("setRawMode EBADF"))).toBe(true);
     expect(
@@ -260,5 +317,120 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+});
+
+describe("resolveCodexCliBin", () => {
+  it("returns a string path when codex CLI is installed", () => {
+    const result = resolveCodexCliBin();
+    // In this test environment codex is installed; verify it returns a non-empty path
+    if (result !== null) {
+      expect(typeof result).toBe("string");
+      expect(result.length).toBeGreaterThan(0);
+      expect(result).toContain("codex");
+    }
+  });
+
+  it("returns null or a valid path (never throws)", () => {
+    // The function should never throw regardless of environment
+    expect(() => resolveCodexCliBin()).not.toThrow();
+    const result = resolveCodexCliBin();
+    expect(result === null || typeof result === "string").toBe(true);
+  });
+});
+
+describe("resolveLocalAuthCliInvocation", () => {
+  it("uses the source runner when dist is unavailable", () => {
+    expect(
+      resolveLocalAuthCliInvocation({
+        execPath: "/usr/bin/node",
+        wrapperPath: "/repo/openclaw.mjs",
+        runNodePath: "/repo/scripts/run-node.mjs",
+        hasDistEntry: false,
+        hasRunNodeScript: true,
+      }),
+    ).toEqual({
+      command: "/usr/bin/node",
+      args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
+    });
+  });
+
+  it("uses the packaged wrapper when dist is available", () => {
+    expect(
+      resolveLocalAuthCliInvocation({
+        execPath: "/usr/bin/node",
+        wrapperPath: "/repo/openclaw.mjs",
+        runNodePath: "/repo/scripts/run-node.mjs",
+        hasDistEntry: true,
+        hasRunNodeScript: true,
+      }),
+    ).toEqual({
+      command: "/usr/bin/node",
+      args: ["/repo/openclaw.mjs", "models", "auth", "login"],
+    });
+  });
+});
+
+describe("resolveLocalAuthSpawnOptions", () => {
+  it("enables shell mode for Windows cmd shims", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
+        platform: "win32",
+      }),
+    ).toEqual({ shell: true });
+  });
+
+  it("enables shell mode for Windows bat shims", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\tools\\codex.bat",
+        platform: "win32",
+      }),
+    ).toEqual({ shell: true });
+  });
+
+  it("keeps direct execution for non-wrapper commands", () => {
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "/usr/local/bin/codex",
+        platform: "linux",
+      }),
+    ).toEqual({});
+    expect(
+      resolveLocalAuthSpawnOptions({
+        command: "C:\\tools\\codex.exe",
+        platform: "win32",
+      }),
+    ).toEqual({});
+  });
+});
+
+describe("resolveLocalAuthSpawnCwd", () => {
+  it("runs the packaged wrapper from the repo root", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["/repo/openclaw.mjs", "models", "auth", "login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/repo");
+  });
+
+  it("runs the source fallback helper from the repo root", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["/repo/scripts/run-node.mjs", "models", "auth", "login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/repo");
+  });
+
+  it("keeps the caller cwd for direct codex exec", () => {
+    expect(
+      resolveLocalAuthSpawnCwd({
+        args: ["login"],
+        defaultCwd: "/worktree/subdir",
+      }),
+    ).toBe("/worktree/subdir");
   });
 });

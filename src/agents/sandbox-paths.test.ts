@@ -130,6 +130,16 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it("preserves remote mxc:// media sources", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "mxc://matrix.org/abc123def456",
+        sandboxRoot: sandboxDir,
+      });
+      expect(result).toBe("mxc://matrix.org/abc123def456");
+    });
+  });
+
   // Group 3: Rejections (security)
   it.each([
     {
@@ -168,9 +178,24 @@ describe("resolveSandboxedMediaSource", () => {
       expected: /remote hosts are not allowed/i,
     },
     {
+      name: "file:// container URLs with remote hosts",
+      media: "file://attacker/workspace/photo.png",
+      expected: /remote hosts are not allowed/i,
+    },
+    {
       name: "invalid file:// URLs",
       media: "file://not a valid url\x00",
       expected: /Invalid file:\/\/ URL/,
+    },
+    {
+      name: "file:// URLs with malformed container pathname encoding",
+      media: "file:///workspace/%E0%A4%A",
+      expected: /Invalid file:\/\/ URL/,
+    },
+    {
+      name: "file:// URLs with encoded separators in the pathname",
+      media: "file:///workspace/%2FREADME.md",
+      expected: /cannot encode path separators/i,
     },
   ])("rejects $name", async ({ media, expected }) => {
     await withSandboxRoot(async (sandboxDir) => {

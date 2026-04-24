@@ -1,6 +1,6 @@
 ---
 summary: “Per-agent sandbox + tool restrictions, precedence, and examples”
-title: Multi-Agent Sandbox & Tools
+title: Multi-agent sandbox & tools
 read_when: “You want per-agent sandboxing or per-agent tool allow/deny policies in a multi-agent gateway.”
 status: active
 ---
@@ -205,7 +205,7 @@ The filtering order is:
 Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
 If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
 If `agents.list[].tools.profile` is set, it overrides `tools.profile` for that agent.
-Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.2`).
+Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
 
 Tool policies support `group:*` shorthands that expand to multiple tools. See [Tool groups](/gateway/sandbox-vs-tool-policy-vs-elevated#tool-groups-shorthands) for the full list.
 
@@ -295,6 +295,15 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
 }
 ```
 
+`sessions_history` in this profile still returns a bounded, sanitized recall
+view rather than a raw transcript dump. Assistant recall strips thinking tags,
+`<relevant-memories>` scaffolding, plain-text tool-call XML payloads
+(including `<tool_call>...</tool_call>`,
+`<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`,
+`<function_calls>...</function_calls>`, and truncated tool-call blocks),
+downgraded tool-call scaffolding, leaked ASCII/full-width model control
+tokens, and malformed MiniMax tool-call XML before redaction/truncation.
+
 ---
 
 ## Common Pitfall: "non-main"
@@ -354,11 +363,11 @@ After configuring multi-agent sandbox and tools:
 
 ---
 
-## See also
+## Related
 
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Elevated Mode](/tools/elevated)
 - [Multi-Agent Routing](/concepts/multi-agent)
-- [Sandbox Configuration](/gateway/configuration-reference#agentsdefaultssandbox)
+- [Sandbox Configuration](/gateway/config-agents#agentsdefaultssandbox)
 - [Session Management](/concepts/session)

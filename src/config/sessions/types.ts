@@ -1,13 +1,14 @@
 import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionChannelId = ChannelId | "webchat";
+export type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
@@ -18,6 +19,8 @@ export type SessionOrigin = {
   chatType?: SessionChatType;
   from?: string;
   to?: string;
+  nativeChannelId?: string;
+  nativeDirectUserId?: string;
   accountId?: string;
   threadId?: string | number;
 };
@@ -65,6 +68,48 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
+export type CliSessionBinding = {
+  sessionId: string;
+  authProfileId?: string;
+  authEpoch?: string;
+  authEpochVersion?: number;
+  extraSystemPromptHash?: string;
+  mcpConfigHash?: string;
+  mcpResumeHash?: string;
+};
+
+export type SessionCompactionCheckpointReason =
+  | "manual"
+  | "auto-threshold"
+  | "overflow-retry"
+  | "timeout-retry";
+
+export type SessionCompactionTranscriptReference = {
+  sessionId: string;
+  sessionFile?: string;
+  leafId?: string;
+  entryId?: string;
+};
+
+export type SessionCompactionCheckpoint = {
+  checkpointId: string;
+  sessionKey: string;
+  sessionId: string;
+  createdAt: number;
+  reason: SessionCompactionCheckpointReason;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  summary?: string;
+  firstKeptEntryId?: string;
+  preCompaction: SessionCompactionTranscriptReference;
+  postCompaction: SessionCompactionTranscriptReference;
+};
+
+export type SessionPluginDebugEntry = {
+  pluginId: string;
+  lines: string[];
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -73,6 +118,14 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /**
+   * Base session key for heartbeat-created isolated sessions.
+   * When present, `<base>:heartbeat` is a synthetic isolated session rather than
+   * a real user/session-scoped key that merely happens to end with `:heartbeat`.
+   */
+  heartbeatIsolatedBaseSessionKey?: string;
+  /** Heartbeat task state (task name -> last run timestamp ms). */
+  heartbeatTaskState?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -112,6 +165,7 @@ export type SessionEntry = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
@@ -122,9 +176,23 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /**
+   * Tracks whether the persisted model override came from an explicit user
+   * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
+   * Resets only preserve user-driven overrides.
+   */
+  modelOverrideSource?: "auto" | "user";
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
+  /**
+   * Set on explicit user-driven session model changes (for example `/model`
+   * and `sessions.patch`) during an active run. The embedded runner checks
+   * this flag to decide whether to throw `LiveSessionModelSwitchError`.
+   * System-initiated fallbacks (rate-limit retry rotation) never set this
+   * flag, so they are never mistaken for user-initiated switches.
+   */
+  liveModelSwitchPending?: boolean;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
@@ -154,6 +222,12 @@ export type SessionEntry = {
   modelProvider?: string;
   model?: string;
   /**
+   * Embedded agent harness selected for this session id.
+   * Prevents config/env changes from moving an existing transcript between
+   * incompatible runtime harnesses.
+   */
+  agentHarnessId?: string;
+  /**
    * Last selected/runtime model pair for which a fallback notice was emitted.
    * Used to avoid repeating the same fallback notice every turn.
    */
@@ -162,10 +236,12 @@ export type SessionEntry = {
   fallbackNoticeReason?: string;
   contextTokens?: number;
   compactionCount?: number;
+  compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
   cliSessionIds?: Record<string, string>;
+  cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
@@ -182,17 +258,50 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /**
+   * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
+   * Each plugin owns and may overwrite only its own entry between turns.
+   */
+  pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
 };
 
-function normalizeRuntimeField(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+function isSessionPluginTraceLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);
+}
+
+function resolveSessionPluginLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+  includeLine: (line: string) => boolean,
+): string[] {
+  return Array.isArray(entry?.pluginDebugEntries)
+    ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
+        Array.isArray(pluginEntry?.lines)
+          ? pluginEntry.lines.filter(
+              (line): line is string =>
+                typeof line === "string" && line.trim().length > 0 && includeLine(line),
+            )
+          : [],
+      )
+    : [];
+}
+
+export function resolveSessionPluginStatusLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return resolveSessionPluginLines(entry, (line) => !isSessionPluginTraceLine(line));
+}
+
+export function resolveSessionPluginTraceLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return resolveSessionPluginLines(entry, isSessionPluginTraceLine);
 }
 
 export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
-  const normalizedModel = normalizeRuntimeField(entry.model);
-  const normalizedProvider = normalizeRuntimeField(entry.modelProvider);
+  const normalizedModel = normalizeOptionalString(entry.model);
+  const normalizedProvider = normalizeOptionalString(entry.modelProvider);
   let next = entry;
 
   if (!normalizedModel) {
@@ -277,8 +386,8 @@ export function mergeSessionEntryWithPolicy(
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
   if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
-    const patchedModel = normalizeRuntimeField(patch.model);
-    const existingModel = normalizeRuntimeField(existing.model);
+    const patchedModel = normalizeOptionalString(patch.model);
+    const existingModel = normalizeOptionalString(existing.model);
     if (patchedModel && patchedModel !== existingModel) {
       delete next.modelProvider;
     }
@@ -302,11 +411,21 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveFreshSessionTotalTokens(
+export function resolveSessionTotalTokens(
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
 ): number | undefined {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    return undefined;
+  }
+  return total;
+}
+
+export function resolveFreshSessionTotalTokens(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): number | undefined {
+  const total = resolveSessionTotalTokens(entry);
+  if (total === undefined) {
     return undefined;
   }
   if (entry?.totalTokensFresh === false) {

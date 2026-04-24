@@ -1,4 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
+import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client.js";
 import { classifySignalCliLogLine } from "./daemon.js";
 import {
@@ -8,7 +11,14 @@ import {
   resolveSignalSender,
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
-import { normalizeSignalAccountInput, parseSignalAllowFromEntries } from "./setup-core.js";
+import { clearSignalRuntime } from "./runtime.js";
+import {
+  normalizeSignalAccountInput,
+  parseSignalAllowFromEntries,
+  signalDmPolicy,
+} from "./setup-core.js";
+
+const getSignalSetupStatus = createPluginSetupWizardStatus(signalPlugin);
 
 describe("looksLikeUuid", () => {
   it("accepts hyphenated UUIDs", () => {
@@ -60,6 +70,45 @@ describe("signal sender identity", () => {
 });
 
 describe("probeSignal", () => {
+  it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    clearSignalRuntime();
+    vi.spyOn(clientModule, "signalCheck")
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        error: null,
+      });
+    vi.spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValueOnce({ version: "0.13.22" })
+      .mockResolvedValueOnce({ version: "0.13.22" });
+
+    const params = {
+      cfg: {} as never,
+      account: {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:8080",
+      } as never,
+      timeoutMs: 1000,
+    };
+
+    const expected = await probeSignal("http://127.0.0.1:8080", 1000);
+    await expect(signalPlugin.status!.probeAccount!(params)).resolves.toEqual(
+      expect.objectContaining({
+        ok: expected.ok,
+        status: expected.status,
+        error: expected.error,
+        version: expected.version,
+      }),
+    );
+  });
+
   it("extracts version from {version} result", async () => {
     vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
       ok: true,
@@ -88,6 +137,86 @@ describe("probeSignal", () => {
     expect(res.status).toBe(503);
     expect(res.version).toBe(null);
   });
+
+  it("setup status lines use the selected account cliPath", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/root-signal-cli",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-signal-cli",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: { signal: "work" },
+    });
+
+    expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
+  });
+
+  it("setup status uses configured defaultAccount for omitted cliPath lookup", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            cliPath: "/tmp/root-signal-cli",
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-signal-cli",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.statusLines).toContain("signal-cli: missing (/tmp/work-signal-cli)");
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const status = await getSignalSetupStatus({
+      cfg: {
+        channels: {
+          signal: {
+            defaultAccount: "work",
+            cliPath: "/tmp/root-signal-cli",
+            accounts: {
+              alerts: {
+                cliPath: "/tmp/alerts-signal-cli",
+              },
+              work: {
+                cliPath: "",
+                account: "",
+                httpHost: "",
+                httpUrl: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+  });
+});
+
+describe("signal outbound", () => {
+  it("chunks outbound text without requiring Signal runtime initialization", () => {
+    clearSignalRuntime();
+    const chunker = signalPlugin.outbound?.chunker;
+    if (!chunker) {
+      throw new Error("signal outbound.chunker unavailable");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
 });
 
 describe("classifySignalCliLogLine", () => {
@@ -114,12 +243,31 @@ describe("classifySignalCliLogLine", () => {
 });
 
 describe("signal setup parsing", () => {
+  it("accepts already normalized numbers", () => {
+    expect(normalizeSignalAccountInput("+15555550123")).toBe("+15555550123");
+  });
+
   it("normalizes valid E.164 numbers", () => {
     expect(normalizeSignalAccountInput(" +1 (555) 555-0123 ")).toBe("+15555550123");
   });
 
+  it("rejects empty input", () => {
+    expect(normalizeSignalAccountInput("   ")).toBeNull();
+  });
+
   it("rejects invalid values", () => {
     expect(normalizeSignalAccountInput("abc")).toBeNull();
+    expect(normalizeSignalAccountInput("++--")).toBeNull();
+  });
+
+  it("rejects inputs with stray + characters", () => {
+    expect(normalizeSignalAccountInput("++12345")).toBeNull();
+    expect(normalizeSignalAccountInput("+1+2345")).toBeNull();
+  });
+
+  it("rejects numbers that are too short or too long", () => {
+    expect(normalizeSignalAccountInput("+1234")).toBeNull();
+    expect(normalizeSignalAccountInput("+1234567890123456")).toBeNull();
   });
 
   it("parses e164, uuid and wildcard entries", () => {
@@ -145,5 +293,85 @@ describe("signal setup parsing", () => {
       entries: [],
       error: "Invalid entry: invalid",
     });
+  });
+
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      signalDmPolicy.getCurrent(
+        {
+          channels: {
+            signal: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  account: "+15555550123",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(signalDmPolicy.resolveConfigKeys?.({ channels: { signal: {} } }, "work")).toEqual({
+      policyKey: "channels.signal.accounts.work.dmPolicy",
+      allowFromKey: "channels.signal.accounts.work.allowFrom",
+    });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["+15555550123"],
+          accounts: {
+            work: {
+              account: "+15555550999",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    };
+
+    expect(signalDmPolicy.getCurrent(cfg)).toBe("allowlist");
+    expect(signalDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.signal.accounts.work.dmPolicy",
+      allowFromKey: "channels.signal.accounts.work.allowFrom",
+    });
+
+    const next = signalDmPolicy.setPolicy(cfg, "open");
+    expect(next.channels?.signal?.dmPolicy).toBe("disabled");
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
+  });
+
+  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          allowFrom: ["+15555550123"],
+          accounts: {
+            work: {
+              account: "+15555550999",
+            },
+          },
+        },
+      },
+    };
+
+    const next = signalDmPolicy.setPolicy(cfg, "open", "work");
+
+    expect(next.channels?.signal?.dmPolicy).toBeUndefined();
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });

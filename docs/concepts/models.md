@@ -7,8 +7,6 @@ read_when:
 title: "Models CLI"
 ---
 
-# Models CLI
-
 See [/concepts/model-failover](/concepts/model-failover) for auth profile
 rotation, cooldowns, and how that interacts with fallbacks.
 Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
@@ -26,7 +24,12 @@ Related:
 
 - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
-- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer a provider default from compatible auth-backed image-generation plugins. If you set a specific provider/model, also configure that provider's auth/API key.
+- `agents.defaults.pdfModel` is used by the `pdf` tool. If omitted, the tool
+  falls back to `agents.defaults.imageModel`, then the resolved session/default
+  model.
+- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
+- `agents.defaults.musicGenerationModel` is used by the shared music-generation capability. If omitted, `music_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered music-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
+- `agents.defaults.videoGenerationModel` is used by the shared video-generation capability. If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
 ## Quick model policy
@@ -44,13 +47,15 @@ openclaw onboard
 ```
 
 It can set up model + auth for common providers, including **OpenAI Code (Codex)
-subscription** (OAuth) and **Anthropic** (API key or `claude setup-token`).
+subscription** (OAuth) and **Anthropic** (API key or Claude CLI).
 
 ## Config keys (overview)
 
 - `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
+- `agents.defaults.pdfModel.primary` and `agents.defaults.pdfModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
+- `agents.defaults.videoGenerationModel.primary` and `agents.defaults.videoGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (custom providers written into `models.json`)
 
@@ -59,6 +64,24 @@ to `zai/*`.
 
 Provider configuration examples (including OpenCode) live in
 [/providers/opencode](/providers/opencode).
+
+### Safe allowlist edits
+
+Use additive writes when updating `agents.defaults.models` by hand:
+
+```bash
+openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
+```
+
+`openclaw config set` protects model/provider maps from accidental clobbers. A
+plain object assignment to `agents.defaults.models`, `models.providers`, or
+`models.providers.<id>.models` is rejected when it would remove existing
+entries. Use `--merge` for additive changes; use `--replace` only when the
+provided value should become the complete target value.
+
+Interactive provider setup and `openclaw configure --section model` also merge
+provider-scoped selections into the existing allowlist, so adding Codex,
+Ollama, or another provider does not drop unrelated model entries.
 
 ## "Model is not allowed" (and why replies stop)
 
@@ -99,7 +122,7 @@ You can switch models for the current session without restarting:
 /model
 /model list
 /model 3
-/model openai/gpt-5.2
+/model openai/gpt-5.4
 /model status
 ```
 
@@ -107,13 +130,34 @@ Notes:
 
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
 - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
+- `/models add` is available by default and can be disabled with `commands.modelsWrite=false`.
+- When enabled, `/models add <provider> <modelId>` is the fastest path; bare `/models add` starts a provider-first guided flow where supported.
+- After `/models add`, the new model becomes available in `/models` and `/model` without restarting the gateway.
 - `/model <#>` selects from that picker.
+- `/model` persists the new session selection immediately.
+- If the agent is idle, the next run uses the new model right away.
+- If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
+- If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - If the model ID itself contains `/` (OpenRouter-style), you must include the provider prefix (example: `/model openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, OpenClaw resolves the input in this order:
+  1. alias match
+  2. unique configured-provider match for that exact unprefixed model id
+  3. deprecated fallback to the configured default provider
+     If that provider no longer exposes the configured default model, OpenClaw
+     instead falls back to the first configured provider/model to avoid
+     surfacing a stale removed-provider default.
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
+
+Examples:
+
+```text
+/models add
+/models add ollama glm-5.1:cloud
+/models add lmstudio qwen/qwen3.5-9b
+```
 
 ## CLI commands
 
@@ -146,9 +190,14 @@ Shows configured models by default. Useful flags:
 
 - `--all`: full catalog
 - `--local`: local providers only
-- `--provider <name>`: filter by provider
+- `--provider <id>`: filter by provider id, for example `moonshot`; display
+  labels from interactive pickers are not accepted
 - `--plain`: one model per line
 - `--json`: machine‑readable output
+
+`--all` includes bundled provider-owned static catalog rows before auth is
+configured, so discovery-only views can show models that are unavailable until
+you add matching provider credentials.
 
 ### `models status`
 
@@ -159,15 +208,23 @@ resolved primary model.
 OAuth status is always shown (and included in `--json` output). If a configured
 provider has no credentials, `models status` prints a **Missing auth** section.
 JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
-(effective auth per provider).
+(effective auth per provider, including env-backed credentials). `auth.oauth`
+is auth-store profile health only; env-only providers do not appear there.
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
+Use `--probe` for live auth checks; probe rows can come from auth profiles, env
+credentials, or `models.json`.
+If explicit `auth.order.<provider>` omits a stored profile, probe reports
+`excluded_by_auth_order` instead of trying it. If auth exists but no probeable
+model can be resolved for that provider, probe reports `status: no_model`.
 
-Auth choice is provider/account dependent. For always-on gateway hosts, API keys are usually the most predictable; subscription token flows are also supported.
+Auth choice is provider/account dependent. For always-on gateway hosts, API
+keys are usually the most predictable; Claude CLI reuse and existing Anthropic
+OAuth/token profiles are also supported.
 
-Example (Anthropic setup-token):
+Example (Claude CLI):
 
 ```bash
-claude setup-token
+claude auth login
 openclaw models status
 ```
 
@@ -223,3 +280,12 @@ Merge mode precedence for matching provider IDs:
 
 Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 This applies whenever OpenClaw regenerates `models.json`, including command-driven paths like `openclaw agent`.
+
+## Related
+
+- [Model Providers](/concepts/model-providers) — provider routing and auth
+- [Model Failover](/concepts/model-failover) — fallback chains
+- [Image Generation](/tools/image-generation) — image model configuration
+- [Music Generation](/tools/music-generation) — music model configuration
+- [Video Generation](/tools/video-generation) — video model configuration
+- [Configuration Reference](/gateway/config-agents#agent-defaults) — model config keys

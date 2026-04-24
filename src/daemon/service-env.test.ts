@@ -388,6 +388,13 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
   });
 
+  it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: " 1 " },
+    });
+    expect(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS).toBe("1");
+  });
+
   it("omits OPENCLAW_GATEWAY_TOKEN when the env var is empty", () => {
     const env = buildNodeServiceEnvironment({
       env: {
@@ -457,8 +464,8 @@ describe("shared Node TLS env defaults", () => {
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
   });
 
-  it.each(builders)("$name does not default NODE_EXTRA_CA_CERTS on non-macOS", ({ build }) => {
-    const env = build({ HOME: "/home/user" }, "linux");
+  it.each(builders)("$name does not default NODE_EXTRA_CA_CERTS on Windows", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "win32");
     expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 

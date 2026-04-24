@@ -4,20 +4,19 @@ import {
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import {
+  normalizeE164,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "./accounts.js";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  normalizeE164,
-  SignalConfigSchema,
-  type ChannelPlugin,
-} from "./runtime-api.js";
+import { SignalChannelConfigSchema } from "./config-schema.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 export const SIGNAL_CHANNEL = "signal" as const;
@@ -32,15 +31,15 @@ export const signalSetupWizard = createSignalSetupWizardProxy(
 
 export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
   sectionKey: SIGNAL_CHANNEL,
-  listAccountIds: listSignalAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveSignalAccount),
-  defaultAccountId: resolveDefaultSignalAccountId,
+  listAccountIds: (cfg) => listSignalAccountIds(cfg),
+  resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
+  defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
   clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     allowFrom
-      .map((entry) => String(entry).trim())
-      .filter(Boolean)
+      .map((entry) => normalizeStringifiedOptionalString(entry))
+      .filter((entry): entry is string => Boolean(entry))
       .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
       .filter(Boolean),
   resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
@@ -75,8 +74,9 @@ export function createSignalPluginBase(params: {
   | "config"
   | "security"
   | "setup"
+  | "messaging"
 > {
-  return createChannelPluginBase({
+  const base = createChannelPluginBase({
     id: SIGNAL_CHANNEL,
     meta: {
       ...getChatChannelMeta(SIGNAL_CHANNEL),
@@ -91,7 +91,7 @@ export function createSignalPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.signal"] },
-    configSchema: buildChannelConfigSchema(SignalConfigSchema),
+    configSchema: SignalChannelConfigSchema,
     config: {
       ...signalConfigAdapter,
       isConfigured: (account) => account.configured,
@@ -106,7 +106,13 @@ export function createSignalPluginBase(params: {
     },
     security: signalSecurityAdapter,
     setup: params.setup,
-  }) as Pick<
+  });
+  return {
+    ...base,
+    messaging: {
+      defaultMarkdownTableMode: "bullets",
+    },
+  } as Pick<
     ChannelPlugin<ResolvedSignalAccount>,
     | "id"
     | "meta"
@@ -118,5 +124,6 @@ export function createSignalPluginBase(params: {
     | "config"
     | "security"
     | "setup"
+    | "messaging"
   >;
 }

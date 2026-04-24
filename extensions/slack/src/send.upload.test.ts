@@ -1,9 +1,17 @@
 import type { WebClient } from "@slack/web-api";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 
 // --- Module mocks (must precede dynamic import) ---
 installSlackBlockTestMocks();
+const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
+  vi.fn(async (_mediaUrl: string, _options?: unknown) => ({
+    buffer: Buffer.from("fake-image"),
+    contentType: "image/png",
+    kind: "image",
+    fileName: "screenshot.png",
+  })),
+);
 const fetchWithSsrFGuard = vi.fn(
   async (params: { url: string; init?: RequestInit }) =>
     ({
@@ -22,17 +30,21 @@ vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/web-media", () => ({
-  loadWebMedia: vi.fn(async () => ({
-    buffer: Buffer.from("fake-image"),
-    contentType: "image/png",
-    kind: "image",
-    fileName: "screenshot.png",
-  })),
-}));
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+  const mockedLoadOutboundMediaFromUrl =
+    loadOutboundMediaFromUrlMock as unknown as typeof actual.loadOutboundMediaFromUrl;
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: (...args: Parameters<typeof actual.loadOutboundMediaFromUrl>) =>
+      mockedLoadOutboundMediaFromUrl(...args),
+  };
+});
 
 let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
 let clearSlackDmChannelCache: typeof import("./send.js").clearSlackDmChannelCache;
+({ sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js"));
+const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn> };
@@ -65,16 +77,12 @@ function createUploadTestClient(): UploadTestClient {
 describe("sendMessageSlack file upload with user IDs", () => {
   const originalFetch = globalThis.fetch;
 
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js"));
-  });
-
   beforeEach(() => {
     globalThis.fetch = vi.fn(
       async () => new Response("ok", { status: 200 }),
     ) as unknown as typeof fetch;
     fetchWithSsrFGuard.mockClear();
+    loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
   });
 
@@ -89,6 +97,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     // Bare user ID — parseSlackTarget classifies this as kind="channel"
     await sendMessageSlack("U2ZH3MFSR", "screenshot", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/screenshot.png",
     });
@@ -111,6 +120,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("user:UABC123", "image", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/photo.png",
     });
@@ -128,10 +138,12 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("user:UABC123", "first", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
     });
     await sendMessageSlack("user:UABC123", "second", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
     });
 
@@ -151,10 +163,12 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("user:UABC123", "first", {
       token: "xoxb-test-a",
+      cfg: SLACK_TEST_CFG,
       client,
     });
     await sendMessageSlack("user:UABC123", "second", {
       token: "xoxb-test-b",
+      cfg: SLACK_TEST_CFG,
       client,
     });
 
@@ -166,6 +180,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("channel:C123CHAN", "chart", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/chart.png",
     });
@@ -181,6 +196,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("<@U777TEST>", "report", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/report.png",
     });
@@ -198,6 +214,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
     await sendMessageSlack("channel:C123CHAN", "caption", {
       token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
       client,
       mediaUrl: "/tmp/threaded.png",
       threadTs: "171.222",
@@ -225,6 +242,51 @@ describe("sendMessageSlack file upload with user IDs", () => {
         channel_id: "C123CHAN",
         initial_comment: "caption",
         thread_ts: "171.222",
+      }),
+    );
+  });
+
+  it("uses explicit upload filename and title overrides when provided", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/threaded.png",
+      uploadFileName: "custom-name.bin",
+      uploadTitle: "Custom Title",
+    });
+
+    expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
+      filename: "custom-name.bin",
+      length: Buffer.from("fake-image").length,
+    });
+    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [expect.objectContaining({ id: "F001", title: "Custom Title" })],
+      }),
+    );
+  });
+
+  it("uses uploadFileName as the title fallback when uploadTitle is omitted", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/threaded.png",
+      uploadFileName: "custom-name.bin",
+    });
+
+    expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
+      filename: "custom-name.bin",
+      length: Buffer.from("fake-image").length,
+    });
+    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [expect.objectContaining({ id: "F001", title: "custom-name.bin" })],
       }),
     );
   });

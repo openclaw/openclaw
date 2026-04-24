@@ -66,17 +66,6 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
   });
 }
 
-function extractToolListText(systemPrompt: string): string {
-  const markerA = "Tool names are case-sensitive. Call tools exactly as listed.\n";
-  const markerB =
-    "\nTOOLS.md does not control tool availability; it is user guidance for how to use external tools.";
-  const extracted = extractBetween(systemPrompt, markerA, markerB);
-  if (!extracted.found) {
-    return "";
-  }
-  return extracted.text.replace(markerA, "").trim();
-}
-
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;
@@ -102,8 +91,6 @@ export function buildSystemPromptReport(params: {
     "\n## Silent Replies\n",
   );
   const projectContextChars = projectContext.text.length;
-  const toolListText = extractToolListText(systemPrompt);
-  const toolListChars = toolListText.length;
   const toolsEntries = buildToolsEntries(params.tools);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
@@ -134,7 +121,7 @@ export function buildSystemPromptReport(params: {
       entries: skillsEntries,
     },
     tools: {
-      listChars: toolListChars,
+      listChars: 0,
       schemaChars: toolsSchemaChars,
       entries: toolsEntries,
     },

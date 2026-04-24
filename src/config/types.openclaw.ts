@@ -1,3 +1,7 @@
+import type {
+  SilentReplyPolicyShape,
+  SilentReplyRewriteShape,
+} from "../shared/silent-reply-policy.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -29,7 +33,13 @@ import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
+export type SurfaceConfigEntry = {
+  silentReply?: SilentReplyPolicyShape;
+  silentReplyRewrite?: SilentReplyRewriteShape;
+};
+
 export type OpenClawConfig = {
+  $schema?: string;
   meta?: {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
@@ -95,6 +105,7 @@ export type OpenClawConfig = {
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
+  surfaces?: Record<string, SurfaceConfigEntry>;
   models?: ModelsConfig;
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;
@@ -124,6 +135,16 @@ export type OpenClawConfig = {
   mcp?: McpConfig;
 };
 
+declare const openClawConfigStateBrand: unique symbol;
+
+type BrandedConfigState<TState extends string> = OpenClawConfig & {
+  readonly [openClawConfigStateBrand]?: TState;
+};
+
+export type SourceConfig = BrandedConfigState<"source">;
+export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
+export type RuntimeConfig = BrandedConfigState<"runtime">;
+
 export type ConfigValidationIssue = {
   path: string;
   message: string;
@@ -142,13 +163,21 @@ export type ConfigFileSnapshot = {
   raw: string | null;
   parsed: unknown;
   /**
+   * Config authored on disk after $include resolution and ${ENV} substitution,
+   * but BEFORE runtime defaults are applied.
+   */
+  sourceConfig: ResolvedSourceConfig;
+  /**
    * Config after $include resolution and ${ENV} substitution, but BEFORE runtime
    * defaults are applied. Use this for config set/unset operations to avoid
    * leaking runtime defaults into the written config file.
    */
-  resolved: OpenClawConfig;
+  resolved: ResolvedSourceConfig;
   valid: boolean;
-  config: OpenClawConfig;
+  /** Runtime-shaped config used by in-process readers. */
+  runtimeConfig: RuntimeConfig;
+  /** @deprecated Prefer runtimeConfig. */
+  config: RuntimeConfig;
   hash?: string;
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];

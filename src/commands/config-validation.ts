@@ -1,16 +1,20 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import { type OpenClawConfig, readConfigFileSnapshot } from "../config/config.js";
+import {
+  type ConfigFileSnapshot,
+  type OpenClawConfig,
+  readConfigFileSnapshot,
+} from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import {
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-export async function requireValidConfigSnapshot(
+export async function requireValidConfigFileSnapshot(
   runtime: RuntimeEnv,
   opts?: { includeCompatibilityAdvisory?: boolean },
-): Promise<OpenClawConfig | null> {
+): Promise<ConfigFileSnapshot | null> {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     const issues =
@@ -23,9 +27,9 @@ export async function requireValidConfigSnapshot(
     return null;
   }
   if (opts?.includeCompatibilityAdvisory !== true) {
-    return snapshot.config;
+    return snapshot;
   }
-  const compatibility = buildPluginCompatibilityNotices({ config: snapshot.config });
+  const compatibility = buildPluginCompatibilitySnapshotNotices({ config: snapshot.config });
   if (compatibility.length > 0) {
     runtime.log(
       [
@@ -38,5 +42,12 @@ export async function requireValidConfigSnapshot(
       ].join("\n"),
     );
   }
-  return snapshot.config;
+  return snapshot;
+}
+
+export async function requireValidConfigSnapshot(
+  runtime: RuntimeEnv,
+  opts?: { includeCompatibilityAdvisory?: boolean },
+): Promise<OpenClawConfig | null> {
+  return (await requireValidConfigFileSnapshot(runtime, opts))?.config ?? null;
 }

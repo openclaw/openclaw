@@ -40,6 +40,13 @@ export type NpmTagStatus = {
   error?: string;
 };
 
+export type NpmPackageTargetStatus = {
+  target: string;
+  version: string | null;
+  nodeEngine: string | null;
+  error?: string;
+};
+
 export type UpdateCheckResult = {
   root: string | null;
   installKind: "git" | "package" | "unknown";
@@ -295,27 +302,46 @@ export async function fetchNpmLatestVersion(params?: {
   };
 }
 
-export async function fetchNpmTagVersion(params: {
-  tag: string;
+export async function fetchNpmPackageTargetStatus(params: {
+  target: string;
   timeoutMs?: number;
-}): Promise<NpmTagStatus> {
-  const timeoutMs = params?.timeoutMs ?? 3500;
-  const tag = params.tag;
+}): Promise<NpmPackageTargetStatus> {
+  const timeoutMs = params.timeoutMs ?? 3500;
+  const target = params.target;
   try {
     const res = await fetchWithTimeout(
-      `https://registry.npmjs.org/openclaw/${encodeURIComponent(tag)}`,
+      `https://registry.npmjs.org/openclaw/${encodeURIComponent(target)}`,
       {},
       Math.max(250, timeoutMs),
     );
     if (!res.ok) {
-      return { tag, version: null, error: `HTTP ${res.status}` };
+      return { target, version: null, nodeEngine: null, error: `HTTP ${res.status}` };
     }
-    const json = (await res.json()) as { version?: unknown };
+    const json = (await res.json()) as {
+      version?: unknown;
+      engines?: { node?: unknown };
+    };
     const version = typeof json?.version === "string" ? json.version : null;
-    return { tag, version };
+    const nodeEngine = typeof json?.engines?.node === "string" ? json.engines.node : null;
+    return { target, version, nodeEngine };
   } catch (err) {
-    return { tag, version: null, error: String(err) };
+    return { target, version: null, nodeEngine: null, error: String(err) };
   }
+}
+
+export async function fetchNpmTagVersion(params: {
+  tag: string;
+  timeoutMs?: number;
+}): Promise<NpmTagStatus> {
+  const res = await fetchNpmPackageTargetStatus({
+    target: params.tag,
+    timeoutMs: params.timeoutMs,
+  });
+  return {
+    tag: params.tag,
+    version: res.version,
+    error: res.error,
+  };
 }
 
 export async function resolveNpmChannelTag(params: {
@@ -366,12 +392,13 @@ export async function checkUpdateStatus(params: {
     };
   }
 
+  const rootRealpath = await fs.realpath(root).catch(() => root);
   const [pm, gitRoot, registry] = await Promise.all([
     detectPackageManager(root),
     detectGitRoot(root),
     params.includeRegistry ? fetchNpmLatestVersion({ timeoutMs }) : Promise.resolve(undefined),
   ]);
-  const isGit = gitRoot && path.resolve(gitRoot) === root;
+  const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([

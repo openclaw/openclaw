@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import ts from "typescript";
+import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import {
   collectCallExpressionLines,
@@ -8,14 +9,15 @@ import {
   unwrapExpression,
 } from "./lib/ts-guard-utils.mjs";
 
-const sourceRoots = [
+export const messagingTmpdirGuardSourceRoots = [
   "src/channels",
   "src/infra/outbound",
   "src/line",
+  "src/media",
   "src/media-understanding",
   "extensions",
 ];
-const allowedRelativePaths = new Set(["extensions/feishu/src/dedup.ts"]);
+const allowedRelativePaths = new Set([bundledPluginFile("feishu", "src/dedup.ts")]);
 
 function collectOsTmpdirImports(sourceFile) {
   const osModuleSpecifiers = new Set(["node:os", "os"]);
@@ -71,7 +73,7 @@ export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
 export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,
-    sourceRoots,
+    sourceRoots: messagingTmpdirGuardSourceRoots,
     findCallLines: findMessagingTmpdirCallLines,
     skipRelativePath: (relativePath) => allowedRelativePaths.has(relativePath),
     header: "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",

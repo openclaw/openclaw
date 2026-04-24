@@ -3,12 +3,12 @@ summary: "End-to-end guide for running OpenClaw as a personal assistant with saf
 read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
-title: "Personal Assistant Setup"
+title: "Personal assistant setup"
 ---
 
 # Building a personal assistant with OpenClaw
 
-OpenClaw is a self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
+OpenClaw is a self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
 
 ## ⚠️ Safety first
 
@@ -16,7 +16,7 @@ You’re putting an agent in a position to:
 
 - run commands on your machine (depending on your tool policy)
 - read/write files in your workspace
-- send messages back out via WhatsApp/Telegram/Discord/Mattermost (plugin)
+- send messages back out via WhatsApp/Telegram/Discord/Mattermost and other bundled channels
 
 Start conservative:
 
@@ -59,13 +59,14 @@ openclaw gateway --port 18789
 
 ```json5
 {
+  gateway: { mode: "local" },
   channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
 
 Now message the assistant number from your allowlisted phone.
 
-When onboarding finishes, we auto-open the dashboard and print a clean (non-tokenized) link. If it prompts for auth, paste the token from `gateway.auth.token` into Control UI settings. To reopen later: `openclaw dashboard`.
+When onboarding finishes, OpenClaw auto-opens the dashboard and prints a clean (non-tokenized) link. If the dashboard prompts for auth, paste the configured shared secret into Control UI settings. Onboarding uses a token by default (`gateway.auth.token`), but password auth works too if you switched `gateway.auth.mode` to `password`. To reopen later: `openclaw dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
@@ -106,7 +107,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
 
-- persona/instructions in `SOUL.md`
+- persona/instructions in [`SOUL.md`](/concepts/soul)
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
 
@@ -192,18 +193,21 @@ MEDIA:https://example.com/screenshot.png
 
 OpenClaw extracts these and sends them as media alongside the text.
 
-For local paths, the default allowlist is intentionally narrow: the OpenClaw temp
-root, the media cache, agent workspace paths, and sandbox-generated files. If you
-need broader local-file attachment roots, configure an explicit channel/plugin
-allowlist instead of relying on arbitrary host paths.
+Local-path behavior follows the same file-read trust model as the agent:
+
+- If `tools.fs.workspaceOnly` is `true`, outbound `MEDIA:` local paths stay restricted to the OpenClaw temp root, the media cache, agent workspace paths, and sandbox-generated files.
+- If `tools.fs.workspaceOnly` is `false`, outbound `MEDIA:` can use host-local files the agent is already allowed to read.
+- Host-local sends still only allow media and safe document types (images, audio, video, PDF, and Office documents). Plain text and secret-like files are not treated as sendable media.
+
+That means generated images/files outside the workspace can now send when your fs policy already allows those reads, without reopening arbitrary host-text attachment exfiltration.
 
 ## Operations checklist
 
 ```bash
 openclaw status          # local status (creds, sessions, queued events)
 openclaw status --all    # full diagnosis (read-only, pasteable)
-openclaw status --deep   # adds gateway health probes (Telegram + Discord)
-openclaw health --json   # gateway health snapshot (WS)
+openclaw status --deep   # asks the gateway for a live health probe with channel probes when supported
+openclaw health --json   # gateway health snapshot (WS; default can return a fresh cached snapshot)
 ```
 
 Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
@@ -219,3 +223,9 @@ Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
 - Windows status: [Windows (WSL2)](/platforms/windows)
 - Linux status: [Linux app](/platforms/linux)
 - Security: [Security](/gateway/security)
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [Setup](/start/setup)
+- [Channels overview](/channels)

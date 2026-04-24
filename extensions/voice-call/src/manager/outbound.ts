@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { CallMode } from "../config.js";
+import { resolvePreferredTtsVoice } from "../tts-provider-voice.js";
 import {
+  type EndReason,
   TerminalStates,
   type CallId,
   type CallRecord,
@@ -8,15 +11,11 @@ import {
 } from "../types.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
 import type { CallManagerContext } from "./context.js";
+import { finalizeCall } from "./lifecycle.js";
 import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import {
-  clearMaxDurationTimer,
-  clearTranscriptWaiter,
-  rejectTranscriptWaiter,
-  waitForFinalTranscript,
-} from "./timers.js";
+import { clearTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
 import { generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
@@ -103,6 +102,12 @@ function requireConnectedCall(ctx: ConnectedCallContext, callId: CallId): Connec
   };
 }
 
+function validateDtmfDigits(digits: string): string | null {
+  return /^[0-9*#wWpP,]+$/.test(digits)
+    ? null
+    : "digits may only contain digits, *, #, comma, w, p";
+}
+
 export async function initiateCall(
   ctx: InitiateContext,
   to: string,
@@ -160,7 +165,7 @@ export async function initiateCall(
     // For notify mode with a message, use inline TwiML with <Say>.
     let inlineTwiml: string | undefined;
     if (mode === "notify" && initialMessage) {
-      const pollyVoice = mapVoiceToPolly(ctx.config.tts?.openai?.voice);
+      const pollyVoice = mapVoiceToPolly(resolvePreferredTtsVoice(ctx.config));
       inlineTwiml = generateNotifyTwiml(initialMessage, pollyVoice);
       console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
     }
@@ -179,19 +184,16 @@ export async function initiateCall(
 
     return { callId, success: true };
   } catch (err) {
-    callRecord.state = "failed";
-    callRecord.endedAt = Date.now();
-    callRecord.endReason = "failed";
-    persistCallRecord(ctx.storePath, callRecord);
-    ctx.activeCalls.delete(callId);
-    if (callRecord.providerCallId) {
-      ctx.providerCallIdMap.delete(callRecord.providerCallId);
-    }
+    finalizeCall({
+      ctx,
+      call: callRecord,
+      endReason: "failed",
+    });
 
     return {
       callId,
       success: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }
@@ -211,7 +213,7 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
+    const voice = provider.name === "twilio" ? resolvePreferredTtsVoice(ctx.config) : undefined;
     await provider.playTts({
       callId,
       providerCallId,
@@ -227,7 +229,36 @@ export async function speak(
     // A failed playback should not leave the call stuck in speaking state.
     transitionState(call, "listening");
     persistCallRecord(ctx.storePath, call);
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
+    return { success: false, error: formatErrorMessage(err) };
+  }
+}
+
+export async function sendDtmf(
+  ctx: SpeakContext,
+  callId: CallId,
+  digits: string,
+): Promise<{ success: boolean; error?: string }> {
+  const validationError = validateDtmfDigits(digits);
+  if (validationError) {
+    return { success: false, error: validationError };
+  }
+  const connected = requireConnectedCall(ctx, callId);
+  if (!connected.ok) {
+    return { success: false, error: connected.error };
+  }
+  if (!connected.provider.sendDtmf) {
+    return { success: false, error: `${connected.provider.name} does not support outbound DTMF` };
+  }
+
+  try {
+    await connected.provider.sendDtmf({
+      callId,
+      providerCallId: connected.providerCallId,
+      digits,
+    });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -333,7 +364,7 @@ export async function continueCall(
         : 1;
 
     call.metadata = {
-      ...(call.metadata ?? {}),
+      ...call.metadata,
       turnCount,
       lastTurnLatencyMs,
       lastTurnListenWaitMs,
@@ -352,7 +383,7 @@ export async function continueCall(
 
     return { success: true, transcript };
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
+    return { success: false, error: formatErrorMessage(err) };
   } finally {
     ctx.activeTurnCalls.delete(callId);
     clearTranscriptWaiter(ctx, callId);
@@ -362,6 +393,7 @@ export async function continueCall(
 export async function endCall(
   ctx: EndCallContext,
   callId: CallId,
+  options?: { reason?: EndReason },
 ): Promise<{ success: boolean; error?: string }> {
   const lookup = lookupConnectedCall(ctx, callId);
   if (lookup.kind === "error") {
@@ -371,27 +403,23 @@ export async function endCall(
     return { success: true };
   }
   const { call, providerCallId, provider } = lookup;
+  const reason = options?.reason ?? "hangup-bot";
 
   try {
     await provider.hangupCall({
       callId,
       providerCallId,
-      reason: "hangup-bot",
+      reason,
     });
 
-    call.state = "hangup-bot";
-    call.endedAt = Date.now();
-    call.endReason = "hangup-bot";
-    persistCallRecord(ctx.storePath, call);
-
-    clearMaxDurationTimer(ctx, callId);
-    rejectTranscriptWaiter(ctx, callId, "Call ended: hangup-bot");
-
-    ctx.activeCalls.delete(callId);
-    ctx.providerCallIdMap.delete(providerCallId);
+    finalizeCall({
+      ctx,
+      call,
+      endReason: reason,
+    });
 
     return { success: true };
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
+    return { success: false, error: formatErrorMessage(err) };
   }
 }

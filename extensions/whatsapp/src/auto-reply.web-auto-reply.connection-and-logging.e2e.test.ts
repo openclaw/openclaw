@@ -1,11 +1,12 @@
 import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { setLoggerOverride } from "../../../src/logging.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
+import { WhatsAppAuthUnstableError } from "./auth-store.js";
 import {
   createWebInboundDeliverySpies,
   createMockWebListener,
@@ -17,13 +18,14 @@ import {
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
   setLoadConfigMock,
+  setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 
 installWebAutoReplyTestHomeHooks();
 
 async function startWatchdogScenario(params: {
-  monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+  monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 }) {
   const sleep = vi.fn(async () => {});
   const scripted = createScriptedWebListenerFactory();
@@ -36,8 +38,12 @@ async function startWatchdogScenario(params: {
     watchdogCheckMs: 5,
   });
 
-  await Promise.resolve();
-  expect(scripted.getListenerCount()).toBe(1);
+  await vi.waitFor(
+    () => {
+      expect(scripted.getListenerCount()).toBe(1);
+    },
+    { timeout: 250, interval: 2 },
+  );
   await vi.waitFor(
     () => {
       expect(scripted.getOnMessage()).toBeTypeOf("function");
@@ -61,9 +67,9 @@ async function startWatchdogScenario(params: {
 describe("web auto-reply connection", () => {
   installWebAutoReplyUnitTestHooks();
 
-  let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+  let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
   beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply.js"));
+    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
   });
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
@@ -95,8 +101,12 @@ describe("web auto-reply connection", () => {
         reconnect: scenario.reconnect,
       });
 
-      await Promise.resolve();
-      expect(scripted.getListenerCount()).toBe(1);
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
 
       scripted.resolveClose(0);
       await vi.waitFor(
@@ -130,8 +140,12 @@ describe("web auto-reply connection", () => {
       reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
     });
 
-    await Promise.resolve();
-    expect(scripted.getListenerCount()).toBe(1);
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBe(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
     scripted.resolveClose(0, {
       status: 440,
       isLoggedOut: false,
@@ -163,6 +177,59 @@ describe("web auto-reply connection", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
   });
 
+  it("retries inbox attach when auth state is still stabilizing", async () => {
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      if (listenerFactory.mock.calls.length === 1) {
+        throw new WhatsAppAuthUnstableError(
+          "WhatsApp auth state is still stabilizing; retrying inbox attach.",
+        );
+      }
+      return createMockWebListener();
+    });
+    const { runtime, controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 3, factor: 1.1 },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(listenerFactory).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    controller.abort();
+    await run;
+
+    expect(sleep).toHaveBeenCalledWith(expect.any(Number), expect.any(AbortSignal));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("inbox attach"));
+  });
+
+  it("stops retrying inbox attach when auth stays unstable past max attempts", async () => {
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      throw new WhatsAppAuthUnstableError(
+        "WhatsApp auth state is still stabilizing; retrying inbox attach.",
+      );
+    });
+    const { runtime, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
+    });
+
+    await run;
+
+    expect(listenerFactory).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1/2"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
+  });
+
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {
@@ -188,7 +255,7 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("keeps watchdog message age across reconnects", async () => {
+  it("gives a reconnected listener a fresh watchdog window", async () => {
     vi.useFakeTimers();
     try {
       const { scripted, controller, run } = await startWatchdogScenario({
@@ -203,7 +270,11 @@ describe("web auto-reply connection", () => {
         { timeout: 250, interval: 2 },
       );
 
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      expect(scripted.getListenerCount()).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(20);
       await Promise.resolve();
       await vi.waitFor(
         () => {
@@ -223,6 +294,109 @@ describe("web auto-reply connection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("passes accounts.default debounceMs into the live listener for named accounts", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          accounts: {
+            default: {
+              debounceMs: 250,
+            },
+            work: {
+              authDir: "/tmp/work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
+  });
+
+  it("matches per-account debounce overrides case-insensitively", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
+              debounceMs: 250,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "Work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
+  });
+
+  it("keeps the global inbound debounce fallback when WhatsApp debounceMs is only the schema default", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      messages: {
+        inbound: {
+          debounceMs: 250,
+        },
+      },
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              authDir: "/tmp/work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    setRuntimeConfigSourceSnapshotMock(null);
+
+    await monitorWebChannel(
+      false,
+      capture.listenerFactory as never,
+      false,
+      async () => ({ text: "ok" }),
+      undefined,
+      undefined,
+      {
+        accountId: "work",
+      },
+    );
+
+    resetLoadConfigMock();
+    expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {
@@ -388,7 +562,8 @@ describe("web auto-reply connection", () => {
     const sendComposing = vi.fn().mockResolvedValue(undefined);
     const sendMedia = vi.fn().mockResolvedValue(undefined);
 
-    const replyResolver = vi.fn().mockImplementation(async (_ctx, opts) => {
+    const replyResolver = vi.fn().mockImplementation(async (ctx, opts) => {
+      void ctx;
       opts?.onTypingController?.(typingMock);
       return { text: "final reply" };
     });

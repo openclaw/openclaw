@@ -1,10 +1,12 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export type SystemdUnavailableKind =
   | "missing_systemctl"
   | "user_bus_unavailable"
   | "generic_unavailable";
 
 function normalizeDetail(detail?: string): string {
-  return detail?.toLowerCase().trim() ?? "";
+  return normalizeLowercaseStringOrEmpty(detail);
 }
 
 export function isSystemctlMissingDetail(detail?: string): boolean {

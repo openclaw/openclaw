@@ -1,3 +1,10 @@
+import {
+  findPreferredDmConversationByUserId,
+  mergeStoredConversationReference,
+  normalizeStoredConversationId,
+  parseStoredConversationTimestamp,
+  toConversationStoreEntries,
+} from "./conversation-store-helpers.js";
 import type {
   MSTeamsConversationStore,
   MSTeamsConversationStoreEntry,
@@ -8,35 +15,22 @@ import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
 type ConversationStoreData = {
   version: 1;
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>;
+  conversations: Record<string, StoredConversationReference>;
 };
 
 const STORE_FILENAME = "msteams-conversations.json";
 const MAX_CONVERSATIONS = 1000;
 const CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
-function parseTimestamp(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return parsed;
-}
-
-function pruneToLimit(
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
-) {
+function pruneToLimit(conversations: Record<string, StoredConversationReference>) {
   const entries = Object.entries(conversations);
   if (entries.length <= MAX_CONVERSATIONS) {
     return conversations;
   }
 
   entries.sort((a, b) => {
-    const aTs = parseTimestamp(a[1].lastSeenAt) ?? 0;
-    const bTs = parseTimestamp(b[1].lastSeenAt) ?? 0;
+    const aTs = parseStoredConversationTimestamp(a[1].lastSeenAt) ?? 0;
+    const bTs = parseStoredConversationTimestamp(b[1].lastSeenAt) ?? 0;
     return aTs - bTs;
   });
 
@@ -45,14 +39,14 @@ function pruneToLimit(
 }
 
 function pruneExpired(
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
+  conversations: Record<string, StoredConversationReference>,
   nowMs: number,
   ttlMs: number,
 ) {
   let removed = false;
   const kept: typeof conversations = {};
   for (const [conversationId, reference] of Object.entries(conversations)) {
-    const lastSeenAt = parseTimestamp(reference.lastSeenAt);
+    const lastSeenAt = parseStoredConversationTimestamp(reference.lastSeenAt);
     // Preserve legacy entries that have no lastSeenAt until they're seen again.
     if (lastSeenAt != null && nowMs - lastSeenAt > ttlMs) {
       removed = true;
@@ -61,10 +55,6 @@ function pruneExpired(
     kept[conversationId] = reference;
   }
   return { conversations: kept, removed };
-}
-
-function normalizeConversationId(raw: string): string {
-  return raw.split(";")[0] ?? raw;
 }
 
 export function createMSTeamsConversationStoreFs(params?: {
@@ -86,7 +76,7 @@ export function createMSTeamsConversationStoreFs(params?: {
   const empty: ConversationStoreData = { version: 1, conversations: {} };
 
   const readStore = async (): Promise<ConversationStoreData> => {
-    const { value } = await readJsonFile<ConversationStoreData>(filePath, empty);
+    const { value } = await readJsonFile(filePath, empty);
     if (
       value.version !== 1 ||
       !value.conversations ||
@@ -102,49 +92,32 @@ export function createMSTeamsConversationStoreFs(params?: {
 
   const list = async (): Promise<MSTeamsConversationStoreEntry[]> => {
     const store = await readStore();
-    return Object.entries(store.conversations).map(([conversationId, reference]) => ({
-      conversationId,
-      reference,
-    }));
+    return toConversationStoreEntries(Object.entries(store.conversations));
   };
 
   const get = async (conversationId: string): Promise<StoredConversationReference | null> => {
     const store = await readStore();
-    return store.conversations[normalizeConversationId(conversationId)] ?? null;
+    return store.conversations[normalizeStoredConversationId(conversationId)] ?? null;
   };
 
-  const findByUserId = async (id: string): Promise<MSTeamsConversationStoreEntry | null> => {
-    const target = id.trim();
-    if (!target) {
-      return null;
-    }
-    for (const entry of await list()) {
-      const { conversationId, reference } = entry;
-      if (reference.user?.aadObjectId === target) {
-        return { conversationId, reference };
-      }
-      if (reference.user?.id === target) {
-        return { conversationId, reference };
-      }
-    }
-    return null;
+  const findPreferredDmByUserId = async (
+    id: string,
+  ): Promise<MSTeamsConversationStoreEntry | null> => {
+    return findPreferredDmConversationByUserId(await list(), id);
   };
 
   const upsert = async (
     conversationId: string,
     reference: StoredConversationReference,
   ): Promise<void> => {
-    const normalizedId = normalizeConversationId(conversationId);
+    const normalizedId = normalizeStoredConversationId(conversationId);
     await withFileLock(filePath, empty, async () => {
       const store = await readStore();
-      const existing = store.conversations[normalizedId];
-      store.conversations[normalizedId] = {
-        // Preserve fields from previous entry that may not be present on every activity
-        // (e.g. timezone is only sent when clientInfo entity is available).
-        ...(existing?.timezone && !reference.timezone ? { timezone: existing.timezone } : {}),
-        ...reference,
-        lastSeenAt: new Date().toISOString(),
-      };
+      store.conversations[normalizedId] = mergeStoredConversationReference(
+        store.conversations[normalizedId],
+        reference,
+        new Date().toISOString(),
+      );
       const nowMs = Date.now();
       store.conversations = pruneExpired(store.conversations, nowMs, ttlMs).conversations;
       store.conversations = pruneToLimit(store.conversations);
@@ -153,7 +126,7 @@ export function createMSTeamsConversationStoreFs(params?: {
   };
 
   const remove = async (conversationId: string): Promise<boolean> => {
-    const normalizedId = normalizeConversationId(conversationId);
+    const normalizedId = normalizeStoredConversationId(conversationId);
     return await withFileLock(filePath, empty, async () => {
       const store = await readStore();
       if (!(normalizedId in store.conversations)) {
@@ -165,5 +138,12 @@ export function createMSTeamsConversationStoreFs(params?: {
     });
   };
 
-  return { upsert, get, list, remove, findByUserId };
+  return {
+    upsert,
+    get,
+    list,
+    remove,
+    findPreferredDmByUserId,
+    findByUserId: findPreferredDmByUserId,
+  };
 }

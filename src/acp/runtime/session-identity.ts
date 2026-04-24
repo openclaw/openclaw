@@ -3,15 +3,8 @@ import type {
   SessionAcpIdentitySource,
   SessionAcpMeta,
 } from "../../config/sessions/types.js";
+import { normalizeText } from "../normalize-text.js";
 import type { AcpRuntimeHandle, AcpRuntimeStatus } from "./types.js";
-
-function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function normalizeIdentityState(value: unknown): SessionAcpIdentity["state"] | undefined {
   if (value !== "pending" && value !== "resolved") {
@@ -58,6 +51,36 @@ function normalizeIdentity(
   };
 }
 
+type IdentityIds = Pick<SessionAcpIdentity, "acpxRecordId" | "acpxSessionId" | "agentSessionId">;
+
+function readIdentityIdsFromHandle(handle: AcpRuntimeHandle): IdentityIds {
+  return {
+    acpxRecordId: normalizeText((handle as { acpxRecordId?: unknown }).acpxRecordId),
+    acpxSessionId: normalizeText(handle.backendSessionId),
+    agentSessionId: normalizeText(handle.agentSessionId),
+  };
+}
+
+function buildSessionIdentity(params: {
+  ids: IdentityIds;
+  state: SessionAcpIdentity["state"];
+  source: SessionAcpIdentitySource;
+  now: number;
+}): SessionAcpIdentity | undefined {
+  const { acpxRecordId, acpxSessionId, agentSessionId } = params.ids;
+  if (!acpxRecordId && !acpxSessionId && !agentSessionId) {
+    return undefined;
+  }
+  return {
+    state: params.state,
+    ...(acpxRecordId ? { acpxRecordId } : {}),
+    ...(acpxSessionId ? { acpxSessionId } : {}),
+    ...(agentSessionId ? { agentSessionId } : {}),
+    source: params.source,
+    lastUpdatedAt: params.now,
+  };
+}
+
 export function resolveSessionIdentityFromMeta(
   meta: SessionAcpMeta | undefined,
 ): SessionAcpIdentity | undefined {
@@ -77,7 +100,7 @@ export function resolveRuntimeResumeSessionId(
   if (!identity) {
     return undefined;
   }
-  return normalizeText(identity.acpxSessionId) ?? normalizeText(identity.agentSessionId);
+  return normalizeText(identity.agentSessionId) ?? normalizeText(identity.acpxSessionId);
 }
 
 export function isSessionIdentityPending(identity: SessionAcpIdentity | undefined): boolean {
@@ -159,20 +182,25 @@ export function createIdentityFromEnsure(params: {
   handle: AcpRuntimeHandle;
   now: number;
 }): SessionAcpIdentity | undefined {
-  const acpxRecordId = normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId);
-  const acpxSessionId = normalizeText(params.handle.backendSessionId);
-  const agentSessionId = normalizeText(params.handle.agentSessionId);
-  if (!acpxRecordId && !acpxSessionId && !agentSessionId) {
-    return undefined;
-  }
-  return {
+  return buildSessionIdentity({
+    ids: readIdentityIdsFromHandle(params.handle),
     state: "pending",
-    ...(acpxRecordId ? { acpxRecordId } : {}),
-    ...(acpxSessionId ? { acpxSessionId } : {}),
-    ...(agentSessionId ? { agentSessionId } : {}),
     source: "ensure",
-    lastUpdatedAt: params.now,
-  };
+    now: params.now,
+  });
+}
+
+export function createIdentityFromHandleEvent(params: {
+  handle: AcpRuntimeHandle;
+  now: number;
+}): SessionAcpIdentity | undefined {
+  const ids = readIdentityIdsFromHandle(params.handle);
+  return buildSessionIdentity({
+    ids,
+    state: ids.agentSessionId ? "resolved" : "pending",
+    source: "event",
+    now: params.now,
+  });
 }
 
 export function createIdentityFromStatus(params: {

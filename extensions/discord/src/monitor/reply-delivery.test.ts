@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -11,6 +10,9 @@ const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendDiscordTextMock = vi.hoisted(() => vi.fn());
+const buildDiscordSendErrorMock = vi.hoisted(() =>
+  vi.fn<(err: unknown, ctx?: unknown) => Promise<unknown>>(async (err: unknown) => err),
+);
 const retryAsyncMock = vi.hoisted(() =>
   vi.fn(
     async (
@@ -37,8 +39,8 @@ const retryAsyncMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
+vi.mock("../send.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
     ...actual,
     sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
@@ -48,16 +50,21 @@ vi.mock("../send.js", async (importOriginal) => {
 });
 
 vi.mock("../send.shared.js", () => ({
+  buildDiscordSendError: (err: unknown, ctx: unknown) => buildDiscordSendErrorMock(err, ctx),
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/retry-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/retry-runtime")>(
+    "openclaw/plugin-sdk/retry-runtime",
+  );
   return {
     ...actual,
     retryAsync: retryAsyncMock,
   };
 });
+
+let deliverDiscordReply: typeof import("./reply-delivery.js").deliverDiscordReply;
 
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
@@ -111,6 +118,10 @@ describe("deliverDiscordReply", () => {
     return threadBindings;
   };
 
+  beforeAll(async () => {
+    ({ deliverDiscordReply } = await import("./reply-delivery.js"));
+  });
+
   beforeEach(() => {
     sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
@@ -128,6 +139,7 @@ describe("deliverDiscordReply", () => {
       id: "msg-direct-1",
       channel_id: "channel-1",
     });
+    buildDiscordSendErrorMock.mockClear().mockImplementation(async (err: unknown) => err);
     retryAsyncMock.mockClear();
     threadBindingTesting.resetThreadBindingsForTests();
   });
@@ -235,6 +247,44 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("sends text first and videos as a separate media-only follow-up", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "done — i kicked off a 5s Molty clip",
+          mediaUrls: ["/tmp/molty.mp4"],
+        },
+      ],
+      target: "channel:654",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToId: "reply-1",
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      1,
+      "channel:654",
+      "done — i kicked off a 5s Molty clip",
+      expect.objectContaining({
+        token: "token",
+        replyTo: "reply-1",
+      }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      2,
+      "channel:654",
+      "",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "/tmp/molty.mp4",
+        replyTo: "reply-1",
+      }),
+    );
+  });
+
   it("forwards cfg to Discord send helpers", async () => {
     await deliverDiscordReply({
       replies: [{ text: "cfg path" }],
@@ -252,36 +302,64 @@ describe("deliverDiscordReply", () => {
     );
   });
 
-  it("uses replyToId only for the first chunk when replyToMode is first", async () => {
+  it("honors payload reply targets even when replyToMode is off", async () => {
     await deliverDiscordReply({
       replies: [
         {
-          text: "1234567890",
+          text: "explicit reply",
+          replyToId: "reply-explicit-1",
+          replyToTag: true,
+          replyToCurrent: true,
         },
       ],
-      target: "channel:789",
+      target: "channel:202",
       token: "token",
       runtime,
       cfg,
-      textLimit: 5,
-      replyToId: "reply-1",
-      replyToMode: "first",
+      textLimit: 2000,
+      replyToMode: "off",
     });
 
-    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageDiscordMock.mock.calls).toEqual([
-      expect.arrayContaining([
-        "channel:789",
-        "12345",
-        expect.objectContaining({ replyTo: "reply-1" }),
-      ]),
-      expect.arrayContaining([
-        "channel:789",
-        "67890",
-        expect.not.objectContaining({ replyTo: expect.anything() }),
-      ]),
-    ]);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:202",
+      "explicit reply",
+      expect.objectContaining({ replyTo: "reply-explicit-1" }),
+    );
   });
+
+  it.each(["first", "batched"] as const)(
+    "uses replyToId only for the first chunk when replyToMode is %s",
+    async (replyToMode) => {
+      await deliverDiscordReply({
+        replies: [
+          {
+            text: "1234567890",
+          },
+        ],
+        target: "channel:789",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 5,
+        replyToId: "reply-1",
+        replyToMode,
+      });
+
+      expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+      expect(sendMessageDiscordMock.mock.calls).toEqual([
+        expect.arrayContaining([
+          "channel:789",
+          "12345",
+          expect.objectContaining({ replyTo: "reply-1" }),
+        ]),
+        expect.arrayContaining([
+          "channel:789",
+          "67890",
+          expect.not.objectContaining({ replyTo: expect.anything() }),
+        ]),
+      ]);
+    },
+  );
 
   it("does not consume replyToId for replyToMode=first on whitespace-only payloads", async () => {
     await deliverDiscordReply({
@@ -410,6 +488,40 @@ describe("deliverDiscordReply", () => {
     ).rejects.toThrow("bad request");
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("wraps direct REST permission errors with channel context", async () => {
+    const apiErr = Object.assign(new Error("Missing Permissions"), {
+      code: 50013,
+      status: 403,
+    });
+    const wrappedErr = new Error(
+      "discord missing permissions in channel 789; permission probe did not identify missing ViewChannel/SendMessages (code=50013 status=403)",
+    );
+    sendDiscordTextMock.mockRejectedValueOnce(apiErr);
+    buildDiscordSendErrorMock.mockResolvedValueOnce(wrappedErr);
+
+    const fakeRest = {
+      post: vi.fn(),
+      get: vi.fn(),
+    } as unknown as import("@buape/carbon").RequestClient;
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "fail" }],
+        target: "channel:789",
+        token: "token",
+        rest: fakeRest,
+        runtime,
+        cfg,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("discord missing permissions in channel 789");
+
+    expect(buildDiscordSendErrorMock).toHaveBeenCalledWith(
+      apiErr,
+      expect.objectContaining({ channelId: "789", hasMedia: false }),
+    );
   });
 
   it("throws after exhausting retry attempts", async () => {

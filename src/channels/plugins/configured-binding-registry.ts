@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import type {
   ConfiguredBindingRecordResolution,
@@ -15,6 +15,36 @@ import {
   toConfiguredBindingConversationRef,
 } from "./configured-binding-match.js";
 import { resolveConfiguredBindingRecordBySessionKeyFromRegistry } from "./configured-binding-session-lookup.js";
+
+function resolveMaterializedConfiguredBinding(params: {
+  cfg: OpenClawConfig;
+  conversation: ConversationRef;
+}) {
+  const conversation = toConfiguredBindingConversationRef(params.conversation);
+  if (!conversation) {
+    return null;
+  }
+  const rules = resolveCompiledBindingRegistry(params.cfg).rulesByChannel.get(conversation.channel);
+  if (!rules || rules.length === 0) {
+    return null;
+  }
+  const resolved = resolveMatchingConfiguredBinding({
+    rules,
+    conversation,
+  });
+  if (!resolved) {
+    return null;
+  }
+  return {
+    conversation,
+    resolved,
+    materializedTarget: materializeConfiguredBindingRecord({
+      rule: resolved.rule,
+      accountId: conversation.accountId,
+      conversation: resolved.match,
+    }),
+  };
+}
 
 export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }): {
   bindingCount: number;
@@ -49,59 +79,26 @@ export function resolveConfiguredBindingRecordForConversation(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
 }): ConfiguredBindingRecordResolution | null {
-  const conversation = toConfiguredBindingConversationRef(params.conversation);
-  if (!conversation) {
-    return null;
-  }
-  const registry = resolveCompiledBindingRegistry(params.cfg);
-  const rules = registry.rulesByChannel.get(conversation.channel);
-  if (!rules || rules.length === 0) {
-    return null;
-  }
-  const resolved = resolveMatchingConfiguredBinding({
-    rules,
-    conversation,
-  });
+  const resolved = resolveMaterializedConfiguredBinding(params);
   if (!resolved) {
     return null;
   }
-  return materializeConfiguredBindingRecord({
-    rule: resolved.rule,
-    accountId: conversation.accountId,
-    conversation: resolved.match,
-  });
+  return resolved.materializedTarget;
 }
 
 export function resolveConfiguredBinding(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
 }): ConfiguredBindingResolution | null {
-  const conversation = toConfiguredBindingConversationRef(params.conversation);
-  if (!conversation) {
-    return null;
-  }
-  const registry = resolveCompiledBindingRegistry(params.cfg);
-  const rules = registry.rulesByChannel.get(conversation.channel);
-  if (!rules || rules.length === 0) {
-    return null;
-  }
-  const resolved = resolveMatchingConfiguredBinding({
-    rules,
-    conversation,
-  });
+  const resolved = resolveMaterializedConfiguredBinding(params);
   if (!resolved) {
     return null;
   }
-  const materializedTarget = materializeConfiguredBindingRecord({
-    rule: resolved.rule,
-    accountId: conversation.accountId,
-    conversation: resolved.match,
-  });
   return {
-    conversation,
-    compiledBinding: resolved.rule,
-    match: resolved.match,
-    ...materializedTarget,
+    conversation: resolved.conversation,
+    compiledBinding: resolved.resolved.rule,
+    match: resolved.resolved.match,
+    ...resolved.materializedTarget,
   };
 }
 

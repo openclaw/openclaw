@@ -1,12 +1,10 @@
 ---
-title: "Creating Skills"
 summary: "Build and test custom workspace skills with SKILL.md"
+title: "Creating skills"
 read_when:
   - You are creating a new custom skill in your workspace
   - You need a quick starter workflow for SKILL.md-based skills
 ---
-
-# Creating Skills
 
 Skills teach the agent how and when to use tools. Each skill is a directory
 containing a `SKILL.md` file with YAML frontmatter and markdown instructions.
@@ -98,15 +96,17 @@ The YAML frontmatter supports these fields:
 - **Be concise** — instruct the model on _what_ to do, not how to be an AI
 - **Safety first** — if your skill uses `exec`, ensure prompts don't allow arbitrary command injection from untrusted input
 - **Test locally** — use `openclaw agent --message "..."` to test before sharing
-- **Use ClawHub** — browse and contribute skills at [ClawHub](https://clawhub.com)
+- **Use ClawHub** — browse and contribute skills at [ClawHub](https://clawhub.ai)
 
 ## Where skills live
 
 | Location                        | Precedence | Scope                 |
 | ------------------------------- | ---------- | --------------------- |
 | `\<workspace\>/skills/`         | Highest    | Per-agent             |
+| `\<workspace\>/.agents/skills/` | High       | Per-workspace agent   |
+| `~/.agents/skills/`             | Medium     | Shared agent profile  |
 | `~/.openclaw/skills/`           | Medium     | Shared (all agents)   |
-| Bundled (shipped with OpenClaw) | Lowest     | Global                |
+| Bundled (shipped with OpenClaw) | Low        | Global                |
 | `skills.load.extraDirs`         | Lowest     | Custom shared folders |
 
 ## Related

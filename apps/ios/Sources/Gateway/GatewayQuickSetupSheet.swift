@@ -8,12 +8,21 @@ struct GatewayQuickSetupSheet: View {
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @State private var connecting: Bool = false
     @State private var connectError: String?
+    @State private var showGatewayProblemDetails: Bool = false
 
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Connect to a Gateway?")
                     .font(.title2.bold())
+
+                if let gatewayProblem = self.appModel.lastGatewayProblem {
+                    GatewayProblemBanner(
+                        problem: gatewayProblem,
+                        onShowDetails: {
+                            self.showGatewayProblemDetails = true
+                        })
+                }
 
                 if let candidate = self.bestCandidate {
                     VStack(alignment: .leading, spacing: 6) {
@@ -27,7 +36,7 @@ struct GatewayQuickSetupSheet: View {
                             // Use verbatim strings so Bonjour-provided values can't be interpreted as
                             // localized format strings (which can crash with Objective-C exceptions).
                             Text(verbatim: "Discovery: \(self.gatewayController.discoveryStatusText)")
-                            Text(verbatim: "Status: \(self.appModel.gatewayStatusText)")
+                            Text(verbatim: "Status: \(self.appModel.gatewayDisplayStatusText)")
                             Text(verbatim: "Node: \(self.appModel.nodeStatusText)")
                             Text(verbatim: "Operator: \(self.appModel.operatorStatusText)")
                         }
@@ -102,6 +111,11 @@ struct GatewayQuickSetupSheet: View {
                         Text("Close")
                     }
                 }
+            }
+        }
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                GatewayProblemDetailsSheet(problem: gatewayProblem)
             }
         }
     }

@@ -1,150 +1,77 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+
+const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => ({
+  resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
+}));
+
+vi.mock("../../channels/plugins/message-action-discovery.js", () => ({
+  resolveChannelMessageToolMediaSourceParamKeys: resolveChannelMessageToolMediaSourceParamKeysMock,
+}));
+
 import {
+  collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
+  resolveExtraActionMediaSourceParamKeys,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
 
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
-
-function createToolContext(
-  overrides: Partial<ChannelThreadingToolContext> = {},
-): ChannelThreadingToolContext {
-  return {
-    currentChannelId: "C123",
-    currentThreadTs: "thread-1",
-    replyToMode: "all",
-    ...overrides,
-  };
-}
-
-function resolveSlackAutoThreadId(params: {
-  to: string;
-  toolContext?: {
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    replyToMode?: "off" | "first" | "all";
-    hasRepliedRef?: { value: boolean };
-  };
-}): string | undefined {
-  const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
-    return undefined;
-  }
-  if (context.replyToMode !== "all" && context.replyToMode !== "first") {
-    return undefined;
-  }
-  const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
-    return undefined;
-  }
-  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
-    return undefined;
-  }
-  if (context.replyToMode === "first" && context.hasRepliedRef?.value) {
-    return undefined;
-  }
-  return context.currentThreadTs;
-}
-
-function resolveTelegramAutoThreadId(params: {
-  to: string;
-  toolContext?: { currentThreadTs?: string; currentChannelId?: string };
-}): string | undefined {
-  const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
-    return undefined;
-  }
-  const parsedTo = parseTelegramTarget(params.to);
-  const parsedChannel = parseTelegramTarget(context.currentChannelId);
-  if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
-    return undefined;
-  }
-  return context.currentThreadTs;
-}
-
-describe("message action threading helpers", () => {
-  it("resolves Slack auto-thread ids only for matching active channels", () => {
-    expect(
-      resolveSlackAutoThreadId({
-        to: "#c123",
-        toolContext: createToolContext(),
-      }),
-    ).toBe("thread-1");
-    expect(
-      resolveSlackAutoThreadId({
-        to: "channel:C999",
-        toolContext: createToolContext(),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "user:U123",
-        toolContext: createToolContext(),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("skips Slack auto-thread ids when reply mode or context blocks them", () => {
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({
-          replyToMode: "first",
-          hasRepliedRef: { value: true },
-        }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({ replyToMode: "off" }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveSlackAutoThreadId({
-        to: "C123",
-        toolContext: createToolContext({ currentThreadTs: undefined }),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("resolves Telegram auto-thread ids for matching chats across target formats", () => {
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "telegram:group:-100123:topic:77",
-        toolContext: createToolContext({
-          currentChannelId: "tg:group:-100123",
-        }),
-      }),
-    ).toBe("thread-1");
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "-100999:77",
-        toolContext: createToolContext({
-          currentChannelId: "-100123",
-        }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "-100123",
-        toolContext: createToolContext({ currentChannelId: undefined }),
-      }),
-    ).toBeUndefined();
-  });
-});
+const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
 
 describe("message action media helpers", () => {
+  beforeEach(() => {
+    resolveChannelMessageToolMediaSourceParamKeysMock.mockClear();
+  });
+
+  it("skips plugin media discovery when args only use standard action params", () => {
+    expect(
+      resolveExtraActionMediaSourceParamKeys({
+        cfg,
+        action: "send",
+        channel: "workspace",
+        args: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hi",
+          media: "https://example.com/photo.png",
+        },
+      }),
+    ).toEqual([]);
+    expect(resolveChannelMessageToolMediaSourceParamKeysMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers plugin media params when args include an extension-owned field", () => {
+    expect(
+      resolveExtraActionMediaSourceParamKeys({
+        cfg,
+        action: "set-profile",
+        channel: "matrix",
+        args: {
+          channel: "matrix",
+          avatarPath: "/workspace/avatars/profile.png",
+        },
+      }),
+    ).toEqual(["avatarPath", "avatarUrl"]);
+    expect(resolveChannelMessageToolMediaSourceParamKeysMock).toHaveBeenCalledWith({
+      cfg,
+      action: "set-profile",
+      channel: "matrix",
+      accountId: undefined,
+      sessionKey: undefined,
+      sessionId: undefined,
+      agentId: undefined,
+      requesterSenderId: undefined,
+      senderIsOwner: undefined,
+    });
+  });
+
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
     expect(
       resolveAttachmentMediaPolicy({
@@ -162,7 +89,27 @@ describe("message action media helpers", () => {
       }),
     ).toEqual({
       mode: "host",
-      localRoots: ["/tmp/a"],
+      mediaAccess: {
+        localRoots: ["/tmp/a"],
+      },
+      mediaLocalRoots: ["/tmp/a"],
+    });
+  });
+
+  it("preserves explicit any local roots for host read opt-ins", () => {
+    const mediaReadFile = async () => Buffer.from("x");
+    expect(
+      resolveAttachmentMediaPolicy({
+        mediaLocalRoots: "any",
+        mediaReadFile,
+      }),
+    ).toEqual({
+      mode: "host",
+      mediaAccess: {
+        readFile: mediaReadFile,
+      },
+      mediaLocalRoots: "any",
+      mediaReadFile,
     });
   });
 
@@ -210,6 +157,184 @@ describe("message action media helpers", () => {
     }
   });
 
+  maybeIt("normalizes extension event image sandbox media params", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-image-"));
+    try {
+      const args: Record<string, unknown> = {
+        image: " file:///workspace/assets/event-cover.png ",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot: ` ${sandboxRoot} `,
+        },
+      });
+
+      expect(args).toMatchObject({
+        image: path.join(sandboxRoot, "assets", "event-cover.png"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("normalizes extension avatarPath and avatarUrl sandbox media params", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarPath: "/workspace/avatars/profile.png",
+        avatarUrl: "file:///workspace/avatars/remote-avatar.jpg",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
+        avatarUrl: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("collects host media source hints from the shared media-source key set", () => {
+    expect(
+      collectActionMediaSourceHints(
+        {
+          media: " /workspace/uploads/photo.png ",
+          filePath: "",
+          image: "file:///workspace/assets/event-cover.png",
+          avatarPath: "/workspace/avatars/profile.png",
+          avatar_url: "mxc://matrix.org/abc123def456",
+          ignored: "/workspace/not-included.png",
+        },
+        matrixMediaSourceParamKeys,
+      ),
+    ).toEqual([
+      " /workspace/uploads/photo.png ",
+      "file:///workspace/assets/event-cover.png",
+      "/workspace/avatars/profile.png",
+      "mxc://matrix.org/abc123def456",
+    ]);
+  });
+
+  maybeIt("normalizes extension snake_case avatar_path and avatar_url aliases", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-snake-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatar_path: "/workspace/avatars/profile.png",
+        avatar_url: "file:///workspace/avatars/remote-avatar.jpg",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatar_path: path.join(sandboxRoot, "avatars", "profile.png"),
+        avatar_url: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("prefers canonical extension media params over invalid snake_case aliases", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-canonical-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatar_url: "data:text/plain;base64,QQ==",
+        avatarPath: "/workspace/avatars/profile.png",
+        avatar_path: "data:text/plain;base64,QQ==",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
+        avatar_url: "data:text/plain;base64,QQ==",
+        avatar_path: "data:text/plain;base64,QQ==",
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("keeps remote HTTP avatarUrl unchanged under sandbox normalization", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-remote-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatarPath: "/workspace/avatars/local.png",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatarPath: path.join(sandboxRoot, "avatars", "local.png"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("keeps mxc:// avatarUrl unchanged under sandbox normalization", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-mxc-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarUrl: "mxc://matrix.org/abc123def456",
+        avatarPath: "/workspace/avatars/local.png",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarUrl: "mxc://matrix.org/abc123def456",
+        avatarPath: path.join(sandboxRoot, "avatars", "local.png"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
   maybeIt(
     "keeps remote HTTP mediaUrl and fileUrl aliases unchanged under sandbox normalization",
     async () => {
@@ -244,7 +369,7 @@ describe("message action media helpers", () => {
     };
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args: mediaArgs,
       action: "sendAttachment",
       dryRun: true,
@@ -257,7 +382,7 @@ describe("message action media helpers", () => {
     };
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args: fileArgs,
       action: "sendAttachment",
       dryRun: true,
@@ -273,7 +398,7 @@ describe("message action media helpers", () => {
 
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args,
       action: "sendAttachment",
       dryRun: true,
@@ -316,7 +441,7 @@ describe("message action sandbox media hydration", () => {
       await expect(
         hydrateAttachmentParamsForAction({
           cfg,
-          channel: "slack",
+          channel: "workspace",
           args,
           action: "sendAttachment",
           mediaPolicy,

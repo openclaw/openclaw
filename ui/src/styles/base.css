@@ -187,6 +187,17 @@
   color-scheme: light;
 }
 
+/* Scrollbar - visible on light backgrounds */
+:root[data-theme="light"]::-webkit-scrollbar-thumb,
+:root[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+:root[data-theme="light"]::-webkit-scrollbar-thumb:hover,
+:root[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
 /* Theme families override accent tokens while keeping shared surfaces/layout. */
 :root[data-theme="openknot"] {
   /*

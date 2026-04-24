@@ -1,13 +1,10 @@
 import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { OutboundIdentity } from "./identity-types.js";
 
-export type OutboundIdentity = {
-  name?: string;
-  avatarUrl?: string;
-  emoji?: string;
-  theme?: string;
-};
+export type { OutboundIdentity } from "./identity-types.js";
 
 export function normalizeOutboundIdentity(
   identity?: OutboundIdentity | null,
@@ -15,10 +12,10 @@ export function normalizeOutboundIdentity(
   if (!identity) {
     return undefined;
   }
-  const name = identity.name?.trim() || undefined;
-  const avatarUrl = identity.avatarUrl?.trim() || undefined;
-  const emoji = identity.emoji?.trim() || undefined;
-  const theme = identity.theme?.trim() || undefined;
+  const name = normalizeOptionalString(identity.name);
+  const avatarUrl = normalizeOptionalString(identity.avatarUrl);
+  const emoji = normalizeOptionalString(identity.emoji);
+  const theme = normalizeOptionalString(identity.theme);
   if (!name && !avatarUrl && !emoji && !theme) {
     return undefined;
   }

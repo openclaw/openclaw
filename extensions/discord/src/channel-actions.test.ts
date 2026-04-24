@@ -1,32 +1,36 @@
-import { Type } from "@sinclair/typebox";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { withEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 
-const handleDiscordMessageActionMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const handleDiscordMessageActionMock = vi.hoisted(() =>
+  vi.fn(async () => ({ content: [], details: { ok: true } })),
+);
 
-vi.mock("./actions/handle-action.js", () => ({
-  handleDiscordMessageAction: handleDiscordMessageActionMock,
-}));
-
-import { discordMessageActions } from "./channel-actions.js";
+const handleActionModule = await import("./actions/handle-action.js");
+vi.spyOn(handleActionModule, "handleDiscordMessageAction").mockImplementation(
+  handleDiscordMessageActionMock,
+);
+const { discordMessageActions } = await import("./channel-actions.js");
 
 describe("discordMessageActions", () => {
   it("returns no tool actions when no token-sourced Discord accounts are enabled", () => {
-    const discovery = discordMessageActions.describeMessageTool?.({
-      cfg: {
-        channels: {
-          discord: {
-            enabled: true,
+    withEnv({ DISCORD_BOT_TOKEN: undefined }, () => {
+      const discovery = discordMessageActions.describeMessageTool?.({
+        cfg: {
+          channels: {
+            discord: {
+              enabled: true,
+            },
           },
-        },
-      } as OpenClawConfig,
-    });
+        } as OpenClawConfig,
+      });
 
-    expect(discovery).toEqual({
-      actions: [],
-      capabilities: [],
-      schema: null,
+      expect(discovery).toEqual({
+        actions: [],
+        capabilities: [],
+        schema: null,
+      });
     });
   });
 
@@ -48,8 +52,8 @@ describe("discordMessageActions", () => {
       } as OpenClawConfig,
     });
 
-    expect(discovery?.capabilities).toEqual(["interactive", "components"]);
-    expect(discovery?.schema).not.toBeNull();
+    expect(discovery?.capabilities).toEqual(["presentation"]);
+    expect(discovery?.schema).toBeUndefined();
     expect(discovery?.actions).toEqual(
       expect.arrayContaining(["send", "poll", "react", "reactions", "emoji-list", "permissions"]),
     );
@@ -57,7 +61,46 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("role-add");
   });
 
-  it("keeps components optional in the message tool schema", () => {
+  it("honors account-scoped action gates during discovery", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot token-main",
+          actions: {
+            reactions: false,
+            polls: true,
+          },
+          accounts: {
+            work: {
+              token: "Bot token-work",
+              actions: {
+                reactions: true,
+                polls: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const defaultDiscovery = discordMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "default",
+    });
+    const workDiscovery = discordMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "work",
+    });
+
+    expect(defaultDiscovery?.actions).toEqual(expect.arrayContaining(["send", "poll"]));
+    expect(defaultDiscovery?.actions).not.toContain("react");
+    expect(workDiscovery?.actions).toEqual(
+      expect.arrayContaining(["send", "react", "reactions", "emoji-list"]),
+    );
+    expect(workDiscovery?.actions).not.toContain("poll");
+  });
+
+  it("does not expose Discord-native message tool schema", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
         channels: {
@@ -67,12 +110,7 @@ describe("discordMessageActions", () => {
         },
       } as OpenClawConfig,
     });
-    const schema = discovery?.schema;
-    if (!schema || Array.isArray(schema)) {
-      throw new Error("expected discord message-tool schema");
-    }
-
-    expect(Type.Object(schema.properties).required).toBeUndefined();
+    expect(discovery?.schema).toBeUndefined();
   });
 
   it("extracts send targets for message and thread reply actions", () => {
@@ -111,7 +149,7 @@ describe("discordMessageActions", () => {
     await discordMessageActions.handleAction?.({
       channel: "discord",
       action: "send",
-      params: { to: "channel:123", text: "hello" },
+      params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
       requesterSenderId: "user-1",
@@ -121,7 +159,7 @@ describe("discordMessageActions", () => {
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
       action: "send",
-      params: { to: "channel:123", text: "hello" },
+      params: { to: "channel:123", message: "hello" },
       cfg,
       accountId: "ops",
       requesterSenderId: "user-1",

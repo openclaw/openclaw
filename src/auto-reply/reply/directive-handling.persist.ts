@@ -3,22 +3,31 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { lookupCachedContextTokens } from "../../agents/context-cache.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thinking.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
   canPersistInternalExecDirective,
+  canPersistInternalVerboseDirective,
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
-import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+
+export type PersistedThinkingLevelRemap = {
+  from: ThinkLevel;
+  to: ThinkLevel;
+  provider: string;
+  model: string;
+};
 
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;
@@ -40,9 +49,17 @@ export async function persistInlineDirectives(params: {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
+  messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
-}): Promise<{ provider: string; model: string; contextTokens: number }> {
+  senderIsOwner?: boolean;
+  markLiveSwitchPending?: boolean;
+}): Promise<{
+  provider: string;
+  model: string;
+  contextTokens: number;
+  thinkingRemap?: PersistedThinkingLevelRemap;
+}> {
   const {
     directives,
     cfg,
@@ -61,14 +78,22 @@ export async function persistInlineDirectives(params: {
     agentCfg,
   } = params;
   let { provider, model } = params;
+  let thinkingRemap: PersistedThinkingLevelRemap | undefined;
   const allowInternalExecPersistence = canPersistInternalExecDirective({
+    messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
+  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+    messageProvider: params.messageProvider,
+    surface: params.surface,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
+  const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
   const activeAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
-  const agentDir = params.agentDir ?? resolveAgentDir(cfg, activeAgentId);
+  const agentDir = resolveAgentDir(cfg, activeAgentId) ?? params.agentDir;
 
   if (sessionEntry && sessionStore && sessionKey) {
     const prevElevatedLevel =
@@ -89,8 +114,20 @@ export async function persistInlineDirectives(params: {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
     }
-    if (directives.hasVerboseDirective && directives.verboseLevel) {
+    if (
+      directives.hasVerboseDirective &&
+      directives.verboseLevel &&
+      allowInternalVerbosePersistence
+    ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
+      updated = true;
+    }
+    if (
+      directives.hasTraceDirective &&
+      directives.traceLevel &&
+      (params.senderIsOwner || delegatedTraceAllowed)
+    ) {
+      applyTraceOverride(sessionEntry, directives.traceLevel);
       updated = true;
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {
@@ -163,9 +200,36 @@ export async function persistInlineDirectives(params: {
           entry: sessionEntry,
           selection: modelResolution.modelSelection,
           profileOverride: modelResolution.profileOverride,
+          markLiveSwitchPending: params.markLiveSwitchPending,
         });
         provider = modelResolution.modelSelection.provider;
         model = modelResolution.modelSelection.model;
+        const currentThinkingLevel = sessionEntry.thinkingLevel as ThinkLevel | undefined;
+        if (
+          currentThinkingLevel &&
+          !directives.hasThinkDirective &&
+          !isThinkingLevelSupported({
+            provider,
+            model,
+            level: currentThinkingLevel,
+          })
+        ) {
+          const remappedThinkingLevel = resolveSupportedThinkingLevel({
+            provider,
+            model,
+            level: currentThinkingLevel,
+          });
+          if (remappedThinkingLevel !== currentThinkingLevel) {
+            sessionEntry.thinkingLevel = remappedThinkingLevel;
+            thinkingRemap = {
+              from: currentThinkingLevel,
+              to: remappedThinkingLevel,
+              provider,
+              model,
+            };
+            updated = true;
+          }
+        }
         const nextLabel = `${provider}/${model}`;
         if (nextLabel !== initialModelLabel) {
           enqueueSystemEvent(
@@ -208,7 +272,14 @@ export async function persistInlineDirectives(params: {
   return {
     provider,
     model,
+    thinkingRemap,
     contextTokens:
-      agentCfg?.contextTokens ?? lookupCachedContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+      resolveContextTokensForModel({
+        cfg,
+        provider,
+        model,
+        contextTokensOverride: agentCfg?.contextTokens,
+        allowAsyncLoad: false,
+      }) ?? DEFAULT_CONTEXT_TOKENS,
   };
 }

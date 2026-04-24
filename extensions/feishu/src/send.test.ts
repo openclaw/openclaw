@@ -1,26 +1,40 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import {
-  buildStructuredCard,
-  editMessageFeishu,
-  getMessageFeishu,
-  listFeishuThreadMessages,
-  resolveFeishuCardTemplate,
-} from "./send.js";
+import { buildMarkdownCard } from "./send.js";
 
 const {
+  mockConvertMarkdownTables,
   mockClientGet,
   mockClientList,
   mockClientPatch,
   mockCreateFeishuClient,
+  mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
+  mockRuntimeConvertMarkdownTables,
+  mockRuntimeResolveMarkdownTableMode,
 } = vi.hoisted(() => ({
+  mockConvertMarkdownTables: vi.fn((text: string) => text),
   mockClientGet: vi.fn(),
   mockClientList: vi.fn(),
   mockClientPatch: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
+  mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
+  mockRuntimeConvertMarkdownTables: vi.fn((text: string) => text),
+  mockRuntimeResolveMarkdownTableMode: vi.fn(() => "preserve"),
 }));
+
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  resolveMarkdownTableMode: mockResolveMarkdownTableMode,
+}));
+
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+  return {
+    ...actual,
+    convertMarkdownTables: mockConvertMarkdownTables,
+  };
+});
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
@@ -35,16 +49,38 @@ vi.mock("./runtime.js", () => ({
   getFeishuRuntime: () => ({
     channel: {
       text: {
-        resolveMarkdownTableMode: () => "preserve",
-        convertMarkdownTables: (text: string) => text,
+        resolveMarkdownTableMode: mockRuntimeResolveMarkdownTableMode,
+        convertMarkdownTables: mockRuntimeConvertMarkdownTables,
       },
     },
   }),
 }));
 
+let buildStructuredCard: typeof import("./send.js").buildStructuredCard;
+let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
+let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
+let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
+let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
+
 describe("getMessageFeishu", () => {
+  beforeAll(async () => {
+    ({
+      buildStructuredCard,
+      editMessageFeishu,
+      getMessageFeishu,
+      listFeishuThreadMessages,
+      resolveFeishuCardTemplate,
+      sendMessageFeishu,
+    } = await import("./send.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveMarkdownTableMode.mockReturnValue("preserve");
+    mockConvertMarkdownTables.mockImplementation((text: string) => text);
+    mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
+    mockRuntimeConvertMarkdownTables.mockImplementation((text: string) => text);
     mockResolveFeishuAccount.mockReturnValue({
       accountId: "default",
       configured: true,
@@ -52,12 +88,47 @@ describe("getMessageFeishu", () => {
     mockCreateFeishuClient.mockReturnValue({
       im: {
         message: {
+          create: vi.fn(),
           get: mockClientGet,
           list: mockClientList,
           patch: mockClientPatch,
         },
       },
     });
+  });
+
+  it("sends text without requiring Feishu runtime text helpers", async () => {
+    mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
+      throw new Error("Feishu runtime not initialized");
+    });
+    mockRuntimeConvertMarkdownTables.mockImplementation(() => {
+      throw new Error("Feishu runtime not initialized");
+    });
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_send" } }),
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "hello",
+    });
+
+    expect(mockResolveMarkdownTableMode).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "feishu",
+    });
+    expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
+    expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -276,6 +347,12 @@ describe("editMessageFeishu", () => {
   });
 
   it("patches post content for text edits", async () => {
+    mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
+      throw new Error("Feishu runtime not initialized");
+    });
+    mockRuntimeConvertMarkdownTables.mockImplementation(() => {
+      throw new Error("Feishu runtime not initialized");
+    });
     mockClientPatch.mockResolvedValueOnce({ code: 0 });
 
     const result = await editMessageFeishu({
@@ -334,6 +411,20 @@ describe("resolveFeishuCardTemplate", () => {
 });
 
 describe("buildStructuredCard", () => {
+  it("uses schema-2.0 width config instead of legacy wide screen mode", () => {
+    const card = buildStructuredCard("hello") as {
+      config: {
+        width_mode?: string;
+        enable_forward?: boolean;
+        wide_screen_mode?: boolean;
+      };
+    };
+
+    expect(card.config.width_mode).toBe("fill");
+    expect(card.config.enable_forward).toBeUndefined();
+    expect(card.config.wide_screen_mode).toBeUndefined();
+  });
+
   it("falls back to blue when the header template is unsupported", () => {
     const card = buildStructuredCard("hello", {
       header: {
@@ -350,5 +441,21 @@ describe("buildStructuredCard", () => {
         },
       }),
     );
+  });
+});
+
+describe("buildMarkdownCard", () => {
+  it("uses schema-2.0 width config instead of legacy wide screen mode", () => {
+    const card = buildMarkdownCard("hello") as {
+      config: {
+        width_mode?: string;
+        enable_forward?: boolean;
+        wide_screen_mode?: boolean;
+      };
+    };
+
+    expect(card.config.width_mode).toBe("fill");
+    expect(card.config.enable_forward).toBeUndefined();
+    expect(card.config.wide_screen_mode).toBeUndefined();
   });
 });

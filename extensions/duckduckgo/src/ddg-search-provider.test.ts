@@ -12,37 +12,17 @@ vi.mock("./ddg-client.js", () => ({
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
   let ddgClientTesting: typeof import("./ddg-client.js").__testing;
-  let plugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
     ({ __testing: ddgClientTesting } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
-    ({ default: plugin } = await import("../index.js"));
+    await import("../index.js");
   });
 
   beforeEach(() => {
     runDuckDuckGoSearch.mockReset();
     runDuckDuckGoSearch.mockImplementation(async (params: Record<string, unknown>) => params);
-  });
-
-  it("registers a keyless web search provider", () => {
-    const webSearchProviders: unknown[] = [];
-
-    plugin.register({
-      registerWebSearchProvider(provider: unknown) {
-        webSearchProviders.push(provider);
-      },
-    } as never);
-
-    expect(plugin.id).toBe("duckduckgo");
-    expect(webSearchProviders).toHaveLength(1);
-
-    const provider = webSearchProviders[0] as Record<string, unknown>;
-    expect(provider.id).toBe("duckduckgo");
-    expect(provider.requiresCredential).toBe(false);
-    expect(provider.envVars).toEqual([]);
   });
 
   it("exposes keyless metadata and enables the plugin in config", () => {

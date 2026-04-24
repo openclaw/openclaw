@@ -1,7 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import {
+  getDetachedTaskLifecycleRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/detached-task-runtime.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
+import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -10,8 +21,9 @@ const mocks = vi.hoisted(() => ({
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
-  getSubagentRunByChildSessionKey: vi.fn(),
+  getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
+  resolveBareResetBootstrapFileAccess: vi.fn(() => true),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
@@ -59,15 +71,31 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
+  resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
+    cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
+  resolveAgentEffectiveModelPrimary: () => undefined,
 }));
+
+vi.mock("../../auto-reply/reply/session-reset-prompt.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../auto-reply/reply/session-reset-prompt.js")
+  >("../../auto-reply/reply/session-reset-prompt.js");
+  return {
+    ...actual,
+    resolveBareResetBootstrapFileAccess: mocks.resolveBareResetBootstrapFileAccess,
+  };
+});
 
 vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
 
-vi.mock("../../agents/subagent-registry.js", () => ({
-  getSubagentRunByChildSessionKey: mocks.getSubagentRunByChildSessionKey,
+vi.mock("../../agents/subagent-registry-read.js", () => ({
+  getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
+}));
+
+vi.mock("../session-subagent-reactivation.runtime.js", () => ({
   replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
 }));
 
@@ -138,33 +166,12 @@ function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string
   });
 }
 
-function captureUpdatedMainEntry() {
-  let capturedEntry: Record<string, unknown> | undefined;
-  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-    const store: Record<string, unknown> = {};
-    await updater(store);
-    capturedEntry = store["agent:main:main"] as Record<string, unknown>;
-  });
-  return () => capturedEntry;
-}
-
 function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: "existing-session-id",
     updatedAt: Date.now(),
     ...overrides,
   };
-}
-
-async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
-  const getCapturedEntry = captureUpdatedMainEntry();
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
-  await runMainAgent("test", idempotencyKey);
-  expect(mocks.updateSessionStore).toHaveBeenCalled();
-  return getCapturedEntry();
 }
 
 function setupNewYorkTimeConfig(isoDate: string) {
@@ -217,6 +224,27 @@ async function runMainAgent(message: string, idempotencyKey: string) {
     { respond, reqId: idempotencyKey },
   );
   return respond;
+}
+
+async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
+  const loaded = mocks.loadSessionEntry();
+  const canonicalKey = loaded?.canonicalKey ?? "agent:main:main";
+  const existingEntry = structuredClone(loaded?.entry ?? buildExistingMainStoreEntry());
+  let capturedEntry: Record<string, unknown> | undefined;
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    const store: Record<string, unknown> = {
+      [canonicalKey]: existingEntry,
+    };
+    const result = await updater(store);
+    capturedEntry = result as Record<string, unknown>;
+    return result;
+  });
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+  await runMainAgent("hi", idempotencyKey);
+  return capturedEntry;
 }
 
 function readLastAgentCommandCall():
@@ -298,6 +326,17 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  afterEach(() => {
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    resetDetachedTaskLifecycleRuntimeForTests();
+    resetTaskRegistryForTests();
+    mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",
@@ -449,14 +488,14 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
   });
-
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
     const completedRun = {
       runId: "run-old",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
       requesterDisplayKey: "main",
       task: "initial task",
       cleanup: "keep" as const,
@@ -484,7 +523,7 @@ describe("gateway agent handler", () => {
       };
       return await updater(store);
     });
-    mocks.getSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
     mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
     mocks.loadGatewaySessionRow.mockReturnValueOnce({
       status: "running",
@@ -526,20 +565,96 @@ describe("gateway agent handler", () => {
       undefined,
       { runId: "run-new" },
     );
-    expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
-      previousRunId: "run-old",
-      nextRunId: "run-new",
-      fallback: completedRun,
-      runTimeoutSeconds: 0,
+    expectSubagentFollowupReactivation({
+      replaceSubagentRunAfterSteerMock: mocks.replaceSubagentRunAfterSteer,
+      broadcastToConnIds,
+      completedRun,
+      childSessionKey,
     });
+  });
+
+  it("includes live session setting metadata in agent send events", async () => {
+    mockMainSessionEntry({
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      fastMode: true,
+      sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          fastMode: true,
+          sendPolicy: "deny",
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.loadGatewaySessionRow.mockReturnValue({
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      fastMode: true,
+      sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+      totalTokens: 12,
+      status: "running",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "test",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-live-settings",
+      },
+      {
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
       expect.objectContaining({
-        sessionKey: childSessionKey,
+        sessionKey: "agent:main:main",
         reason: "send",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        fastMode: true,
+        sendPolicy: "deny",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
+        totalTokens: 12,
         status: "running",
-        startedAt: 123,
-        endedAt: undefined,
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
@@ -633,6 +748,48 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const respond = vi.fn();
+    const logInfo = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "best effort delivery fallback",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        bestEffortDeliver: true,
+        idempotencyKey: "test-best-effort-delivery-fallback",
+      },
+      {
+        reqId: "best-effort-delivery-fallback",
+        respond,
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: logInfo, error: vi.fn() },
+          broadcastToConnIds: vi.fn(),
+          getSessionEventSubscriberConnIds: () => new Set(),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const accepted = respond.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
+    );
+    expect(accepted).toBeDefined();
+    const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
+    expect(rejected).toBeUndefined();
+    expect(logInfo).toHaveBeenCalledTimes(1);
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.stringContaining("agent delivery downgraded to session-only (bestEffortDeliver)"),
+    );
+  });
+
   it("rejects public spawned-run metadata fields", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
@@ -657,6 +814,85 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("invalid agent params"),
       }),
     );
+  });
+
+  it("accepts music generation internal events", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "music generation finished",
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA: https://example.test/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        idempotencyKey: "music-generation-event",
+      },
+      { reqId: "music-generation-event-1", respond },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
+  it("does not create task rows for inter-session completion wakes", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: [
+          "[Mon 2026-04-06 02:42 GMT+1] <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+        ].join("\n"),
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA:/tmp/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "music_generate:task-123",
+          sourceChannel: "internal",
+          sourceTool: "music_generate",
+        },
+        idempotencyKey: "music-generation-event-inter-session",
+      },
+      { reqId: "music-generation-event-inter-session" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(findTaskByRunId("music-generation-event-inter-session")).toBeUndefined();
   });
 
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
@@ -737,6 +973,72 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
+  it("tracks async gateway agent runs in the shared task registry", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run",
+        },
+        { reqId: "task-registry-agent-run" },
+      );
+
+      expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
+        runtime: "cli",
+        childSessionKey: "agent:main:main",
+        status: "running",
+      });
+    });
+  });
+
+  it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      const defaultRuntime = getDetachedTaskLifecycleRuntime();
+      const createRunningTaskRunSpy = vi.fn(
+        (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
+          defaultRuntime.createRunningTaskRun(...args),
+      );
+
+      setDetachedTaskLifecycleRuntime({
+        ...defaultRuntime,
+        createRunningTaskRun: createRunningTaskRunSpy,
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli seam task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-seam",
+        },
+        { reqId: "task-registry-agent-seam" },
+      );
+
+      expect(createRunningTaskRunSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: "cli",
+          runId: "task-registry-agent-seam",
+          childSessionKey: "agent:main:main",
+          sourceId: "task-registry-agent-seam",
+          task: expect.stringContaining("background cli seam task"),
+        }),
+      );
+      expect(findTaskByRunId("task-registry-agent-seam")).toMatchObject({
+        runtime: "cli",
+        childSessionKey: "agent:main:main",
+        status: "running",
+      });
+    });
+  });
+
   it("handles missing cliSessionIds gracefully", async () => {
     mockMainSessionEntry({});
 
@@ -746,7 +1048,6 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
     expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
   });
-
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {
@@ -813,10 +1114,189 @@ describe("gateway agent handler", () => {
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
     // Message is now dynamically built with current date — check key substrings
-    expect(call?.message).toContain("Run your Session Startup sequence");
+    expect(call?.message).toContain("Execute your Session Startup sequence now");
     expect(call?.message).toContain("Current time:");
     expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.sessionId).toBe("reset-session-id");
+  });
+
+  it("prepends runtime-loaded startup memory to bare /new agent runs", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-reset-startup-" }, async (workspaceDir) => {
+      await fs.mkdir(`${workspaceDir}/memory`, { recursive: true });
+      await fs.writeFile(`${workspaceDir}/memory/2026-01-28.md`, "today gateway note", "utf-8");
+      await fs.writeFile(`${workspaceDir}/memory/2026-01-27.md`, "yesterday gateway note", "utf-8");
+      setupNewYorkTimeConfig("2026-01-28T20:30:00.000Z");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: {
+            userTimezone: "America/New_York",
+            workspace: workspaceDir,
+          },
+        },
+      };
+      mockSessionResetSuccess({ reason: "new" });
+      primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
+
+      await invokeAgent(
+        {
+          message: "/new",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "test-idem-new-startup-context",
+        },
+        {
+          reqId: "4-startup",
+          client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        },
+      );
+
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = readLastAgentCommandCall();
+      expect(call?.message).toContain("[Startup context loaded by runtime]");
+      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-28.md]");
+      expect(call?.message).toContain("today gateway note");
+      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-27.md]");
+      expect(call?.message).toContain("yesterday gateway note");
+      resetTimeConfig();
+    });
+  });
+
+  it("uses shared bootstrap reset wording for bare /new when workspace bootstrap is pending", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-reset-bootstrap-" }, async (workspaceDir) => {
+      await fs.writeFile(`${workspaceDir}/BOOTSTRAP.md`, "bootstrap ritual", "utf-8");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      };
+      mockSessionResetSuccess({ reason: "new" });
+      primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
+
+      await invokeAgent(
+        {
+          message: "/new",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "test-idem-new-bootstrap-pending",
+        },
+        {
+          reqId: "4-bootstrap",
+          client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        },
+      );
+
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = readLastAgentCommandCall();
+      expect(call?.message).toContain("while bootstrap is still pending for this workspace");
+      expect(call?.message).toContain("Please read BOOTSTRAP.md from the workspace now");
+      expect(call?.message).not.toContain("Today memory context");
+    });
+  });
+
+  it("resolves bare /new bootstrap state from the effective spawned workspace", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-reset-default-" },
+      async (defaultWorkspaceDir) => {
+        await withTempDir(
+          { prefix: "openclaw-gateway-reset-spawned-" },
+          async (spawnedWorkspaceDir) => {
+            await fs.writeFile(`${spawnedWorkspaceDir}/BOOTSTRAP.md`, "bootstrap ritual", "utf-8");
+            mocks.loadConfigReturn = {
+              agents: {
+                defaults: {
+                  workspace: defaultWorkspaceDir,
+                },
+              },
+            };
+            mockSessionResetSuccess({ reason: "new" });
+            mocks.loadSessionEntry.mockReturnValue({
+              cfg: mocks.loadConfigReturn,
+              storePath: "/tmp/sessions.json",
+              entry: {
+                sessionId: "reset-session-id",
+                updatedAt: Date.now(),
+                spawnedBy: "agent:main:controller",
+                spawnedWorkspaceDir,
+              },
+              canonicalKey: "agent:main:main",
+            });
+            mocks.updateSessionStore.mockResolvedValue(undefined);
+            mocks.agentCommand.mockResolvedValue({
+              payloads: [{ text: "ok" }],
+              meta: { durationMs: 100 },
+            });
+
+            await invokeAgent(
+              {
+                message: "/new",
+                sessionKey: "agent:main:main",
+                idempotencyKey: "test-idem-new-bootstrap-spawned-workspace",
+              },
+              {
+                reqId: "4-bootstrap-spawned",
+                client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+              },
+            );
+
+            await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+            const call = readLastAgentCommandCall();
+            expect(call?.message).toContain("while bootstrap is still pending for this workspace");
+            expect(call?.message).toContain(
+              "cannot safely complete the full BOOTSTRAP.md workflow here",
+            );
+            expect(call?.message).toContain("switching to a primary interactive run");
+          },
+        );
+      },
+    );
+  });
+
+  it("suppresses full bootstrap wording for bare /new on subagent sessions", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-reset-subagent-" }, async (workspaceDir) => {
+      await fs.writeFile(`${workspaceDir}/BOOTSTRAP.md`, "bootstrap ritual", "utf-8");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      };
+      mockSessionResetSuccess({
+        reason: "new",
+        key: "agent:main:subagent:worker",
+      });
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: mocks.loadConfigReturn,
+        storePath: "/tmp/sessions.json",
+        entry: {
+          sessionId: "reset-session-id",
+          updatedAt: Date.now(),
+        },
+        canonicalKey: "agent:main:subagent:worker",
+      });
+      mocks.updateSessionStore.mockResolvedValue(undefined);
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "/new",
+          sessionKey: "agent:main:subagent:worker",
+          idempotencyKey: "test-idem-new-subagent-bootstrap-suppressed",
+        },
+        {
+          reqId: "4-bootstrap-subagent",
+          client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        },
+      );
+
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = readLastAgentCommandCall();
+      expect(call?.message).toContain("Execute your Session Startup sequence now");
+      expect(call?.message).not.toContain("while bootstrap is still pending for this workspace");
+    });
   });
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
@@ -844,6 +1324,51 @@ describe("gateway agent handler", () => {
     expect(call?.sessionId).toBe("reset-session-id");
 
     resetTimeConfig();
+  });
+
+  it("uses request model override when resolving bare /new bootstrap file access", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-reset-model-override-" },
+      async (workspaceDir) => {
+        await fs.writeFile(`${workspaceDir}/BOOTSTRAP.md`, "bootstrap ritual", "utf-8");
+        mocks.loadConfigReturn = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
+          },
+        };
+        mockSessionResetSuccess({ reason: "new" });
+        primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
+
+        await invokeAgent(
+          {
+            message: "/new",
+            sessionKey: "agent:main:main",
+            provider: "openai",
+            model: "gpt-5.4-mini",
+            idempotencyKey: "test-idem-new-bootstrap-model-override",
+          },
+          {
+            reqId: "4-bootstrap-model-override",
+            client: {
+              connect: { scopes: ["operator.admin"] },
+              internal: { allowModelOverride: true },
+            } as AgentHandlerArgs["client"],
+          },
+        );
+
+        await waitForAssertion(() =>
+          expect(mocks.resolveBareResetBootstrapFileAccess).toHaveBeenCalled(),
+        );
+        expect(mocks.resolveBareResetBootstrapFileAccess).toHaveBeenCalledWith(
+          expect.objectContaining({
+            modelProvider: "openai",
+            modelId: "gpt-5.4-mini",
+          }),
+        );
+      },
+    );
   });
 
   it("rejects malformed agent session keys early in agent handler", async () => {

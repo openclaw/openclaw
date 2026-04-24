@@ -1,80 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
 describe("resolveAnnounceTargetFromKey", () => {
   beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: {
-            id: "discord",
-            meta: {
-              id: "discord",
-              label: "Discord",
-              selectionLabel: "Discord",
-              docsPath: "/channels/discord",
-              blurb: "Discord test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "channel", "thread"] },
-            messaging: {
-              resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
-            },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-          },
-        },
-        {
-          pluginId: "slack",
-          source: "test",
-          plugin: {
-            id: "slack",
-            meta: {
-              id: "slack",
-              label: "Slack",
-              selectionLabel: "Slack",
-              docsPath: "/channels/slack",
-              blurb: "Slack test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "channel", "thread"] },
-            messaging: {
-              resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
-            },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-          },
-        },
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            id: "telegram",
-            meta: {
-              id: "telegram",
-              label: "Telegram",
-              selectionLabel: "Telegram",
-              docsPath: "/channels/telegram",
-              blurb: "Telegram test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "group", "thread"] },
-            messaging: {
-              normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
-            },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-          },
-        },
-      ]),
-    );
+    setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 
   it("lets plugins own session-derived target shapes", () => {
@@ -95,6 +26,40 @@ describe("resolveAnnounceTargetFromKey", () => {
       channel: "telegram",
       to: "-100123",
       threadId: "99",
+    });
+  });
+
+  it("preserves decimal thread ids for Slack-style session keys", () => {
+    expect(
+      resolveAnnounceTargetFromKey("agent:main:slack:channel:general:thread:1699999999.0001"),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:general",
+      threadId: "1699999999.0001",
+    });
+  });
+
+  it("preserves colon-delimited matrix ids for channel and thread targets", () => {
+    expect(
+      resolveAnnounceTargetFromKey(
+        "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
+      ),
+    ).toEqual({
+      channel: "matrix",
+      to: "channel:!room:example.org",
+      threadId: "$AbC123:example.org",
+    });
+  });
+
+  it("preserves feishu conversation ids that embed :topic: in the base id", () => {
+    expect(
+      resolveAnnounceTargetFromKey(
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      ),
+    ).toEqual({
+      channel: "feishu",
+      to: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      threadId: undefined,
     });
   });
 });

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const WINDOWS_EXECUTABLE_SUFFIXES = [".exe", ".cmd", ".bat", ".com"] as const;
 
@@ -15,7 +16,7 @@ export function basenameLower(token: string): string {
   const win = path.win32.basename(token);
   const posix = path.posix.basename(token);
   const base = win.length < posix.length ? win : posix;
-  return base.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(base);
 }
 
 export function normalizeExecutableToken(token: string): string {

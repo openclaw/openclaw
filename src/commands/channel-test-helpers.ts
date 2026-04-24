@@ -1,11 +1,3 @@
-import { matrixPlugin, setMatrixRuntime } from "../../extensions/matrix/index.js";
-import { msteamsPlugin } from "../../extensions/msteams/index.js";
-import { nostrPlugin } from "../../extensions/nostr/index.js";
-import { tlonPlugin } from "../../extensions/tlon/index.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/index.js";
-import { bundledChannelPlugins } from "../channels/plugins/bundled.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
 import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
@@ -28,27 +20,6 @@ type PatchedSetupAdapterFields = {
   configureWhenConfigured?: ChannelSetupWizardAdapter["configureWhenConfigured"];
   getStatus?: ChannelSetupWizardAdapter["getStatus"];
 };
-
-export function setDefaultChannelPluginRegistryForTests(): void {
-  setMatrixRuntime({
-    state: {
-      resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
-    },
-  } as Parameters<typeof setMatrixRuntime>[0]);
-  const channels = [
-    ...bundledChannelPlugins,
-    matrixPlugin,
-    msteamsPlugin,
-    nostrPlugin,
-    tlonPlugin,
-    whatsappPlugin,
-  ].map((plugin) => ({
-    pluginId: plugin.id,
-    plugin,
-    source: "test" as const,
-  })) as unknown as Parameters<typeof createTestRegistry>[0];
-  setActivePluginRegistry(createTestRegistry(channels));
-}
 
 export function patchChannelSetupWizardAdapter(
   channel: ChannelChoice,

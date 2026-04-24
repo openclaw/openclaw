@@ -1,34 +1,40 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import {
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
   normalizeIMessageMessagingTarget,
   type ChannelPlugin,
-} from "../runtime-api.js";
-import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+} from "./channel-api.js";
+import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
+import {
+  matchIMessageAcpConversation,
+  normalizeIMessageAcpConversationId,
+  resolveIMessageConversationIdFromTarget,
+} from "./conversation-id.js";
 import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
 import type { IMessageProbe } from "./probe.js";
-import { getIMessageRuntime } from "./runtime.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import {
   createIMessagePluginBase,
-  imessageConfigAdapter,
   imessageSecurityAdapter,
   imessageSetupWizard,
 } from "./shared.js";
+import { probeIMessageStatusAccount } from "./status-core.js";
 import {
   inferIMessageTargetChatType,
   looksLikeIMessageExplicitTargetId,
@@ -128,6 +134,33 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveRequireMention: resolveIMessageGroupRequireMention,
         resolveToolPolicy: resolveIMessageGroupToolPolicy,
       },
+      doctor: {
+        groupAllowFromFallbackToAllowFrom: false,
+      },
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
+        createManager: ({ cfg, accountId }) =>
+          createIMessageConversationBindingManager({
+            cfg,
+            accountId: accountId ?? undefined,
+          }),
+      },
+      bindings: {
+        compileConfiguredBinding: ({ conversationId }) =>
+          normalizeIMessageAcpConversationId(conversationId),
+        matchInboundConversation: ({ compiledBinding, conversationId }) =>
+          matchIMessageAcpConversation({
+            bindingConversationId: compiledBinding.conversationId,
+            conversationId,
+          }),
+        resolveCommandConversation: ({ originatingTo, commandTo, fallbackTo }) => {
+          const conversationId =
+            resolveIMessageConversationIdFromTarget(originatingTo ?? "") ??
+            resolveIMessageConversationIdFromTarget(commandTo ?? "") ??
+            resolveIMessageConversationIdFromTarget(fallbackTo ?? "");
+          return conversationId ? { conversationId } : null;
+        },
+      },
       messaging: {
         normalizeTarget: normalizeIMessageMessagingTarget,
         inferTargetChatType: ({ to }) => inferIMessageTargetChatType(to),
@@ -163,8 +196,13 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             cliPath: snapshot.cliPath ?? null,
             dbPath: snapshot.dbPath ?? null,
           }),
-        probeAccount: async ({ timeoutMs }) =>
-          await (await loadIMessageChannelRuntime()).probeIMessageAccount(timeoutMs),
+        probeAccount: async ({ account, timeoutMs }) =>
+          await probeIMessageStatusAccount({
+            account,
+            timeoutMs,
+            probeIMessageAccount: async (params) =>
+              await (await loadIMessageChannelRuntime()).probeIMessageAccount(params),
+          }),
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,
           name: account.name,
@@ -178,25 +216,35 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
       }),
       gateway: {
-        startAccount: async (ctx) =>
-          await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx),
+        startAccount: async (ctx) => {
+          const conversationBindings = createIMessageConversationBindingManager({
+            cfg: ctx.cfg,
+            accountId: ctx.accountId,
+          });
+          try {
+            return await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx);
+          } finally {
+            conversationBindings.stop();
+          }
+        },
       },
     },
     pairing: {
       text: {
         idLabel: "imessageSenderId",
         message: "OpenClaw: your access has been approved.",
-        notify: async ({ id }) =>
-          await (await loadIMessageChannelRuntime()).notifyIMessageApproval(id),
+        notify: async ({ id, cfg }) =>
+          await (await loadIMessageChannelRuntime()).notifyIMessageApproval({ id, cfg }),
       },
     },
     security: imessageSecurityAdapter,
     outbound: {
       base: {
         deliveryMode: "direct",
-        chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkTextForOutbound,
         chunkerMode: "text",
         textChunkLimit: 4000,
+        sanitizeText: ({ text }) => sanitizeForPlainText(text),
       },
       attachedResults: {
         channel: "imessage",

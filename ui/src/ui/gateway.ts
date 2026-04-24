@@ -7,6 +7,7 @@ import {
 } from "../../../src/gateway/protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
+  formatConnectErrorMessage,
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
 } from "../../../src/gateway/protocol/connect-error-details.js";
@@ -27,24 +28,36 @@ export type GatewayResponseFrame = {
   id: string;
   ok: boolean;
   payload?: unknown;
-  error?: { code: string; message: string; details?: unknown };
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+    retryable?: boolean;
+    retryAfterMs?: number;
+  };
 };
 
 export type GatewayErrorInfo = {
   code: string;
   message: string;
   details?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
 };
 
 export class GatewayRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
-    super(error.message);
+    super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
     this.details = error.details;
+    this.retryable = error.retryable === true;
+    this.retryAfterMs = error.retryAfterMs;
   }
 }
 
@@ -111,6 +124,7 @@ export type GatewayHelloOk = {
     scopes?: string[];
     issuedAtMs?: number;
   };
+  canvasHostUrl?: string;
   policy?: { tickIntervalMs?: number };
 };
 
@@ -209,6 +223,8 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export type GatewayEventListener = (evt: GatewayEventFrame) => void;
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
@@ -284,6 +300,7 @@ export class GatewayBrowserClient {
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private eventListeners = new Set<GatewayEventListener>();
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -294,6 +311,7 @@ export class GatewayBrowserClient {
 
   stop() {
     this.closed = true;
+    this.clearConnectTimer();
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -314,7 +332,7 @@ export class GatewayBrowserClient {
     this.ws.addEventListener("open", () => this.queueConnect());
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
-      const reason = String(ev.reason ?? "");
+      const reason = ev.reason ?? "";
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
@@ -343,7 +361,11 @@ export class GatewayBrowserClient {
     }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
-    window.setTimeout(() => this.connect(), delay);
+    this.clearConnectTimer();
+    this.connectTimer = window.setTimeout(() => {
+      this.connectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private flushPending(err: Error) {
@@ -472,6 +494,8 @@ export class GatewayBrowserClient {
         code: err.gatewayCode,
         message: err.message,
         details: err.details,
+        retryable: err.retryable,
+        retryAfterMs: err.retryAfterMs,
       };
     } else {
       this.pendingConnectError = undefined;
@@ -491,10 +515,7 @@ export class GatewayBrowserClient {
       return;
     }
     this.connectSent = true;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    this.clearConnectTimer();
 
     const plan = await this.buildConnectPlan();
     void this.request<GatewayHelloOk>("connect", this.buildConnectParams(plan))
@@ -531,6 +552,9 @@ export class GatewayBrowserClient {
       }
       try {
         this.opts.onEvent?.(evt);
+        for (const listener of this.eventListeners) {
+          listener(evt);
+        }
       } catch (err) {
         console.error("[gateway] event handler error:", err);
       }
@@ -552,6 +576,8 @@ export class GatewayBrowserClient {
             code: res.error?.code ?? "UNAVAILABLE",
             message: res.error?.message ?? "request failed",
             details: res.error?.details,
+            retryable: res.error?.retryable,
+            retryAfterMs: res.error?.retryAfterMs,
           }),
         );
       }
@@ -605,14 +631,27 @@ export class GatewayBrowserClient {
     return p;
   }
 
+  addEventListener(listener: GatewayEventListener): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
+  }
+
   private queueConnect() {
     this.connectNonce = null;
     this.connectSent = false;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-    }
+    this.clearConnectTimer();
     this.connectTimer = window.setTimeout(() => {
+      this.connectTimer = null;
       void this.sendConnect();
     }, 750);
+  }
+
+  private clearConnectTimer() {
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
   }
 }

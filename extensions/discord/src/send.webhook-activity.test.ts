@@ -1,30 +1,36 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ channels: { discord: {} } })));
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
     loadConfig: () => loadConfigMock(),
   };
 });
 
-vi.mock("../../../src/infra/channel-activity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/infra/channel-activity.js")>();
+vi.mock("../../../src/infra/channel-activity.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../src/infra/channel-activity.js")>(
+    "../../../src/infra/channel-activity.js",
+  );
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivityMock(...args),
   };
 });
 
-let sendWebhookMessageDiscord: typeof import("./send.js").sendWebhookMessageDiscord;
+let sendWebhookMessageDiscord: typeof import("./send.outbound.js").sendWebhookMessageDiscord;
 
 describe("sendWebhookMessageDiscord activity", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ sendWebhookMessageDiscord } = await import("./send.js"));
+  beforeAll(async () => {
+    ({ sendWebhookMessageDiscord } = await import("./send.outbound.js"));
+  });
+
+  beforeEach(() => {
     recordChannelActivityMock.mockClear();
     loadConfigMock.mockClear();
     vi.stubGlobal(

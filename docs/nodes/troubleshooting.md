@@ -3,10 +3,8 @@ summary: "Troubleshoot node pairing, foreground requirements, permissions, and t
 read_when:
   - Node is connected but camera/canvas/screen/exec tools fail
   - You need the node pairing versus approvals mental model
-title: "Node Troubleshooting"
+title: "Node troubleshooting"
 ---
-
-# Node troubleshooting
 
 Use this page when a node is visible in status but node tools fail.
 
@@ -62,7 +60,8 @@ If you see `NODE_BACKGROUND_UNAVAILABLE`, bring the node app to the foreground a
 These are different gates:
 
 1. **Device pairing**: can this node connect to the gateway?
-2. **Exec approvals**: can this node run a specific shell command?
+2. **Gateway node command policy**: is the RPC command ID allowed by `gateway.nodes.allowCommands` / `denyCommands` and platform defaults?
+3. **Exec approvals**: can this node run a specific shell command locally?
 
 Quick checks:
 
@@ -74,7 +73,15 @@ openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
 If pairing is missing, approve the node device first.
-If pairing is fine but `system.run` fails, fix exec approvals/allowlist.
+If `nodes describe` is missing a command, check the gateway node command policy and whether the node actually declared that command on connect.
+If pairing is fine but `system.run` fails, fix exec approvals/allowlist on that node.
+
+Node pairing is an identity/trust gate, not a per-command approval surface. For `system.run`, the per-node policy lives in that node's exec approvals file (`openclaw approvals get --node ...`), not in the gateway pairing record.
+
+For approval-backed `host=node` runs, the gateway also binds execution to the
+prepared canonical `systemRunPlan`. If a later caller mutates command/cwd or
+session metadata before the approved run is forwarded, the gateway rejects the
+run as an approval mismatch instead of trusting the edited payload.
 
 ## Common node error codes
 
@@ -112,3 +119,9 @@ Related:
 - [/nodes/location-command](/nodes/location-command)
 - [/tools/exec-approvals](/tools/exec-approvals)
 - [/gateway/pairing](/gateway/pairing)
+
+## Related
+
+- [Nodes overview](/nodes)
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Channel troubleshooting](/channels/troubleshooting)

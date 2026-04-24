@@ -1,4 +1,6 @@
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 
 export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
@@ -53,7 +55,7 @@ function resolvePluginNativeName(
   command: OpenClawPluginCommandDefinition,
   provider?: string,
 ): string {
-  const providerName = provider?.trim().toLowerCase();
+  const providerName = normalizeOptionalLowercaseString(provider);
   const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
   if (typeof providerOverride === "string" && providerOverride.trim()) {
     return providerOverride.trim();
@@ -70,10 +72,22 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   description: string;
   acceptsArgs: boolean;
 }> {
-  const providerName = provider?.trim().toLowerCase();
-  if (providerName && providerName !== "telegram" && providerName !== "discord") {
+  const providerName = normalizeOptionalLowercaseString(provider);
+  if (
+    providerName &&
+    getChannelPlugin(providerName)?.commands?.nativeCommandsAutoEnabled !== true
+  ) {
     return [];
   }
+  return listProviderPluginCommandSpecs(provider);
+}
+
+/** Resolve plugin command specs for a provider's native naming surface without support gating. */
+export function listProviderPluginCommandSpecs(provider?: string): Array<{
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+}> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: resolvePluginNativeName(cmd, provider),
     description: cmd.description,

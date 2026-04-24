@@ -2,16 +2,16 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import type { OAuthCredentials, OAuthProvider } from "./auth-profiles/types.js";
 
 const log = createSubsystemLogger("agents/auth-profiles");
 
 const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
-const QWEN_CLI_CREDENTIALS_RELATIVE_PATH = ".qwen/oauth_creds.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
@@ -26,13 +26,11 @@ type CachedValue<T> = {
 
 let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
 let codexCliCache: CachedValue<CodexCliCredential> | null = null;
-let qwenCliCache: CachedValue<QwenCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 
 export function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
-  qwenCliCache = null;
   minimaxCliCache = null;
 }
 
@@ -58,14 +56,7 @@ export type CodexCliCredential = {
   refresh: string;
   expires: number;
   accountId?: string;
-};
-
-export type QwenCliCredential = {
-  type: "oauth";
-  provider: "qwen-portal";
-  access: string;
-  refresh: string;
-  expires: number;
+  idToken?: string;
 };
 
 export type MiniMaxCliCredential = {
@@ -125,23 +116,14 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   };
 }
 
-function resolveCodexCliAuthPath() {
-  return path.join(resolveCodexHomePath(), CODEX_CLI_AUTH_FILENAME);
-}
-
-function resolveCodexHomePath() {
-  const configured = process.env.CODEX_HOME;
+function resolveCodexHomePath(codexHome?: string) {
+  const configured = codexHome ?? process.env.CODEX_HOME;
   const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
   try {
     return fs.realpathSync.native(home);
   } catch {
     return home;
   }
-}
-
-function resolveQwenCliCredentialsPath(homeDir?: string) {
-  const baseDir = homeDir ?? resolveUserPath("~");
-  return path.join(baseDir, QWEN_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
@@ -201,6 +183,18 @@ function computeCodexKeychainAccount(codexHome: string) {
   return `cli|${hash.slice(0, 16)}`;
 }
 
+function resolveCodexKeychainParams(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}) {
+  return {
+    platform: options?.platform ?? process.platform,
+    execSyncImpl: options?.execSync ?? execSync,
+    codexHome: resolveCodexHomePath(options?.codexHome),
+  };
+}
+
 function decodeJwtExpiryMs(token: string): number | null {
   const parts = token.split(".");
   if (parts.length < 2) {
@@ -217,17 +211,15 @@ function decodeJwtExpiryMs(token: string): number | null {
   }
 }
 
-function readCodexKeychainCredentials(options?: {
+function readCodexKeychainAuthRecord(options?: {
+  codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
-}): CodexCliCredential | null {
-  const platform = options?.platform ?? process.platform;
+}): Record<string, unknown> | null {
+  const { platform, execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
   if (platform !== "darwin") {
     return null;
   }
-  const execSyncImpl = options?.execSync ?? execSync;
-
-  const codexHome = resolveCodexHomePath();
   const account = computeCodexKeychainAccount(codexHome);
 
   try {
@@ -241,7 +233,23 @@ function readCodexKeychainCredentials(options?: {
     ).trim();
 
     const parsed = JSON.parse(secret) as Record<string, unknown>;
-    const tokens = parsed.tokens as Record<string, unknown> | undefined;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function readCodexKeychainCredentials(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}): CodexCliCredential | null {
+  const parsed = readCodexKeychainAuthRecord(options);
+  if (!parsed) {
+    return null;
+  }
+  const tokens = parsed.tokens as Record<string, unknown> | undefined;
+  try {
     const accessToken = tokens?.access_token;
     const refreshToken = tokens?.refresh_token;
     if (typeof accessToken !== "string" || !accessToken) {
@@ -262,6 +270,7 @@ function readCodexKeychainCredentials(options?: {
       : Date.now() + 60 * 60 * 1000;
     const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
+    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
@@ -275,15 +284,11 @@ function readCodexKeychainCredentials(options?: {
       refresh: refreshToken,
       expires,
       accountId,
+      idToken,
     };
   } catch {
     return null;
   }
-}
-
-function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
-  const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
-  return readPortalCliOauthCredentials(credPath, "qwen-portal");
 }
 
 function readPortalCliOauthCredentials<TProvider extends string>(
@@ -440,7 +445,7 @@ export function writeClaudeCliKeychainCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -482,7 +487,7 @@ export function writeClaudeCliFileCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli file", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -509,10 +514,12 @@ export function writeClaudeCliCredentials(
 }
 
 export function readCodexCliCredentials(options?: {
+  codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
   const keychain = readCodexKeychainCredentials({
+    codexHome: options?.codexHome,
     platform: options?.platform,
     execSync: options?.execSync,
   });
@@ -520,7 +527,7 @@ export function readCodexCliCredentials(options?: {
     return keychain;
   }
 
-  const authPath = resolveCodexCliAuthPath();
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const raw = loadJsonFile(authPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -558,21 +565,24 @@ export function readCodexCliCredentials(options?: {
     refresh: refreshToken,
     expires,
     accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
+    idToken: typeof tokens.id_token === "string" ? tokens.id_token : undefined,
   };
 }
 
 export function readCodexCliCredentialsCached(options?: {
+  codexHome?: string;
   ttlMs?: number;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
-  const authPath = resolveCodexCliAuthPath();
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   return readCachedCliCredential({
     ttlMs: options?.ttlMs ?? 0,
     cache: codexCliCache,
     cacheKey: `${options?.platform ?? process.platform}|${authPath}`,
     read: () =>
       readCodexCliCredentials({
+        codexHome: options?.codexHome,
         platform: options?.platform,
         execSync: options?.execSync,
       }),
@@ -580,23 +590,6 @@ export function readCodexCliCredentialsCached(options?: {
       codexCliCache = next;
     },
     readSourceFingerprint: () => readFileMtimeMs(authPath),
-  });
-}
-
-export function readQwenCliCredentialsCached(options?: {
-  ttlMs?: number;
-  homeDir?: string;
-}): QwenCliCredential | null {
-  const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
-  return readCachedCliCredential({
-    ttlMs: options?.ttlMs ?? 0,
-    cache: qwenCliCache,
-    cacheKey: credPath,
-    read: () => readQwenCliCredentials({ homeDir: options?.homeDir }),
-    setCache: (next) => {
-      qwenCliCache = next;
-    },
-    readSourceFingerprint: () => readFileMtimeMs(credPath),
   });
 }
 

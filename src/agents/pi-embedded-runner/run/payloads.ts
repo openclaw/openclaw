@@ -2,9 +2,15 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isCronSessionKey } from "../../../routing/session-key.js";
+import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -13,22 +19,16 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
 import {
-  extractAssistantText,
   extractAssistantThinking,
+  extractAssistantVisibleText,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
+import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
-type LastToolError = {
-  toolName: string;
-  meta?: string;
-  error?: string;
-  mutatingAction?: boolean;
-  actionFingerprint?: string;
-};
 type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
@@ -45,7 +45,7 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
 ] as const;
 
 function isRecoverableToolError(error: string | undefined): boolean {
-  const errorLower = (error ?? "").toLowerCase();
+  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
@@ -53,19 +53,49 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
 
+function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
+  if (!lastAssistant) {
+    return "";
+  }
+  return (
+    normalizeOptionalString(
+      extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" }) ??
+        extractAssistantTextForPhase(lastAssistant),
+    ) ?? ""
+  );
+}
+
+function shouldIncludeToolErrorDetails(params: {
+  lastToolError: ToolErrorSummary;
+  isCronTrigger?: boolean;
+  sessionKey: string;
+  verboseLevel?: VerboseLevel;
+}): boolean {
+  if (isVerboseToolDetailEnabled(params.verboseLevel)) {
+    return true;
+  }
+  return (
+    isExecLikeToolName(params.lastToolError.toolName) &&
+    params.lastToolError.timedOut === true &&
+    (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
+  );
+}
+
 function resolveToolErrorWarningPolicy(params: {
-  lastToolError: LastToolError;
+  lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
+  isCronTrigger?: boolean;
+  sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
-  const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
+  const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
+  const includeDetails = shouldIncludeToolErrorDetails(params);
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
-  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
-  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
+  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -92,8 +122,9 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: LastToolError;
+  lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
+  isCronTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   model?: string;
@@ -141,7 +172,7 @@ export function buildEmbeddedRunPayloads(params: {
           })
       : undefined;
   const rawErrorMessage = lastAssistantErrored
-    ? params.lastAssistant?.errorMessage?.trim() || undefined
+    ? normalizeOptionalString(params.lastAssistant?.errorMessage)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
@@ -199,7 +230,10 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  const fallbackAnswerText = params.lastAssistant
+    ? extractAssistantVisibleText(params.lastAssistant)
+    : "";
+  const fallbackRawAnswerText = resolveRawAssistantAnswerText(params.lastAssistant);
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -250,13 +284,32 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
+  const rawAnswerDirectiveState = fallbackRawAnswerText
+    ? parseReplyDirectives(fallbackRawAnswerText)
+    : null;
+  const rawAnswerHasMedia =
+    (rawAnswerDirectiveState?.mediaUrls?.length ?? 0) > 0 || rawAnswerDirectiveState?.audioAsVoice;
+  const assistantTextsHaveMedia = params.assistantTexts.some((text) => {
+    const parsed = parseReplyDirectives(text);
+    return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
+  });
+  const normalizedAssistantTexts = normalizeTextForComparison(params.assistantTexts.join("\n\n"));
+  const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
+  const shouldPreferRawAnswerText =
+    rawAnswerHasMedia &&
+    (!params.assistantTexts.length ||
+      (!assistantTextsHaveMedia &&
+        normalizedAssistantTexts.length > 0 &&
+        normalizedAssistantTexts === normalizedRawAnswerText));
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
-        : fallbackAnswerText
-          ? [fallbackAnswerText]
-          : []
+    : (shouldPreferRawAnswerText && fallbackRawAnswerText
+        ? [fallbackRawAnswerText]
+        : params.assistantTexts.length
+          ? params.assistantTexts
+          : fallbackAnswerText
+            ? [fallbackAnswerText]
+            : []
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
@@ -289,6 +342,8 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      isCronTrigger: params.isCronTrigger,
+      sessionKey: params.sessionKey,
       verboseLevel: params.verboseLevel,
     });
 
@@ -327,7 +382,7 @@ export function buildEmbeddedRunPayloads(params: {
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => ({
-      text: item.text?.trim() ? item.text.trim() : undefined,
+      text: normalizeOptionalString(item.text),
       mediaUrls: item.media?.length ? item.media : undefined,
       mediaUrl: item.media?.[0],
       isError: item.isError,
@@ -340,7 +395,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (!hasOutboundReplyContent(p)) {
         return false;
       }
-      if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {
+      if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {
         return false;
       }
       return true;

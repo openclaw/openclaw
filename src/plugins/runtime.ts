@@ -1,28 +1,22 @@
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry-types.js";
+import {
+  PLUGIN_REGISTRY_STATE,
+  type RegistryState,
+  type RegistrySurfaceState,
+} from "./runtime-state.js";
 
-const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
-
-type RegistrySurfaceState = {
-  registry: PluginRegistry | null;
-  pinned: boolean;
-  version: number;
-};
-
-type RegistryState = {
-  activeRegistry: PluginRegistry | null;
-  activeVersion: number;
-  httpRoute: RegistrySurfaceState;
-  channel: RegistrySurfaceState;
-  key: string | null;
-};
+function asPluginRegistry(registry: RegistryState["activeRegistry"]): PluginRegistry | null {
+  return registry;
+}
 
 const state: RegistryState = (() => {
   const globalState = globalThis as typeof globalThis & {
-    [REGISTRY_STATE]?: RegistryState;
+    [PLUGIN_REGISTRY_STATE]?: RegistryState;
   };
-  if (!globalState[REGISTRY_STATE]) {
-    globalState[REGISTRY_STATE] = {
+  let registryState = globalState[PLUGIN_REGISTRY_STATE];
+  if (!registryState) {
+    registryState = {
       activeRegistry: null,
       activeVersion: 0,
       httpRoute: {
@@ -36,14 +30,22 @@ const state: RegistryState = (() => {
         version: 0,
       },
       key: null,
+      workspaceDir: null,
+      runtimeSubagentMode: "default",
+      importedPluginIds: new Set<string>(),
     };
+    globalState[PLUGIN_REGISTRY_STATE] = registryState;
   }
-  return globalState[REGISTRY_STATE];
+  return registryState;
 })();
+
+export function recordImportedPluginId(pluginId: string): void {
+  state.importedPluginIds.add(pluginId);
+}
 
 function installSurfaceRegistry(
   surface: RegistrySurfaceState,
-  registry: PluginRegistry | null,
+  registry: RegistryState["activeRegistry"],
   pinned: boolean,
 ) {
   if (surface.registry === registry && surface.pinned === pinned) {
@@ -56,7 +58,7 @@ function installSurfaceRegistry(
 
 function syncTrackedSurface(
   surface: RegistrySurfaceState,
-  registry: PluginRegistry | null,
+  registry: RegistryState["activeRegistry"],
   refreshVersion = false,
 ) {
   if (surface.pinned) {
@@ -71,16 +73,27 @@ function syncTrackedSurface(
   installSurfaceRegistry(surface, registry, false);
 }
 
-export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
+export function setActivePluginRegistry(
+  registry: PluginRegistry,
+  cacheKey?: string,
+  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
+  workspaceDir?: string,
+) {
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
   state.key = cacheKey ?? null;
+  state.workspaceDir = workspaceDir ?? null;
+  state.runtimeSubagentMode = runtimeSubagentMode;
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
-  return state.activeRegistry;
+  return asPluginRegistry(state.activeRegistry);
+}
+
+export function getActivePluginRegistryWorkspaceDir(): string | undefined {
+  return state.workspaceDir ?? undefined;
 }
 
 export function requireActivePluginRegistry(): PluginRegistry {
@@ -90,7 +103,7 @@ export function requireActivePluginRegistry(): PluginRegistry {
     syncTrackedSurface(state.httpRoute, state.activeRegistry);
     syncTrackedSurface(state.channel, state.activeRegistry);
   }
-  return state.activeRegistry;
+  return asPluginRegistry(state.activeRegistry)!;
 }
 
 export function pinActivePluginHttpRouteRegistry(registry: PluginRegistry) {
@@ -105,7 +118,7 @@ export function releasePinnedPluginHttpRouteRegistry(registry?: PluginRegistry) 
 }
 
 export function getActivePluginHttpRouteRegistry(): PluginRegistry | null {
-  return state.httpRoute.registry ?? state.activeRegistry;
+  return asPluginRegistry(state.httpRoute.registry ?? state.activeRegistry);
 }
 
 export function getActivePluginHttpRouteRegistryVersion(): number {
@@ -154,7 +167,7 @@ export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
  *  When pinned, this returns the startup registry regardless of subsequent
  *  `setActivePluginRegistry` calls. */
 export function getActivePluginChannelRegistry(): PluginRegistry | null {
-  return state.channel.registry ?? state.activeRegistry;
+  return asPluginRegistry(state.channel.registry ?? state.activeRegistry);
 }
 
 export function getActivePluginChannelRegistryVersion(): number {
@@ -175,8 +188,45 @@ export function getActivePluginRegistryKey(): string | null {
   return state.key;
 }
 
+export function getActivePluginRuntimeSubagentMode(): "default" | "explicit" | "gateway-bindable" {
+  return state.runtimeSubagentMode;
+}
+
 export function getActivePluginRegistryVersion(): number {
   return state.activeVersion;
+}
+
+function collectLoadedPluginIds(
+  registry: PluginRegistry | null | undefined,
+  ids: Set<string>,
+): void {
+  if (!registry) {
+    return;
+  }
+  for (const plugin of registry.plugins) {
+    if (plugin.status === "loaded" && plugin.format !== "bundle") {
+      ids.add(plugin.id);
+    }
+  }
+}
+
+/**
+ * Returns plugin ids that were imported by plugin runtime or registry loading in
+ * the current process.
+ *
+ * This is a process-level view, not a fresh import trace: cached registry reuse
+ * still counts because the plugin code was loaded earlier in this process.
+ * Explicit loader import tracking covers plugins that were imported but later
+ * ended in an error state during registration.
+ * Bundle-format plugins are excluded because they can be "loaded" from metadata
+ * without importing any JS entrypoint.
+ */
+export function listImportedRuntimePluginIds(): string[] {
+  const imported = new Set(state.importedPluginIds);
+  collectLoadedPluginIds(asPluginRegistry(state.activeRegistry), imported);
+  collectLoadedPluginIds(asPluginRegistry(state.channel.registry), imported);
+  collectLoadedPluginIds(asPluginRegistry(state.httpRoute.registry), imported);
+  return [...imported].toSorted((left, right) => left.localeCompare(right));
 }
 
 export function resetPluginRuntimeStateForTest(): void {
@@ -185,4 +235,7 @@ export function resetPluginRuntimeStateForTest(): void {
   installSurfaceRegistry(state.httpRoute, null, false);
   installSurfaceRegistry(state.channel, null, false);
   state.key = null;
+  state.workspaceDir = null;
+  state.runtimeSubagentMode = "default";
+  state.importedPluginIds.clear();
 }

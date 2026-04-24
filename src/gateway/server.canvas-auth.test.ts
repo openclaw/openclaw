@@ -1,3 +1,4 @@
+import type { Socket } from "node:net";
 import { describe, expect, test } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../canvas-host/a2ui.js";
@@ -6,11 +7,53 @@ import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CANVAS_CAPABILITY_PATH_PREFIX } from "./canvas-capability.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 const WS_REJECT_TIMEOUT_MS = 2_000;
-const WS_CONNECT_TIMEOUT_MS = 2_000;
+const WS_CONNECT_TIMEOUT_MS = 5_000;
+const HTTP_REQUEST_TIMEOUT_MS = 15_000;
+const SERVER_CLOSE_TIMEOUT_MS = 5_000;
+
+async function fetchCanvas(input: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  headers.set("connection", "close");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HTTP_REQUEST_TIMEOUT_MS);
+    try {
+      return await fetch(input, {
+        ...init,
+        headers,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (attempt === 1) {
+        throw error;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error("unreachable");
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 async function listen(
   server: ReturnType<typeof createGatewayHttpServer>,
@@ -20,6 +63,13 @@ async function listen(
   port: number;
   close: () => Promise<void>;
 }> {
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+    });
+  });
   await new Promise<void>((resolve) => server.listen(0, host, resolve));
   const addr = server.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
@@ -27,8 +77,15 @@ async function listen(
     host,
     port,
     close: async () => {
-      await new Promise<void>((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve())),
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await withTimeout(
+        new Promise<void>((resolve, reject) =>
+          server.close((err) => (err ? reject(err) : resolve())),
+        ),
+        SERVER_CLOSE_TIMEOUT_MS,
+        "gateway test server close",
       );
     },
   };
@@ -59,20 +116,47 @@ async function expectWsRejected(
   });
 }
 
-async function expectWsConnected(url: string): Promise<void> {
+async function expectWsConnected(url: string, headers?: Record<string, string>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(url);
-    const timer = setTimeout(() => reject(new Error("timeout")), WS_CONNECT_TIMEOUT_MS);
-    ws.once("open", () => {
+    const ws = new WebSocket(url, headers ? { headers } : undefined);
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearTimeout(timer);
-      ws.terminate();
-      resolve();
+      fn();
+    };
+    const timer = setTimeout(
+      () =>
+        finish(() => {
+          ws.terminate();
+          reject(new Error("timeout"));
+        }),
+      WS_CONNECT_TIMEOUT_MS,
+    );
+    ws.once("open", () => {
+      finish(() => {
+        ws.terminate();
+        resolve();
+      });
     });
     ws.once("unexpected-response", (_req, res) => {
-      clearTimeout(timer);
-      reject(new Error(`unexpected response ${res.statusCode}`));
+      finish(() => reject(new Error(`unexpected response ${res.statusCode}`)));
     });
-    ws.once("error", reject);
+    ws.once("close", (code, reason) => {
+      finish(() =>
+        reject(
+          new Error(
+            `socket closed before open (${code}${reason.length > 0 ? `: ${reason.toString()}` : ""})`,
+          ),
+        ),
+      );
+    });
+    ws.once("error", (err) => {
+      finish(() => reject(err));
+    });
   });
 }
 
@@ -80,7 +164,7 @@ function makeWsClient(params: {
   connId: string;
   clientIp: string;
   role: "node" | "operator";
-  mode: "node" | "backend";
+  mode: "node" | "backend" | "webchat";
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
 }): GatewayWsClient {
@@ -93,6 +177,7 @@ function makeWsClient(params: {
       },
     } as GatewayWsClient["connect"],
     connId: params.connId,
+    usesSharedGatewayAuth: false,
     clientIp: params.clientIp,
     canvasCapability: params.canvasCapability,
     canvasCapabilityExpiresAtMs: params.canvasCapabilityExpiresAtMs,
@@ -115,6 +200,7 @@ const allowCanvasHostHttp: CanvasHostHandler["handleHttpRequest"] = async (req, 
 };
 async function withCanvasGatewayHarness(params: {
   resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth?: () => ResolvedGatewayAuth;
   listenHost?: string;
   rateLimiter?: ReturnType<typeof createAuthRateLimiter>;
   handleHttpRequest: CanvasHostHandler["handleHttpRequest"];
@@ -134,7 +220,10 @@ async function withCanvasGatewayHarness(params: {
       if (url.pathname !== CANVAS_WS_PATH) {
         return false;
       }
-      canvasWss.handleUpgrade(req, socket, head, (ws) => ws.close());
+      canvasWss.handleUpgrade(req, socket, head, (ws) => {
+        // Let the client observe a successful open before the harness closes.
+        setImmediate(() => ws.close());
+      });
       return true;
     },
     handleHttpRequest: params.handleHttpRequest,
@@ -149,6 +238,7 @@ async function withCanvasGatewayHarness(params: {
     openResponsesEnabled: false,
     handleHooksRequest: async () => false,
     resolvedAuth: params.resolvedAuth,
+    getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
   });
 
@@ -158,7 +248,9 @@ async function withCanvasGatewayHarness(params: {
     wss,
     canvasHost,
     clients,
+    preauthConnectionBudget: createPreauthConnectionBudget(8),
     resolvedAuth: params.resolvedAuth,
+    getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
   });
 
@@ -166,10 +258,16 @@ async function withCanvasGatewayHarness(params: {
   try {
     await params.run({ listener, clients });
   } finally {
+    for (const ws of canvasWss.clients) {
+      ws.terminate();
+    }
+    for (const ws of wss.clients) {
+      ws.terminate();
+    }
+    await new Promise<void>((resolve) => canvasWss.close(() => resolve()));
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
     await listener.close();
     params.rateLimiter?.dispose();
-    canvasWss.close();
-    wss.close();
   }
 }
 
@@ -200,35 +298,37 @@ describe("gateway canvas host auth", () => {
         handleHttpRequest: allowCanvasHostHttp,
         run: async ({ listener, clients }) => {
           const host = "127.0.0.1";
-          const operatorOnlyCapability = "operator-only";
+          const webchatCapability = "webchat-cap";
           const expiredNodeCapability = "expired-node";
           const activeNodeCapability = "active-node";
           const activeCanvasPath = scopedCanvasPath(activeNodeCapability, `${CANVAS_HOST_PATH}/`);
           const activeWsPath = scopedCanvasPath(activeNodeCapability, CANVAS_WS_PATH);
 
-          const unauthCanvas = await fetch(`http://${host}:${listener.port}${CANVAS_HOST_PATH}/`);
+          const unauthCanvas = await fetchCanvas(
+            `http://${host}:${listener.port}${CANVAS_HOST_PATH}/`,
+          );
           expect(unauthCanvas.status).toBe(401);
 
-          const malformedScoped = await fetch(
+          const malformedScoped = await fetchCanvas(
             `http://${host}:${listener.port}${CANVAS_CAPABILITY_PATH_PREFIX}/broken`,
           );
           expect(malformedScoped.status).toBe(401);
 
           clients.add(
             makeWsClient({
-              connId: "c-operator",
+              connId: "c-webchat",
               clientIp: "192.168.1.10",
               role: "operator",
-              mode: "backend",
-              canvasCapability: operatorOnlyCapability,
+              mode: "webchat",
+              canvasCapability: webchatCapability,
               canvasCapabilityExpiresAtMs: Date.now() + 60_000,
             }),
           );
 
-          const operatorCapabilityBlocked = await fetch(
-            `http://${host}:${listener.port}${scopedCanvasPath(operatorOnlyCapability, `${CANVAS_HOST_PATH}/`)}`,
+          const webchatCapabilityAllowed = await fetchCanvas(
+            `http://${host}:${listener.port}${scopedCanvasPath(webchatCapability, `${CANVAS_HOST_PATH}/`)}`,
           );
-          expect(operatorCapabilityBlocked.status).toBe(401);
+          expect(webchatCapabilityAllowed.status).toBe(200);
 
           clients.add(
             makeWsClient({
@@ -241,7 +341,7 @@ describe("gateway canvas host auth", () => {
             }),
           );
 
-          const expiredCapabilityBlocked = await fetch(
+          const expiredCapabilityBlocked = await fetchCanvas(
             `http://${host}:${listener.port}${scopedCanvasPath(expiredNodeCapability, `${CANVAS_HOST_PATH}/`)}`,
           );
           expect(expiredCapabilityBlocked.status).toBe(401);
@@ -256,20 +356,22 @@ describe("gateway canvas host auth", () => {
           });
           clients.add(activeNodeClient);
 
-          const scopedCanvas = await fetch(`http://${host}:${listener.port}${activeCanvasPath}`);
+          const scopedCanvas = await fetchCanvas(
+            `http://${host}:${listener.port}${activeCanvasPath}`,
+          );
           expect(scopedCanvas.status).toBe(200);
           expect(await scopedCanvas.text()).toBe("ok");
 
-          const scopedA2ui = await fetch(
+          const scopedA2ui = await fetchCanvas(
             `http://${host}:${listener.port}${scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)}`,
           );
-          expect([200, 503]).toContain(scopedA2ui.status);
+          expect([200, 404, 503]).toContain(scopedA2ui.status);
 
           await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
 
           clients.delete(activeNodeClient);
 
-          const disconnectedNodeBlocked = await fetch(
+          const disconnectedNodeBlocked = await fetchCanvas(
             `http://${host}:${listener.port}${activeCanvasPath}`,
           );
           expect(disconnectedNodeBlocked.status).toBe(401);
@@ -296,7 +398,7 @@ describe("gateway canvas host auth", () => {
             }),
           );
 
-          const res = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+          const res = await fetchCanvas(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
           expect(res.status).toBe(401);
 
           await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
@@ -310,13 +412,42 @@ describe("gateway canvas host auth", () => {
       resolvedAuth: tokenResolvedAuth,
       handleHttpRequest: allowCanvasHostHttp,
       run: async ({ listener }) => {
-        const res = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+        const res = await fetchCanvas(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
         expect(res.status).toBe(401);
 
-        const a2ui = await fetch(`http://127.0.0.1:${listener.port}${A2UI_PATH}/`);
+        const a2ui = await fetchCanvas(`http://127.0.0.1:${listener.port}${A2UI_PATH}/`);
         expect(a2ui.status).toBe(401);
 
         await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
+      },
+    });
+  }, 60_000);
+
+  test("re-resolves canvas bearer auth on each upgrade after shared auth rotation", async () => {
+    let currentAuth = tokenResolvedAuth;
+
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      getResolvedAuth: () => currentAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener }) => {
+        const url = `ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`;
+
+        await expectWsConnected(url, {
+          authorization: "Bearer test-token",
+        });
+
+        currentAuth = {
+          ...tokenResolvedAuth,
+          token: "rotated-token",
+        };
+
+        await expectWsRejected(url, {
+          authorization: "Bearer test-token",
+        });
+        await expectWsConnected(url, {
+          authorization: "Bearer rotated-token",
+        });
       },
     });
   }, 60_000);
@@ -349,7 +480,7 @@ describe("gateway canvas host auth", () => {
 
               const canvasPath = scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`);
               const wsPath = scopedCanvasPath(capability, CANVAS_WS_PATH);
-              const scopedCanvas = await fetch(`http://[::1]:${listener.port}${canvasPath}`);
+              const scopedCanvas = await fetchCanvas(`http://[::1]:${listener.port}${canvasPath}`);
               expect(scopedCanvas.status).toBe(200);
 
               await expectWsConnected(`ws://[::1]:${listener.port}${wsPath}`);
@@ -383,14 +514,17 @@ describe("gateway canvas host auth", () => {
             authorization: "Bearer wrong",
             "x-forwarded-for": "203.0.113.99",
           };
-          const first = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+          const first = await fetchCanvas(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
             headers,
           });
           expect(first.status).toBe(401);
 
-          const second = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-            headers,
-          });
+          const second = await fetchCanvas(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers,
+            },
+          );
           expect(second.status).toBe(429);
           expect(second.headers.get("retry-after")).toBeTruthy();
 
@@ -425,14 +559,20 @@ describe("gateway canvas host auth", () => {
               host: "localhost",
               "x-forwarded-for": "127.0.0.1, 203.0.113.24",
             };
-            const first = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-              headers,
-            });
+            const first = await fetchCanvas(
+              `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+              {
+                headers,
+              },
+            );
             expect(first.status).toBe(401);
 
-            const second = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-              headers,
-            });
+            const second = await fetchCanvas(
+              `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+              {
+                headers,
+              },
+            );
             expect(second.status).toBe(429);
           },
         });

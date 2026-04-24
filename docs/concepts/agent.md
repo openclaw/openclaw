@@ -2,12 +2,13 @@
 summary: "Agent runtime, workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
-title: "Agent Runtime"
+title: "Agent runtime"
 ---
 
-# Agent Runtime
-
-OpenClaw runs a single embedded agent runtime.
+OpenClaw runs a **single embedded agent runtime** — one agent process per
+Gateway, with its own workspace, bootstrap files, and session store. This page
+covers that runtime contract: what the workspace must contain, which files get
+injected, and how sessions bootstrap against it.
 
 ## Workspace (required)
 
@@ -55,11 +56,14 @@ guidance for how _you_ want them used.
 
 ## Skills
 
-OpenClaw loads skills from three locations (workspace wins on name conflict):
+OpenClaw loads skills from these locations (highest precedence first):
 
-- Bundled (shipped with the install)
-- Managed/local: `~/.openclaw/skills`
 - Workspace: `<workspace>/skills`
+- Project agent skills: `<workspace>/.agents/skills`
+- Personal agent skills: `~/.agents/skills`
+- Managed/local: `~/.openclaw/skills`
+- Bundled (shipped with the install)
+- Extra skill folders: `skills.load.extraDirs`
 
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 
@@ -108,7 +112,11 @@ Model refs in config (for example `agents.defaults.model` and `agents.defaults.m
 
 - Use `provider/model` when configuring models.
 - If the model ID itself contains `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, OpenClaw tries an alias first, then a unique
+  configured-provider match for that exact model id, and only then falls back
+  to the configured default provider. If that provider no longer exposes the
+  configured default model, OpenClaw falls back to the first configured
+  provider/model instead of surfacing a stale removed-provider default.
 
 ## Configuration (minimal)
 
@@ -120,3 +128,9 @@ At minimum, set:
 ---
 
 _Next: [Group Chats](/channels/group-messages)_ 🦞
+
+## Related
+
+- [Agent workspace](/concepts/agent-workspace)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Session management](/concepts/session)

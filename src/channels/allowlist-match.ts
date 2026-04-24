@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
+
 export type AllowlistMatchSource =
   | "wildcard"
   | "id"
@@ -37,7 +42,9 @@ export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowl
 
 function compileSimpleAllowlist(entries: ReadonlyArray<string | number>): CompiledAllowlist {
   return compileAllowlist(
-    entries.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean),
+    entries
+      .map((entry) => normalizeOptionalLowercaseString(String(entry)))
+      .filter((entry): entry is string => Boolean(entry)),
   );
 }
 
@@ -98,8 +105,8 @@ export function resolveAllowlistMatchSimple(params: {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
 
-  const senderId = params.senderId.toLowerCase();
-  const senderName = params.senderName?.toLowerCase();
+  const senderId = normalizeLowercaseStringOrEmpty(params.senderId);
+  const senderName = normalizeOptionalLowercaseString(params.senderName);
   return resolveAllowlistCandidates({
     compiledAllowlist: allowFrom,
     candidates: [

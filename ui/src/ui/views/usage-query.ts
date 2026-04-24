@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { extractQueryTerms } from "../usage-helpers.ts";
 import { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
 
@@ -138,8 +139,8 @@ const buildQuerySuggestions = (
     ? [lastToken.slice(0, lastToken.indexOf(":")), lastToken.slice(lastToken.indexOf(":") + 1)]
     : ["", ""];
 
-  const key = rawKey.toLowerCase();
-  const value = rawValue.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(rawKey);
+  const value = normalizeLowercaseStringOrEmpty(rawValue);
 
   const unique = (items: Array<string | undefined>): string[] => {
     const set = new Set<string>();
@@ -181,7 +182,7 @@ const buildQuerySuggestions = (
   const suggestions: QuerySuggestion[] = [];
   const addValues = (prefix: string, values: string[]) => {
     for (const val of values) {
-      if (!value || val.toLowerCase().includes(value)) {
+      if (!value || normalizeLowercaseStringOrEmpty(val).includes(value)) {
         suggestions.push({ label: `${prefix}:${val}`, value: `${prefix}:${val}` });
       }
     }
@@ -227,7 +228,7 @@ const applySuggestionToQuery = (query: string, suggestion: string): string => {
   return `${tokens.join(" ")} `;
 };
 
-const normalizeQueryText = (value: string): string => value.trim().toLowerCase();
+const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
 const addQueryToken = (query: string, token: string): string => {
   const trimmed = query.trim();

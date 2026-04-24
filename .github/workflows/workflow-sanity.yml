@@ -6,9 +6,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -16,7 +19,7 @@ env:
 jobs:
   no-tabs:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -48,7 +51,7 @@ jobs:
 
   actionlint:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -60,8 +63,11 @@ jobs:
           ACTIONLINT_VERSION="1.7.11"
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
-          curl -sSfL -o "${archive}" "${base_url}/${archive}"
-          curl -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          # GitHub release downloads occasionally return transient 5xx responses.
+          # Retry all curl errors here so workflow-sanity does not fail closed on
+          # a one-off release edge outage.
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           grep " ${archive}\$" checksums.txt | sha256sum -c -
           tar -xzf "${archive}" actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
@@ -77,7 +83,7 @@ jobs:
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -86,7 +92,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check config docs drift statefile
         run: pnpm config:docs:check

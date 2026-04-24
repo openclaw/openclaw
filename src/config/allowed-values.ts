@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 const MAX_ALLOWED_VALUES_HINT = 12;
 const MAX_ALLOWED_VALUE_CHARS = 160;
 
@@ -86,7 +88,7 @@ export function summarizeAllowedValues(
 }
 
 function messageAlreadyIncludesAllowedValues(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   return lower.includes("(allowed:") || lower.includes("expected one of");
 }
 

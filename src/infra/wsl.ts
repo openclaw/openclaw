@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 let wslCached: boolean | null = null;
 
@@ -26,7 +27,7 @@ export function isWSLSync(): boolean {
     return true;
   }
   try {
-    const release = readFileSync("/proc/version", "utf8").toLowerCase();
+    const release = normalizeLowercaseStringOrEmpty(readFileSync("/proc/version", "utf8"));
     return release.includes("microsoft") || release.includes("wsl");
   } catch {
     return false;
@@ -41,7 +42,7 @@ export function isWSL2Sync(): boolean {
     return false;
   }
   try {
-    const version = readFileSync("/proc/version", "utf8").toLowerCase();
+    const version = normalizeLowercaseStringOrEmpty(readFileSync("/proc/version", "utf8"));
     return version.includes("wsl2") || version.includes("microsoft-standard");
   } catch {
     return false;
@@ -61,9 +62,10 @@ export async function isWSL(): Promise<boolean> {
     return wslCached;
   }
   try {
-    const release = await fs.readFile("/proc/sys/kernel/osrelease", "utf8");
-    wslCached =
-      release.toLowerCase().includes("microsoft") || release.toLowerCase().includes("wsl");
+    const release = normalizeLowercaseStringOrEmpty(
+      await fs.readFile("/proc/sys/kernel/osrelease", "utf8"),
+    );
+    wslCached = release.includes("microsoft") || release.includes("wsl");
   } catch {
     wslCached = false;
   }

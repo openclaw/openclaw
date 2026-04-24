@@ -75,6 +75,31 @@ describe("whatsappOutbound sendPayload", () => {
     });
   });
 
+  it("drops blank mediaUrls before sending payload media", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendPayload!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "",
+      payload: {
+        text: "\n\ncaption",
+        mediaUrls: ["   ", " /tmp/voice.ogg "],
+      },
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
+      verbose: false,
+      cfg: {},
+      mediaUrl: "/tmp/voice.ogg",
+      mediaLocalRoots: undefined,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+  });
+
   it("skips whitespace-only text payloads", async () => {
     const sendWhatsApp = vi.fn();
 
@@ -88,5 +113,16 @@ describe("whatsappOutbound sendPayload", () => {
 
     expect(result).toEqual({ channel: "whatsapp", messageId: "" });
     expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes HTML-only text to whitespace-only payload", () => {
+    expect(
+      whatsappOutbound
+        .sanitizeText?.({
+          text: "<br><br>",
+          payload: { text: "<br><br>" },
+        })
+        ?.trim(),
+    ).toBe("");
   });
 });

@@ -1,14 +1,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadConfigMock as loadConfig,
+  resolveConfigPathMock as resolveConfigPath,
   resolveGatewayPortMock as resolveGatewayPort,
+  resolveStateDirMock as resolveStateDir,
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
-const { resolveGatewayConnection } = await import("./gateway-chat.js");
+vi.mock("../config/config.js", async () => {
+  const mocks = await import("../gateway/gateway-connection.test-mocks.js");
+  return {
+    loadConfig: mocks.loadConfigMock,
+    resolveConfigPath: mocks.resolveConfigPathMock,
+    resolveGatewayPort: mocks.resolveGatewayPortMock,
+    resolveStateDir: mocks.resolveStateDirMock,
+  };
+});
+
+vi.mock("../gateway/net.js", async () => {
+  const mocks = await import("../gateway/gateway-connection.test-mocks.js");
+  return {
+    isLoopbackHost: mocks.isLoopbackHostMock,
+    isSecureWebSocketUrl: mocks.isSecureWebSocketUrlMock,
+    pickPrimaryLanIPv4: mocks.pickPrimaryLanIPv4Mock,
+  };
+});
+
+const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
+const { GatewayClientRequestError } = await import("../gateway/client.js");
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -88,17 +110,29 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_GATEWAY_URL",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
-    loadConfig.mockClear();
-    resolveGatewayPort.mockClear();
+    loadConfig.mockReset();
+    resolveGatewayPort.mockReset();
+    resolveStateDir.mockReset();
+    resolveConfigPath.mockReset();
     resolveGatewayPort.mockReturnValue(18789);
+    resolveStateDir.mockImplementation(
+      (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw",
+    );
+    resolveConfigPath.mockImplementation(
+      (env: NodeJS.ProcessEnv, stateDir: string) =>
+        env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
+    );
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
   });
 
   afterEach(() => {
     envSnapshot.restore();
+    vi.useRealTimers();
   });
 
   it("throws when url override is missing explicit credentials", async () => {
@@ -131,6 +165,7 @@ describe("resolveGatewayConnection", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       ...expected,
+      allowInsecureLocalOperatorUi: false,
     });
   });
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
@@ -164,6 +199,74 @@ describe("resolveGatewayConnection", () => {
     const result = await resolveGatewayConnection({});
     expect(result.password).toBe("config-password");
     expect(result.token).toBeUndefined();
+  });
+
+  it("keeps normal TUI local password mode env precedence by default", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: "config-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
+      const result = await resolveGatewayConnection({});
+      expect(result.password).toBe("env-password");
+    });
+  });
+
+  it("uses configured local password for setup-launched TUI despite stale gateway password env", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: "config-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "stale-env-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.password).toBe("config-password");
+      },
+    );
+  });
+
+  it("still resolves env SecretRefs for setup-launched TUI config auth", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "resolved-ref-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.password).toBe("resolved-ref-password");
+      },
+    );
   });
 
   it("fails when both local token and password are configured but gateway.auth.mode is unset", async () => {
@@ -348,5 +451,102 @@ describe("resolveGatewayConnection", () => {
         expect(await fileExists(passwordMarker)).toBe(true);
       },
     );
+  });
+
+  it("marks loopback local connections for insecure operator ui auth when enabled", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        controlUi: {
+          allowInsecureAuth: true,
+        },
+        auth: {
+          mode: "token",
+          token: "config-token",
+        },
+      },
+    });
+
+    const result = await resolveGatewayConnection({});
+    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+  });
+
+  it("preserves insecure local operator ui auth when a loopback url override is provided", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        controlUi: {
+          allowInsecureAuth: true,
+        },
+        auth: {
+          mode: "token",
+          token: "config-token",
+        },
+      },
+    });
+
+    const result = await resolveGatewayConnection({
+      url: "ws://127.0.0.1:18791",
+      token: "override-token",
+    });
+    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+    expect(result.token).toBe("override-token");
+  });
+});
+
+describe("GatewayChatClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+
+    expect(
+      (client as unknown as { client: { opts: { clientName?: string; mode?: string } } }).client
+        .opts.clientName,
+    ).toBe("openclaw-tui");
+    expect(
+      (client as unknown as { client: { opts: { clientName?: string; mode?: string } } }).client
+        .opts.mode,
+    ).toBe("ui");
+    expect(
+      (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
+        .deviceIdentity,
+    ).toBeUndefined();
+  });
+
+  it("retries startup-unavailable chat history until the gateway finishes booting", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "chat.history unavailable during gateway startup",
+          details: { method: "chat.history" },
+          retryable: true,
+          retryAfterMs: 250,
+        }),
+      )
+      .mockResolvedValueOnce({ messages: [] });
+
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    const historyPromise = client.loadHistory({ sessionKey: "main", limit: 200 });
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(historyPromise).resolves.toEqual({ messages: [] });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

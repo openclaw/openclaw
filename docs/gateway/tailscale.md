@@ -22,8 +22,10 @@ Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 
 Set `gateway.auth.mode` to control the handshake:
 
+- `none` (private ingress only)
 - `token` (default when `OPENCLAW_GATEWAY_TOKEN` is set)
 - `password` (shared secret via `OPENCLAW_GATEWAY_PASSWORD` or config)
+- `trusted-proxy` (identity-aware reverse proxy; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth))
 
 When `tailscale.mode = "serve"` and `gateway.auth.allowTailscale` is `true`,
 Control UI/WebSocket auth can use Tailscale identity headers
@@ -34,12 +36,14 @@ OpenClaw only treats a request as Serve when it arrives from loopback with
 Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
 headers.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
-still require token/password auth.
+do **not** use Tailscale identity-header auth. They still follow the gateway's
+normal HTTP auth mode: shared-secret auth by default, or an intentionally
+configured trusted-proxy / private-ingress `none` setup.
 This tokenless flow assumes the gateway host is trusted. If untrusted local code
 may run on the same host, disable `gateway.auth.allowTailscale` and require
 token/password auth instead.
-To require explicit credentials, set `gateway.auth.allowTailscale: false` or
-force `gateway.auth.mode: "password"`.
+To require explicit shared-secret credentials, set `gateway.auth.allowTailscale: false`
+and use `gateway.auth.mode: "token"` or `"password"`.
 
 ## Config examples
 
@@ -130,3 +134,9 @@ Avoid Funnel for browser control; treat node pairing like operator access.
 - `tailscale serve` command: [https://tailscale.com/kb/1242/tailscale-serve](https://tailscale.com/kb/1242/tailscale-serve)
 - Tailscale Funnel overview: [https://tailscale.com/kb/1223/tailscale-funnel](https://tailscale.com/kb/1223/tailscale-funnel)
 - `tailscale funnel` command: [https://tailscale.com/kb/1311/tailscale-funnel](https://tailscale.com/kb/1311/tailscale-funnel)
+
+## Related
+
+- [Remote access](/gateway/remote)
+- [Discovery](/gateway/discovery)
+- [Authentication](/gateway/authentication)
