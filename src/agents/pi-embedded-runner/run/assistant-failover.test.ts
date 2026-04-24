@@ -70,9 +70,7 @@ describe("handleAssistantFailover", () => {
 
       const err = expectThrownFailoverError(outcome);
       expect(err.reason).toBe("billing");
-      expect(err.message).toBe(
-        formatBillingErrorMessage("Anthropic", "claude-haiku-4-5-20251001"),
-      );
+      expect(err.message).toBe(formatBillingErrorMessage("Anthropic", "claude-haiku-4-5-20251001"));
       expect(err.status).toBe(402);
       expect(err.provider).toBe("Anthropic");
       expect(err.model).toBe("claude-haiku-4-5-20251001");
@@ -109,6 +107,26 @@ describe("handleAssistantFailover", () => {
       expect(err.reason).toBe("rate_limit");
       expect(err.message).toBe("LLM request rate limited.");
       expect(err.status).toBe(429);
+    });
+
+    it("preserves the raw provider error on surfaced failures", async () => {
+      const rawError = '  400 {"error":{"message":"credit balance is too low"}}  ';
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: "billing" },
+          failoverReason: "billing",
+          billingFailure: true,
+          lastAssistant: {
+            errorMessage: rawError,
+            model: "claude-haiku-4-5-20251001",
+            provider: "Anthropic",
+          } as Params["lastAssistant"],
+        }),
+      );
+
+      const err = expectThrownFailoverError(outcome);
+      expect(err.reason).toBe("billing");
+      expect(err.rawError).toBe(rawError.trim());
     });
 
     it("coerces a null decision reason onto the most specific non-timeout failure signal", async () => {
@@ -207,9 +225,7 @@ describe("handleAssistantFailover", () => {
       const err = expectThrownFailoverError(outcome);
       expect(err.reason).toBe("billing");
       expect(err.status).toBe(402);
-      expect(err.message).toBe(
-        formatBillingErrorMessage("Anthropic", "claude-haiku-4-5-20251001"),
-      );
+      expect(err.message).toBe(formatBillingErrorMessage("Anthropic", "claude-haiku-4-5-20251001"));
       expect(logDecision).toHaveBeenCalledWith("fallback_model", { status: 402 });
     });
   });
