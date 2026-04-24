@@ -6,6 +6,7 @@ import { AUTH_PROFILE_FILENAME } from "./path-constants.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotResult,
   replaceRuntimeAuthProfileStoreSnapshots,
   updateRuntimeAuthProfileStoreSnapshotIfPresent,
 } from "./runtime-snapshots.js";
@@ -57,6 +58,48 @@ describe("runtime auth profile snapshots", () => {
     );
 
     expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toBeUndefined();
+  });
+
+  it("distinguishes stale snapshots from missing snapshots", async () => {
+    await fixtureSuite.setup();
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    replaceRuntimeAuthProfileStoreSnapshots(
+      [
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "stale-key",
+              },
+            },
+          },
+        },
+      ],
+      Date.now() - 10_000,
+    );
+
+    expect(getRuntimeAuthProfileStoreSnapshotResult()).toEqual({ status: "miss" });
+
+    await fs.writeFile(
+      path.join(agentDir, AUTH_PROFILE_FILENAME),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "fresh-key",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(getRuntimeAuthProfileStoreSnapshotResult(agentDir)).toEqual({ status: "stale" });
   });
 
   it("does not invalidate snapshots when an unsnapshotted store key is newer", async () => {

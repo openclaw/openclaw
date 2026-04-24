@@ -5,6 +5,11 @@ import type { AuthProfileStore } from "./types.js";
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
 const runtimeAuthStoreSnapshotLoadedAtMsByKey = new Map<string, number>();
 
+export type RuntimeAuthProfileStoreSnapshotResult =
+  | { status: "hit"; store: AuthProfileStore }
+  | { status: "miss" }
+  | { status: "stale" };
+
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
 }
@@ -40,12 +45,19 @@ function clearStaleRuntimeSnapshotsIfNeeded(storeKey: string): boolean {
 export function getRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
 ): AuthProfileStore | undefined {
+  const result = getRuntimeAuthProfileStoreSnapshotResult(agentDir);
+  return result.status === "hit" ? result.store : undefined;
+}
+
+export function getRuntimeAuthProfileStoreSnapshotResult(
+  agentDir?: string,
+): RuntimeAuthProfileStoreSnapshotResult {
   const storeKey = resolveRuntimeStoreKey(agentDir);
   if (clearStaleRuntimeSnapshotsIfNeeded(storeKey)) {
-    return undefined;
+    return { status: "stale" };
   }
   const store = runtimeAuthStoreSnapshots.get(storeKey);
-  return store ? cloneAuthProfileStore(store) : undefined;
+  return store ? { status: "hit", store: cloneAuthProfileStore(store) } : { status: "miss" };
 }
 
 export function hasRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {

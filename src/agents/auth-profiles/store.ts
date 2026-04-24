@@ -24,7 +24,7 @@ import {
 } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotResult,
   replaceRuntimeAuthProfileStoreSnapshots as replaceRuntimeAuthProfileStoreSnapshotsImpl,
   updateRuntimeAuthProfileStoreSnapshotIfPresent,
 } from "./runtime-snapshots.js";
@@ -59,15 +59,26 @@ function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
   const mainKey = resolveAuthStorePath(undefined);
   const requestedKey = resolveAuthStorePath(agentDir);
-  const mainStore = getRuntimeAuthProfileStoreSnapshot(undefined);
-  const requestedStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
+  const requestedResult =
+    !agentDir || requestedKey === mainKey
+      ? getRuntimeAuthProfileStoreSnapshotResult(undefined)
+      : getRuntimeAuthProfileStoreSnapshotResult(agentDir);
 
   if (!agentDir || requestedKey === mainKey) {
-    if (!mainStore) {
-      return null;
-    }
-    return mainStore;
+    return requestedResult.status === "hit" ? requestedResult.store : null;
   }
+
+  if (requestedResult.status === "stale") {
+    return null;
+  }
+
+  const mainResult = getRuntimeAuthProfileStoreSnapshotResult(undefined);
+  if (mainResult.status === "stale") {
+    return null;
+  }
+
+  const mainStore = mainResult.status === "hit" ? mainResult.store : null;
+  const requestedStore = requestedResult.status === "hit" ? requestedResult.store : null;
 
   if (mainStore && requestedStore) {
     return mergeAuthProfileStores(mainStore, requestedStore);
