@@ -1145,6 +1145,23 @@ describe("resolveModel", () => {
     });
   });
 
+  it("resolves openai-codex gpt-5.5 even when discovery omits the OAuth catalog row", () => {
+    const result = resolveModelForTest("openai-codex", "gpt-5.5");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("preserves unmarked manual openai-codex metadata overrides", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",

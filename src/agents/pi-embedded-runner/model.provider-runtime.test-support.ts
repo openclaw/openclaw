@@ -233,7 +233,22 @@ function buildDynamicModel(
       if (lower === "gpt-5.5") {
         return (
           (params.modelRegistry.find("openai-codex", modelId) as ResolvedModelLike | null) ??
-          undefined
+          cloneTemplate(
+            undefined,
+            modelId,
+            {
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: OPENAI_CODEX_BASE_URL,
+              reasoning: true,
+              input: ["text", "image"],
+              cost: OPENROUTER_FALLBACK_COST,
+              contextWindow: 1_000_000,
+              contextTokens: 272_000,
+              maxTokens: 128_000,
+            },
+            {},
+          )
         );
       }
       const template =

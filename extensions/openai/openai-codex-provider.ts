@@ -50,6 +50,8 @@ const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
+const OPENAI_CODEX_GPT_55_NATIVE_CONTEXT_TOKENS = 1_000_000;
+const OPENAI_CODEX_GPT_55_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS = 1_000_000;
 const OPENAI_CODEX_GPT_55_PRO_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
@@ -185,7 +187,22 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
     const model = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId) as
       | ProviderRuntimeModel
       | undefined;
-    return model;
+    return (
+      model ??
+      normalizeModelCompat({
+        id: trimmedModelId,
+        name: trimmedModelId,
+        api: "openai-codex-responses",
+        provider: PROVIDER_ID,
+        baseUrl: OPENAI_CODEX_BASE_URL,
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: OPENAI_CODEX_GPT_55_NATIVE_CONTEXT_TOKENS,
+        contextTokens: OPENAI_CODEX_GPT_55_DEFAULT_CONTEXT_TOKENS,
+        maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+      } as ProviderRuntimeModel)
+    );
   }
 
   let templateIds: readonly string[];

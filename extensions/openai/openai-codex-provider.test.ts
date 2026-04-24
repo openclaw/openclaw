@@ -368,6 +368,27 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("synthesizes gpt-5.5 when the Codex catalog omits the OAuth row", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({}), null) as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.5",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("resolves gpt-5.4-pro from a gpt-5.4 runtime template when legacy codex rows are absent", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
