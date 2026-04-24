@@ -29,7 +29,7 @@ export function inlineDataUriOrphanLeaf(): { content: unknown[] } {
 export function mediaOnlyHistoryMessage(): AgentMessage {
   return {
     role: "user",
-    content: [{ type: "image", url: `data:image/png;base64,${"b".repeat(2048)}` }],
+    content: [{ type: "image", data: "b".repeat(2048), mimeType: "image/png" }],
     timestamp: 1,
   } as AgentMessage;
 }
@@ -39,7 +39,7 @@ export function structuredHistoryMessage(): AgentMessage {
     role: "user",
     content: [
       { type: "text", text: "older structured context" },
-      { type: "image", url: "https://example.test/context.png" },
+      { type: "image", data: "c".repeat(64), mimeType: "image/png" },
     ],
     timestamp: 1,
   } as AgentMessage;
