@@ -269,6 +269,19 @@ export type DiagnosticPayloadLargeEvent = DiagnosticBaseEvent & {
   reason?: string;
 };
 
+export type DiagnosticLogRecordEvent = DiagnosticBaseEvent & {
+  type: "log.record";
+  level: string;
+  message: string;
+  loggerName?: string;
+  loggerParents?: string[];
+  attributes?: Record<string, string | number | boolean>;
+  code?: {
+    line?: number;
+    functionName?: string;
+  };
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -293,7 +306,8 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallErrorEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
-  | DiagnosticPayloadLargeEvent;
+  | DiagnosticPayloadLargeEvent
+  | DiagnosticLogRecordEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -318,6 +332,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "log.record",
 ]);
 
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
