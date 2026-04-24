@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
@@ -78,7 +78,7 @@ function isLoopbackHostname(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
 }
 
-function resolveGatewayTarget(config: ReturnType<typeof loadConfig>, url: string | undefined) {
+function resolveGatewayTarget(config: OpenClawConfig, url: string | undefined) {
   const normalizedUrl = trimToUndefined(url);
 
   if (!normalizedUrl) {
@@ -109,8 +109,7 @@ function resolveGatewayTarget(config: ReturnType<typeof loadConfig>, url: string
         ? 443
         : 80;
 
-    return {
-      config: {
+    const localConfig: OpenClawConfig = {
         ...config,
         gateway: {
           ...config.gateway,
@@ -121,7 +120,10 @@ function resolveGatewayTarget(config: ReturnType<typeof loadConfig>, url: string
             enabled: parsedUrl.protocol === "wss:",
           },
         },
-      },
+      };
+
+    return {
+      config: localConfig,
       url: undefined,
     };
   }

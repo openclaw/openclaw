@@ -4,7 +4,7 @@ import {
   PROTOCOL_VERSION,
   type ToolsCatalogResult,
 } from "./protocol/index.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -64,8 +64,7 @@ function resolveGatewayTarget(url: string | undefined) {
         ? 443
         : 80;
 
-    return {
-      config: {
+    const localConfig: OpenClawConfig = {
         ...config,
         gateway: {
           ...config.gateway,
@@ -76,7 +75,10 @@ function resolveGatewayTarget(url: string | undefined) {
             enabled: parsedUrl.protocol === "wss:",
           },
         },
-      },
+      };
+
+    return {
+      config: localConfig,
       url: undefined,
     };
   }

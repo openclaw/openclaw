@@ -11,7 +11,7 @@ import {
   type WizardStatusResult,
   type WizardStartResult,
 } from "./protocol/index.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -146,8 +146,7 @@ function resolveGatewayTarget(url: string | undefined, deps: OnboardingHelperDep
         ? 443
         : 80;
 
-    return {
-      config: {
+    const localConfig: OpenClawConfig = {
         ...config,
         gateway: {
           ...config.gateway,
@@ -158,7 +157,10 @@ function resolveGatewayTarget(url: string | undefined, deps: OnboardingHelperDep
             enabled: parsedUrl.protocol === "wss:",
           },
         },
-      },
+      };
+
+    return {
+      config: localConfig,
       url: undefined,
     };
   }
@@ -210,8 +212,9 @@ function normalizePairingResolution(
 
   const payload = {
     url: resolution.payload.url,
-    token: trimToNull(resolution.payload.token),
-    password: trimToNull(resolution.payload.password),
+    token: resolution.authLabel === "token" ? trimToNull(resolution.payload.bootstrapToken) : null,
+    password:
+      resolution.authLabel === "password" ? trimToNull(resolution.payload.bootstrapToken) : null,
     authLabel: resolution.authLabel,
     urlSource: resolution.urlSource,
     setupCode: deps.encodePairingSetupCode(resolution.payload),
@@ -438,8 +441,7 @@ export async function completePairing(
     trimToUndefined(input?.setupCode) ??
     deps.encodePairingSetupCode({
       url: pairingUrl,
-      token,
-      password,
+      bootstrapToken: token ?? password ?? "",
     });
 
   return {

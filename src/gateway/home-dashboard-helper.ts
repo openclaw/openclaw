@@ -1,12 +1,13 @@
 import { callGatewayScoped } from "./call.js";
 import { READ_SCOPE } from "./method-scopes.js";
 import { PROTOCOL_VERSION, type ToolsCatalogResult } from "./protocol/index.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../utils/message-channel.js";
-import type { CronListPageResult } from "../cron/service/ops.js";
+import type { CronJob } from "../cron/types.js";
+import type { CronListPageResult } from "../cron/service/list-page-types.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
 export type FetchHomeDashboardOptions = {
@@ -121,8 +122,7 @@ function resolveGatewayTarget(url: string | undefined) {
         ? 443
         : 80;
 
-    return {
-      config: {
+    const localConfig: OpenClawConfig = {
         ...config,
         gateway: {
           ...config.gateway,
@@ -133,7 +133,10 @@ function resolveGatewayTarget(url: string | undefined) {
             enabled: parsedUrl.protocol === "wss:",
           },
         },
-      },
+      };
+
+    return {
+      config: localConfig,
       url: undefined,
       gatewayUrl: normalizedUrl,
     };
@@ -257,8 +260,8 @@ async function fetchSessionsList(
 
 async function fetchCronList(
   options: FetchHomeDashboardOptions,
-): Promise<CronListPageResult> {
-  return await callReadOnlyGateway<CronListPageResult>({
+): Promise<CronListPageResult<CronJob[]>> {
+  return await callReadOnlyGateway<CronListPageResult<CronJob[]>>({
     method: "cron.list",
     payload: {
       enabled: "enabled",
@@ -387,9 +390,9 @@ export async function fetchHomeDashboard(
 
   const scheduled =
     scheduledResult.status === "fulfilled"
-      ? createSection(
-          (scheduledResult.value.jobs ?? []).map((job) =>
-            normalizeScheduledItem(job as Record<string, unknown>),
+      ? createSection<HomeDashboardScheduledItem>(
+          (scheduledResult.value.jobs ?? []).map((job: CronJob) =>
+            normalizeScheduledItem(job as unknown as Record<string, unknown>),
           ),
         )
       : createUnavailableSection<HomeDashboardScheduledItem>(

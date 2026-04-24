@@ -5,6 +5,7 @@ import {
   loadConfig,
   readConfigFileSnapshot,
   type HooksGmailTailscaleMode,
+  type OpenClawConfig,
 } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -162,8 +163,7 @@ function resolveGatewayTarget(
         ? 443
         : 80;
 
-    return {
-      config: {
+    const localConfig: OpenClawConfig = {
         ...config,
         gateway: {
           ...config.gateway,
@@ -174,7 +174,10 @@ function resolveGatewayTarget(
             enabled: parsedUrl.protocol === "wss:",
           },
         },
-      },
+      };
+
+    return {
+      config: localConfig,
       url: undefined,
     };
   }
