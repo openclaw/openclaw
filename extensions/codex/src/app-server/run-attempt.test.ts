@@ -616,9 +616,9 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
-      "turn start exploded",
-    );
+    await expect(
+      runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir)),
+    ).rejects.toThrow("turn start exploded");
 
     await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
     await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
@@ -628,6 +628,8 @@ describe("runCodexAppServerAttempt", () => {
         assistantTexts: [],
         model: "gpt-5.4-codex",
         provider: "codex",
+        resolvedRef: "codex/gpt-5.4-codex",
+        harnessId: "codex",
         runId: "run-1",
         sessionId: "session-1",
       }),
