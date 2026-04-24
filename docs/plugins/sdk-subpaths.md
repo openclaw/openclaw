@@ -119,6 +119,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
     | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
+    | `plugin-sdk/channel-contract-testing` | Narrow channel contract test helpers without the broad testing barrel |
     | `plugin-sdk/command-auth-native` | Native command auth + native session-target helpers |
     | `plugin-sdk/command-detection` | Shared command detection helpers |
     | `plugin-sdk/command-primitives-runtime` | Lightweight command text predicates for hot channel paths |
