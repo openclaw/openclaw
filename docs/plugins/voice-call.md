@@ -122,6 +122,17 @@ Set config under `plugins.entries.voice-call.config`:
             maxPendingConnectionsPerIp: 4,
             maxConnections: 128,
           },
+
+          realtime: {
+            enabled: false,
+            provider: "google", // optional; first registered realtime voice provider when unset
+            providers: {
+              google: {
+                model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                voice: "Kore",
+              },
+            },
+          },
         },
       },
     },
@@ -140,12 +151,96 @@ Notes:
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
 - Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
+- `realtime.enabled` starts full voice-to-voice conversations; do not enable it together with `streaming.enabled`.
 - Streaming security defaults:
   - `streaming.preStartTimeoutMs` closes sockets that never send a valid `start` frame.
 - `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
 - `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
 - `streaming.maxConnections` caps total open media stream sockets (pending + active).
 - Runtime fallback still accepts those old voice-call keys for now, but the rewrite path is `openclaw doctor --fix` and the compat shim is temporary.
+
+## Realtime voice conversations
+
+`realtime` selects a full duplex realtime voice provider for live call audio.
+It is separate from `streaming`, which only forwards audio to realtime
+transcription providers.
+
+Current runtime behavior:
+
+- `realtime.enabled` is supported for Twilio Media Streams.
+- `realtime.enabled` cannot be combined with `streaming.enabled`.
+- `realtime.provider` is optional. If unset, Voice Call uses the first
+  registered realtime voice provider.
+- Bundled realtime voice providers include Google Gemini Live (`google`) and
+  OpenAI (`openai`), registered by their provider plugins.
+- Provider-owned raw config lives under `realtime.providers.<providerId>`.
+- If `realtime.provider` points at an unregistered provider, or no realtime
+  voice provider is registered at all, Voice Call logs a warning and skips
+  realtime media instead of failing the whole plugin.
+
+Google Gemini Live realtime defaults:
+
+- API key: `realtime.providers.google.apiKey`, `GEMINI_API_KEY`, or
+  `GOOGLE_GENERATIVE_AI_API_KEY`
+- model: `gemini-2.5-flash-native-audio-preview-12-2025`
+- voice: `Kore`
+
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          provider: "twilio",
+          inboundPolicy: "allowlist",
+          allowFrom: ["+15550005678"],
+          realtime: {
+            enabled: true,
+            provider: "google",
+            instructions: "Speak briefly and ask before using tools.",
+            providers: {
+              google: {
+                apiKey: "${GEMINI_API_KEY}",
+                model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                voice: "Kore",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Use OpenAI instead:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          realtime: {
+            enabled: true,
+            provider: "openai",
+            providers: {
+              openai: {
+                apiKey: "${OPENAI_API_KEY}",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+See [Google provider](/providers/google) and [OpenAI provider](/providers/openai)
+for provider-specific realtime voice options.
 
 ## Streaming transcription
 

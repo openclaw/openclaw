@@ -596,9 +596,11 @@ entries should pair exact specs with `expectedIntegrity` so update flows fail
 closed if the fetched npm artifact no longer matches the pinned release.
 Interactive onboarding still offers trusted registry npm specs, including bare
 package names and dist-tags, for compatibility. Catalog diagnostics can
-distinguish exact, floating, integrity-pinned, and missing-integrity sources.
-When `expectedIntegrity` is present, install/update flows enforce it; when it
-is omitted, the registry resolution is recorded without an integrity pin.
+distinguish exact, floating, integrity-pinned, missing-integrity, and invalid
+default-choice sources. They also warn when `expectedIntegrity` is present but
+there is no valid npm source it can pin. When `expectedIntegrity` is present,
+install/update flows enforce it; when it is omitted, the registry resolution is
+recorded without an integrity pin.
 
 Channel plugins should provide `openclaw.setupEntry` when status, channel list,
 or SecretRef scans need to identify configured accounts without loading the full

@@ -9,16 +9,23 @@ Docs: https://docs.openclaw.ai
 - Plugins/activation: expose activation plan reasons and a richer plan API so callers can inspect why a plugin was selected while preserving existing id-list activation behavior. (#70943) Thanks @vincentkoc.
 - Plugins/source metadata: expose normalized install-source facts on provider and channel catalogs so onboarding can explain npm pinning, integrity state, and local availability before runtime loads. (#70951) Thanks @vincentkoc.
 - Plugins/catalog: pin the official external WeCom channel source to an exact npm release plus dist integrity, with a guard that official external sources stay integrity-pinned. (#70997) Thanks @vincentkoc.
+- Plugins/source metadata: warn when `openclaw.install.defaultChoice` is invalid or points at a missing source, keeping catalog diagnostics explicit without breaking existing plugins. Thanks @vincentkoc.
+- Plugins/source metadata: warn when `openclaw.install.expectedIntegrity` is present without a valid npm source, keeping orphaned integrity metadata visible without rejecting existing plugins. Thanks @vincentkoc.
 - Diagnostics/OTEL: add a lightweight diagnostic trace-context carrier for future span correlation without adding OTEL SDK state to core. Thanks @vincentkoc.
+- Dependencies/SBOM: add an ownership-backed dependency risk report for root closure size, native/build-risk packages, and missing owner records. Thanks @vincentkoc.
 - Diagnostics/OTEL: attach diagnostic trace context to exported OTEL logs so log records can correlate with future spans without adding retained process state. Thanks @vincentkoc.
 - Diagnostics/OTEL: pass immutable per-run diagnostic trace context through agent and tool hook contexts, and parent exported diagnostic spans from validated context without retaining global trace state. Thanks @vincentkoc.
 - Diagnostics/OTEL: make exporter startup restart-safe so config reloads do not retain stale SDKs, log transports, or diagnostic event listeners. Thanks @vincentkoc.
+- Diagnostics: emit structured tool execution diagnostic events with trace context, timing, and redacted error metadata. Thanks @vincentkoc.
+- Diagnostics: emit structured run and model-call diagnostic events with trace context, duration, and non-message error metadata. Thanks @vincentkoc.
 - Control UI/chat: add a Steer action on queued messages so a browser follow-up can be injected into the active run without retyping it.
 - Control UI/Talk: add browser WebRTC realtime voice sessions backed by OpenAI Realtime, with Gateway-minted ephemeral client secrets and `openclaw_agent_consult` handoff to the full OpenClaw agent.
 - Agents/tools: add optional per-call `timeoutMs` support for image, video, music, and TTS generation tools so agents can extend provider request timeouts only when a specific generation needs it.
 - Agents/subagents: add optional forked context for native `sessions_spawn` runs so agents can let a child inherit the requester transcript when needed, while keeping clean isolated sessions as the default; includes prompt guidance, context-engine hook metadata, docs, and QA coverage.
 - Codex harness: add structured debug logging for embedded harness selection decisions so `/status` stays simple while gateway logs explain auto-selection and Pi fallback reasons. (#70760) Thanks @100yenadmin.
-- Dependencies/Pi: update bundled Pi packages to `0.70.0`, use Pi's upstream `gpt-5.5` catalog metadata for OpenAI and OpenAI Codex, and keep only local `gpt-5.5-pro` forward-compat handling.
+- Plugin SDK/Codex harness: add provider-owned transport/auth/follow-up seams and harness result classification so Codex-style runtimes can participate in fallback policy without core special-casing. (#70772) Thanks @100yenadmin.
+- Codex harness: bridge Codex-native tool hooks into OpenClaw plugin hooks and approvals, with bounded relay payloads and approval spam protection. (#71008) Thanks @pashpashpash.
+- Dependencies/Pi: update bundled Pi packages to `0.70.2`, use Pi's upstream `gpt-5.5` and DeepSeek V4 catalog metadata, and keep only local `gpt-5.5-pro` forward-compat handling.
 - Models/CLI: speed up `openclaw models list --all --provider <id>` for bundled providers with safe static catalogs while keeping live and third-party providers on registry discovery. (#70632) Thanks @shakkernerd.
 - Models/CLI: avoid broad registry enumeration for default `openclaw models list`, reducing default listing latency while preserving configured-row output. (#70883) Thanks @shakkernerd.
 - Models/CLI: split `openclaw models list` row-source orchestration and registry loading into narrower helpers without changing list output behavior. (#70867) Thanks @shakkernerd.
@@ -27,17 +34,21 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google Meet: default Chrome realtime sessions to OpenAI plus SoX `rec`/`play` audio bridge commands, so the usual setup only needs the plugin enabled and `OPENAI_API_KEY`.
 - Plugins/Google Meet: add a `chrome-node` transport so a paired macOS node, such as a Parallels VM, can own Chrome, BlackHole, and SoX while the Gateway machine keeps the agent and model key.
 - Plugins/Bonjour: move LAN Gateway discovery advertising into a default-enabled bundled plugin with its own `@homebridge/ciao` dependency, so users can disable Bonjour without cutting wide-area discovery. Thanks @vincentkoc.
+- Providers/Google: add a Gemini Live realtime voice provider for backend Voice Call and Google Meet audio bridges, with bidirectional audio and function-call support.
 - Providers/OpenAI: add image generation and reference-image editing through Codex OAuth, so `openai/gpt-image-2` works without an `OPENAI_API_KEY`. Fixes #70703.
 - Providers/OpenRouter: add image generation and reference-image editing through `image_generate`, so OpenRouter image models work with `OPENROUTER_API_KEY`. Fixes #55066 via #67668. Thanks @notamicrodose.
 - Image generation: let agents request provider-supported quality and output format hints, and pass OpenAI-specific background, moderation, compression, and user hints through the `image_generate` tool. (#70503) Thanks @ottodeng.
 - Plugins/Google Meet: let realtime Meet sessions consult the full OpenClaw agent for deeper answers while staying in the live voice loop.
+- Providers/DeepSeek: add DeepSeek V4 Flash and V4 Pro to the bundled catalog and make V4 Flash the onboarding default.
 
 ### Fixes
 
+- Diagnostics: harden tool and model diagnostic events against hostile errors, blocking listeners, and unsafe stability reason fields. Thanks @vincentkoc.
 - Plugins/onboarding: record local plugin install source metadata without duplicating raw absolute local paths in persisted `plugins.installs`, while preserving linked load-path cleanup. (#70970) Thanks @vincentkoc.
 - Browser/tool: tell agents not to pass per-call `timeoutMs` on existing-session type, evaluate, and other Chrome MCP actions that reject timeout overrides.
 - Codex/GPT-5.4: harden fallback, auth-profile, tool-schema, and replay edge cases across native and embedded runtime paths. (#70743) Thanks @100yenadmin.
 - Voice-call/Telnyx: preserve inbound/outbound callback metadata and read transcription text from Telnyx's current `transcription_data` payload.
+- Providers/DeepSeek: wire V4 thinking controls and OpenAI-compatible replay policy so follow-up turns preserve DeepSeek `reasoning_content`, while the None/off thinking path strips replayed reasoning fields. Fixes #70931.
 - Codex harness: send verbose tool progress to chat channels for native app-server runs, matching the Pi harness `/verbose on` and `/verbose full` behavior. (#70966) Thanks @jalehman.
 - Codex models: fetch paginated Codex app-server model catalogs, mark truncated `/codex models` output, and keep ChatGPT OAuth defaults on the `openai-codex/gpt-5.5` route instead of the OpenAI API-key route.
 - Codex harness: route native `request_user_input` prompts back to the originating chat, preserve queued follow-up answers, and honor newer app-server command approval amendment decisions.
@@ -71,6 +82,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI: honor the private-network SSRF opt-in for OpenAI-compatible image generation endpoints, so trusted LocalAI/LAN `image_generate` routes work without disabling SSRF checks globally. Fixes #62879. Thanks @seitzbg.
 - Providers/OpenAI: stop advertising the removed `gpt-5.3-codex-spark` Codex model through fallback catalogs, and suppress stale rows with a GPT-5.5 recovery hint.
 - Plugins/QR: replace legacy `qrcode-terminal` QR rendering with bounded `qrcode-tui` helpers for plugin login/setup flows. (#65969) Thanks @vincentkoc.
+- Gateway/chat: register chat.send runs in the chat run registry so lifecycle error events reach the client instead of being silently dropped, fixing stuck 'waiting' state and /abort reporting no active run. (#69747) Thanks @wangshu94.
 - Voice-call/realtime: wait for OpenAI session configuration before greeting or forwarding buffered audio, and reject non-allowlisted Twilio callers before stream setup. (#43501) Thanks @forrestblount.
 - ACPX/Codex: stop materializing `auth.json` bridge files for Codex ACP, Codex app-server, and Codex CLI runs; Codex-owned runtimes now use their normal `CODEX_HOME`/`~/.codex` auth path directly.
 - Auto-reply/system events: route async exec-event completion replies through the persisted session delivery context, so long-running command results return to the originating channel instead of being dropped when live origin metadata is missing. (#70258) Thanks @wzfukui.
@@ -106,6 +118,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/security: fail closed on agent-driven `gateway config.apply`/`config.patch` runtime edits by allowlisting a narrow set of agent-tunable prompt, model, and mention-gating paths (including Telegram topic-level `requireMention`) instead of relying on a hand-maintained denylist of protected subtrees that could miss new sensitive config keys. (#70726) Thanks @drobison00.
 - Webhooks/security: re-resolve `SecretRef`-backed webhook route secrets on each request so `openclaw secrets reload` revokes the previous secret immediately instead of waiting for a gateway restart. (#70727) Thanks @drobison00.
 - Memory/dreaming: decouple the managed dreaming cron from heartbeat by running it as an isolated lightweight agent turn, so dreaming runs even when heartbeat is disabled for the default agent and is no longer skipped by `heartbeat.activeHours`. `openclaw doctor --fix` migrates stale main-session dreaming jobs in persisted cron configs to the new shape. Fixes #69811, #67397, #68972. (#70737) Thanks @jalehman.
+- Agents/CLI: keep `--agent` plus `--session-id` lookup scoped to the requested agent store, so explicit agent resumes cannot select another agent's session. (#70985) Thanks @frankekn.
+- Plugins/QQ Bot: enable the bundled qqbot plugin by default so its runtime dependency `@tencent-connect/qqbot-connector` is installed on first launch, unblocking the QR-code binding flow that dynamically imports the connector before any account is configured. (#71051) Thanks @cxyhhhhh.
 
 ## 2026.4.22
 

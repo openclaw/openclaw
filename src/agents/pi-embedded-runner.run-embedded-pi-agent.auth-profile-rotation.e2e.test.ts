@@ -1065,6 +1065,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         }),
       ).rejects.toMatchObject({
         name: "FailoverError",
+        profileId: "openai:p1",
         reason: "rate_limit",
         provider: "openai",
         model: "mock-1",

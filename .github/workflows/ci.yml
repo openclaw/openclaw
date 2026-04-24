@@ -194,6 +194,11 @@ jobs:
                 }).map((shard) => ({
                   check_name: shard.checkName,
                   extensions_csv: shard.extensionIds.join(","),
+                  runner: isCanonicalRepository && [0, 3, 4].includes(shard.index)
+                    ? "blacksmith-8vcpu-ubuntu-2404"
+                    : isCanonicalRepository
+                      ? "blacksmith-4vcpu-ubuntu-2404"
+                      : "ubuntu-24.04",
                   shard_index: shard.index + 1,
                   task: "extensions-batch",
                 }))
@@ -913,7 +918,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1372,16 +1377,16 @@ jobs:
             runner: ubuntu-24.04
           - check_name: check-prod-types
             task: prod-types
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            runner: ubuntu-24.04
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
           - check_name: check-test-types
             task: test-types
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-strict-smoke
             task: strict-smoke
             runner: ubuntu-24.04

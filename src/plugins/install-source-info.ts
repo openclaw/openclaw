@@ -4,6 +4,9 @@ import type { PluginPackageInstall } from "./manifest.js";
 
 export type PluginInstallSourceWarning =
   | "invalid-npm-spec"
+  | "invalid-default-choice"
+  | "default-choice-missing-source"
+  | "npm-integrity-without-source"
   | "npm-spec-floating"
   | "npm-spec-missing-integrity";
 
@@ -44,23 +47,28 @@ function resolveNpmPinState(params: {
   return params.hasIntegrity ? "floating-with-integrity" : "floating-without-integrity";
 }
 
+function resolveDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
+  return value === "npm" || value === "local" ? value : undefined;
+}
+
 export function describePluginInstallSource(
   install: PluginPackageInstall,
 ): PluginInstallSourceInfo {
   const npmSpec = normalizeOptionalString(install.npmSpec);
   const localPath = normalizeOptionalString(install.localPath);
-  const defaultChoice =
-    install.defaultChoice === "npm" || install.defaultChoice === "local"
-      ? install.defaultChoice
-      : undefined;
+  const defaultChoice = resolveDefaultChoice(install.defaultChoice);
+  const expectedIntegrity = normalizeOptionalString(install.expectedIntegrity);
   const warnings: PluginInstallSourceWarning[] = [];
   let npm: PluginInstallNpmSourceInfo | undefined;
+
+  if (install.defaultChoice !== undefined && !defaultChoice) {
+    warnings.push("invalid-default-choice");
+  }
 
   if (npmSpec) {
     const parsed = parseRegistryNpmSpec(npmSpec);
     if (parsed) {
       const exactVersion = parsed.selectorKind === "exact-version";
-      const expectedIntegrity = normalizeOptionalString(install.expectedIntegrity);
       const hasIntegrity = Boolean(expectedIntegrity);
       if (!exactVersion) {
         warnings.push("npm-spec-floating");
@@ -80,6 +88,15 @@ export function describePluginInstallSource(
     } else {
       warnings.push("invalid-npm-spec");
     }
+  }
+  if (defaultChoice === "npm" && !npm) {
+    warnings.push("default-choice-missing-source");
+  }
+  if (defaultChoice === "local" && !localPath) {
+    warnings.push("default-choice-missing-source");
+  }
+  if (expectedIntegrity && !npm) {
+    warnings.push("npm-integrity-without-source");
   }
 
   return {
