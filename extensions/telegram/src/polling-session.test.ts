@@ -2912,7 +2912,6 @@ describe("TelegramPollingSession", () => {
 
     expect(setStatus).toHaveBeenCalledWith({
       mode: "polling",
-      connected: false,
       lastConnectedAt: null,
       lastEventAt: null,
       lastTransportActivityAt: null,
@@ -3078,14 +3077,25 @@ describe("TelegramPollingSession", () => {
     const disconnectedPatches = statusPatches(setStatus).filter(
       (patch) => patch.connected === false,
     );
-    expect(disconnectedPatches).toHaveLength(2);
-    expect(disconnectedPatches[0]?.mode).toBe("polling");
-    expect(disconnectedPatches[0]?.lastConnectedAt).toBeNull();
-    expect(disconnectedPatches[0]?.lastEventAt).toBeNull();
-    expect(disconnectedPatches[0]?.lastTransportActivityAt).toBeNull();
-    expect(disconnectedPatches[1]).toEqual({
+    // Only notePollingStop now writes connected:false; notePollingStart no longer
+    // stomps the flag (see polling-status.ts for why).
+    expect(disconnectedPatches).toHaveLength(1);
+    expect(disconnectedPatches[0]).toEqual({
       mode: "polling",
       connected: false,
+    });
+    const cycleStartPatches = setStatus.mock.calls.filter(
+      ([patch]) =>
+        (patch as Record<string, unknown>).mode === "polling" &&
+        !("connected" in (patch as Record<string, unknown>)) &&
+        (patch as Record<string, unknown>).lastEventAt === null,
+    );
+    expect(cycleStartPatches.length).toBeGreaterThanOrEqual(1);
+    expect(cycleStartPatches[0]?.[0]).toMatchObject({
+      mode: "polling",
+      lastConnectedAt: null,
+      lastEventAt: null,
+      lastTransportActivityAt: null,
     });
   });
 

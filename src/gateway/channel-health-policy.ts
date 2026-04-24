@@ -49,7 +49,10 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 // Keep these shared between the background health monitor and on-demand readiness
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
-export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
+// Widened from 120s so slow-startup channels (e.g. long-poll handshakes or
+// heavy first-page payloads) finish the full connect sequence before the
+// health monitor runs its first post-grace evaluation.
+export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 300_000;
 
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
