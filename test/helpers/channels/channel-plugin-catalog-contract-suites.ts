@@ -120,6 +120,24 @@ export function describeChannelPluginCatalogEntriesContract() {
   describe("channel plugin catalog entries contract", () => {
     it.each([
       {
+        name: "includes built-in WeChat external catalog metadata",
+        setup: () => ({
+          channelId: "openclaw-weixin",
+          expected: {
+            id: "openclaw-weixin",
+            meta: {
+              label: "WeChat",
+              docsPath: "/channels/wechat",
+              order: 44,
+            },
+            install: {
+              npmSpec: "@tencent-weixin/openclaw-weixin",
+              defaultChoice: "npm",
+            },
+          },
+        }),
+      },
+      {
         name: "includes external catalog entries",
         setup: () => {
           const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-"));
