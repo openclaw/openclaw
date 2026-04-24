@@ -118,6 +118,21 @@ describe("joinShellLineContinuations", () => {
     );
   });
 
+  it("recognizes a terminator whose letters are split by a continuation", () => {
+    // bash: the logical line after splicing is `EOF`, so the heredoc terminates.
+    expect(joinShellLineContinuations("cat <<EOF\nbody\nEO\\\nF\ntail\n")).toBe(
+      "cat <<EOF\nbody\nEOF\ntail\n",
+    );
+  });
+
+  it("does not terminate when a continuation joins text into the delimiter line", () => {
+    // bash: the logical line is `foo EOF`, which is NOT the delimiter; keep
+    // consuming the body until a standalone `EOF` arrives.
+    expect(joinShellLineContinuations("cat <<EOF\nfoo \\\nEOF\nEOF\ntail\n")).toBe(
+      "cat <<EOF\nfoo EOF\nEOF\ntail\n",
+    );
+  });
+
   it("returns the original command for unterminated quotes", () => {
     const input = "echo 'unterminated \\\n";
     expect(joinShellLineContinuations(input)).toBe(input);

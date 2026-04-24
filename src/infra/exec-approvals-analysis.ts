@@ -147,13 +147,16 @@ function parseHeredocDelimiter(source: string, start: number): ParsedHeredocDeli
 export function joinShellLineContinuations(command: string): string {
   type HeredocSpec = { delimiter: string; stripTabs: boolean; quoted: boolean };
 
-  let out = "";
+  // Build output via chunked array + `join("")` at the end so concatenation
+  // stays linear for large commands (e.g. big heredoc bodies) rather than
+  // relying on engine-specific optimizations for `+=` concatenation.
+  const out: string[] = [];
+  const heredocLine: string[] = [];
   let inSingle = false;
   let inDouble = false;
   let inComment = false;
   const pendingHeredocs: HeredocSpec[] = [];
   let inHeredocBody = false;
-  let heredocLine = "";
 
   const isContinuation = (i: number): 0 | 2 | 3 => {
     if (command[i] !== "\\") {
@@ -169,6 +172,12 @@ export function joinShellLineContinuations(command: string): string {
     return 0;
   };
 
+  const resetHeredocLine = () => {
+    heredocLine.length = 0;
+  };
+
+  const currentHeredocLine = (): string => heredocLine.join("");
+
   let i = 0;
   while (i < command.length) {
     const ch = command[i];
@@ -179,14 +188,20 @@ export function joinShellLineContinuations(command: string): string {
       if (current && !current.quoted) {
         const skip = isContinuation(i);
         if (skip) {
-          heredocLine = "";
+          // Splice: drop the backslash-newline without resetting the logical
+          // heredoc line. A continued line joins into the next physical line,
+          // so characters accumulated so far still belong to this logical
+          // line — needed to correctly classify `foo \<LF>EOF` (does not
+          // terminate <<EOF, since the logical line is "foo EOF") and
+          // `EO\<LF>F` (does terminate <<EOF, since the logical line is "EOF").
           i += skip;
           continue;
         }
       }
       if (ch === "\n" || ch === "\r") {
         if (current) {
-          const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
+          const raw = currentHeredocLine();
+          const line = current.stripTabs ? raw.replace(/^\t+/, "") : raw;
           if (line === current.delimiter) {
             pendingHeredocs.shift();
             if (pendingHeredocs.length === 0) {
@@ -194,18 +209,18 @@ export function joinShellLineContinuations(command: string): string {
             }
           }
         }
-        heredocLine = "";
-        out += ch;
+        resetHeredocLine();
+        out.push(ch);
         if (ch === "\r" && next === "\n") {
-          out += "\n";
+          out.push("\n");
           i += 2;
         } else {
           i += 1;
         }
         continue;
       }
-      heredocLine += ch;
-      out += ch;
+      heredocLine.push(ch);
+      out.push(ch);
       i += 1;
       continue;
     }
@@ -214,7 +229,7 @@ export function joinShellLineContinuations(command: string): string {
       if (ch === "\n" || ch === "\r") {
         inComment = false;
       }
-      out += ch;
+      out.push(ch);
       i += 1;
       continue;
     }
@@ -223,7 +238,7 @@ export function joinShellLineContinuations(command: string): string {
       if (ch === "'") {
         inSingle = false;
       }
-      out += ch;
+      out.push(ch);
       i += 1;
       continue;
     }
@@ -235,15 +250,14 @@ export function joinShellLineContinuations(command: string): string {
         continue;
       }
       if (ch === "\\" && next !== undefined && DOUBLE_QUOTE_ESCAPES.has(next)) {
-        out += ch;
-        out += next;
+        out.push(ch, next);
         i += 2;
         continue;
       }
       if (ch === '"') {
         inDouble = false;
       }
-      out += ch;
+      out.push(ch);
       i += 1;
       continue;
     }
@@ -255,45 +269,44 @@ export function joinShellLineContinuations(command: string): string {
     }
 
     if (ch === "\\" && next !== undefined) {
-      out += ch;
-      out += next;
+      out.push(ch, next);
       i += 2;
       continue;
     }
 
     if (ch === "'") {
       inSingle = true;
-      out += ch;
+      out.push(ch);
       i += 1;
       continue;
     }
     if (ch === '"') {
       inDouble = true;
-      out += ch;
+      out.push(ch);
       i += 1;
       continue;
     }
 
     if (isShellCommentStart(command, i)) {
       inComment = true;
-      out += ch;
+      out.push(ch);
       i += 1;
       continue;
     }
 
     if (ch === "<" && next === "<") {
-      out += "<<";
+      out.push("<<");
       let scanIndex = i + 2;
       let stripTabs = false;
       if (command[scanIndex] === "-") {
         stripTabs = true;
-        out += "-";
+        out.push("-");
         scanIndex += 1;
       }
       const parsed = parseHeredocDelimiter(command, scanIndex);
       if (parsed) {
         pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs, quoted: parsed.quoted });
-        out += command.slice(scanIndex, parsed.end);
+        out.push(command.slice(scanIndex, parsed.end));
         i = parsed.end;
       } else {
         i = scanIndex;
@@ -302,28 +315,28 @@ export function joinShellLineContinuations(command: string): string {
     }
 
     if (ch === "\n" || ch === "\r") {
-      out += ch;
+      out.push(ch);
       if (ch === "\r" && next === "\n") {
-        out += "\n";
+        out.push("\n");
         i += 2;
       } else {
         i += 1;
       }
       if (pendingHeredocs.length > 0) {
         inHeredocBody = true;
-        heredocLine = "";
+        resetHeredocLine();
       }
       continue;
     }
 
-    out += ch;
+    out.push(ch);
     i += 1;
   }
 
   if (inSingle || inDouble || (inHeredocBody && pendingHeredocs.length > 0)) {
     return command;
   }
-  return out;
+  return out.join("");
 }
 
 function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
