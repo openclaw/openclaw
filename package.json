@@ -637,6 +637,10 @@
       "types": "./dist/plugin-sdk/channel-inbound.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound.js"
     },
+    "./plugin-sdk/channel-inbound-debounce": {
+      "types": "./dist/plugin-sdk/channel-inbound-debounce.d.ts",
+      "default": "./dist/plugin-sdk/channel-inbound-debounce.js"
+    },
     "./plugin-sdk/channel-inbound-roots": {
       "types": "./dist/plugin-sdk/channel-inbound-roots.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound-roots.js"

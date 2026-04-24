@@ -145,6 +145,7 @@
   "channel-contract",
   "channel-feedback",
   "channel-inbound",
+  "channel-inbound-debounce",
   "channel-inbound-roots",
   "channel-logging",
   "channel-location",
