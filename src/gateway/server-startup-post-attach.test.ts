@@ -197,6 +197,7 @@ describe("startGatewayPostAttachRuntime", () => {
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
+        awaitSidecars: false,
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars }),
     );
