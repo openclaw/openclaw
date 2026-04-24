@@ -68,6 +68,7 @@ export type PluginInspectReport = {
   commands: string[];
   cliCommands: string[];
   services: string[];
+  gatewayDiscoveryServices: string[];
   gatewayMethods: string[];
   mcpServers: Array<{
     name: string;
@@ -341,6 +342,7 @@ export function buildPluginInspectReport(params: {
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
+    gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
     gatewayMethods: [...plugin.gatewayMethods],
     mcpServers,
     lspServers,

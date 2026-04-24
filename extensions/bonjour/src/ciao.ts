@@ -1,4 +1,4 @@
-import { formatBonjourError } from "./bonjour-errors.js";
+import { formatBonjourError } from "./errors.js";
 
 const CIAO_CANCELLATION_MESSAGE_RE = /^CIAO (?:ANNOUNCEMENT|PROBING) CANCELLED\b/u;
 const CIAO_INTERFACE_ASSERTION_MESSAGE_RE =
