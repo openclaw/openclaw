@@ -1725,16 +1725,23 @@ function extractReplayReasoningContent(record: Record<string, unknown>): {
   keysToDelete: string[];
 } {
   const keysToDelete: string[] = [];
+  let firstNonEmptyContent: string | undefined;
   for (const [key, value] of Object.entries(record)) {
     if (!parseReplayReasoningSignatureKey(key)) {
       continue;
     }
     keysToDelete.push(key);
-    if (typeof value === "string" && value.trim().length > 0) {
-      return { content: value, keysToDelete };
+    if (
+      firstNonEmptyContent === undefined &&
+      typeof value === "string" &&
+      value.trim().length > 0
+    ) {
+      firstNonEmptyContent = value;
     }
   }
-  return { keysToDelete };
+  return firstNonEmptyContent !== undefined
+    ? { content: firstNonEmptyContent, keysToDelete }
+    : { keysToDelete };
 }
 
 function injectDeepSeekReasoningReplay(outgoingMessages: unknown[], model: OpenAIModeModel): void {
@@ -1791,6 +1798,12 @@ function injectDeepSeekReasoningReplay(outgoingMessages: unknown[], model: OpenA
     }
     if (typeof record.content === "string" && record.content.trim().length > 0) {
       record.reasoning_content = record.content;
+      continue;
+    }
+    // P1 fix: unconditional empty-string fallback ensures reasoning_content is never undefined
+    // for DeepSeek tool-call history (verified safe against live API → 200 OK)
+    if (record.reasoning_content === undefined) {
+      record.reasoning_content = "";
     }
   }
 }
