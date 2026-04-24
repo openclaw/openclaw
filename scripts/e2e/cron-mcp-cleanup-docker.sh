@@ -82,6 +82,19 @@ docker run --rm \
       tail -n 120 /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null || true
       exit 1
     fi
+    acpx_ready=0
+    for _ in \$(seq 1 2400); do
+      if grep -q '\[plugins\] embedded acpx runtime backend ready' /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null; then
+        acpx_ready=1
+        break
+      fi
+      sleep 0.25
+    done
+    if [ \"\$acpx_ready\" -ne 1 ]; then
+      echo \"Embedded ACPX runtime did not become ready\"
+      tail -n 120 /tmp/cron-mcp-cleanup-gateway.log 2>/dev/null || true
+      exit 1
+    fi
     node --import tsx scripts/e2e/cron-mcp-cleanup-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
