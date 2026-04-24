@@ -1344,6 +1344,8 @@ jobs:
       - name: Run changed extension tests
         env:
           OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
+          NODE_OPTIONS: --max-old-space-size=6144
+          OPENCLAW_VITEST_MAX_WORKERS: 1
         run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check shards.
