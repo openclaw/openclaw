@@ -1,3 +1,6 @@
+import { resolveProviderIdForAuth } from "../../../src/agents/provider-auth-aliases.js";
+import type { PluginManifestRegistry } from "../../../src/plugins/manifest-registry.js";
+
 export const AUTH_PROFILE_RUNTIME_CONTRACT = {
   sessionId: "session-auth-contract",
   sessionKey: "agent:main:auth-contract",
@@ -11,11 +14,32 @@ export const AUTH_PROFILE_RUNTIME_CONTRACT = {
   anthropicProfileId: "anthropic:work",
 } as const;
 
-export function resolveContractAuthProvider(provider: string): string {
-  const normalized = provider.trim().toLowerCase();
-  return normalized === AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider
-    ? AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider
-    : normalized;
+export function createAuthAliasManifestRegistry(): PluginManifestRegistry {
+  return {
+    plugins: [
+      {
+        id: "openai",
+        origin: "bundled",
+        channels: [],
+        providers: [],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        rootDir: "/tmp/openclaw-auth-contract-plugin",
+        source: "test",
+        manifestPath: "/tmp/openclaw-auth-contract-plugin/plugin.json",
+        providerAuthChoices: [
+          {
+            provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+            method: "oauth",
+            choiceId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+            deprecatedChoiceIds: [AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider],
+          },
+        ],
+      },
+    ],
+    diagnostics: [],
+  };
 }
 
 export function expectedForwardedAuthProfile(params: {
@@ -23,8 +47,8 @@ export function expectedForwardedAuthProfile(params: {
   authProfileProvider: string;
   sessionAuthProfileId: string | undefined;
 }): string | undefined {
-  return resolveContractAuthProvider(params.provider) ===
-    resolveContractAuthProvider(params.authProfileProvider)
+  return resolveProviderIdForAuth(params.provider) ===
+    resolveProviderIdForAuth(params.authProfileProvider)
     ? params.sessionAuthProfileId
     : undefined;
 }

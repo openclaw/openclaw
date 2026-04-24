@@ -4,16 +4,18 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AUTH_PROFILE_RUNTIME_CONTRACT,
+  createAuthAliasManifestRegistry,
   expectedForwardedAuthProfile,
 } from "../../test/helpers/agents/auth-profile-runtime-contract.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runAgentAttempt } from "./command/attempt-execution.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<() => PluginManifestRegistry>(() => ({
     plugins: [],
     diagnostics: [],
   })),
@@ -104,26 +106,6 @@ function makeEmbeddedResult(text: string): EmbeddedPiRunResult {
   };
 }
 
-function createAuthAliasManifestRegistry() {
-  return {
-    plugins: [
-      {
-        id: "openai",
-        origin: "bundled",
-        providerAuthChoices: [
-          {
-            provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-            method: "oauth",
-            choiceId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-            deprecatedChoiceIds: [AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider],
-          },
-        ],
-      },
-    ],
-    diagnostics: [],
-  };
-}
-
 async function runAuthContractAttempt(params: {
   tmpDir: string;
   storePath: string;
@@ -190,7 +172,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("resolves codex-cli through the real provider auth alias registry", () => {
+  it("resolves codex-cli through the provider auth alias resolver using a mocked manifest", () => {
     expect(resolveProviderIdForAuth(AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider)).toBe(
       AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
     );

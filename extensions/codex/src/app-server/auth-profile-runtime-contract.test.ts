@@ -163,8 +163,8 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
       authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       dynamicToolsFingerprint: "[]",
     });
+    // authProfileId is intentionally omitted to exercise the resume-bound profile path.
     const params = createParams(sessionFile, tmpDir);
-    delete params.authProfileId;
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
