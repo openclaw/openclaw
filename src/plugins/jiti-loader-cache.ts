@@ -79,19 +79,27 @@ export function getCachedPluginJitiLoader(params: {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
-  // The returned loader prefers native require() for already-compiled JS
-  // artifacts (the bundled plugin public surfaces shipped in dist/) because
-  // jiti's transform pipeline provides no value for output that is already
-  // plain JS and adds several seconds of per-load overhead on slower hosts.
-  // Jiti stays on the hot path for TS / TSX and for the small set of
-  // require(esm)/async-module fallbacks `tryNativeRequireJavaScriptModule`
-  // declines to handle.
-  const loader = ((target: string) => {
+  // When the caller has explicitly opted out of native loading (for example
+  // `bundled-capability-runtime` in Vitest+dist mode, which depends on
+  // jiti's alias rewriting to surface a narrow SDK slice), route every
+  // target through jiti so those alias rewrites still apply.
+  if (!tryNative) {
+    params.cache.set(scopedCacheKey, jitiLoader);
+    return jitiLoader;
+  }
+  // Otherwise prefer native require() for already-compiled JS artifacts
+  // (the bundled plugin public surfaces shipped in dist/). jiti's transform
+  // pipeline provides no value for output that is already plain JS and adds
+  // several seconds of per-load overhead on slower hosts. jiti still runs
+  // for TS / TSX sources and for the small set of require(esm) /
+  // async-module fallbacks `tryNativeRequireJavaScriptModule` declines to
+  // handle.
+  const loader = ((target: string, ...rest: unknown[]) => {
     const native = tryNativeRequireJavaScriptModule(target);
     if (native.ok) {
       return native.moduleExport;
     }
-    return jitiLoader(target);
+    return (jitiLoader as (t: string, ...a: unknown[]) => unknown)(target, ...rest);
   }) as PluginJitiLoader;
   params.cache.set(scopedCacheKey, loader);
   return loader;
