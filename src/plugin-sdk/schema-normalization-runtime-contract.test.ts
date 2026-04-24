@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createNativeOpenAICodexResponsesModel,
   createNativeOpenAIResponsesModel,
@@ -11,11 +11,9 @@ import { buildProviderToolCompatFamilyHooks } from "./provider-tools.js";
 
 describe("OpenAI-family schema normalization runtime contract", () => {
   const hooks = buildProviderToolCompatFamilyHooks("openai");
-  const normalizeToolSchemas = vi.fn(hooks.normalizeToolSchemas);
-  const inspectToolSchemas = vi.fn(hooks.inspectToolSchemas);
 
   it("normalizes parameter-free schemas for native OpenAI Responses tools", () => {
-    const normalized = normalizeToolSchemas({
+    const normalized = hooks.normalizeToolSchemas({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -27,7 +25,7 @@ describe("OpenAI-family schema normalization runtime contract", () => {
   });
 
   it("normalizes parameter-free schemas for native OpenAI Codex Responses tools", () => {
-    const normalized = normalizeToolSchemas({
+    const normalized = hooks.normalizeToolSchemas({
       provider: "openai-codex",
       modelId: "gpt-5.4",
       modelApi: "openai-codex-responses",
@@ -40,7 +38,7 @@ describe("OpenAI-family schema normalization runtime contract", () => {
 
   it("does not apply native strict normalization to proxy-like OpenAI routes", () => {
     const tools = [createParameterFreeTool()] as never;
-    const normalized = normalizeToolSchemas({
+    const normalized = hooks.normalizeToolSchemas({
       provider: "openai",
       modelId: "custom-gpt",
       modelApi: "openai-responses",
@@ -53,7 +51,7 @@ describe("OpenAI-family schema normalization runtime contract", () => {
 
   it("keeps permissive schemas observable for transport strict:false downgrade", () => {
     const tool = createPermissiveTool();
-    const normalized = normalizeToolSchemas({
+    const normalized = hooks.normalizeToolSchemas({
       provider: "openai-codex",
       modelId: "gpt-5.4",
       modelApi: "openai-codex-responses",
@@ -63,7 +61,7 @@ describe("OpenAI-family schema normalization runtime contract", () => {
 
     expect(normalized[0]?.parameters).toEqual(tool.parameters);
     expect(
-      inspectToolSchemas({
+      hooks.inspectToolSchemas({
         provider: "openai-codex",
         modelId: "gpt-5.4",
         modelApi: "openai-codex-responses",
