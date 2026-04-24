@@ -6,8 +6,6 @@ read_when:
 title: "OpenResponses API"
 ---
 
-# OpenResponses API (HTTP)
-
 OpenClaw’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.

@@ -327,6 +327,12 @@ narrows the candidate plugin and setup still needs richer setup-time runtime
 hooks, set `requiresRuntime: true` and keep `setup-api` in place as the
 fallback execution path.
 
+Set `requiresRuntime: false` only when those descriptors are sufficient for the
+setup surface. OpenClaw treats explicit `false` as a descriptor-only contract
+and will not execute `setup-api` for setup lookup. Omitted `requiresRuntime`
+keeps legacy fallback behavior so existing plugins that added descriptors
+without the flag do not break.
+
 Because setup lookup can execute plugin-owned `setup-api` code, normalized
 `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across
 discovered plugins. Ambiguous ownership fails closed instead of picking a

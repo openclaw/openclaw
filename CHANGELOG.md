@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gradium: add a bundled text-to-speech provider with voice-note and telephony output support. (#64958) Thanks @LaurentMazare.
+- Plugins/setup: honor explicit `setup.requiresRuntime: false` as a descriptor-only setup contract while keeping omitted values on the legacy setup-api fallback path. Thanks @vincentkoc.
 - TUI/dependencies: remove direct `cli-highlight` usage from the OpenClaw TUI code-block renderer, keeping themed code coloring without the extra root dependency. Thanks @vincentkoc.
 - Diagnostics/OTEL: export run, model-call, and tool-execution diagnostic lifecycle events as OTEL spans without retaining live span state. Thanks @vincentkoc.
 - Plugins/activation: expose activation plan reasons and a richer plan API so callers can inspect why a plugin was selected while preserving existing id-list activation behavior. (#70943) Thanks @vincentkoc.
@@ -31,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Models/CLI: split `openclaw models list` row-source orchestration and registry loading into narrower helpers without changing list output behavior. (#70867) Thanks @shakkernerd.
 - Models/commands: deprecate `/models add` so chat attempts now return a deprecation message instead of writing model configuration, and remove the add action from `/models` provider menus.
 - Codex harness/context-engine: run context-engine bootstrap, assembly, post-turn maintenance, and engine-owned compaction in Codex app-server sessions while keeping native Codex thread state and compaction auditable. (#70809) Thanks @jalehman.
+- Codex runtime plan: consolidate contract-first Pi/Codex parity coverage and accept legacy Codex auth-provider aliases in app-server profile login and refresh paths. (#71096) Thanks @100yenadmin.
 - Plugins/Google Meet: add a bundled participant plugin with personal Google auth, explicit meeting URL joins, Chrome and Twilio transports, and realtime voice support. (#70765) Thanks @steipete.
 - Plugins/Google Meet: default Chrome realtime sessions to OpenAI plus SoX `rec`/`play` audio bridge commands, so the usual setup only needs the plugin enabled and `OPENAI_API_KEY`.
 - Plugins/Google Meet: add a `chrome-node` transport so a paired macOS node, such as a Parallels VM, can own Chrome, BlackHole, and SoX while the Gateway machine keeps the agent and model key.
