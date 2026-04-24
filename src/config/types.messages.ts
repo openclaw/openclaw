@@ -1,8 +1,19 @@
 import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
 import type { TtsConfig } from "./types.tts.js";
 
+export type MentionPatternsMode = "allow" | "deny";
+
+export type ProviderMentionPatternsMode = "inherit" | MentionPatternsMode;
+
+export type MentionPatternsPolicyConfig = {
+  mode?: ProviderMentionPatternsMode;
+  allowIn?: string[];
+  denyIn?: string[];
+};
+
 export type GroupChatConfig = {
   mentionPatterns?: string[];
+  mentionPatternsMode?: MentionPatternsMode;
   historyLimit?: number;
 };
 

@@ -126,6 +126,8 @@ export type PluginRuntimeChannel = {
     matchesMentionWithExplicit: MatchesMentionWithExplicit;
     implicitMentionKindWhen: typeof import("../../channels/mention-gating.js").implicitMentionKindWhen;
     resolveInboundMentionDecision: typeof import("../../channels/mention-gating.js").resolveInboundMentionDecision;
+    resolveMentionPatternPolicy: typeof import("../../channels/mention-pattern-policy.js").resolveMentionPatternPolicy;
+    resolveMentionPatternsEnabled: typeof import("../../channels/mention-pattern-policy.js").resolveMentionPatternsEnabled;
   };
   reactions: {
     shouldAckReaction: typeof import("../../channels/ack-reactions.js").shouldAckReaction;

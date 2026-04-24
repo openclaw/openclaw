@@ -7,6 +7,7 @@ import {
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
@@ -326,7 +327,13 @@ export function resolveIMessageInboundDecision(params: {
     sender,
     chatId,
   });
-  const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
+  const mentionRegexes = resolveMentionPatternsEnabled({
+    cfg: params.cfg,
+    provider: "imessage",
+    conversationId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+  })
+    ? buildMentionRegexes(params.cfg, route.agentId)
+    : [];
   if (!bodyText) {
     return { kind: "drop", reason: "empty body" };
   }

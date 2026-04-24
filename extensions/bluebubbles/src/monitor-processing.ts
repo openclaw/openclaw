@@ -1017,7 +1017,13 @@ async function processMessageAfterDedupe(
 
   // Mention gating for group chats (parity with iMessage/WhatsApp)
   const messageText = text;
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);
+  const mentionRegexes = core.channel.mentions.resolveMentionPatternsEnabled({
+    cfg: config,
+    provider: "bluebubbles",
+    conversationId: peerId,
+  })
+    ? core.channel.mentions.buildMentionRegexes(config, route.agentId)
+    : [];
   const wasMentioned = isGroup
     ? core.channel.mentions.matchesMentionPatterns(messageText, mentionRegexes)
     : true;

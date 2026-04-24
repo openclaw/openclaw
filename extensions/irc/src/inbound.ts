@@ -248,7 +248,13 @@ export async function handleIrcInbound(params: {
     return;
   }
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const mentionRegexes = core.channel.mentions.resolveMentionPatternsEnabled({
+    cfg: config as OpenClawConfig,
+    provider: CHANNEL_ID,
+    conversationId: message.target,
+  })
+    ? core.channel.mentions.buildMentionRegexes(config as OpenClawConfig)
+    : [];
   const mentionNick = connectedNick?.trim() || account.nick;
   const explicitMentionRegex = mentionNick
     ? new RegExp(`\\b${escapeIrcRegexLiteral(mentionNick)}\\b[:,]?`, "i")

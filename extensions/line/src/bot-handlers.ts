@@ -3,6 +3,7 @@ import {
   buildMentionRegexes,
   matchesMentionPatterns,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { hasControlCommand, resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
@@ -443,7 +444,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       accountId: account.accountId,
       peer: { kind: "group", id: peerId },
     });
-    const mentionRegexes = buildMentionRegexes(cfg, agentId);
+    const mentionRegexes = resolveMentionPatternsEnabled({
+      cfg,
+      provider: "line",
+      conversationId: peerId,
+    })
+      ? buildMentionRegexes(cfg, agentId)
+      : [];
     const wasMentionedByNative = isLineBotMentioned(message);
     const wasMentionedByPattern =
       message.type === "text" ? matchesMentionPatterns(rawText, mentionRegexes) : false;

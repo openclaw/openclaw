@@ -22,6 +22,7 @@ import {
   GroupPolicySchema,
   HexColorSchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
   SecretRefSchema,
@@ -538,6 +539,7 @@ export const DiscordAccountSchema = z
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
+    mentionPatterns: MentionPatternsPolicySchema.optional(),
     retry: RetryConfigSchema,
     actions: z
       .object({

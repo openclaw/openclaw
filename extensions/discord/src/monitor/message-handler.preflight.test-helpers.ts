@@ -64,6 +64,11 @@ export function createDiscordMessage(params: {
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
   attachments?: Array<Record<string, unknown>>;
+  referencedMessage?: {
+    author?: {
+      id?: string;
+    };
+  };
 }): import("@buape/carbon").Message {
   return {
     id: params.id,
@@ -74,6 +79,7 @@ export function createDiscordMessage(params: {
     mentionedUsers: params.mentionedUsers ?? [],
     mentionedRoles: [],
     mentionedEveryone: params.mentionedEveryone ?? false,
+    referencedMessage: params.referencedMessage,
     author: params.author,
   } as unknown as import("@buape/carbon").Message;
 }

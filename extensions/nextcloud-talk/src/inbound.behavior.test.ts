@@ -72,6 +72,7 @@ function installRuntime(params?: {
       },
       mentions: {
         buildMentionRegexes: params?.buildMentionRegexes ?? vi.fn(() => []),
+        resolveMentionPatternsEnabled: vi.fn(() => true),
         matchesMentionPatterns: params?.matchesMentionPatterns ?? vi.fn(() => false),
       },
     },

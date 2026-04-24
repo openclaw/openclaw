@@ -941,6 +941,40 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "number",
           exclusiveMinimum: 0,
         },
+        mentionPatterns: {
+          type: "object",
+          properties: {
+            mode: {
+              anyOf: [
+                {
+                  type: "string",
+                  const: "inherit",
+                },
+                {
+                  type: "string",
+                  const: "allow",
+                },
+                {
+                  type: "string",
+                  const: "deny",
+                },
+              ],
+            },
+            allowIn: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            denyIn: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+          },
+          additionalProperties: false,
+        },
         retry: {
           type: "object",
           properties: {
@@ -2116,6 +2150,40 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               mediaMaxMb: {
                 type: "number",
                 exclusiveMinimum: 0,
+              },
+              mentionPatterns: {
+                type: "object",
+                properties: {
+                  mode: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "inherit",
+                      },
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "deny",
+                      },
+                    ],
+                  },
+                  allowIn: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  denyIn: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+                additionalProperties: false,
               },
               retry: {
                 type: "object",
@@ -6852,6 +6920,40 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         contextVisibility: {
           type: "string",
           enum: ["all", "allowlist", "allowlist_quote"],
+        },
+        mentionPatterns: {
+          type: "object",
+          properties: {
+            mode: {
+              anyOf: [
+                {
+                  type: "string",
+                  const: "inherit",
+                },
+                {
+                  type: "string",
+                  const: "allow",
+                },
+                {
+                  type: "string",
+                  const: "deny",
+                },
+              ],
+            },
+            allowIn: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            denyIn: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+          },
+          additionalProperties: false,
         },
         blockStreaming: {
           type: "boolean",

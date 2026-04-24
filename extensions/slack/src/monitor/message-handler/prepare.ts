@@ -11,6 +11,7 @@ import {
   matchesMentionWithExplicit,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
@@ -421,7 +422,13 @@ export async function prepareSlackMessage(params: {
     );
   }
 
-  const mentionRegexes = resolveCachedMentionRegexes(ctx, route.agentId);
+  const mentionRegexes = resolveMentionPatternsEnabled({
+    cfg: ctx.cfg,
+    provider: "slack",
+    conversationId: message.channel,
+  })
+    ? resolveCachedMentionRegexes(ctx, route.agentId)
+    : [];
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
     ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`),

@@ -205,7 +205,13 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const mentionRegexes = core.channel.mentions.resolveMentionPatternsEnabled({
+    cfg: config as OpenClawConfig,
+    provider: CHANNEL_ID,
+    conversationId: roomToken,
+  })
+    ? core.channel.mentions.buildMentionRegexes(config as OpenClawConfig)
+    : [];
   const wasMentioned = mentionRegexes.length
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
     : false;

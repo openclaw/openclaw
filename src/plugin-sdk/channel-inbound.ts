@@ -46,6 +46,14 @@ export {
   // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
   resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
+export type {
+  ResolveMentionPatternPolicyParams,
+  ResolvedMentionPatternPolicy,
+} from "../channels/mention-pattern-policy.js";
+export {
+  resolveMentionPatternPolicy,
+  resolveMentionPatternsEnabled,
+} from "../channels/mention-pattern-policy.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";
 export { logInboundDrop } from "../channels/logging.js";

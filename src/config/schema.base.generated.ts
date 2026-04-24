@@ -6454,6 +6454,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "string",
                       },
                     },
+                    mentionPatternsMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "allow",
+                        },
+                        {
+                          type: "string",
+                          const: "deny",
+                        },
+                      ],
+                    },
                     historyLimit: {
                       type: "integer",
                       exclusiveMinimum: 0,
@@ -18057,7 +18069,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 title: "Group Mention Patterns",
                 description:
-                  "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
+                  "Safe case-insensitive regex pattern strings used to detect explicit mentions/trigger phrases in group chats. Write regex bodies without slash delimiters (for example scoo+b, not /scoo+b/); invalid or unsafe nested-repetition patterns are ignored.",
+              },
+              mentionPatternsMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "allow",
+                  },
+                  {
+                    type: "string",
+                    const: "deny",
+                  },
+                ],
+                title: "Group Mention Pattern Mode",
+                description:
+                  'Global default for whether configured mention patterns count as mention evidence in group chats: "allow" keeps existing behavior and "deny" disables configured pattern matching unless a provider-specific allowlist re-enables it.',
               },
               historyLimit: {
                 type: "integer",
@@ -26933,7 +26960,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.groupChat.mentionPatterns": {
       label: "Group Mention Patterns",
-      help: "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
+      help: "Safe case-insensitive regex pattern strings used to detect explicit mentions/trigger phrases in group chats. Write regex bodies without slash delimiters (for example scoo+b, not /scoo+b/); invalid or unsafe nested-repetition patterns are ignored.",
+      tags: ["advanced"],
+    },
+    "messages.groupChat.mentionPatternsMode": {
+      label: "Group Mention Pattern Mode",
+      help: 'Global default for whether configured mention patterns count as mention evidence in group chats: "allow" keeps existing behavior and "deny" disables configured pattern matching unless a provider-specific allowlist re-enables it.',
       tags: ["advanced"],
     },
     "messages.groupChat.historyLimit": {

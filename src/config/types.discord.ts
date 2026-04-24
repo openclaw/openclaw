@@ -11,7 +11,11 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channels.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type {
+  DmConfig,
+  MentionPatternsPolicyConfig,
+  ProviderCommandsConfig,
+} from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -266,6 +270,8 @@ export type DiscordAccountConfig = {
    */
   maxLinesPerMessage?: number;
   mediaMaxMb?: number;
+  /** Controls where configured mention patterns count as mention evidence. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;

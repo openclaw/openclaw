@@ -270,9 +270,11 @@ Telegram, WhatsApp, Slack, Discord, Microsoft Teams, and ZaloUser.
 
 Notes:
 
-- `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored.
+- `mentionPatterns` are case-insensitive safe regex pattern strings; write the regex body only (for example `scoo+b`, not `/scoo+b/`). Invalid patterns and unsafe nested-repetition forms are ignored.
 - Surfaces that provide explicit mentions still pass; patterns are a fallback.
 - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
+- `messages.groupChat.mentionPatternsMode` sets the global default for configured pattern matching (`allow` by default for backward compatibility).
+- Providers can add scoped overrides such as `channels.discord.mentionPatterns` with exact `allowIn` / `denyIn` conversation IDs. Native platform mentions still work when configured patterns are disabled.
 - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
 - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
 - Group history context is wrapped uniformly across channels and is **pending-only** (messages skipped due to mention gating); use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.

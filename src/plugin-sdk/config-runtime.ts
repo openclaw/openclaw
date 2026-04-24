@@ -118,6 +118,7 @@ export type {
   GroupToolPolicyConfig,
   MarkdownConfig,
   MarkdownTableMode,
+  MentionPatternsPolicyConfig,
   OpenClawConfig,
   ReplyToMode,
   SignalReactionNotificationMode,

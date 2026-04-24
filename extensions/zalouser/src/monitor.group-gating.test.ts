@@ -128,6 +128,7 @@ function installRuntime(params: {
       },
       mentions: {
         buildMentionRegexes: vi.fn(() => []),
+        resolveMentionPatternsEnabled: vi.fn(() => true),
         matchesMentionWithExplicit: vi.fn(
           (input) => input.explicit?.isExplicitlyMentioned === true,
         ),

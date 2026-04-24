@@ -303,6 +303,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         ) as unknown as PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"],
         implicitMentionKindWhen,
         resolveInboundMentionDecision,
+        resolveMentionPatternPolicy: vi.fn(() => ({
+          globalMode: "allow",
+          effectiveMode: "allow",
+          allowMatched: false,
+          denyMatched: false,
+          enabled: true,
+        })) as unknown as PluginRuntime["channel"]["mentions"]["resolveMentionPatternPolicy"],
+        resolveMentionPatternsEnabled: vi.fn(
+          () => true,
+        ) as unknown as PluginRuntime["channel"]["mentions"]["resolveMentionPatternsEnabled"],
       },
       reactions: {
         shouldAckReaction,

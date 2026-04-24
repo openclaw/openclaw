@@ -7,6 +7,7 @@ import {
   formatInboundFromLabel,
   matchesMentionPatterns,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
   resolveEnvelopeFormatOptions,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -662,7 +663,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId,
       senderPeerId,
     });
-    const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
+    const mentionRegexes = resolveMentionPatternsEnabled({
+      cfg: deps.cfg,
+      provider: "signal",
+      conversationId: groupId ?? senderPeerId,
+    })
+      ? buildMentionRegexes(deps.cfg, route.agentId)
+      : [];
     const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
     const requireMention =
       isGroup &&

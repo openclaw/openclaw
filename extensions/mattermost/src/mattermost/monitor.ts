@@ -1376,7 +1376,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
         const historyKey = kind === "direct" ? null : sessionKey;
 
-        const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
+        const mentionRegexes = core.channel.mentions.resolveMentionPatternsEnabled({
+          cfg,
+          provider: "mattermost",
+          conversationId: kind === "direct" ? senderId : channelId,
+        })
+          ? core.channel.mentions.buildMentionRegexes(cfg, route.agentId)
+          : [];
         const wasMentioned =
           kind !== "direct" &&
           ((botUsername

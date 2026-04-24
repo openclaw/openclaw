@@ -12,6 +12,7 @@ export {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ReplyRuntimeConfigSchemaShape,
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";

@@ -40,6 +40,7 @@ export type {
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
+  MentionPatternsPolicyConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-runtime";
 export type { WizardPrompter } from "openclaw/plugin-sdk/matrix-runtime-shared";

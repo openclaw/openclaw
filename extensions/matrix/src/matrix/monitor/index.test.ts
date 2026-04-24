@@ -241,6 +241,7 @@ vi.mock("../../runtime.js", () => ({
     channel: {
       mentions: {
         buildMentionRegexes: () => [],
+        resolveMentionPatternsEnabled: () => true,
       },
       text: {
         resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>

@@ -512,6 +512,7 @@ vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
   parseActivationCommand: (body: string) => ({
     hasCommand: body.trim().startsWith("/"),
   }),
+  resolveMentionPatternsEnabled: () => true,
   recordPendingHistoryEntryIfEnabled: (params: {
     historyMap: Map<string, unknown[]>;
     historyKey: string;

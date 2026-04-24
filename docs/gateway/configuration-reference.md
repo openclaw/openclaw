@@ -767,13 +767,26 @@ Group messages default to **require mention** (metadata mention or safe regex pa
 **Mention types:**
 
 - **Metadata mentions**: Native platform @-mentions. Ignored in WhatsApp self-chat mode.
-- **Text patterns**: Safe regex patterns in `agents.list[].groupChat.mentionPatterns`. Invalid patterns and unsafe nested repetition are ignored.
+- **Text patterns**: Safe regex pattern strings in `agents.list[].groupChat.mentionPatterns`. Write the regex body only (for example `openclaw`, not `/openclaw/`). Invalid patterns and unsafe nested repetition are ignored.
 - Mention gating is enforced only when detection is possible (native mentions or at least one pattern).
+- `messages.groupChat.mentionPatternsMode` sets the global default for configured pattern matching (`allow` by default).
+- `channels.discord.mentionPatterns` adds Discord-specific exact-ID allow/deny overrides for configured pattern matching. Native Discord @mentions and reply-to-bot implicit mentions are unchanged.
 
 ```json5
 {
   messages: {
-    groupChat: { historyLimit: 50 },
+    groupChat: {
+      historyLimit: 50,
+      mentionPatternsMode: "allow",
+    },
+  },
+  channels: {
+    discord: {
+      mentionPatterns: {
+        mode: "inherit",
+        denyIn: ["123456789012345678"],
+      },
+    },
   },
   agents: {
     list: [{ id: "main", groupChat: { mentionPatterns: ["@openclaw", "openclaw"] } }],

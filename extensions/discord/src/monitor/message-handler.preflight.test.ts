@@ -1011,6 +1011,141 @@ describe("preflightDiscordMessage", () => {
     expect(result?.wasMentioned).toBe(true);
   });
 
+  it("disables configured mention pattern matches when discord mentionPatterns policy denies the channel", async () => {
+    const channelId = "channel-policy-deny-pattern";
+    const guildId = "guild-policy-deny-pattern";
+    const client = createGuildTextClient(channelId);
+    const message = createDiscordMessage({
+      id: "m-policy-deny-pattern",
+      channelId,
+      content: "openclaw can you weigh in?",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          messages: {
+            groupChat: {
+              mentionPatterns: ["openclaw"],
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        discordConfig: {
+          mentionPatterns: {
+            mode: "deny",
+          },
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps native and reply-to-bot mentions working when configured patterns are denied", async () => {
+    const channelId = "channel-policy-native";
+    const guildId = "guild-policy-native";
+
+    const explicitResult = await runGuildPreflight({
+      channelId,
+      guildId,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        messages: {
+          groupChat: {
+            mentionPatterns: ["openclaw"],
+          },
+        },
+      },
+      message: createDiscordMessage({
+        id: "m-policy-native-explicit",
+        channelId,
+        content: "hello <@openclaw-bot>",
+        author: { id: "user-1", bot: false, username: "Alice" },
+        mentionedUsers: [{ id: "openclaw-bot" }],
+      }),
+      discordConfig: {
+        mentionPatterns: {
+          mode: "deny",
+        },
+      } as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    const replyResult = await runGuildPreflight({
+      channelId,
+      guildId,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        messages: {
+          groupChat: {
+            mentionPatterns: ["openclaw"],
+          },
+        },
+      },
+      message: createDiscordMessage({
+        id: "m-policy-native-reply",
+        channelId,
+        content: "following up here",
+        author: { id: "user-2", bot: false, username: "Bob" },
+        referencedMessage: {
+          author: {
+            id: "openclaw-bot",
+          },
+        },
+      }),
+      discordConfig: {
+        mentionPatterns: {
+          mode: "deny",
+        },
+      } as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(explicitResult).not.toBeNull();
+    expect(replyResult).not.toBeNull();
+  });
+
   it("does not transcribe guild audio from unauthorized members", async () => {
     const channelId = "channel-audio-unauthorized-1";
     const guildId = "guild-audio-unauthorized-1";

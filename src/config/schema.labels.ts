@@ -770,6 +770,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.responsePrefix": "Outbound Response Prefix",
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
+  "messages.groupChat.mentionPatternsMode": "Group Mention Pattern Mode",
   "messages.groupChat.historyLimit": "Group History Limit",
   "messages.queue": "Inbound Queue",
   "messages.queue.mode": "Queue Mode",

@@ -460,6 +460,7 @@ Example:
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
     `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
+    `channels.discord.mentionPatterns` can scope configured pattern matching by exact Discord channel/thread/group-DM ID without affecting native Discord @mentions or reply-to-bot implicit mentions.
 
     Group DMs:
 
