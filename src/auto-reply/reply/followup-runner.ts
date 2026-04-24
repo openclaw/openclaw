@@ -1,8 +1,5 @@
 import crypto from "node:crypto";
-import {
-  hasOutboundReplyContent,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
@@ -11,16 +8,15 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { buildAgentRuntimePlan } from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveProviderFollowupFallbackRoute } from "../../plugins/provider-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
@@ -84,6 +80,13 @@ export function createFollowupRunner(params: {
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+    const deliveryPlan = buildAgentRuntimePlan({
+      provider: resolvedRun.provider,
+      modelId: resolvedRun.modelId,
+      config: runtimeConfig,
+      workspaceDir: queued.run.workspaceDir,
+      agentDir: queued.run.agentDir,
+    }).delivery;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       defaultRuntime.error?.(
@@ -98,28 +101,15 @@ export function createFollowupRunner(params: {
       if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
       }
-      if (
-        isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
-        !resolveSendableOutboundReplyParts(payload).hasMedia
-      ) {
+      if (deliveryPlan.isSilentPayload(payload)) {
         continue;
       }
-      const providerRoute = resolveProviderFollowupFallbackRoute({
-        provider: resolvedRun.provider,
-        config: runtimeConfig,
-        workspaceDir: queued.run.workspaceDir,
-        context: {
-          config: runtimeConfig,
-          agentDir: queued.run.agentDir,
-          workspaceDir: queued.run.workspaceDir,
-          provider: resolvedRun.provider,
-          modelId: resolvedRun.modelId,
-          payload,
-          originatingChannel,
-          originatingTo,
-          originRoutable: Boolean(shouldRouteToOriginating),
-          dispatcherAvailable: Boolean(opts?.onBlockReply),
-        },
+      const providerRoute = deliveryPlan.resolveFollowupRoute({
+        payload,
+        originatingChannel,
+        originatingTo,
+        originRoutable: Boolean(shouldRouteToOriginating),
+        dispatcherAvailable: Boolean(opts?.onBlockReply),
       });
       if (providerRoute?.route === "drop") {
         logVerbose(

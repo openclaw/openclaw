@@ -1438,10 +1438,32 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   });
 
-  // Phase 1 contract marker: Codex preserves JSON NO_REPLY envelopes, but
-  // follow-up delivery still only suppresses exact text tokens. Runtime-plan
-  // delivery migration should flip this into an executable green row.
-  it.todo("suppresses JSON NO_REPLY followups without origin or dispatcher delivery");
+  it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
+    const typing = createMockTypingController();
+    const onBlockReply = createAsyncReplySpy();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.originChannel,
+        originatingTo: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.originTo,
+      }),
+    );
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
 
   it("keeps NO_REPLY followups with media deliverable", async () => {
     const { onBlockReply } = await runMessagingCase({
