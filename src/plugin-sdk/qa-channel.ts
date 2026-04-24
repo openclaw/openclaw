@@ -1,9 +1,92 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/qa-channel/api.js");
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-loader.js";
+import type {
+  QaBusAttachment,
+  QaBusInboundMessageInput,
+  QaBusMessage,
+  QaBusPollResult,
+  QaBusSearchMessagesInput,
+  QaBusStateSnapshot,
+  QaBusThread,
+} from "./qa-channel-protocol.js";
+
+export type * from "./qa-channel-protocol.js";
+
+type QaTargetParts = {
+  chatType: "direct" | "channel";
+  conversationId: string;
+  threadId?: string;
+};
+
+type FacadeModule = {
+  buildQaTarget: (params: QaTargetParts & { threadId?: string | null }) => string;
+  formatQaTarget: (params: QaTargetParts & { threadId?: string | null }) => string;
+  createQaBusThread: (params: {
+    baseUrl: string;
+    accountId: string;
+    conversationId: string;
+    title: string;
+    createdBy?: string;
+  }) => Promise<{ thread: QaBusThread }>;
+  deleteQaBusMessage: (params: {
+    baseUrl: string;
+    accountId: string;
+    messageId: string;
+  }) => Promise<{ message: QaBusMessage }>;
+  editQaBusMessage: (params: {
+    baseUrl: string;
+    accountId: string;
+    messageId: string;
+    text: string;
+  }) => Promise<{ message: QaBusMessage }>;
+  getQaBusState: (baseUrl: string) => Promise<QaBusStateSnapshot>;
+  injectQaBusInboundMessage: (params: {
+    baseUrl: string;
+    input: QaBusInboundMessageInput;
+  }) => Promise<{ message: QaBusMessage }>;
+  normalizeQaTarget: (raw: string) => string | undefined;
+  parseQaTarget: (raw: string) => QaTargetParts;
+  pollQaBus: (params: {
+    baseUrl: string;
+    accountId: string;
+    cursor: number;
+    timeoutMs: number;
+    signal?: AbortSignal;
+  }) => Promise<QaBusPollResult>;
+  qaChannelPlugin: ChannelPlugin;
+  reactToQaBusMessage: (params: {
+    baseUrl: string;
+    accountId: string;
+    messageId: string;
+    emoji: string;
+    senderId?: string;
+  }) => Promise<{ message: QaBusMessage }>;
+  readQaBusMessage: (params: {
+    baseUrl: string;
+    accountId: string;
+    messageId: string;
+  }) => Promise<{ message: QaBusMessage }>;
+  searchQaBusMessages: (params: {
+    baseUrl: string;
+    input: QaBusSearchMessagesInput;
+  }) => Promise<{ messages: QaBusMessage[] }>;
+  sendQaBusMessage: (params: {
+    baseUrl: string;
+    accountId: string;
+    to: string;
+    text: string;
+    senderId?: string;
+    senderName?: string;
+    threadId?: string;
+    replyToId?: string;
+    attachments?: QaBusAttachment[];
+  }) => Promise<{ message: QaBusMessage }>;
+  setQaChannelRuntime: (runtime: unknown) => void;
+};
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
@@ -62,26 +145,3 @@ export const sendQaBusMessage: FacadeModule["sendQaBusMessage"] = ((...args) =>
 
 export const setQaChannelRuntime: FacadeModule["setQaChannelRuntime"] = ((...args) =>
   loadFacadeModule().setQaChannelRuntime(...args)) as FacadeModule["setQaChannelRuntime"];
-
-export type QaBusAttachment = import("@openclaw/qa-channel/api.js").QaBusAttachment;
-export type QaBusConversation = import("@openclaw/qa-channel/api.js").QaBusConversation;
-export type QaBusConversationKind = import("@openclaw/qa-channel/api.js").QaBusConversationKind;
-export type QaBusCreateThreadInput = import("@openclaw/qa-channel/api.js").QaBusCreateThreadInput;
-export type QaBusDeleteMessageInput = import("@openclaw/qa-channel/api.js").QaBusDeleteMessageInput;
-export type QaBusEditMessageInput = import("@openclaw/qa-channel/api.js").QaBusEditMessageInput;
-export type QaBusEvent = import("@openclaw/qa-channel/api.js").QaBusEvent;
-export type QaBusInboundMessageInput =
-  import("@openclaw/qa-channel/api.js").QaBusInboundMessageInput;
-export type QaBusMessage = import("@openclaw/qa-channel/api.js").QaBusMessage;
-export type QaBusOutboundMessageInput =
-  import("@openclaw/qa-channel/api.js").QaBusOutboundMessageInput;
-export type QaBusPollInput = import("@openclaw/qa-channel/api.js").QaBusPollInput;
-export type QaBusPollResult = import("@openclaw/qa-channel/api.js").QaBusPollResult;
-export type QaBusReactToMessageInput =
-  import("@openclaw/qa-channel/api.js").QaBusReactToMessageInput;
-export type QaBusReadMessageInput = import("@openclaw/qa-channel/api.js").QaBusReadMessageInput;
-export type QaBusSearchMessagesInput =
-  import("@openclaw/qa-channel/api.js").QaBusSearchMessagesInput;
-export type QaBusStateSnapshot = import("@openclaw/qa-channel/api.js").QaBusStateSnapshot;
-export type QaBusThread = import("@openclaw/qa-channel/api.js").QaBusThread;
-export type QaBusWaitForInput = import("@openclaw/qa-channel/api.js").QaBusWaitForInput;

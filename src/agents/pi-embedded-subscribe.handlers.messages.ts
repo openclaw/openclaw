@@ -1,10 +1,15 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import {
+  parseReplyDirectives,
+  type ReplyDirectiveParseResult,
+} from "../auto-reply/reply/reply-directives.js";
+import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { coerceChatContentText } from "../shared/chat-content.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -31,46 +36,6 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
-
-const stripTrailingDirective = (text: string): string => {
-  const openIndex = text.lastIndexOf("[[");
-  if (openIndex < 0) {
-    if (text.endsWith("[")) {
-      return text.slice(0, -1);
-    }
-    return text;
-  }
-  const closeIndex = text.indexOf("]]", openIndex + 2);
-  if (closeIndex >= 0) {
-    return text;
-  }
-  return text.slice(0, openIndex);
-};
-
-const coerceText = (value: unknown): string => {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value == null) {
-    return "";
-  }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
-    return String(value);
-  }
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value) ?? "";
-    } catch {
-      return "";
-    }
-  }
-  return "";
-};
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
@@ -189,12 +154,12 @@ export function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
 }): string {
-  const text = coerceText(params.text);
+  const text = coerceChatContentText(params.text);
   const trimmed = text.trim();
   if (trimmed !== SILENT_REPLY_TOKEN) {
     return text;
   }
-  const fallback = coerceText(params.messagingToolSentTexts.at(-1)).trim();
+  const fallback = coerceChatContentText(params.messagingToolSentTexts.at(-1)).trim();
   if (!fallback) {
     return text;
   }
@@ -202,20 +167,31 @@ export function resolveSilentReplyFallbackText(params: {
 }
 
 function clearPendingToolMedia(
-  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+  state: Pick<
+    EmbeddedPiSubscribeState,
+    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+  >,
 ) {
   state.pendingToolMediaUrls = [];
   state.pendingToolAudioAsVoice = false;
+  state.pendingToolTrustedLocalMedia = false;
 }
 
 export function consumePendingToolMediaIntoReply(
-  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+  state: Pick<
+    EmbeddedPiSubscribeState,
+    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+  >,
   payload: BlockReplyPayload,
 ): BlockReplyPayload {
   if (payload.isReasoning) {
     return payload;
   }
-  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
+  if (
+    state.pendingToolMediaUrls.length === 0 &&
+    !state.pendingToolAudioAsVoice &&
+    !state.pendingToolTrustedLocalMedia
+  ) {
     return payload;
   }
   const mergedMediaUrls = Array.from(
@@ -225,15 +201,23 @@ export function consumePendingToolMediaIntoReply(
     ...payload,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
     audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
+    trustedLocalMedia: payload.trustedLocalMedia || state.pendingToolTrustedLocalMedia || undefined,
   };
   clearPendingToolMedia(state);
   return mergedPayload;
 }
 
 export function consumePendingToolMediaReply(
-  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+  state: Pick<
+    EmbeddedPiSubscribeState,
+    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+  >,
 ): BlockReplyPayload | null {
-  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
+  if (
+    state.pendingToolMediaUrls.length === 0 &&
+    !state.pendingToolAudioAsVoice &&
+    !state.pendingToolTrustedLocalMedia
+  ) {
     return null;
   }
   const payload: BlockReplyPayload = {
@@ -241,9 +225,92 @@ export function consumePendingToolMediaReply(
       ? Array.from(new Set(state.pendingToolMediaUrls))
       : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
+    trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
   };
   clearPendingToolMedia(state);
   return payload;
+}
+
+function hasReplyDirectiveMetadata(parsed: ReplyDirectiveParseResult | null | undefined): boolean {
+  return Boolean(
+    parsed &&
+    ((parsed.mediaUrls?.length ?? 0) > 0 ||
+      parsed.audioAsVoice ||
+      parsed.replyToId ||
+      parsed.replyToTag ||
+      parsed.replyToCurrent),
+  );
+}
+
+function hasReplyDirectiveMetadataResult(
+  parsed: ReplyDirectiveParseResult | null | undefined,
+): parsed is ReplyDirectiveParseResult {
+  return hasReplyDirectiveMetadata(parsed);
+}
+
+function mergeReplyDirectiveResults(
+  first: ReplyDirectiveParseResult | null | undefined,
+  second: ReplyDirectiveParseResult | null | undefined,
+): ReplyDirectiveParseResult | null {
+  if (!first) {
+    return second ?? null;
+  }
+  if (!second) {
+    return first;
+  }
+  const mediaUrls = Array.from(new Set([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]));
+  return {
+    text: `${first.text ?? ""}${second.text ?? ""}`,
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    mediaUrl: mediaUrls[0] ?? first.mediaUrl ?? second.mediaUrl,
+    replyToId: second.replyToId ?? first.replyToId,
+    replyToCurrent: first.replyToCurrent || second.replyToCurrent,
+    replyToTag: first.replyToTag || second.replyToTag,
+    audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
+    isSilent: first.isSilent || second.isSilent,
+  };
+}
+
+export function recordPendingAssistantReplyDirectives(
+  state: Pick<EmbeddedPiSubscribeState, "pendingAssistantReplyDirectives">,
+  parsed: ReplyDirectiveParseResult | null | undefined,
+) {
+  if (!hasReplyDirectiveMetadataResult(parsed)) {
+    return;
+  }
+  const current = state.pendingAssistantReplyDirectives;
+  const mediaUrls = Array.from(
+    new Set([...(current?.mediaUrls ?? []), ...(parsed.mediaUrls ?? [])]),
+  );
+  state.pendingAssistantReplyDirectives = {
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    audioAsVoice: current?.audioAsVoice || parsed?.audioAsVoice || undefined,
+    replyToId: parsed?.replyToId ?? current?.replyToId,
+    replyToTag: current?.replyToTag || parsed.replyToTag || undefined,
+    replyToCurrent: current?.replyToCurrent || parsed.replyToCurrent || undefined,
+  };
+}
+
+export function consumePendingAssistantReplyDirectivesIntoReply(
+  state: Pick<EmbeddedPiSubscribeState, "pendingAssistantReplyDirectives">,
+  payload: BlockReplyPayload,
+): BlockReplyPayload {
+  if (payload.isReasoning || !state.pendingAssistantReplyDirectives) {
+    return payload;
+  }
+  const pending = state.pendingAssistantReplyDirectives;
+  const mediaUrls = Array.from(
+    new Set([...(payload.mediaUrls ?? []), ...(pending.mediaUrls ?? [])]),
+  );
+  state.pendingAssistantReplyDirectives = undefined;
+  return {
+    ...payload,
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    audioAsVoice: payload.audioAsVoice || pending.audioAsVoice || undefined,
+    replyToId: payload.replyToId ?? pending.replyToId,
+    replyToTag: Boolean(payload.replyToTag || pending.replyToTag) || undefined,
+    replyToCurrent: Boolean(payload.replyToCurrent || pending.replyToCurrent) || undefined,
+  };
 }
 
 export function hasAssistantVisibleReply(params: {
@@ -322,6 +389,13 @@ export function handleMessageUpdate(
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
+  if (evtType === "text_end" || evtType === "done" || evtType === "error") {
+    ctx.recordAssistantUsage(assistantRecord);
+    if (evtType === "done" || evtType === "error") {
+      ctx.commitAssistantUsage();
+    }
+  }
+
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
       openReasoningStream(ctx);
@@ -397,7 +471,9 @@ export function handleMessageUpdate(
   if (deliveryPhase === "commentary") {
     return;
   }
-  const phaseAwareVisibleText = coerceText(extractAssistantVisibleText(partialAssistant)).trim();
+  const phaseAwareVisibleText = coerceChatContentText(
+    extractAssistantVisibleText(partialAssistant),
+  ).trim();
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
@@ -433,10 +509,16 @@ export function handleMessageUpdate(
       emitReasoningEnd(ctx);
     }
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
-    const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
+    const finalParsedDelta =
+      evtType === "text_end" ? ctx.consumePartialReplyDirectives("", { final: true }) : null;
+    const parsedStreamDirectives = mergeReplyDirectiveResults(parsedDelta, finalParsedDelta);
+    if (shouldUsePhaseAwareBlockReply) {
+      recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
+    }
+    const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text);
     const cleanedText = parsedFull.text;
-    const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedDelta ?? {});
-    const hasAudio = Boolean(parsedDelta?.audioAsVoice);
+    const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
+    const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
     let shouldEmit = false;
@@ -538,13 +620,14 @@ export function handleMessageEnd(
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
     return;
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = coerceText(extractAssistantText(assistantMessage));
-  const rawVisibleText = coerceText(extractAssistantVisibleText(assistantMessage));
+  const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
+  const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
@@ -564,7 +647,9 @@ export function handleMessageEnd(
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
   const trimmedText = text.trim();
-  const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
+  const parsedText = trimmedText
+    ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
+    : null;
   let cleanedText = parsedText?.text ?? "";
   let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
@@ -697,6 +782,14 @@ export function handleMessageEnd(
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
       ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
       ctx.blockChunker.reset();
+      // Final-flush the streaming directive accumulator so any partial
+      // directive tail held back by splitTrailingDirective (for example a
+      // trailing `MEDIA:<path>` that arrived without a closing newline)
+      // gets emitted here. Without this, a reply ending in a directive
+      // line whose URL is complete but un-terminated would sit in
+      // pendingTail forever and the attachment would be silently dropped
+      // on the message_end / blockReplyChunking path.
+      emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
     } else if (text !== ctx.state.lastBlockReplyText) {
       // Guard: for text_end channels, if text_end already delivered content
       // (lastBlockReplyText is set), skip this safety send. The text comparison

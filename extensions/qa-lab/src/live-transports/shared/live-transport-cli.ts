@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { collectString } from "../../cli-options.js";
+import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../providers/index.js";
 import type { QaProviderModeInput } from "../../run-config.js";
 
 export type LiveTransportQaCommandOptions = {
@@ -9,6 +10,7 @@ export type LiveTransportQaCommandOptions = {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  allowFailures?: boolean;
   scenarioIds?: string[];
   sutAccountId?: string;
   credentialSource?: string;
@@ -23,6 +25,7 @@ type LiveTransportQaCommanderOptions = {
   altModel?: string;
   scenario?: string[];
   fast?: boolean;
+  allowFailures?: boolean;
   sutAccount?: string;
   credentialSource?: string;
   credentialRole?: string;
@@ -56,6 +59,7 @@ export function mapLiveTransportQaCommanderOptions(
     primaryModel: opts.model,
     alternateModel: opts.altModel,
     fastMode: opts.fast,
+    allowFailures: opts.allowFailures,
     scenarioIds: opts.scenario,
     sutAccountId: opts.sutAccount,
     credentialSource: opts.credentialSource,
@@ -78,15 +82,16 @@ export function registerLiveTransportQaCli(params: {
     .description(params.description)
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", params.outputDirHelp)
-    .option(
-      "--provider-mode <mode>",
-      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
-      "live-frontier",
-    )
+    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectString, [])
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--allow-failures",
+      "Write artifacts without setting a failing exit code when scenarios fail",
+      false,
+    )
     .option("--sut-account <id>", params.sutAccountHelp, "sut");
 
   if (params.credentialOptions) {

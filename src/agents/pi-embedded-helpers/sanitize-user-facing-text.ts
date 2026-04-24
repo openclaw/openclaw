@@ -5,6 +5,7 @@ import {
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
+import { coerceChatContentText } from "../../shared/chat-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -33,6 +34,8 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const MODEL_CAPACITY_ERROR_USER_MESSAGE =
+  "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
@@ -59,6 +62,7 @@ const HTTP_ERROR_HINTS = [
 ];
 const RATE_LIMIT_SPECIFIC_HINT_RE =
   /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\breset\b|\bplan\b|\bquota\b/i;
+const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
 
@@ -91,6 +95,9 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
 export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
     return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
+  }
+  if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
+    return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
@@ -300,33 +307,8 @@ function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
   return false;
 }
 
-function coerceText(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value == null) {
-    return "";
-  }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
-    return String(value);
-  }
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value) ?? "";
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
 function stripFinalTagsFromText(text: unknown): string {
-  const normalized = coerceText(text);
+  const normalized = coerceChatContentText(text);
   if (!normalized) {
     return normalized;
   }
@@ -378,7 +360,7 @@ export function isLikelyHttpErrorText(raw: string): boolean {
 }
 
 export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
-  const raw = coerceText(text);
+  const raw = coerceChatContentText(text);
   if (!raw) {
     return raw;
   }

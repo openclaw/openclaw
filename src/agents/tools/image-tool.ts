@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";

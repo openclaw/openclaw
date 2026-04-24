@@ -7,11 +7,6 @@ import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
 
-export {
-  extractInstalledNpmHookPackageName,
-  extractInstalledNpmPackageName,
-} from "./plugins-install-records.js";
-
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
 
 export function resolveFileNpmSpecToLocalPath(
@@ -108,6 +103,9 @@ export function formatPluginInstallWithHookFallbackError(
   pluginError: string,
   hookError: string,
 ): string {
+  if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
+    return `${pluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
+  }
   return `${pluginError}\nAlso not a valid hook pack: ${hookError}`;
 }
 

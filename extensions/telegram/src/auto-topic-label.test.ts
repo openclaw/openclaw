@@ -2,15 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 
 const generateConversationLabel = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", () => ({
   generateConversationLabel,
 }));
 
 import {
   AUTO_TOPIC_LABEL_DEFAULT_PROMPT,
-  generateTelegramTopicLabel,
   resolveAutoTopicLabelConfig,
-} from "./auto-topic-label.js";
+} from "./auto-topic-label-config.js";
+import { generateTelegramTopicLabel } from "./auto-topic-label.js";
 
 describe("resolveAutoTopicLabelConfig", () => {
   it("returns enabled with default prompt when configs are undefined", () => {

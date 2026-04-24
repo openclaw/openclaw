@@ -10,6 +10,11 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { BootstrapMode } from "./bootstrap-mode.js";
+import {
+  buildFullBootstrapPromptLines,
+  buildLimitedBootstrapPromptLines,
+} from "./bootstrap-prompt.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
@@ -181,6 +186,34 @@ function buildMemorySection(params: {
   });
 }
 
+export function buildAgentUserPromptPrefix(params: {
+  bootstrapMode?: BootstrapMode;
+}): string | undefined {
+  if (!params.bootstrapMode || params.bootstrapMode === "none") {
+    return undefined;
+  }
+  if (params.bootstrapMode === "limited") {
+    return [
+      "[Bootstrap pending]",
+      ...buildLimitedBootstrapPromptLines({
+        introLine:
+          "Bootstrap is still pending for this workspace, but this run cannot safely complete the full BOOTSTRAP.md workflow here.",
+        nextStepLine:
+          "Typical next steps include switching to a primary interactive run with normal workspace access or having the user complete the canonical BOOTSTRAP.md deletion afterward.",
+      }),
+    ].join("\n");
+  }
+  return [
+    "[Bootstrap pending]",
+    ...buildFullBootstrapPromptLines({
+      readLine:
+        "Please read BOOTSTRAP.md from the workspace and follow it before replying normally.",
+      firstReplyLine:
+        "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md, not a generic greeting.",
+    }),
+  ].join("\n");
+}
+
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
   if (!ownerLine || isMinimal) {
     return [];
@@ -269,10 +302,13 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   }
   return [
     "## Execution Bias",
-    "If the user asks you to do the work, start doing it in the same turn.",
-    "Use a real tool call or concrete action first when the task is actionable; do not stop at a plan or promise-to-act reply.",
-    "Commentary-only turns are incomplete when tools are available and the next action is clear.",
-    "If the work will take multiple steps or a while to finish, send one short progress update before or while acting.",
+    "- Actionable request: act in this turn.",
+    "- Non-final turn: use tools to advance, or ask for the one missing decision that blocks safe progress.",
+    "- Continue until done or genuinely blocked; do not finish with a plan/promise when tools can move it forward.",
+    "- Weak/empty tool result: vary query, path, command, or source before concluding.",
+    "- Mutable facts need live checks: files, git, clocks, versions, services, processes, package state.",
+    "- Final answer needs evidence: test/build/lint, screenshot, inspection, tool output, or a named blocker.",
+    "- Longer work: brief progress update, then keep going; use background work or sub-agents when they fit.",
     "",
   ];
 }
@@ -307,11 +343,20 @@ function buildMessagingSection(params: {
   if (params.isMinimal) {
     return [];
   }
+  const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
+  const hasSubagents = params.availableTools.has("subagents");
+  const subagentOrchestrationGuidance = hasSessionsSpawn
+    ? hasSubagents
+      ? '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.'
+      : '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.'
+    : hasSubagents
+      ? "- Sub-agent orchestration → use `subagents(action=list|steer|kill)` to manage already-spawned children."
+      : "";
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
+    subagentOrchestrationGuidance,
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
@@ -319,7 +364,7 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
-          "- For `action=send`, include `to` and `message`.",
+          "- For `action=send`, include `target` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
@@ -456,8 +501,8 @@ export function buildAgentSystemPrompt(params: {
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
-      : "Spawn an isolated sub-agent session",
+      ? 'Spawn a sub-agent or ACP coding session; defaults to isolated, native subagents may use context="fork" when current transcript context is required (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
+      : 'Spawn an isolated sub-agent session; use context="fork" only when current transcript context is required',
     subagents: "List, steer, or kill sub-agent runs for this requester session",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
@@ -657,9 +702,11 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    'Sub-agents start isolated by default. Use `sessions_spawn` with `context:"fork"` only when the child needs the current transcript context; otherwise omit `context` or use `context:"isolated"`.',
     ...(acpHarnessSpawnAllowed
       ? [
-          'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          'For requests like "do this in claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          "For Codex conversation binding/control, prefer the native Codex app-server plugin path (`/codex bind`, `/codex threads`, `/codex resume`). Use ACP for Codex only when the user explicitly asks for ACP/`/acp`, or for background child sessions where native Codex runtime spawn is not exposed.",
           'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
           "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',

@@ -7,8 +7,6 @@ read_when:
 title: "Pairing"
 ---
 
-# Pairing
-
 “Pairing” is OpenClaw’s explicit **owner approval** step.
 It is used in two places:
 
@@ -99,6 +97,12 @@ openclaw devices reject <requestId>
 If the same device retries with different auth details (for example different
 role/scopes/public key), the previous pending request is superseded and a new
 `requestId` is created.
+
+Important: an already paired device does not get broader access silently. If it
+reconnects asking for more scopes or a broader role, OpenClaw keeps the
+existing approval as-is and creates a fresh pending upgrade request. Use
+`openclaw devices list` to compare the currently approved access with the newly
+requested access before you approve.
 
 ### Node pairing state storage
 

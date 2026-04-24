@@ -100,6 +100,36 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("defaults Claude CLI provider api through plugin config normalization", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "claude-cli",
+        providerConfig: {
+          models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+        },
+      } as never),
+    ).toMatchObject({
+      api: "anthropic-messages",
+    });
+  });
+
+  it("does not default non-Anthropic provider api through plugin config normalization", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const providerConfig = {
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+    };
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "openai-codex",
+        providerConfig,
+      } as never),
+    ).toBe(providerConfig);
+  });
+
   it("applies Anthropic pruning defaults through plugin hooks", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -193,13 +223,66 @@ describe("anthropic provider replay hooks", () => {
       id: "claude-opus-4-7",
       api: "anthropic-messages",
       reasoning: true,
+      contextWindow: 1_048_576,
+      contextTokens: 1_048_576,
     });
     expect(
-      provider.resolveDefaultThinkingLevel?.({
+      provider.resolveThinkingProfile?.({
         provider: "anthropic",
         modelId: "claude-opus-4-7",
       } as never),
-    ).toBe("adaptive");
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+      defaultLevel: "off",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+      } as never),
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "adaptive" }]),
+      defaultLevel: "adaptive",
+    });
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "anthropic",
+          modelId: "claude-opus-4-6",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
+    ).toBe(false);
+  });
+
+  it("normalizes exact claude opus 4.7 variants to 1M context", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    for (const [runtimeProvider, modelId] of [
+      ["anthropic", "claude-opus-4-7"],
+      ["claude-cli", "claude-opus-4.7-20260219"],
+    ] as const) {
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: runtimeProvider,
+          modelId,
+          model: {
+            id: modelId,
+            name: "Claude Opus 4.7",
+            provider: runtimeProvider,
+            api: "anthropic-messages",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200_000,
+            contextTokens: 200_000,
+            maxTokens: 32_000,
+          },
+        } as never),
+      ).toMatchObject({
+        contextWindow: 1_048_576,
+        contextTokens: 1_048_576,
+      });
+    }
   });
 
   it("resolves claude-cli synthetic oauth auth", async () => {

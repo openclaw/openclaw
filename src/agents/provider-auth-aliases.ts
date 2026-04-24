@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  isWorkspacePluginAllowedByConfig,
+  normalizePluginConfigId,
+} from "../plugins/plugin-config-trust.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
@@ -16,8 +19,6 @@ type ProviderAuthAliasCandidate = {
   origin?: PluginOrigin;
   target: string;
 };
-
-type PluginEntriesConfig = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>;
 
 const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
@@ -33,54 +34,16 @@ function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined
   return PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
 }
 
-function normalizePluginConfigId(id: unknown): string {
-  return normalizeOptionalLowercaseString(id) ?? "";
-}
-
-function hasPluginId(list: unknown, pluginId: string): boolean {
-  return Array.isArray(list) && list.some((entry) => normalizePluginConfigId(entry) === pluginId);
-}
-
-function findPluginEntry(
-  entries: PluginEntriesConfig | undefined,
-  pluginId: string,
-): { enabled?: boolean } | undefined {
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(entries)) {
-    if (normalizePluginConfigId(key) !== pluginId) {
-      continue;
-    }
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as { enabled?: boolean })
-      : {};
-  }
-  return undefined;
-}
-
 function isWorkspacePluginTrustedForAuthAliases(
   plugin: PluginManifestRecord,
   config: OpenClawConfig | undefined,
 ): boolean {
-  const pluginsConfig = config?.plugins;
-  if (pluginsConfig?.enabled === false) {
-    return false;
-  }
-
-  const pluginId = normalizePluginConfigId(plugin.id);
-  if (!pluginId || hasPluginId(pluginsConfig?.deny, pluginId)) {
-    return false;
-  }
-
-  const entry = findPluginEntry(pluginsConfig?.entries, pluginId);
-  if (entry?.enabled === false) {
-    return false;
-  }
-  if (entry?.enabled === true || hasPluginId(pluginsConfig?.allow, pluginId)) {
-    return true;
-  }
-  return normalizePluginConfigId(pluginsConfig?.slots?.contextEngine) === pluginId;
+  return isWorkspacePluginAllowedByConfig({
+    config,
+    isImplicitlyAllowed: (pluginId) =>
+      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+    plugin,
+  });
 }
 
 function shouldUsePluginAuthAliases(
@@ -91,6 +54,30 @@ function shouldUsePluginAuthAliases(
     return true;
   }
   return isWorkspacePluginTrustedForAuthAliases(plugin, params?.config);
+}
+
+function setPreferredAlias(params: {
+  aliases: Map<string, ProviderAuthAliasCandidate>;
+  alias: string;
+  origin?: PluginOrigin;
+  target: string;
+}) {
+  const normalizedAlias = normalizeProviderId(params.alias);
+  const normalizedTarget = normalizeProviderId(params.target);
+  if (!normalizedAlias || !normalizedTarget) {
+    return;
+  }
+  const existing = params.aliases.get(normalizedAlias);
+  if (
+    !existing ||
+    resolveProviderAuthAliasOriginPriority(params.origin) <
+      resolveProviderAuthAliasOriginPriority(existing.origin)
+  ) {
+    params.aliases.set(normalizedAlias, {
+      origin: params.origin,
+      target: normalizedTarget,
+    });
+  }
 }
 
 export function resolveProviderAuthAliasMap(
@@ -110,20 +97,21 @@ export function resolveProviderAuthAliasMap(
     for (const [alias, target] of Object.entries(plugin.providerAuthAliases ?? {}).toSorted(
       ([left], [right]) => left.localeCompare(right),
     )) {
-      const normalizedAlias = normalizeProviderId(alias);
-      const normalizedTarget = normalizeProviderId(target);
-      if (normalizedAlias && normalizedTarget) {
-        const existing = preferredAliases.get(normalizedAlias);
-        if (
-          !existing ||
-          resolveProviderAuthAliasOriginPriority(plugin.origin) <
-            resolveProviderAuthAliasOriginPriority(existing.origin)
-        ) {
-          preferredAliases.set(normalizedAlias, {
-            origin: plugin.origin,
-            target: normalizedTarget,
-          });
-        }
+      setPreferredAlias({
+        aliases: preferredAliases,
+        alias,
+        origin: plugin.origin,
+        target,
+      });
+    }
+    for (const choice of plugin.providerAuthChoices ?? []) {
+      for (const deprecatedChoiceId of choice.deprecatedChoiceIds ?? []) {
+        setPreferredAlias({
+          aliases: preferredAliases,
+          alias: deprecatedChoiceId,
+          origin: plugin.origin,
+          target: choice.provider,
+        });
       }
     }
   }

@@ -10,6 +10,7 @@ import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { A2UI_PATH, CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
+import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -77,12 +78,12 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
-let bundledChannelsModulePromise:
-  | Promise<typeof import("../channels/plugins/bundled.js")>
-  | undefined;
 let identityAvatarModulePromise: Promise<typeof import("../agents/identity-avatar.js")> | undefined;
 let controlUiModulePromise: Promise<typeof import("./control-ui.js")> | undefined;
 let embeddingsHttpModulePromise: Promise<typeof import("./embeddings-http.js")> | undefined;
+let managedImageAttachmentsModulePromise:
+  | Promise<typeof import("./managed-image-attachments.js")>
+  | undefined;
 let modelsHttpModulePromise: Promise<typeof import("./models-http.js")> | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
@@ -91,11 +92,6 @@ let sessionHistoryHttpModulePromise:
   | undefined;
 let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js")> | undefined;
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
-
-function getBundledChannelsModule() {
-  bundledChannelsModulePromise ??= import("../channels/plugins/bundled.js");
-  return bundledChannelsModulePromise;
-}
 
 function getIdentityAvatarModule() {
   identityAvatarModulePromise ??= import("../agents/identity-avatar.js");
@@ -110,6 +106,11 @@ function getControlUiModule() {
 function getEmbeddingsHttpModule() {
   embeddingsHttpModulePromise ??= import("./embeddings-http.js");
   return embeddingsHttpModulePromise;
+}
+
+function getManagedImageAttachmentsModule() {
+  managedImageAttachmentsModulePromise ??= import("./managed-image-attachments.js");
+  return managedImageAttachmentsModulePromise;
 }
 
 function getModelsHttpModule() {
@@ -202,21 +203,12 @@ async function resolvePluginGatewayAuthBypassPaths(
   if (!configuredChannels || Object.keys(configuredChannels).length === 0) {
     return paths;
   }
-  const { getBundledChannelPlugin, getBundledChannelSetupPlugin } =
-    await getBundledChannelsModule();
   for (const channelId of Object.keys(configuredChannels)) {
-    const setupPlugin = getBundledChannelSetupPlugin(channelId);
-    const plugin = setupPlugin?.gateway?.resolveGatewayAuthBypassPaths
-      ? setupPlugin
-      : getBundledChannelPlugin(channelId);
-    if (!plugin) {
-      continue;
-    }
-    for (const path of plugin.gateway?.resolveGatewayAuthBypassPaths?.({ cfg: configSnapshot }) ??
-      []) {
-      if (typeof path === "string" && path.trim()) {
-        paths.add(path.trim());
-      }
+    for (const path of resolveBundledChannelGatewayAuthBypassPaths({
+      channelId,
+      cfg: configSnapshot,
+    })) {
+      paths.add(path);
     }
   }
   return paths;
@@ -773,7 +765,8 @@ export function createHooksRequestHandler(
           }
           const sessionKey = resolveHookSessionKey({
             hooksConfig,
-            source: "mapping",
+            source:
+              mapped.action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
             sessionKey: mapped.action.sessionKey,
           });
           if (!sessionKey.ok) {
@@ -991,6 +984,7 @@ export function createGatewayHttpServer(opts: {
           run: async () =>
             (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
               auth: resolvedAuth,
+              getResolvedAuth,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -1075,6 +1069,21 @@ export function createGatewayHttpServer(opts: {
         }),
       );
 
+      requestStages.push({
+        name: "chat-managed-image-media",
+        run: async () =>
+          (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
+            req,
+            res,
+            {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            },
+          ),
+      });
+
       if (controlUiEnabled) {
         requestStages.push({
           name: "control-ui-assistant-media",
@@ -1096,6 +1105,10 @@ export function createGatewayHttpServer(opts: {
             const { resolveAgentAvatar } = await getIdentityAvatarModule();
             return handleControlUiAvatarRequest(req, res, {
               basePath: controlUiBasePath,
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
               resolveAvatar: (agentId) =>
                 resolveAgentAvatar(configSnapshot, agentId, { includeUiOverride: true }),
             });
@@ -1109,6 +1122,10 @@ export function createGatewayHttpServer(opts: {
               config: configSnapshot,
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
               root: controlUiRoot,
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
             }),
         });
       }
@@ -1155,6 +1172,8 @@ export function attachGatewayUpgradeHandler(opts: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional logger for error diagnostics. */
+  log?: { warn: (msg: string) => void };
 }) {
   const {
     httpServer,
@@ -1164,6 +1183,7 @@ export function attachGatewayUpgradeHandler(opts: {
     preauthConnectionBudget,
     resolvedAuth,
     rateLimiter,
+    log,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
@@ -1266,7 +1286,10 @@ export function attachGatewayUpgradeHandler(opts: {
         releaseUpgradeBudget();
         throw new Error("gateway websocket upgrade failed");
       }
-    })().catch(() => {
+    })().catch((err) => {
+      const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
       socket.destroy();
     });
   });

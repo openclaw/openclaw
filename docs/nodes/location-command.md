@@ -3,10 +3,8 @@ summary: "Location command for nodes (location.get), permission modes, and Andro
 read_when:
   - Adding location node support or permissions UI
   - Designing Android location permissions or foreground behavior
-title: "Location Command"
+title: "Location command"
 ---
-
-# Location command (nodes)
 
 ## TL;DR
 
@@ -96,3 +94,9 @@ Errors (stable codes):
 - Off: “Location sharing is disabled.”
 - While Using: “Only when OpenClaw is open.”
 - Precise: “Use precise GPS location. Toggle off to share approximate location.”
+
+## Related
+
+- [Channel location parsing](/channels/location)
+- [Camera capture](/nodes/camera)
+- [Talk mode](/nodes/talk)

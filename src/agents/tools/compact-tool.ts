@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {

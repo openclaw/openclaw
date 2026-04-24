@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 const { createMatrixQaClient } = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
@@ -24,12 +27,68 @@ import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
 } from "../../shared/live-transport-scenarios.js";
+import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES } from "./scenario-media-fixtures.js";
 import {
   __testing as scenarioTesting,
   MATRIX_QA_SCENARIOS,
   runMatrixQaScenario,
+  type MatrixQaScenarioContext,
 } from "./scenarios.js";
+
+const MATRIX_SUBAGENT_MISSING_HOOK_ERROR =
+  "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.";
+const MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS = 300_000;
+
+function matrixQaScenarioContext(): MatrixQaScenarioContext {
+  return {
+    baseUrl: "http://127.0.0.1:28008/",
+    canary: undefined,
+    driverAccessToken: "driver-token",
+    driverUserId: "@driver:matrix-qa.test",
+    observedEvents: [],
+    observerAccessToken: "observer-token",
+    observerUserId: "@observer:matrix-qa.test",
+    roomId: "!main:matrix-qa.test",
+    restartGateway: undefined,
+    syncState: {},
+    sutAccessToken: "sut-token",
+    sutUserId: "@sut:matrix-qa.test",
+    timeoutMs: 8_000,
+    topology: {
+      defaultRoomId: "!main:matrix-qa.test",
+      defaultRoomKey: "main",
+      rooms: [],
+    },
+  };
+}
+
+async function writeTestJsonFile(pathname: string, value: unknown) {
+  await writeFile(pathname, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function matrixSyncStoreFixture(nextBatch: string) {
+  return {
+    version: 1,
+    cleanShutdown: true,
+    savedSync: {
+      nextBatch,
+      accountData: [],
+      roomsData: {
+        join: {},
+        invite: {},
+        leave: {},
+        knock: {},
+      },
+    },
+  };
+}
+
+function matrixQaE2eeRoomKey(
+  scenarioId: Parameters<typeof scenarioTesting.buildMatrixQaE2eeScenarioRoomKey>[0],
+) {
+  return scenarioTesting.buildMatrixQaE2eeScenarioRoomKey(scenarioId);
+}
 
 describe("matrix live qa scenarios", () => {
   beforeEach(() => {
@@ -45,6 +104,7 @@ describe("matrix live qa scenarios", () => {
       "matrix-thread-root-preservation",
       "matrix-thread-nested-reply-shape",
       "matrix-thread-isolation",
+      "matrix-subagent-thread-spawn",
       "matrix-top-level-reply-shape",
       "matrix-room-thread-reply-override",
       "matrix-room-quiet-streaming-preview",
@@ -67,12 +127,17 @@ describe("matrix live qa scenarios", () => {
       "matrix-reaction-redaction-observed",
       "matrix-restart-resume",
       "matrix-post-restart-room-continue",
+      "matrix-initial-catchup-then-incremental",
+      "matrix-restart-replay-dedupe",
+      "matrix-stale-sync-replay-dedupe",
       "matrix-room-membership-loss",
       "matrix-homeserver-restart-resume",
       "matrix-mention-gating",
+      "matrix-mxid-prefixed-command-block",
       "matrix-mention-metadata-spoof-block",
       "matrix-observer-allowlist-override",
       "matrix-allowlist-block",
+      "matrix-allowlist-hot-reload",
       "matrix-multi-actor-ordering",
       "matrix-inbound-edit-ignored",
       "matrix-inbound-edit-no-duplicate-trigger",
@@ -96,6 +161,22 @@ describe("matrix live qa scenarios", () => {
     expect(
       scenarioTesting.buildMentionPrompt("@sut:matrix-qa.test", "MATRIX_QA_CANARY_TOKEN"),
     ).toBe("@sut:matrix-qa.test reply with only this exact marker: MATRIX_QA_CANARY_TOKEN");
+  });
+
+  it("keeps live Matrix model and E2EE waits above observed CI latency", () => {
+    const scenarios = new Map(MATRIX_QA_SCENARIOS.map((scenario) => [scenario.id, scenario]));
+
+    expect(scenarios.get("matrix-subagent-thread-spawn")?.timeoutMs).toBeGreaterThanOrEqual(
+      120_000,
+    );
+    expect(scenarios.get("matrix-room-generated-image-delivery")?.timeoutMs).toBeGreaterThanOrEqual(
+      180_000,
+    );
+    expect(scenarios.get("matrix-e2ee-restart-resume")?.timeoutMs).toBeGreaterThanOrEqual(150_000);
+    expect(scenarios.get("matrix-e2ee-artifact-redaction")?.timeoutMs).toBeGreaterThanOrEqual(
+      150_000,
+    );
+    expect(scenarios.get("matrix-e2ee-media-image")?.timeoutMs).toBeGreaterThanOrEqual(180_000);
   });
 
   it("requires Matrix replies to match the exact marker body", () => {
@@ -256,6 +337,43 @@ describe("matrix live qa scenarios", () => {
         ],
       }),
     ).toThrow('Matrix QA topology room "ops" has conflicting definitions');
+  });
+
+  it("provisions isolated encrypted rooms for each E2EE scenario", () => {
+    const topology = scenarioTesting.buildMatrixQaTopologyForScenarios({
+      defaultRoomName: "OpenClaw Matrix QA run",
+      scenarios: [
+        MATRIX_QA_SCENARIOS.find((scenario) => scenario.id === "matrix-e2ee-basic-reply")!,
+        MATRIX_QA_SCENARIOS.find((scenario) => scenario.id === "matrix-e2ee-thread-follow-up")!,
+      ],
+    });
+
+    expect(topology.rooms).toEqual([
+      {
+        encrypted: false,
+        key: "main",
+        kind: "group",
+        members: ["driver", "observer", "sut"],
+        name: "OpenClaw Matrix QA run",
+        requireMention: true,
+      },
+      {
+        encrypted: true,
+        key: "e2ee-basic-reply",
+        kind: "group",
+        members: ["driver", "observer", "sut"],
+        name: "Matrix QA E2EE Basic Reply Room",
+        requireMention: true,
+      },
+      {
+        encrypted: true,
+        key: "e2ee-thread-follow-up",
+        kind: "group",
+        members: ["driver", "observer", "sut"],
+        name: "Matrix QA E2EE Thread Follow-up Room",
+        requireMention: true,
+      },
+    ]);
   });
 
   it("resolves scenario room ids from provisioned topology keys", () => {
@@ -443,6 +561,579 @@ describe("matrix live qa scenarios", () => {
     });
   });
 
+  it("blocks MXID-prefixed Matrix control commands from non-allowlisted observers", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("observer-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$observer-command-trigger");
+    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async (params) => {
+      expect(params.since).toBe("observer-sync-start");
+      return {
+        matched: false,
+        since: "observer-sync-next",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-mxid-prefixed-command-block",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        actorUserId: "@observer:matrix-qa.test",
+        driverEventId: "$observer-command-trigger",
+      },
+    });
+
+    expect(createMatrixQaClient).toHaveBeenCalledWith({
+      accessToken: "observer-token",
+      baseUrl: "http://127.0.0.1:28008/",
+    });
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: "@sut:matrix-qa.test /new",
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+    expect(waitForOptionalRoomEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roomId: "!main:matrix-qa.test",
+      }),
+    );
+  });
+
+  it("ignores stale Matrix SUT replies before a no-reply trigger", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("observer-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$observer-command-trigger");
+    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async (params) => {
+      expect(
+        params.predicate({
+          eventId: "$previous-reply",
+          kind: "message",
+          relatesTo: {
+            eventId: "$previous-trigger",
+            inReplyToId: "$previous-trigger",
+            isFallingBack: true,
+            relType: "m.thread",
+          },
+          roomId: "!main:matrix-qa.test",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+        }),
+      ).toBe(false);
+      expect(
+        params.predicate({
+          eventId: "$observer-command-trigger",
+          kind: "message",
+          roomId: "!main:matrix-qa.test",
+          sender: "@observer:matrix-qa.test",
+          type: "m.room.message",
+        }),
+      ).toBe(false);
+      expect(
+        params.predicate({
+          eventId: "$current-reply",
+          kind: "message",
+          relatesTo: {
+            eventId: "$observer-command-trigger",
+            inReplyToId: "$observer-command-trigger",
+            isFallingBack: true,
+            relType: "m.thread",
+          },
+          roomId: "!main:matrix-qa.test",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+        }),
+      ).toBe(true);
+      return {
+        matched: false,
+        since: "observer-sync-next",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-mxid-prefixed-command-block",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        driverEventId: "$observer-command-trigger",
+      },
+    });
+  });
+
+  it("hot-reloads group allowlist removals inside one running Matrix gateway", async () => {
+    const patchGatewayConfig = vi.fn(async () => {});
+    const primeRoom = vi.fn().mockResolvedValue("sync-start");
+    const sendTextMessage = vi
+      .fn()
+      .mockResolvedValueOnce("$group-accepted")
+      .mockResolvedValueOnce("$group-removed");
+    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async (params) => ({
+      matched: false,
+      since: `${params.roomId}:no-reply`,
+    }));
+    const waitForRoomEvent = vi.fn().mockImplementation(async (params) => {
+      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const token = sentBody
+        .replace("@sut:matrix-qa.test reply with only this exact marker: ", "")
+        .replace("reply with only this exact marker: ", "");
+      return {
+        event: {
+          kind: "message",
+          roomId: params.roomId,
+          eventId: "$group-reply",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: token,
+        },
+        since: `${params.roomId}:reply`,
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-allowlist-hot-reload",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        ...matrixQaScenarioContext(),
+        patchGatewayConfig,
+        topology: {
+          defaultRoomId: "!main:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: "main",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Main",
+              requireMention: true,
+              roomId: "!main:matrix-qa.test",
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        secondDriverEventId: "$group-removed",
+        firstReply: {
+          eventId: "$group-reply",
+          tokenMatched: true,
+        },
+      },
+    });
+
+    expect(patchGatewayConfig).toHaveBeenCalledWith(
+      {
+        channels: {
+          matrix: {
+            accounts: {
+              sut: {
+                groupAllowFrom: ["@driver:matrix-qa.test"],
+              },
+            },
+          },
+        },
+        gateway: {
+          reload: {
+            mode: "off",
+          },
+        },
+      },
+      {
+        restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
+      },
+    );
+    expect(sendTextMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!main:matrix-qa.test",
+      }),
+    );
+    expect(sendTextMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!main:matrix-qa.test",
+      }),
+    );
+  });
+
+  it("queues a Matrix trigger during restart before proving incremental sync continues", async () => {
+    const callOrder: string[] = [];
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockImplementation(async (params) => {
+      callOrder.push(`send:${String(params.body).includes("CATCHUP") ? "catchup" : "incremental"}`);
+      return String(params.body).includes("CATCHUP") ? "$catchup-trigger" : "$incremental-trigger";
+    });
+    const waitForRoomEvent = vi.fn().mockImplementation(async () => {
+      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
+      callOrder.push(`wait:${token.includes("CATCHUP") ? "catchup" : "incremental"}`);
+      return {
+        event: {
+          kind: "message",
+          roomId: "!restart:matrix-qa.test",
+          eventId: token.includes("CATCHUP") ? "$catchup-reply" : "$incremental-reply",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: token,
+        },
+        since: token.includes("CATCHUP")
+          ? "driver-sync-after-catchup"
+          : "driver-sync-after-incremental",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-initial-catchup-then-incremental",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        baseUrl: "http://127.0.0.1:28008/",
+        canary: undefined,
+        driverAccessToken: "driver-token",
+        driverUserId: "@driver:matrix-qa.test",
+        observedEvents: [],
+        observerAccessToken: "observer-token",
+        observerUserId: "@observer:matrix-qa.test",
+        restartGatewayWithQueuedMessage: async (queueMessage) => {
+          callOrder.push("restart");
+          await queueMessage();
+          callOrder.push("ready");
+        },
+        roomId: "!room:matrix-qa.test",
+        syncState: {},
+        sutAccessToken: "sut-token",
+        sutUserId: "@sut:matrix-qa.test",
+        timeoutMs: 8_000,
+        topology: {
+          defaultRoomId: "!room:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: "restart",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Restart room",
+              requireMention: true,
+              roomId: "!restart:matrix-qa.test",
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        catchupDriverEventId: "$catchup-trigger",
+        catchupReply: {
+          eventId: "$catchup-reply",
+          tokenMatched: true,
+        },
+        incrementalDriverEventId: "$incremental-trigger",
+        incrementalReply: {
+          eventId: "$incremental-reply",
+          tokenMatched: true,
+        },
+      },
+    });
+
+    expect(callOrder).toEqual([
+      "restart",
+      "send:catchup",
+      "ready",
+      "wait:catchup",
+      "send:incremental",
+      "wait:incremental",
+    ]);
+  });
+
+  it("fails if a handled Matrix event is redelivered after gateway restart", async () => {
+    const callOrder: string[] = [];
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockImplementation(async (params) => {
+      const body = String(params.body);
+      const kind = body.includes("REPLAY_DEDUPE_FRESH") ? "fresh" : "first";
+      callOrder.push(`send:${kind}`);
+      return kind === "fresh" ? "$fresh-trigger" : "$first-trigger";
+    });
+    const waitForRoomEvent = vi.fn().mockImplementation(async () => {
+      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
+      const kind = token.includes("REPLAY_DEDUPE_FRESH") ? "fresh" : "first";
+      callOrder.push(`wait:${kind}`);
+      return {
+        event: {
+          kind: "message",
+          roomId: "!restart:matrix-qa.test",
+          eventId: kind === "fresh" ? "$fresh-reply" : "$first-reply",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: token,
+        },
+        since: kind === "fresh" ? "driver-sync-after-fresh" : "driver-sync-after-first",
+      };
+    });
+    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async () => {
+      callOrder.push("wait:no-duplicate");
+      return {
+        matched: false,
+        since: "driver-sync-after-no-duplicate-window",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForOptionalRoomEvent,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-restart-replay-dedupe",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        ...matrixQaScenarioContext(),
+        restartGateway: async () => {
+          callOrder.push("restart");
+        },
+        roomId: "!room:matrix-qa.test",
+        topology: {
+          defaultRoomId: "!room:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: "restart",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Restart room",
+              requireMention: true,
+              roomId: "!restart:matrix-qa.test",
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        duplicateWindowMs: 8000,
+        firstDriverEventId: "$first-trigger",
+        firstReply: {
+          eventId: "$first-reply",
+          tokenMatched: true,
+        },
+        freshDriverEventId: "$fresh-trigger",
+        freshReply: {
+          eventId: "$fresh-reply",
+          tokenMatched: true,
+        },
+      },
+    });
+
+    expect(callOrder).toEqual([
+      "send:first",
+      "wait:first",
+      "restart",
+      "wait:no-duplicate",
+      "send:fresh",
+      "wait:fresh",
+    ]);
+    expect(waitForOptionalRoomEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roomId: "!restart:matrix-qa.test",
+        timeoutMs: 8000,
+      }),
+    );
+  });
+
+  it("forces a stale persisted Matrix sync cursor and expects inbound dedupe to absorb replay", async () => {
+    const stateRoot = await mkdtemp(path.join(os.tmpdir(), "matrix-stale-sync-"));
+    try {
+      const accountDir = path.join(stateRoot, "matrix", "accounts", "sut", "server", "token");
+      const staleSyncRoomId = "!stale-sync:matrix-qa.test";
+      const syncStorePath = path.join(accountDir, "bot-storage.json");
+      const dedupeStorePath = path.join(accountDir, "inbound-dedupe.json");
+      await mkdir(accountDir, { recursive: true });
+      await writeTestJsonFile(path.join(accountDir, "storage-meta.json"), {
+        accountId: "sut",
+        userId: "@sut:matrix-qa.test",
+      });
+      await writeTestJsonFile(syncStorePath, matrixSyncStoreFixture("driver-sync-start"));
+
+      const callOrder: string[] = [];
+      const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+      const sendTextMessage = vi.fn().mockImplementation(async (params) => {
+        const body = String(params.body);
+        const kind = body.includes("STALE_SYNC_DEDUPE_FRESH") ? "fresh" : "first";
+        callOrder.push(`send:${kind}`);
+        return kind === "fresh" ? "$fresh-trigger" : "$first-trigger";
+      });
+      const waitForRoomEvent = vi.fn().mockImplementation(async () => {
+        const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+        const token = sentBody.replace(
+          "@sut:matrix-qa.test reply with only this exact marker: ",
+          "",
+        );
+        const kind = token.includes("STALE_SYNC_DEDUPE_FRESH") ? "fresh" : "first";
+        callOrder.push(`wait:${kind}`);
+        if (kind === "first") {
+          await writeTestJsonFile(dedupeStorePath, {
+            version: 1,
+            entries: [
+              {
+                key: `${staleSyncRoomId}|$first-trigger`,
+                ts: Date.now(),
+              },
+            ],
+          });
+        }
+        return {
+          event: {
+            kind: "message",
+            roomId: staleSyncRoomId,
+            eventId: kind === "fresh" ? "$fresh-reply" : "$first-reply",
+            sender: "@sut:matrix-qa.test",
+            type: "m.room.message",
+            body: token,
+          },
+          since: kind === "fresh" ? "driver-sync-after-fresh" : "driver-sync-after-first",
+        };
+      });
+      const waitForOptionalRoomEvent = vi.fn().mockImplementation(async () => {
+        callOrder.push("wait:no-duplicate");
+        return {
+          matched: false,
+          since: "driver-sync-after-no-duplicate-window",
+        };
+      });
+
+      createMatrixQaClient.mockReturnValue({
+        primeRoom,
+        sendTextMessage,
+        waitForOptionalRoomEvent,
+        waitForRoomEvent,
+      });
+
+      const scenario = MATRIX_QA_SCENARIOS.find(
+        (entry) => entry.id === "matrix-stale-sync-replay-dedupe",
+      );
+      expect(scenario).toBeDefined();
+
+      await expect(
+        runMatrixQaScenario(scenario!, {
+          ...matrixQaScenarioContext(),
+          gatewayStateDir: stateRoot,
+          restartGatewayAfterStateMutation: async (mutateState) => {
+            callOrder.push("hard-restart");
+            await writeTestJsonFile(
+              syncStorePath,
+              matrixSyncStoreFixture("driver-sync-after-first"),
+            );
+            await mutateState({ stateDir: stateRoot });
+            const persisted = JSON.parse(await readFile(syncStorePath, "utf8")) as {
+              savedSync?: { nextBatch?: string };
+            };
+            expect(persisted.savedSync?.nextBatch).toBe("driver-sync-start");
+          },
+          roomId: "!room:matrix-qa.test",
+          sutAccountId: "sut",
+          topology: {
+            defaultRoomId: "!room:matrix-qa.test",
+            defaultRoomKey: "main",
+            rooms: [
+              {
+                key: "stale-sync",
+                kind: "group",
+                memberRoles: ["driver", "observer", "sut"],
+                memberUserIds: [
+                  "@driver:matrix-qa.test",
+                  "@observer:matrix-qa.test",
+                  "@sut:matrix-qa.test",
+                ],
+                name: "Stale sync room",
+                requireMention: true,
+                roomId: staleSyncRoomId,
+              },
+            ],
+          },
+        }),
+      ).resolves.toMatchObject({
+        artifacts: {
+          dedupeCommitObserved: true,
+          duplicateWindowMs: 8000,
+          firstDriverEventId: "$first-trigger",
+          firstReply: {
+            eventId: "$first-reply",
+            tokenMatched: true,
+          },
+          freshDriverEventId: "$fresh-trigger",
+          freshReply: {
+            eventId: "$fresh-reply",
+            tokenMatched: true,
+          },
+          restartSignal: "hard-restart",
+          staleSyncCursor: "driver-sync-start",
+        },
+      });
+
+      expect(callOrder).toEqual([
+        "send:first",
+        "wait:first",
+        "hard-restart",
+        "wait:no-duplicate",
+        "send:fresh",
+        "wait:fresh",
+      ]);
+    } finally {
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("runs the DM scenario against the provisioned DM room without a mention", async () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$dm-trigger");
@@ -565,6 +1256,70 @@ describe("matrix live qa scenarios", () => {
     );
     expect(scenario).toBeDefined();
 
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        driverEventId: "$room-thread-trigger",
+        reply: {
+          relatesTo: {
+            relType: "m.thread",
+            eventId: "$room-thread-trigger",
+          },
+        },
+      },
+    });
+  });
+
+  it("runs the subagent thread spawn scenario against a child thread", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$subagent-spawn-trigger");
+    const waitForRoomEvent = vi
+      .fn()
+      .mockImplementationOnce(async () => ({
+        event: {
+          kind: "message",
+          roomId: "!main:matrix-qa.test",
+          eventId: "$subagent-thread-root",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: "qa session active. Messages here go directly to this session.",
+        },
+        since: "driver-sync-intro",
+      }))
+      .mockImplementationOnce(async () => {
+        const childToken =
+          /task="Reply exactly `([^`]+)`/.exec(
+            String(sendTextMessage.mock.calls[0]?.[0]?.body),
+          )?.[1] ?? "MATRIX_QA_SUBAGENT_CHILD_FIXED";
+        return {
+          event: {
+            kind: "message",
+            roomId: "!main:matrix-qa.test",
+            eventId: "$subagent-completion",
+            sender: "@sut:matrix-qa.test",
+            type: "m.room.message",
+            body: childToken,
+            relatesTo: {
+              relType: "m.thread",
+              eventId: "$subagent-thread-root",
+              inReplyToId: "$subagent-thread-root",
+              isFallingBack: true,
+            },
+          },
+          since: "driver-sync-next",
+        };
+      });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-subagent-thread-spawn",
+    );
+    expect(scenario).toBeDefined();
+
     await expect(
       runMatrixQaScenario(scenario!, {
         baseUrl: "http://127.0.0.1:28008/",
@@ -588,15 +1343,95 @@ describe("matrix live qa scenarios", () => {
       }),
     ).resolves.toMatchObject({
       artifacts: {
-        driverEventId: "$room-thread-trigger",
-        reply: {
+        driverEventId: "$subagent-spawn-trigger",
+        subagentCompletion: {
+          eventId: "$subagent-completion",
           relatesTo: {
             relType: "m.thread",
-            eventId: "$room-thread-trigger",
+            eventId: "$subagent-thread-root",
           },
+          tokenMatched: true,
         },
+        subagentIntro: {
+          eventId: "$subagent-thread-root",
+        },
+        threadRootEventId: "$subagent-thread-root",
       },
     });
+
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: expect.stringContaining("Call sessions_spawn now for this QA check"),
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: expect.stringContaining("runTimeoutSeconds=60"),
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+    expect(waitForRoomEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        since: "driver-sync-start",
+      }),
+    );
+    expect(waitForRoomEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        predicate: expect.any(Function),
+        since: "driver-sync-intro",
+      }),
+    );
+    const introPredicate = waitForRoomEvent.mock.calls[0]?.[0]?.predicate as
+      | ((event: MatrixQaObservedEvent) => boolean)
+      | undefined;
+    expect(() =>
+      introPredicate?.({
+        kind: "message",
+        roomId: "!main:matrix-qa.test",
+        eventId: "$missing-hook-error",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: MATRIX_SUBAGENT_MISSING_HOOK_ERROR,
+      }),
+    ).toThrow("missing hook error");
+  });
+
+  it("fails the subagent thread spawn scenario when Matrix lacks subagent hooks", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$subagent-spawn-trigger");
+    const waitForRoomEvent = vi.fn().mockImplementationOnce(async (options) => {
+      const event = {
+        kind: "message",
+        roomId: "!main:matrix-qa.test",
+        eventId: "$missing-hook-error",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: MATRIX_SUBAGENT_MISSING_HOOK_ERROR,
+      } satisfies MatrixQaObservedEvent;
+      options.predicate(event);
+      return {
+        event,
+        since: "driver-sync-error",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-subagent-thread-spawn",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).rejects.toThrow(
+      "missing hook error",
+    );
+
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
   });
 
   it("captures quiet preview notices before the finalized Matrix reply", async () => {
@@ -676,7 +1511,7 @@ describe("matrix live qa scenarios", () => {
     });
 
     expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Matrix quiet streaming QA check"),
+      body: expect.stringContaining("Quiet streaming QA check"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -781,7 +1616,7 @@ describe("matrix live qa scenarios", () => {
     });
 
     expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Matrix block streaming QA check"),
+      body: expect.stringContaining("Block streaming QA check"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!block:matrix-qa.test",
     });
@@ -1711,7 +2546,7 @@ describe("matrix live qa scenarios", () => {
           defaultRoomKey: "main",
           rooms: [
             {
-              key: scenarioTesting.MATRIX_QA_E2EE_ROOM_KEY,
+              key: matrixQaE2eeRoomKey("matrix-e2ee-verification-notice-no-trigger"),
               kind: "group",
               memberRoles: ["driver", "observer", "sut"],
               memberUserIds: [
@@ -1832,7 +2667,7 @@ describe("matrix live qa scenarios", () => {
           rooms: [
             {
               encrypted: true,
-              key: scenarioTesting.MATRIX_QA_E2EE_ROOM_KEY,
+              key: matrixQaE2eeRoomKey("matrix-e2ee-recovery-key-lifecycle"),
               kind: "group",
               memberRoles: ["driver", "observer", "sut"],
               memberUserIds: [
@@ -1930,7 +2765,7 @@ describe("matrix live qa scenarios", () => {
           defaultRoomKey: "main",
           rooms: [
             {
-              key: scenarioTesting.MATRIX_QA_E2EE_ROOM_KEY,
+              key: matrixQaE2eeRoomKey("matrix-e2ee-key-bootstrap-failure"),
               kind: "group",
               memberRoles: ["driver", "observer", "sut"],
               memberUserIds: [

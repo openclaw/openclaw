@@ -4,7 +4,7 @@ read_when:
   - You need to debug session ids, transcript JSONL, or sessions.json fields
   - You are changing auto-compaction behavior or adding “pre-compaction” housekeeping
   - You want to implement memory flushes or silent system turns
-title: "Session Management Deep Dive"
+title: "Session management deep dive"
 ---
 
 # Session Management & Compaction (Deep Dive)
@@ -365,3 +365,9 @@ flush logic lives on the Gateway side today.
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
   - tool-result bloat: enable/tune session pruning
 - Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you’re on a build that includes the streaming suppression fix.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)
+- [Context engine](/concepts/context-engine)

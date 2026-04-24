@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -40,8 +40,7 @@ import {
   encodeAssistantTextSignature,
   normalizeAssistantPhase,
 } from "../shared/chat-message-content.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
+import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   getOpenAIWebSocketErrorDetails,
   OpenAIWebSocketManager,
@@ -57,6 +56,7 @@ import {
 } from "./openai-ws-message-conversion.js";
 import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { normalizeProviderId } from "./provider-id.js";
 import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 import {
@@ -73,6 +73,7 @@ import { mergeTransportMetadata } from "./transport-stream-shared.js";
 interface WsSession {
   manager: OpenAIWebSocketManager;
   managerConfigSignature: string;
+  authSignature: string;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
   /** True if the connection has been established at least once. */
@@ -81,6 +82,9 @@ interface WsSession {
   warmUpAttempted: boolean;
   /** True if the session is permanently broken (no more reconnect). */
   broken: boolean;
+  /** Pending idle release timer when disabled-by-default pooling retains a session. */
+  idleTimer?: ReturnType<typeof setTimeout>;
+  pooledUntil?: number;
   /** Session-scoped cool-down after repeated websocket failures. */
   degradedUntil: number | null;
   degradeCooldownMs: number;
@@ -201,20 +205,72 @@ function createEventStream(): AssistantMessageEventStream {
 // Public registry helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ReleaseWsSessionOptions = {
+  allowPool?: boolean;
+  env?: NodeJS.ProcessEnv;
+};
+
+function resolveWsSessionPoolConfig(env: NodeJS.ProcessEnv = process.env): {
+  enabled: boolean;
+  idleMs: number;
+} {
+  const enabled =
+    env.OPENCLAW_OPENAI_WS_POOL === "1" || env.OPENCLAW_OPENAI_WS_SESSION_POOL === "1";
+  const rawIdleMs = Number(env.OPENCLAW_OPENAI_WS_SESSION_POOL_IDLE_MS);
+  const idleMs = Number.isFinite(rawIdleMs)
+    ? Math.min(300_000, Math.max(1_000, Math.trunc(rawIdleMs)))
+    : 30_000;
+  return { enabled, idleMs };
+}
+
+function clearWsSessionIdleTimer(session: WsSession): void {
+  if (!session.idleTimer) {
+    return;
+  }
+  clearTimeout(session.idleTimer);
+  session.idleTimer = undefined;
+  session.pooledUntil = undefined;
+}
+
+function closeWsSession(sessionId: string, session: WsSession): void {
+  clearWsSessionIdleTimer(session);
+  try {
+    session.manager.close();
+  } catch {
+    // Ignore close errors — connection may already be gone.
+  }
+  wsRegistry.delete(sessionId);
+}
+
 /**
  * Release and close the WebSocket session for the given sessionId.
  * Call this after the agent run completes to free the connection.
  */
-export function releaseWsSession(sessionId: string): void {
+export function releaseWsSession(sessionId: string, options: ReleaseWsSessionOptions = {}): void {
   const session = wsRegistry.get(sessionId);
-  if (session) {
-    try {
-      session.manager.close();
-    } catch {
-      // Ignore close errors — connection may already be gone.
-    }
-    wsRegistry.delete(sessionId);
+  if (!session) {
+    return;
   }
+  const pool = resolveWsSessionPoolConfig(options.env);
+  if (
+    options.allowPool === true &&
+    pool.enabled &&
+    !session.broken &&
+    session.manager.isConnected()
+  ) {
+    clearWsSessionIdleTimer(session);
+    session.pooledUntil = Date.now() + pool.idleMs;
+    session.idleTimer = setTimeout(() => {
+      const current = wsRegistry.get(sessionId);
+      if (current === session) {
+        closeWsSession(sessionId, session);
+      }
+    }, pool.idleMs);
+    session.idleTimer.unref?.();
+    log.debug(`[ws-stream] pooled websocket session=${sessionId} idleMs=${pool.idleMs}`);
+    return;
+  }
+  closeWsSession(sessionId, session);
 }
 
 /**
@@ -292,6 +348,7 @@ function resetWsSession(params: {
   createManager: () => OpenAIWebSocketManager;
   preserveDegradeUntil?: boolean;
 }): void {
+  clearWsSessionIdleTimer(params.session);
   try {
     params.session.manager.close();
   } catch {
@@ -362,45 +419,12 @@ function resolveWsManagerConfigSignature(
   });
 }
 
+function resolveWsAuthSignature(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+
 const AZURE_OPENAI_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
-
-function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  try {
-    const url = new URL(trimmed);
-    return (
-      url.protocol === "https:" &&
-      normalizeLowercaseStringOrEmpty(url.hostname) === "api.openai.com" &&
-      /^\/v1\/?$/u.test(url.pathname)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/iu.test(trimmed);
-}
-
-function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(trimmed).hostname).endsWith(".openai.azure.com");
-  } catch {
-    return false;
-  }
-}
 
 function normalizeTransportIdentityValue(value: string, maxLength = 160): string {
   const trimmed = value.trim().replace(/[\r\n]+/gu, " ");
@@ -408,18 +432,23 @@ function normalizeTransportIdentityValue(value: string, maxLength = 160): string
 }
 
 function usesNativeOpenAIRoute(provider: string, baseUrl?: string): boolean {
+  const endpointClass = resolveProviderEndpoint(baseUrl).endpointClass;
   const normalizedProvider = normalizeProviderId(provider);
   if (!normalizedProvider) {
     return false;
   }
   if (normalizedProvider === "openai") {
-    return !baseUrl || isOpenAIApiBaseUrl(baseUrl);
+    return endpointClass === "default" || endpointClass === "openai-public";
   }
   if (AZURE_OPENAI_PROVIDER_IDS.has(normalizedProvider)) {
-    return !baseUrl || isAzureOpenAIBaseUrl(baseUrl);
+    return endpointClass === "default" || endpointClass === "azure-openai";
   }
   if (normalizedProvider === OPENAI_CODEX_PROVIDER_ID) {
-    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
+    return (
+      endpointClass === "default" ||
+      endpointClass === "openai-public" ||
+      endpointClass === "openai-codex"
+    );
   }
   return false;
 }
@@ -687,6 +716,7 @@ export function createOpenAIWebSocketStreamFn(
 
       while (true) {
         let session = wsRegistry.get(sessionId);
+        const authSignature = resolveWsAuthSignature(apiKey);
         const managerConfigSignature = resolveWsManagerConfigSignature(
           opts.managerOptions,
           sessionHeaders,
@@ -696,6 +726,7 @@ export function createOpenAIWebSocketStreamFn(
           session = {
             manager,
             managerConfigSignature,
+            authSignature,
             lastContextLength: 0,
             everConnected: false,
             warmUpAttempted: false,
@@ -704,13 +735,20 @@ export function createOpenAIWebSocketStreamFn(
             degradeCooldownMs: wsSessionPolicy.degradeCooldownMs,
           };
           wsRegistry.set(sessionId, session);
-        } else if (session.managerConfigSignature !== managerConfigSignature) {
+        } else if (
+          session.managerConfigSignature !== managerConfigSignature ||
+          session.authSignature !== authSignature
+        ) {
+          clearWsSessionIdleTimer(session);
           resetWsSession({
             session,
             createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
           });
           session.managerConfigSignature = managerConfigSignature;
+          session.authSignature = authSignature;
           session.degradeCooldownMs = wsSessionPolicy.degradeCooldownMs;
+        } else {
+          clearWsSessionIdleTimer(session);
         }
 
         if (transport !== "websocket" && isWsSessionDegraded(session)) {

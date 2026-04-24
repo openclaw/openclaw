@@ -18,6 +18,7 @@ import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -65,7 +66,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import { createReplyMediaContext } from "./reply-media-paths.js";
 import {
   createReplyOperation,
   ReplyRunAlreadyActiveError,
@@ -250,13 +251,17 @@ function mergeExecutionTrace(params: {
   runner: "embedded" | "cli";
 }): TraceExecutionView | undefined {
   const attempts: TraceAttemptView[] = [
-    ...(params.fallbackAttempts ?? []).map((attempt) => ({
-      provider: attempt.provider,
-      model: attempt.model,
-      result: inferFallbackAttemptResult(attempt),
-      ...(attempt.reason ? { reason: attempt.reason } : {}),
-      ...(typeof attempt.status === "number" ? { status: attempt.status } : {}),
-    })),
+    ...(params.fallbackAttempts ?? []).map((attempt) =>
+      Object.assign(
+        {
+          provider: attempt.provider,
+          model: attempt.model,
+          result: inferFallbackAttemptResult(attempt),
+        },
+        attempt.reason ? { reason: attempt.reason } : {},
+        typeof attempt.status === `number` ? { status: attempt.status } : {},
+      ),
+    ),
     ...(params.executionTrace?.attempts ?? []),
   ];
   const winnerProvider =
@@ -870,6 +875,7 @@ export async function runReplyAgent(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
@@ -887,6 +893,7 @@ export async function runReplyAgent(params: {
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
   resetTriggered?: boolean;
+  replyThreadingOverride?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
@@ -904,6 +911,7 @@ export async function runReplyAgent(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
+    runtimePolicySessionKey,
     storePath,
     defaultModel,
     agentCfgContextTokens,
@@ -916,6 +924,7 @@ export async function runReplyAgent(params: {
     shouldInjectGroupIntro,
     typingMode,
     resetTriggered,
+    replyThreadingOverride,
     replyOperation: providedReplyOperation,
   } = params;
 
@@ -1033,7 +1042,7 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+  const replyMediaContext = createReplyMediaContext({
     cfg,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
@@ -1102,6 +1111,7 @@ export async function runReplyAgent(params: {
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
       sessionKey,
+      runtimePolicySessionKey,
       storePath,
       isHeartbeat,
       replyOperation,
@@ -1121,6 +1131,7 @@ export async function runReplyAgent(params: {
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
       sessionKey,
+      runtimePolicySessionKey,
       storePath,
       isHeartbeat,
       replyOperation,
@@ -1190,6 +1201,7 @@ export async function runReplyAgent(params: {
       commandBody,
       followupRun,
       sessionCtx,
+      replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
       replyOperation,
       opts,
       typingSignals,
@@ -1205,10 +1217,12 @@ export async function runReplyAgent(params: {
       resetSessionAfterRoleOrderingConflict,
       isHeartbeat,
       sessionKey,
+      runtimePolicySessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      replyMediaContext,
     });
 
     if (runOutcome.kind === "final") {
@@ -1341,6 +1355,7 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
+    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
       payloads: payloadArray,
       isHeartbeat,
@@ -1351,8 +1366,8 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
       replyToMode,
       replyToChannel,
-      currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-      replyThreading: sessionCtx.ReplyThreading,
+      currentMessageId,
+      replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
       messageProvider: followupRun.run.messageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
@@ -1363,7 +1378,7 @@ export async function runReplyAgent(params: {
         to: sessionCtx.To,
       }),
       accountId: sessionCtx.AccountId,
-      normalizeMediaPaths: normalizeReplyMediaPaths,
+      normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
@@ -1410,6 +1425,9 @@ export async function runReplyAgent(params: {
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
       emitDiagnosticEvent({
         type: "model.usage",
+        ...(runResult.diagnosticTrace
+          ? { trace: freezeDiagnosticTraceContext(runResult.diagnosticTrace) }
+          : {}),
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,

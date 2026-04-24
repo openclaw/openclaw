@@ -19,6 +19,7 @@ import {
   handleAbortChat as handleAbortChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  steerQueuedChatMessage as steerQueuedChatMessageInternal,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -39,6 +40,7 @@ import {
 } from "./app-scroll.ts";
 import {
   applySettings as applySettingsInternal,
+  applyLocalUserIdentity as applyLocalUserIdentityInternal,
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
   setTab as setTabInternal,
@@ -55,6 +57,7 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import { RealtimeTalkSession, type RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
@@ -77,7 +80,7 @@ import type {
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
-import { loadSettings, type UiSettings } from "./storage.ts";
+import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -115,6 +118,7 @@ declare global {
 }
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
+const bootLocalUserIdentity = loadLocalUserIdentity();
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -162,6 +166,8 @@ export class OpenClawApp extends LitElement {
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
+  @state() userName = bootLocalUserIdentity.name;
+  @state() userAvatar = bootLocalUserIdentity.avatar;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
@@ -187,6 +193,11 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() realtimeTalkActive = false;
+  @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
+  @state() realtimeTalkDetail: string | null = null;
+  @state() realtimeTalkTranscript: string | null = null;
+  private realtimeTalkSession: RealtimeTalkSession | null = null;
   @state() chatManualRefreshInFlight = false;
   @state() navDrawerOpen = false;
 
@@ -251,6 +262,7 @@ export class OpenClawApp extends LitElement {
   @state() wikiMemoryPalaceError: string | null = null;
   @state() wikiMemoryPalace: WikiMemoryPalace | null = null;
   @state() configFormDirty = false;
+  @state() configSettingsMode: "quick" | "advanced" = "quick";
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";
   @state() configActiveSection: string | null = null;
@@ -396,6 +408,11 @@ export class OpenClawApp extends LitElement {
   usageQueryDebounceTimer: number | null = null;
 
   @state() cronLoading = false;
+  @state() cronQuickCreateOpen = false;
+  @state() cronQuickCreateStep: import("./views/cron-quick-create.ts").CronQuickCreateStep = "what";
+  @state() cronQuickCreateDraft:
+    | import("./views/cron-quick-create.ts").CronQuickCreateDraft
+    | null = null;
   @state() cronJobsLoadingMore = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronJobsTotal = 0;
@@ -630,6 +647,13 @@ export class OpenClawApp extends LitElement {
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
   }
 
+  applyLocalUserIdentity(next: { name?: string | null; avatar?: string | null }) {
+    applyLocalUserIdentityInternal(
+      this as unknown as Parameters<typeof applyLocalUserIdentityInternal>[0],
+      next,
+    );
+  }
+
   setTab(next: Tab) {
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
     this.navDrawerOpen = false;
@@ -689,6 +713,58 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof handleSendChatInternal>[0],
       messageOverride,
       opts,
+    );
+  }
+
+  async toggleRealtimeTalk() {
+    if (this.realtimeTalkSession) {
+      this.realtimeTalkSession.stop();
+      this.realtimeTalkSession = null;
+      this.realtimeTalkActive = false;
+      this.realtimeTalkStatus = "idle";
+      this.realtimeTalkDetail = null;
+      this.realtimeTalkTranscript = null;
+      return;
+    }
+    if (!this.client || !this.connected) {
+      this.lastError = "Gateway not connected";
+      return;
+    }
+    this.realtimeTalkActive = true;
+    this.realtimeTalkStatus = "connecting";
+    this.realtimeTalkDetail = null;
+    this.realtimeTalkTranscript = null;
+    const session = new RealtimeTalkSession(this.client, this.sessionKey, {
+      onStatus: (status, detail) => {
+        this.realtimeTalkStatus = status;
+        this.realtimeTalkDetail = detail ?? null;
+        if (status === "idle" || status === "error") {
+          this.realtimeTalkActive = status !== "idle";
+        }
+      },
+      onTranscript: (entry) => {
+        this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
+      },
+    });
+    this.realtimeTalkSession = session;
+    try {
+      await session.start();
+    } catch (error) {
+      session.stop();
+      if (this.realtimeTalkSession === session) {
+        this.realtimeTalkSession = null;
+      }
+      this.realtimeTalkActive = false;
+      this.realtimeTalkStatus = "error";
+      this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
+      this.lastError = this.realtimeTalkDetail;
+    }
+  }
+
+  async steerQueuedChatMessage(id: string) {
+    await steerQueuedChatMessageInternal(
+      this as unknown as Parameters<typeof steerQueuedChatMessageInternal>[0],
+      id,
     );
   }
 

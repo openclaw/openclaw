@@ -39,7 +39,6 @@ minimumReleaseAgeExclude:
   - "axios"
 
 onlyBuiltDependencies:
-  - "@discordjs/opus"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"

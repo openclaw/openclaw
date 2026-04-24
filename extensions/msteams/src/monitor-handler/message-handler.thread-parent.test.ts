@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
+import "./message-handler-mock-support.test-support.js";
+import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import {
   buildChannelActivity,
@@ -8,52 +10,52 @@ import {
   createMessageHandlerDeps,
 } from "./message-handler.test-support.js";
 
-const runtimeApiMockState = vi.hoisted(() => ({
-  dispatchReplyFromConfigWithSettledDispatcher: vi.fn(async (params: { ctxPayload: unknown }) => ({
-    queuedFinal: false,
-    counts: {},
-    capturedCtxPayload: params.ctxPayload,
-  })),
-}));
-
-vi.mock("../../runtime-api.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
-  return {
-    ...actual,
-    dispatchReplyFromConfigWithSettledDispatcher:
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-  };
-});
-
+const runtimeApiMockState = getRuntimeApiMockState();
 const fetchChannelMessageMock = vi.hoisted(() => vi.fn());
 const fetchThreadRepliesMock = vi.hoisted(() => vi.fn(async () => []));
 const resolveTeamGroupIdMock = vi.hoisted(() => vi.fn(async () => "group-1"));
 
-vi.mock("../graph-thread.js", async () => {
-  const actual = await vi.importActual<typeof import("../graph-thread.js")>("../graph-thread.js");
+vi.mock("../graph-thread.js", () => {
+  const stripHtmlFromTeamsMessage = (html: string) =>
+    html
+      .replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   return {
-    ...actual,
+    stripHtmlFromTeamsMessage,
     resolveTeamGroupId: resolveTeamGroupIdMock,
     fetchChannelMessage: fetchChannelMessageMock,
     fetchThreadReplies: fetchThreadRepliesMock,
   };
 });
 
-vi.mock("../reply-dispatcher.js", () => ({
-  createMSTeamsReplyDispatcher: () => ({
-    dispatcher: {},
-    replyOptions: {},
-    markDispatchIdle: vi.fn(),
-  }),
-}));
-
 describe("msteams thread parent context injection", () => {
+  type MessageHandler = ReturnType<typeof createMSTeamsMessageHandler>;
+
   function findParentSystemEventCall(
     mock: ReturnType<typeof vi.fn>,
   ): [string, { sessionKey: string; contextKey?: string }] | undefined {
     const calls = mock.mock.calls as Array<[string, { sessionKey: string; contextKey?: string }]>;
     return calls.find(([text]) => text.startsWith("Replying to @"));
+  }
+
+  async function dispatchThreadReply(handler: MessageHandler, id: string) {
+    await handler({
+      activity: buildChannelActivity({ id, replyToId: "thread-root-123" }),
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<MessageHandler>[0]);
+  }
+
+  async function dispatchTwoThreadReplies(handler: MessageHandler) {
+    await dispatchThreadReply(handler, "msg-reply-1");
+    await dispatchThreadReply(handler, "msg-reply-2");
   }
 
   beforeEach(() => {
@@ -100,15 +102,7 @@ describe("msteams thread parent context injection", () => {
     const { deps } = createMessageHandlerDeps(cfg);
     const handler = createMSTeamsMessageHandler(deps);
 
-    await handler({
-      activity: buildChannelActivity({ id: "msg-reply-1", replyToId: "thread-root-123" }),
-      sendActivity: vi.fn(async () => undefined),
-    } as unknown as Parameters<typeof handler>[0]);
-
-    await handler({
-      activity: buildChannelActivity({ id: "msg-reply-2", replyToId: "thread-root-123" }),
-      sendActivity: vi.fn(async () => undefined),
-    } as unknown as Parameters<typeof handler>[0]);
+    await dispatchTwoThreadReplies(handler);
 
     // Parent message fetched exactly once across two replies thanks to LRU cache.
     expect(fetchChannelMessageMock).toHaveBeenCalledTimes(1);
@@ -123,15 +117,7 @@ describe("msteams thread parent context injection", () => {
     const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
     const handler = createMSTeamsMessageHandler(deps);
 
-    await handler({
-      activity: buildChannelActivity({ id: "msg-reply-1", replyToId: "thread-root-123" }),
-      sendActivity: vi.fn(async () => undefined),
-    } as unknown as Parameters<typeof handler>[0]);
-
-    await handler({
-      activity: buildChannelActivity({ id: "msg-reply-2", replyToId: "thread-root-123" }),
-      sendActivity: vi.fn(async () => undefined),
-    } as unknown as Parameters<typeof handler>[0]);
+    await dispatchTwoThreadReplies(handler);
 
     const parentCalls = enqueueSystemEvent.mock.calls.filter(
       ([text]) => typeof text === "string" && text.startsWith("Replying to @"),

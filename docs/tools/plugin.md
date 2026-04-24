@@ -8,11 +8,9 @@ title: "Plugins"
 sidebarTitle: "Install and Configure"
 ---
 
-# Plugins
-
 Plugins extend OpenClaw with new capabilities: channels, model providers,
-tools, skills, speech, realtime transcription, realtime voice,
-media-understanding, image generation, video generation, web fetch, web
+agent harnesses, tools, skills, speech, realtime transcription, realtime
+voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external** (published on npm by the community).
 
@@ -62,6 +60,13 @@ If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
 reinstall path for plugins that opt into
 `openclaw.install.allowInvalidConfigRecovery`.
+
+Packaged OpenClaw installs do not eagerly install every bundled plugin's
+runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
+plugin config, legacy channel config, or a default-enabled manifest, startup
+repairs only that plugin's declared runtime dependencies before importing it.
+External plugins and custom load paths must still be installed through
+`openclaw plugins install`.
 
 ## Plugin types
 
@@ -126,7 +131,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
@@ -146,6 +151,17 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 Config changes **require a gateway restart**. If the Gateway is running with config
 watch + in-process restart enabled (the default `openclaw gateway` path), that
 restart is usually performed automatically a moment after the config write lands.
+There is no supported hot-reload path for native plugin runtime code or lifecycle
+hooks; restart the Gateway process that is serving the live channel before
+expecting updated `register(api)` code, `api.on(...)` hooks, tools, services, or
+provider/runtime hooks to run.
+
+`openclaw plugins list` is a local CLI/config snapshot. A `loaded` plugin there
+means the plugin is discoverable and loadable from the config/files seen by that
+CLI invocation. It does not prove that an already-running remote Gateway child
+has restarted into the same plugin code. On VPS/container setups with wrapper
+processes, send restarts to the actual `openclaw gateway run` process, or use
+`openclaw gateway restart` against the running Gateway.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
@@ -162,11 +178,11 @@ OpenClaw scans for plugins in this order (first match wins):
     `plugins.load.paths` — explicit file or directory paths.
   </Step>
 
-  <Step title="Workspace extensions">
+  <Step title="Workspace plugins">
     `\<workspace\>/.openclaw/<plugin-root>/*.ts` and `\<workspace\>/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
-  <Step title="Global extensions">
+  <Step title="Global plugins">
     `~/.openclaw/<plugin-root>/*.ts` and `~/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
@@ -184,6 +200,34 @@ OpenClaw scans for plugins in this order (first match wins):
 - Workspace-origin plugins are **disabled by default** (must be explicitly enabled)
 - Bundled plugins follow the built-in default-on set unless overridden
 - Exclusive slots can force-enable the selected plugin for that slot
+- Some bundled opt-in plugins are enabled automatically when config names a
+  plugin-owned surface, such as a provider model ref, channel config, or harness
+  runtime
+- OpenAI-family Codex routes keep separate plugin boundaries:
+  `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
+  app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
+  `codex/*` model refs
+
+## Troubleshooting Runtime Hooks
+
+If a plugin appears in `plugins list` but `register(api)` side effects or hooks
+do not run in live chat traffic, check these first:
+
+- Run `openclaw gateway status --deep --require-rpc` and confirm the active
+  Gateway URL, profile, config path, and process are the ones you are editing.
+- Restart the live Gateway after plugin install/config/code changes. In wrapper
+  containers, PID 1 may only be a supervisor; restart or signal the child
+  `openclaw gateway run` process.
+- Use `openclaw plugins inspect <id> --json` to confirm hook registrations and
+  diagnostics. Non-bundled conversation hooks such as `llm_input`,
+  `llm_output`, and `agent_end` need
+  `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+- For model switching, prefer `before_model_resolve`. It runs before model
+  resolution for agent turns; `llm_output` only runs after a model attempt
+  produces assistant output.
+- For proof of the effective session model, use `openclaw sessions` or the
+  Gateway session/status surfaces and, when debugging provider payloads, start
+  the Gateway with `--raw-stream --raw-stream-path <path>`.
 
 ## Plugin slots (exclusive categories)
 
@@ -227,8 +271,8 @@ openclaw plugins install <plugin> --marketplace <source>
 openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 openclaw plugins install <spec> --pin      # record exact resolved npm spec
 openclaw plugins install <spec> --dangerously-force-unsafe-install
-openclaw plugins update <id>             # update one plugin
-openclaw plugins update <id> --dangerously-force-unsafe-install
+openclaw plugins update <id-or-npm-spec> # update one plugin
+openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
 openclaw plugins uninstall <id>          # remove config/install records
 openclaw plugins uninstall <id> --keep-files
@@ -243,9 +287,22 @@ Bundled plugins ship with OpenClaw. Many are enabled by default (for example
 bundled model providers, bundled speech providers, and the bundled browser
 plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 
-`--force` overwrites an existing installed plugin or hook pack in place.
-It is not supported with `--link`, which reuses the source path instead of
-copying over a managed install target.
+`--force` overwrites an existing installed plugin or hook pack in place. Use
+`openclaw plugins update <id-or-npm-spec>` for routine upgrades of tracked npm
+plugins. It is not supported with `--link`, which reuses the source path instead
+of copying over a managed install target.
+
+When `plugins.allow` is already set, `openclaw plugins install` adds the
+installed plugin id to that allowlist before enabling it, so installs are
+immediately loadable after restart.
+
+`openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
+an npm package spec with a dist-tag or exact version resolves the package name
+back to the tracked plugin record and records the new spec for future updates.
+Passing the package name without a version moves an exact pinned install back to
+the registry's default release line. If the installed npm plugin already matches
+the resolved version and recorded artifact identity, OpenClaw skips the update
+without downloading, reinstalling, or rewriting config.
 
 `--pin` is npm-only. It is not supported with `--marketplace`, because
 marketplace installs persist marketplace source metadata instead of an npm spec.

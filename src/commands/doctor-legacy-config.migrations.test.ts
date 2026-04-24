@@ -12,16 +12,41 @@ vi.mock("../plugins/setup-registry.js", () => ({
   }),
 }));
 
-function asLegacyConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => ({
+    plugins: [
+      {
+        id: "brave",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["brave"] },
+      },
+      {
+        id: "google",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["gemini"] },
+      },
+      {
+        id: "firecrawl",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["firecrawl"] },
+      },
+    ],
+  }),
+  resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
+    if (value === "gemini") {
+      return "google";
+    }
+    return value === "brave" || value === "firecrawl" ? value : undefined;
+  },
+}));
 
-function getLegacyProperty(value: unknown, key: string): unknown {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return (value as Record<string, unknown>)[key];
-}
+vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
+  applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+    next: cfg,
+    changes: [],
+  }),
+}));
+
 describe("normalizeCompatibilityConfigValues", () => {
   let previousOauthDir: string | undefined;
   let tempOauthDir = "";
@@ -90,201 +115,39 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates Slack dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
+  it("moves WhatsApp access defaults into accounts.default for named accounts", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
-        slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        },
-      },
-    });
-
-    expect(res.config.channels?.slack?.dmPolicy).toBe("open");
-    expect(res.config.channels?.slack?.allowFrom).toEqual(["*"]);
-    expect(res.config.channels?.slack?.dm).toEqual({
-      enabled: true,
-    });
-    expect(res.changes).toEqual([
-      "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
-      "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
-    ]);
-  });
-
-  it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        discord: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
           accounts: {
             work: {
-              dm: { policy: "allowlist", allowFrom: ["123"], groupEnabled: true },
+              enabled: true,
+              authDir: "/tmp/wa-work",
             },
           },
         },
       },
     });
 
-    expect(res.config.channels?.discord?.accounts?.work?.dmPolicy).toBe("allowlist");
-    expect(res.config.channels?.discord?.accounts?.work?.allowFrom).toEqual(["123"]);
-    expect(res.config.channels?.discord?.accounts?.work?.dm).toEqual({
-      groupEnabled: true,
+    expect(res.config.channels?.whatsapp?.dmPolicy).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.accounts?.default).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      groupPolicy: "open",
+      groupAllowFrom: [],
     });
-    expect(res.changes).toEqual([
-      "Moved channels.discord.accounts.work.dm.policy → channels.discord.accounts.work.dmPolicy.",
-      "Moved channels.discord.accounts.work.dm.allowFrom → channels.discord.accounts.work.allowFrom.",
-    ]);
-  });
-
-  it("migrates Discord streaming boolean alias into nested streaming.mode", () => {
-    const res = normalizeCompatibilityConfigValues(
-      asLegacyConfig({
-        channels: {
-          discord: {
-            streaming: true,
-            accounts: {
-              work: {
-                streaming: false,
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "partial" });
-    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.config.channels?.discord?.accounts?.work?.streaming).toEqual({ mode: "off" });
-    expect(
-      getLegacyProperty(res.config.channels?.discord?.accounts?.work, "streamMode"),
-    ).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
-      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
-    ]);
-  });
-
-  it("migrates Discord legacy streamMode into nested streaming.mode", () => {
-    const res = normalizeCompatibilityConfigValues(
-      asLegacyConfig({
-        channels: {
-          discord: {
-            streaming: false,
-            streamMode: "block",
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "block" });
-    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-    ]);
-  });
-
-  it("migrates Telegram streamMode into nested streaming.mode", () => {
-    const res = normalizeCompatibilityConfigValues(
-      asLegacyConfig({
-        channels: {
-          telegram: {
-            streamMode: "block",
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.telegram?.streaming).toEqual({ mode: "block" });
-    expect(getLegacyProperty(res.config.channels?.telegram, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
-    ]);
-  });
-
-  it("migrates Slack legacy streaming keys into nested streaming config", () => {
-    const res = normalizeCompatibilityConfigValues(
-      asLegacyConfig({
-        channels: {
-          slack: {
-            streaming: false,
-            streamMode: "status_final",
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.slack?.streaming).toEqual({
-      mode: "progress",
-      nativeTransport: false,
-    });
-    expect(getLegacyProperty(res.config.channels?.slack, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
-      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.nativeTransport.",
-    ]);
-  });
-
-  it("preserves top-level Telegram allowlist fallback for existing named accounts", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        telegram: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["123"],
-          groupPolicy: "allowlist",
-          accounts: {
-            bot1: {
-              enabled: true,
-              botToken: "bot-1-token",
-            },
-            bot2: {
-              enabled: true,
-              botToken: "bot-2-token",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.config.channels?.telegram?.dmPolicy).toBe("allowlist");
-    expect(res.config.channels?.telegram?.allowFrom).toEqual(["123"]);
-    expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
-    expect(res.config.channels?.telegram?.accounts?.bot1?.botToken).toBe("bot-1-token");
-    expect(res.config.channels?.telegram?.accounts?.bot2?.botToken).toBe("bot-2-token");
-    expect(res.changes).not.toContain(
-      "Moved channels.telegram single-account top-level values into channels.telegram.accounts.default.",
-    );
-  });
-
-  it("keeps Telegram policy fallback top-level while still seeding default auth", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        telegram: {
-          enabled: true,
-          botToken: "legacy-token",
-          dmPolicy: "allowlist",
-          allowFrom: ["123"],
-          groupPolicy: "allowlist",
-          accounts: {
-            bot1: {
-              enabled: true,
-              botToken: "bot-1-token",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.config.channels?.telegram?.accounts?.default).toMatchObject({
-      botToken: "legacy-token",
-    });
-    expect(res.config.channels?.telegram?.botToken).toBeUndefined();
-    expect(res.config.channels?.telegram?.dmPolicy).toBe("allowlist");
-    expect(res.config.channels?.telegram?.allowFrom).toEqual(["123"]);
-    expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
     expect(res.changes).toContain(
-      "Moved channels.telegram single-account top-level values into channels.telegram.accounts.default.",
+      "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
     );
   });
-
   it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
     const res = normalizeCompatibilityConfigValues({
       browser: {
@@ -354,6 +217,91 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
+  });
+
+  it("marks legacy untagged /models add OpenAI Codex metadata rows for doctor repair", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.["openai-codex"]?.models?.[0]).toMatchObject({
+      id: "gpt-5.5",
+      metadataSource: "models-add",
+    });
+    expect(res.changes).toContain(
+      "Marked models.providers.openai-codex.models.gpt-5.5 as /models add metadata so official OpenAI Codex metadata can override it.",
+    );
+  });
+
+  it("does not mark untagged manual OpenAI Codex metadata overrides", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config).toEqual({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(res.changes).toEqual([]);
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {

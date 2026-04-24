@@ -32,7 +32,10 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   };
 }
 
-function createHealthyDiscordManager(startedAt: number, lastEventAt: number): ChannelManager {
+function createHealthyDiscordManager(
+  startedAt: number,
+  lastTransportActivityAt: number,
+): ChannelManager {
   return createManager(
     snapshotWith({
       discord: {
@@ -41,7 +44,7 @@ function createHealthyDiscordManager(startedAt: number, lastEventAt: number): Ch
         enabled: true,
         configured: true,
         lastStartAt: startedAt,
-        lastEventAt,
+        lastTransportActivityAt,
       },
     }),
   );
@@ -60,6 +63,7 @@ function withReadinessClock(run: () => void) {
 function createReadinessHarness(params: {
   startedAgoMs: number;
   accounts: Record<string, Partial<ChannelAccountSnapshot>>;
+  getStartupPending?: () => boolean;
   cacheTtlMs?: number;
 }) {
   const startedAt = Date.now() - params.startedAgoMs;
@@ -69,6 +73,7 @@ function createReadinessHarness(params: {
     readiness: createReadinessChecker({
       channelManager: manager,
       startedAt,
+      getStartupPending: params.getStartupPending,
       cacheTtlMs: params.cacheTtlMs,
     }),
   };
@@ -82,6 +87,43 @@ describe("createReadinessChecker", () => {
 
       const readiness = createReadinessChecker({ channelManager: manager, startedAt });
       expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+    });
+  });
+
+  it("keeps readiness red while startup sidecars are pending", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getStartupPending: () => true,
+      });
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["startup-sidecars"],
+        uptimeMs: 300_000,
+      });
+    });
+  });
+
+  it("does not cache startup-pending readiness", () => {
+    withReadinessClock(() => {
+      let startupPending = true;
+      const { manager, readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getStartupPending: () => startupPending,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["startup-sidecars"],
+        uptimeMs: 300_000,
+      });
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+      startupPending = false;
+      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -177,7 +219,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: startedAt,
-            lastEventAt: Date.now() - 31 * 60_000,
+            lastTransportActivityAt: Date.now() - 31 * 60_000,
           },
         },
       });
@@ -197,7 +239,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: startedAt,
-            lastEventAt: null,
+            lastTransportActivityAt: null,
           },
         },
       });
@@ -216,7 +258,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: Date.now() - 5 * 60_000,
-            lastEventAt: Date.now() - 1_000,
+            lastTransportActivityAt: Date.now() - 1_000,
           },
         },
         cacheTtlMs: 1_000,

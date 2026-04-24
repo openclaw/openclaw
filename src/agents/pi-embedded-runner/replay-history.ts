@@ -52,6 +52,37 @@ type ModelSnapshotEntry = {
   modelId?: string;
 };
 
+type ProviderReplayHookParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  provider: string;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+  sessionId?: string;
+};
+
+function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
+  const context = {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    provider: params.provider,
+    modelId: params.modelId,
+    modelApi: params.modelApi,
+    model: params.model,
+    sessionId: params.sessionId,
+  };
+  return {
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context,
+  };
+}
+
 function buildInterSessionPrefix(message: AgentMessage): string {
   const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
   if (!provenance) {
@@ -191,6 +222,24 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
       ...candidateRecord,
       usage: makeZeroUsageSnapshot(),
     } as unknown as AgentMessage;
+    touched = true;
+  }
+  return touched ? out : messages;
+}
+
+export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out = [...messages];
+  for (let i = 0; i < out.length; i += 1) {
+    const message = out[i];
+    const replayContent = (message as { content?: unknown } | undefined)?.content;
+    if (!message || message.role !== "assistant" || typeof replayContent !== "string") {
+      continue;
+    }
+    out[i] = {
+      ...message,
+      content: [{ type: "text", text: replayContent }],
+    };
     touched = true;
   }
   return touched ? out : messages;
@@ -412,8 +461,9 @@ export async function sanitizeSessionHistory(params: {
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
     params.modelApi === "azure-openai-responses";
+  const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    normalizedAssistantReplay,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
@@ -476,28 +526,21 @@ export async function sanitizeSessionHistory(params: {
       })
     : false;
   const provider = params.provider?.trim();
-  const providerSanitized =
-    provider && provider.length > 0
-      ? await sanitizeProviderReplayHistoryWithPlugin({
-          provider,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          context: {
-            config: params.config,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
-            provider,
-            modelId: params.modelId,
-            modelApi: params.modelApi,
-            model: params.model,
-            sessionId: params.sessionId,
-            messages: sanitizedCompactionUsage,
-            allowedToolNames: params.allowedToolNames,
-            sessionState: createProviderReplaySessionState(params.sessionManager),
-          },
-        })
-      : undefined;
+  let providerSanitized: AgentMessage[] | undefined;
+  if (provider && provider.length > 0) {
+    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
+    const providerResult = await sanitizeProviderReplayHistoryWithPlugin({
+      ...pluginParams,
+      context: {
+        ...pluginParams.context,
+        sessionId: params.sessionId ?? "",
+        messages: sanitizedCompactionUsage,
+        allowedToolNames: params.allowedToolNames,
+        sessionState: createProviderReplaySessionState(params.sessionManager),
+      },
+    });
+    providerSanitized = providerResult ?? undefined;
+  }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
@@ -551,20 +594,11 @@ export async function validateReplayTurns(params: {
     });
   const provider = params.provider?.trim();
   if (provider) {
+    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
     const providerValidated = await validateProviderReplayTurnsWithPlugin({
-      provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
+      ...pluginParams,
       context: {
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        provider,
-        modelId: params.modelId,
-        modelApi: params.modelApi,
-        model: params.model,
-        sessionId: params.sessionId,
+        ...pluginParams.context,
         messages: params.messages,
       },
     });

@@ -12,12 +12,13 @@ import type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import {
   isQaFastModeEnabled,
   normalizeQaProviderMode,
   type QaProviderMode,
 } from "./model-selection.js";
+import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
+import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   createQaTransportAdapter,
@@ -45,6 +46,7 @@ import {
 import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
 import { closeQaWebSessions } from "./web-runtime.js";
 
 type QaSuiteStep = {
@@ -69,7 +71,7 @@ export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaL
 export type QaSuiteRunParams = {
   repoRoot?: string;
   outputDir?: string;
-  providerMode?: QaProviderMode | "live-openai";
+  providerMode?: QaProviderMode;
   transportId?: QaTransportId;
   primaryModel?: string;
   alternateModel?: string;
@@ -81,7 +83,73 @@ export type QaSuiteRunParams = {
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;
   controlUiEnabled?: boolean;
+  transportReadyTimeoutMs?: number;
 };
+
+function parseQaSuiteBooleanEnv(value: string | undefined): boolean | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return undefined;
+}
+
+function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
+  const override = parseQaSuiteBooleanEnv(env.OPENCLAW_QA_SUITE_PROGRESS);
+  if (override !== undefined) {
+    return override;
+  }
+  return parseQaSuiteBooleanEnv(env.CI) === true;
+}
+
+function resolveQaSuiteTransportReadyTimeoutMs(
+  explicitTimeoutMs?: number,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  if (
+    typeof explicitTimeoutMs === "number" &&
+    Number.isFinite(explicitTimeoutMs) &&
+    explicitTimeoutMs > 0
+  ) {
+    return Math.floor(explicitTimeoutMs);
+  }
+  const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
+  if (!raw) {
+    return 120_000;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 120_000;
+  }
+  return Math.floor(parsed);
+}
+
+function writeQaSuiteProgress(enabled: boolean, message: string) {
+  if (!enabled) {
+    return;
+  }
+  process.stderr.write(`[qa-suite] ${message}\n`);
+}
+
+function sanitizeQaSuiteProgressValue(value: string): string {
+  let normalized = "";
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    if (code === undefined) {
+      continue;
+    }
+    const isControl = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    normalized += isControl ? " " : char;
+  }
+  normalized = normalized.replace(/\s+/gu, " ").trim();
+  return normalized.length > 0 ? normalized : "<empty>";
+}
 
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
   if (startLab) {
@@ -195,7 +263,7 @@ async function runScenarioDefinition(
 
 function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -222,28 +290,7 @@ export type QaSuiteSummaryJsonParams = {
  * import this type instead of re-declaring the shape, so changes to the
  * summary schema propagate through to every consumer at type-check time.
  */
-export type QaSuiteSummaryJson = {
-  scenarios: QaSuiteScenarioResult[];
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-  };
-  run: {
-    startedAt: string;
-    finishedAt: string;
-    providerMode: QaProviderMode;
-    primaryModel: string;
-    primaryProvider: string | null;
-    primaryModelName: string | null;
-    alternateModel: string;
-    alternateProvider: string | null;
-    alternateModelName: string | null;
-    fastMode: boolean;
-    concurrency: number;
-    scenarioIds: string[] | null;
-  };
-};
+export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 /**
  * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.4
@@ -267,7 +314,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
     counts: {
       total: params.scenarios.length,
       passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
-      failed: params.scenarios.filter((scenario) => scenario.status === "fail").length,
+      failed: countQaSuiteFailedScenarios(params.scenarios),
     },
     run: {
       startedAt: params.startedAt.toISOString(),
@@ -331,7 +378,9 @@ async function writeQaSuiteArtifacts(params: {
 export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const providerMode = normalizeQaProviderMode(params?.providerMode ?? "live-frontier");
+  const providerMode = normalizeQaProviderMode(
+    params?.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
+  );
   const transportId = normalizeQaTransportId(params?.transportId);
   const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
@@ -355,6 +404,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     params?.concurrency,
     selectedCatalogScenarios.length,
     defaultQaSuiteConcurrencyForTransport(transportId),
+  );
+  const progressEnabled = shouldLogQaSuiteProgress();
+  writeQaSuiteProgress(
+    progressEnabled,
+    `run start: scenarios=${selectedCatalogScenarios.length} concurrency=${concurrency} transport=${transportId}`,
   );
 
   if (concurrency > 1 && selectedCatalogScenarios.length > 1) {
@@ -393,6 +447,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         selectedCatalogScenarios,
         concurrency,
         async (scenario, index): Promise<QaSuiteScenarioResult> => {
+          const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
+          writeQaSuiteProgress(
+            progressEnabled,
+            `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+          );
           liveScenarioOutcomes[index] = {
             id: scenario.id,
             name: scenario.title,
@@ -444,6 +503,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               finishedAt: new Date().toISOString(),
             };
             updateScenarioRun();
+            writeQaSuiteProgress(
+              progressEnabled,
+              `scenario ${scenarioResult.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+            );
             return scenarioResult;
           } catch (error) {
             const details = formatErrorMessage(error);
@@ -469,11 +532,16 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               finishedAt: new Date().toISOString(),
             };
             updateScenarioRun();
+            writeQaSuiteProgress(
+              progressEnabled,
+              `scenario fail (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+            );
             return scenarioResult;
           }
         },
       );
       const finishedAt = new Date();
+      const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
       lab.setScenarioRun({
         kind: "suite",
         status: "completed",
@@ -508,6 +576,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         markdown: report,
         generatedAt: finishedAt.toISOString(),
       } satisfies QaLabLatestReport);
+      writeQaSuiteProgress(
+        progressEnabled,
+        `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+      );
       return {
         outputDir,
         reportPath,
@@ -538,13 +610,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     id: transportId,
     state: lab.state,
   });
-  const mock =
-    providerMode === "mock-openai"
-      ? await startQaMockOpenAiServer({
-          host: "127.0.0.1",
-          port: 0,
-        })
-      : null;
+  const mock = await startQaProviderServer(providerMode);
   const gateway = await startQaGatewayChild({
     repoRoot,
     providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
@@ -585,12 +651,15 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
   let preserveGatewayRuntimeDir: string | undefined;
   try {
+    const transportReadyTimeoutMs = resolveQaSuiteTransportReadyTimeoutMs(
+      params?.transportReadyTimeoutMs,
+    );
     // The gateway child already waits for /readyz before returning, but the
     // selected transport can still be finishing account startup. Pay that
     // readiness cost once here so the first scenario does not race bootstrap.
-    await waitForTransportReady(env, 120_000).catch(async () => {
-      await waitForGatewayHealthy(env, 120_000);
-      await waitForTransportReady(env, 120_000);
+    await waitForTransportReady(env, transportReadyTimeoutMs).catch(async () => {
+      await waitForGatewayHealthy(env, transportReadyTimeoutMs);
+      await waitForTransportReady(env, transportReadyTimeoutMs);
     });
     await sleep(1_000);
     const scenarios: QaSuiteScenarioResult[] = [];
@@ -610,6 +679,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     });
 
     for (const [index, scenario] of selectedCatalogScenarios.entries()) {
+      const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
+      writeQaSuiteProgress(
+        progressEnabled,
+        `scenario start (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+      );
       liveScenarioOutcomes[index] = {
         id: scenario.id,
         name: scenario.title,
@@ -625,6 +699,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
       const result = await runScenarioDefinition(env, scenario);
       scenarios.push(result);
+      writeQaSuiteProgress(
+        progressEnabled,
+        `scenario ${result.status} (${index + 1}/${selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+      );
       liveScenarioOutcomes[index] = {
         id: scenario.id,
         name: scenario.title,
@@ -643,6 +721,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     }
 
     const finishedAt = new Date();
+    const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
     if (scenarios.some((scenario) => scenario.status === "fail")) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
@@ -677,6 +756,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       generatedAt: finishedAt.toISOString(),
     } satisfies QaLabLatestReport;
     lab.setLatestReport(latestReport);
+    writeQaSuiteProgress(
+      progressEnabled,
+      `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+    );
 
     return {
       outputDir,
@@ -709,3 +792,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     }
   }
 }
+
+export const qaSuiteProgressTesting = {
+  parseQaSuiteBooleanEnv,
+  resolveQaSuiteTransportReadyTimeoutMs,
+  sanitizeQaSuiteProgressValue,
+  shouldLogQaSuiteProgress,
+};

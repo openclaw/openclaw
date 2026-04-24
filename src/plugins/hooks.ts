@@ -258,9 +258,11 @@ export function createHookRunner(
     if (next.status === "error") {
       return next;
     }
+    const deliveryOrigin = acc?.deliveryOrigin ?? next.deliveryOrigin;
     return {
       status: "ok",
       threadBindingReady: Boolean(acc?.threadBindingReady || next.threadBindingReady),
+      ...(deliveryOrigin ? { deliveryOrigin } : {}),
     };
   };
 
@@ -453,6 +455,7 @@ export function createHookRunner(
 
   async function runClaimingHookForPluginOutcome<
     K extends PluginHookName,
+    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Targeted hook outcomes preserve caller-specific handled result types.
     TResult extends { handled: boolean },
   >(
     hookName: K,
