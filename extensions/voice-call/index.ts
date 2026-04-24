@@ -82,6 +82,11 @@ const voiceCallConfigSchema = {
     },
     "realtime.streamPath": { label: "Realtime Stream Path", advanced: true },
     "realtime.instructions": { label: "Realtime Instructions", advanced: true },
+    "realtime.toolPolicy": {
+      label: "Realtime Tool Policy",
+      help: "Controls the shared openclaw_agent_consult tool.",
+      advanced: true,
+    },
     "realtime.providers": { label: "Realtime Provider Config", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",

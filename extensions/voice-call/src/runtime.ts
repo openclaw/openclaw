@@ -1,12 +1,21 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { ResolvedRealtimeVoiceProvider } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  consultRealtimeVoiceAgent,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  resolveRealtimeVoiceAgentConsultTools,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
+  type RealtimeVoiceTool,
+  type ResolvedRealtimeVoiceProvider,
+} from "openclaw/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import { resolveVoiceResponseModel } from "./response-model.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
@@ -74,6 +83,43 @@ function loadRealtimeVoiceRuntime(): Promise<RealtimeVoiceRuntimeModule> {
 function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
   realtimeHandlerPromise ??= import("./webhook/realtime-handler.js");
   return realtimeHandlerPromise;
+}
+
+function resolveRealtimeTools(config: VoiceCallConfig): RealtimeVoiceTool[] {
+  const tools = new Map<string, RealtimeVoiceTool>();
+  for (const tool of resolveRealtimeVoiceAgentConsultTools(config.realtime.toolPolicy)) {
+    tools.set(tool.name, tool);
+  }
+  for (const tool of config.realtime.tools) {
+    if (!tools.has(tool.name)) {
+      tools.set(tool.name, tool);
+    }
+  }
+  return [...tools.values()];
+}
+
+function resolveVoiceCallConsultSessionKey(call: {
+  sessionKey?: string;
+  from?: string;
+  to?: string;
+  direction?: "inbound" | "outbound";
+  callId: string;
+}): string {
+  if (call.sessionKey) {
+    return call.sessionKey;
+  }
+  const phone = call.direction === "outbound" ? call.to : call.from;
+  const normalizedPhone = phone?.replace(/\D/g, "");
+  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${call.callId}`;
+}
+
+function mapVoiceCallConsultTranscript(call: {
+  transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
+}): RealtimeVoiceAgentConsultTranscriptEntry[] {
+  return (call.transcript ?? []).map((entry) => ({
+    role: entry.speaker === "bot" ? "assistant" : "user",
+    text: entry.text,
+  }));
 }
 
 function createRuntimeResourceLifecycle(params: {
@@ -215,6 +261,7 @@ export async function createVoiceCallRuntime(params: {
   };
 
   const config = resolveVoiceCallConfig(rawConfig);
+  const cfg = fullConfig ?? (coreConfig as OpenClawConfig);
 
   if (!config.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
@@ -236,7 +283,7 @@ export async function createVoiceCallRuntime(params: {
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
         config,
-        fullConfig: fullConfig ?? (coreConfig as OpenClawConfig),
+        fullConfig: cfg,
       })
     : null;
   const webhookServer = new VoiceCallWebhookServer(
@@ -249,16 +296,61 @@ export async function createVoiceCallRuntime(params: {
   );
   if (realtimeProvider) {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
-    webhookServer.setRealtimeHandler(
-      new RealtimeCallHandler(
-        config.realtime,
-        manager,
-        provider,
-        realtimeProvider.provider,
-        realtimeProvider.providerConfig,
-        config.serve.path,
-      ),
+    const realtimeConfig = {
+      ...config.realtime,
+      tools: resolveRealtimeTools(config),
+    };
+    const realtimeHandler = new RealtimeCallHandler(
+      realtimeConfig,
+      manager,
+      provider,
+      realtimeProvider.provider,
+      realtimeProvider.providerConfig,
+      config.serve.path,
     );
+    if (config.realtime.toolPolicy !== "none") {
+      realtimeHandler.registerToolHandler(
+        REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        async (args, callId) => {
+          const call = manager.getCall(callId);
+          if (!call) {
+            return { error: `Call "${callId}" not found` };
+          }
+          const { provider: agentProvider, model } = resolveVoiceResponseModel({
+            voiceConfig: config,
+            agentRuntime,
+          });
+          const thinkLevel = agentRuntime.resolveThinkingDefault({
+            cfg,
+            provider: agentProvider,
+            model,
+          });
+          return await consultRealtimeVoiceAgent({
+            cfg,
+            agentRuntime,
+            logger: log,
+            sessionKey: resolveVoiceCallConsultSessionKey(call),
+            messageProvider: "voice",
+            lane: "voice",
+            runIdPrefix: `voice-realtime-consult:${callId}`,
+            args,
+            transcript: mapVoiceCallConsultTranscript(call),
+            surface: "a live phone call",
+            userLabel: "Caller",
+            assistantLabel: "Agent",
+            questionSourceLabel: "caller",
+            provider: agentProvider,
+            model,
+            thinkLevel,
+            timeoutMs: config.responseTimeoutMs,
+            toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(config.realtime.toolPolicy),
+            extraSystemPrompt:
+              "You are a behind-the-scenes consultant for a live phone voice agent. Be accurate, brief, and speakable.",
+          });
+        },
+      );
+    }
+    webhookServer.setRealtimeHandler(realtimeHandler);
   }
   const lifecycle = createRuntimeResourceLifecycle({ config, webhookServer });
 

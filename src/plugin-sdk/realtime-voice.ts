@@ -15,9 +15,23 @@ export type {
   RealtimeVoiceToolCallEvent,
 } from "../realtime-voice/provider-types.js";
 export {
+  buildRealtimeVoiceAgentConsultChatMessage,
+  buildRealtimeVoiceAgentConsultPrompt,
+  collectRealtimeVoiceAgentConsultVisibleText,
+  parseRealtimeVoiceAgentConsultArgs,
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  type RealtimeVoiceAgentConsultArgs,
+  type RealtimeVoiceAgentConsultToolPolicy,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "../realtime-voice/agent-consult-tool.js";
+export {
+  consultRealtimeVoiceAgent,
+  resolveRealtimeVoiceAgentConsultTools,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+  type RealtimeVoiceAgentConsultResult,
+  type RealtimeVoiceAgentConsultRuntime,
+} from "../realtime-voice/agent-consult-runtime.js";
 export {
   canonicalizeRealtimeVoiceProviderId,
   getRealtimeVoiceProvider,
