@@ -6,6 +6,7 @@ import {
   generateJobName,
   buildReminderPrompt,
   executeRemind,
+  executeScheduledRemind,
 } from "./remind-logic.js";
 
 describe("engine/tools/remind-logic", () => {
@@ -200,6 +201,78 @@ describe("engine/tools/remind-logic", () => {
     it("returns error when neither AI nor ctx provides a target", () => {
       const result = executeRemind({ action: "add", content: "test", time: "5m" });
       expect((result.details as { error: string }).error).toMatch(/delivery target/i);
+    });
+  });
+
+  describe("executeScheduledRemind", () => {
+    it("runs cron.add directly for relative reminders", async () => {
+      const calls: unknown[] = [];
+      const result = await executeScheduledRemind(
+        { action: "add", content: "test reminder", to: "qqbot:c2c:123", time: "5m" },
+        {},
+        async (params) => {
+          calls.push(params);
+          return { id: "job-1" };
+        },
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        action: "add",
+        job: {
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn" },
+          delivery: {
+            mode: "announce",
+            channel: "qqbot",
+            to: "qqbot:c2c:123",
+            accountId: "default",
+          },
+        },
+      });
+      expect(result.details).toEqual({
+        ok: true,
+        action: "add",
+        summary: '⏰ Reminder in 5m: "test reminder"',
+        cronResult: { id: "job-1" },
+      });
+    });
+
+    it("runs cron list and remove through the scheduler", async () => {
+      const calls: unknown[] = [];
+      await executeScheduledRemind({ action: "list" }, {}, async (params) => {
+        calls.push(params);
+        return { jobs: [] };
+      });
+      await executeScheduledRemind({ action: "remove", jobId: "job-1" }, {}, async (params) => {
+        calls.push(params);
+        return { ok: true };
+      });
+
+      expect(calls).toEqual([{ action: "list" }, { action: "remove", jobId: "job-1" }]);
+    });
+
+    it("does not call scheduler when validation fails", async () => {
+      const result = await executeScheduledRemind({ action: "add", time: "5m" }, {}, async () => {
+        throw new Error("should not run");
+      });
+
+      expect((result.details as { error: string }).error).toContain("content");
+    });
+
+    it("returns a clear error when Gateway cron fails", async () => {
+      const result = await executeScheduledRemind(
+        { action: "remove", jobId: "job-1" },
+        {},
+        async () => {
+          throw new Error("gateway unavailable");
+        },
+      );
+
+      expect(result.details).toEqual({
+        error: "Failed to run Gateway cron action: gateway unavailable",
+        action: "remove",
+      });
     });
   });
 });

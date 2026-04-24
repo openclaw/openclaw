@@ -33,6 +33,16 @@ export interface RemindExecuteContext {
   fallbackAccountId?: string;
 }
 
+export type RemindCronParams =
+  | { action: "list" }
+  | { action: "remove"; jobId: string }
+  | {
+      action: "add";
+      job: ReturnType<typeof buildOnceJob>["job"] | ReturnType<typeof buildCronJob>["job"];
+    };
+
+export type RemindCronScheduler = (params: RemindCronParams) => Promise<unknown>;
+
 /**
  * JSON Schema for AI tool parameters (used by framework registration).
  * AI Tool 参数的 JSON Schema 定义（供框架注册使用）。
@@ -233,6 +243,40 @@ function json(data: unknown) {
   };
 }
 
+function getCronParams(details: unknown): RemindCronParams | undefined {
+  if (!details || typeof details !== "object") {
+    return undefined;
+  }
+  const cronParams = (details as { cronParams?: unknown }).cronParams;
+  if (!cronParams || typeof cronParams !== "object") {
+    return undefined;
+  }
+  const action = (cronParams as { action?: unknown }).action;
+  if (action === "list") {
+    return { action };
+  }
+  if (action === "remove") {
+    const jobId = (cronParams as { jobId?: unknown }).jobId;
+    return typeof jobId === "string" && jobId.trim() ? { action, jobId } : undefined;
+  }
+  if (action === "add" && "job" in cronParams) {
+    return cronParams as Extract<RemindCronParams, { action: "add" }>;
+  }
+  return undefined;
+}
+
+function getStringDetail(details: unknown, key: string): string | undefined {
+  if (!details || typeof details !== "object") {
+    return undefined;
+  }
+  const value = (details as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function formatSchedulerError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * Execute the reminder tool logic.
  * 执行提醒工具逻辑。
@@ -308,4 +352,31 @@ export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = 
     cronParams: buildOnceJob(params, delayMs, resolvedTo, resolvedAccountId),
     summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${params.content}"`,
   });
+}
+
+export async function executeScheduledRemind(
+  params: RemindParams,
+  ctx: RemindExecuteContext,
+  scheduler: RemindCronScheduler,
+) {
+  const prepared = executeRemind(params, ctx);
+  const cronParams = getCronParams(prepared.details);
+  if (!cronParams) {
+    return prepared;
+  }
+
+  try {
+    const cronResult = await scheduler(cronParams);
+    return json({
+      ok: true,
+      action: params.action,
+      summary: getStringDetail(prepared.details, "summary"),
+      cronResult,
+    });
+  } catch (error) {
+    return json({
+      error: `Failed to run Gateway cron action: ${formatSchedulerError(error)}`,
+      action: params.action,
+    });
+  }
 }
