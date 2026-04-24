@@ -5,12 +5,13 @@ import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures
 import "./test-helpers/pi-coding-agent-token-mock.js";
 
 let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
+let estimateTokensCjkAware: typeof import("./compaction.js").estimateTokensCjkAware;
 let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;
 let splitMessagesByTokenShare: typeof import("./compaction.js").splitMessagesByTokenShare;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ estimateMessagesTokens, pruneHistoryForContextShare, splitMessagesByTokenShare } =
+  ({ estimateMessagesTokens, estimateTokensCjkAware, pruneHistoryForContextShare, splitMessagesByTokenShare } =
     await import("./compaction.js"));
 });
 
@@ -369,5 +370,68 @@ describe("pruneHistoryForContextShare", () => {
     const keptToolResults = pruned.messages.filter((m) => m.role === "toolResult");
     expect(keptToolResults).toHaveLength(0);
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
+  });
+});
+
+describe("estimateTokensCjkAware", () => {
+  it("returns the same estimate as upstream for ASCII-only messages", () => {
+    const asciiMessage: AgentMessage = {
+      role: "user",
+      content: "Hello, this is a plain ASCII message for testing.",
+      timestamp: 1,
+    };
+    // For pure ASCII, CJK correction is 0 — result matches upstream chars/4.
+    const result = estimateTokensCjkAware(asciiMessage);
+    const expected = Math.max(1, Math.ceil("Hello, this is a plain ASCII message for testing.".length / 4));
+    expect(result).toBe(expected);
+  });
+
+  it("returns a higher estimate for CJK text than upstream chars/4", () => {
+    const cjkText = "このメッセージは日本語で書かれています";
+    const cjkMessage: AgentMessage = {
+      role: "user",
+      content: cjkText,
+      timestamp: 2,
+    };
+    const result = estimateTokensCjkAware(cjkMessage);
+    // Upstream would estimate ceil(24/4)=6. CJK-aware should be much higher.
+    const naiveEstimate = Math.max(1, Math.ceil(cjkText.length / 4));
+    expect(result).toBeGreaterThan(naiveEstimate);
+  });
+
+  it("corrects CJK inside assistant toolCall arguments", () => {
+    const cjkContent = "日本語のファイル内容を書き込みます";
+    const assistantWithToolCall: AgentMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "write",
+          arguments: { path: "test.txt", data: cjkContent },
+        },
+      ],
+      timestamp: 3,
+    } as unknown as AgentMessage;
+    const result = estimateTokensCjkAware(assistantWithToolCall);
+    expect(result).toBeGreaterThan(0);
+    // The CJK-aware estimate should be higher than what the mock upstream
+    // estimateTokens alone would return. The upstream mock reads the message
+    // content shallowly and divides by 4, while our wrapper adds CJK weight.
+    const asciiOnlyToolCall: AgentMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_2",
+          name: "write",
+          arguments: { path: "test.txt", data: "x".repeat(cjkContent.length) },
+        },
+      ],
+      timestamp: 4,
+    } as unknown as AgentMessage;
+    const asciiResult = estimateTokensCjkAware(asciiOnlyToolCall);
+    // CJK message must estimate higher than equivalent-length ASCII message
+    expect(result).toBeGreaterThan(asciiResult);
   });
 });

@@ -123,17 +123,30 @@ function cjkTokenCorrection(message: AgentMessage): number {
           texts.push(rec.text);
         } else if (rec.type === "thinking" && typeof rec.thinking === "string") {
           texts.push(rec.thinking);
+        } else if (rec.type === "toolCall") {
+          // toolCall arguments can contain CJK text (e.g. file content writes)
+          if (typeof rec.arguments === "object" && rec.arguments !== null) {
+            texts.push(JSON.stringify(rec.arguments));
+          }
         }
       }
     }
   }
 
   // bashExecution: command + output; branchSummary / compactionSummary: summary
-  if (typeof msg.command === "string") texts.push(msg.command);
-  if (typeof msg.output === "string") texts.push(msg.output);
-  if (typeof msg.summary === "string") texts.push(msg.summary);
+  if (typeof msg.command === "string") {
+    texts.push(msg.command);
+  }
+  if (typeof msg.output === "string") {
+    texts.push(msg.output);
+  }
+  if (typeof msg.summary === "string") {
+    texts.push(msg.summary);
+  }
 
-  if (texts.length === 0) return 0;
+  if (texts.length === 0) {
+    return 0;
+  }
 
   let rawLength = 0;
   let weightedLength = 0;
@@ -143,7 +156,9 @@ function cjkTokenCorrection(message: AgentMessage): number {
   }
 
   const extraChars = weightedLength - rawLength;
-  if (extraChars <= 0) return 0;
+  if (extraChars <= 0) {
+    return 0;
+  }
   return Math.ceil(extraChars / CHARS_PER_TOKEN_ESTIMATE);
 }
 
