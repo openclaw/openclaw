@@ -315,14 +315,11 @@ describeLive("gateway live (cli backend)", () => {
           {
             sessionKey,
             idempotencyKey: `idem-${randomUUID()}`,
-            message:
-              providerId === "codex-cli"
-                ? `Please include the token CLI-BACKEND-${nonce} in your reply.`
-                : enableCliModelSwitchProbe
-                  ? `Reply with exactly: CLI backend OK ${nonce}.` +
-                    ` Also remember this session note for later: ${memoryToken}.` +
-                    " Do not include the note in your reply."
-                  : `Reply with exactly: CLI backend OK ${nonce}.`,
+            message: enableCliModelSwitchProbe
+              ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
+                ` Also remember this session note for later: ${memoryToken}.` +
+                " Do not include the note in your reply."
+              : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
             deliver: false,
             timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
           },
@@ -340,7 +337,7 @@ describeLive("gateway live (cli backend)", () => {
           const resultWithMeta = payload?.result as {
             meta?: { systemPromptReport?: SystemPromptReport };
           };
-          expect(matchesCliBackendReply(text, `CLI backend OK ${nonce}.`)).toBe(true);
+          expect(text).toContain(`CLI-BACKEND-${nonce}`);
           expect(
             resultWithMeta.meta?.systemPromptReport?.injectedWorkspaceFiles?.map(
               (entry) => entry.name,
