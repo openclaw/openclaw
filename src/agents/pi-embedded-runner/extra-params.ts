@@ -119,7 +119,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cachedContent?: string;
   openaiWsWarmup?: boolean;
 };
-type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
+export type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
@@ -140,6 +140,7 @@ export function resolvePreparedExtraParams(params: {
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
+  resolvedTransport?: SupportedTransport;
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -198,7 +199,7 @@ export function resolvePreparedExtraParams(params: {
       extraParams: prepared,
       thinkingLevel: params.thinkingLevel,
       model: params.model,
-      transport: resolveSupportedTransport(prepared.transport),
+      transport: params.resolvedTransport ?? resolveSupportedTransport(prepared.transport),
     },
   })?.patch;
   return transportPatch ? { ...prepared, ...transportPatch } : prepared;
@@ -258,6 +259,21 @@ export function resolveAgentTransportOverride(params: {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
+}
+
+export function resolveExplicitSettingsTransport(params: {
+  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  sessionTransport: unknown;
+}): SupportedTransport | undefined {
+  const globalSettings = params.settingsManager.getGlobalSettings();
+  const projectSettings = params.settingsManager.getProjectSettings();
+  if (
+    !hasExplicitTransportSetting(globalSettings) &&
+    !hasExplicitTransportSetting(projectSettings)
+  ) {
+    return undefined;
+  }
+  return resolveSupportedTransport(params.sessionTransport);
 }
 
 function createStreamFnWithExtraParams(
@@ -477,6 +493,7 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
   agentDir?: string,
+  resolvedTransport?: SupportedTransport,
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -501,6 +518,7 @@ export function applyExtraParamsToAgent(
     workspaceDir,
     resolvedExtraParams,
     model,
+    resolvedTransport,
   });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,

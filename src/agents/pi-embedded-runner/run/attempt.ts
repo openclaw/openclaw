@@ -141,7 +141,11 @@ import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
+} from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -1381,6 +1385,10 @@ export async function runEmbeddedAttempt(
         effectiveWorkspace,
         params.model,
         agentDir,
+        resolveExplicitSettingsTransport({
+          settingsManager,
+          sessionTransport: activeSession.agent.transport,
+        }),
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,

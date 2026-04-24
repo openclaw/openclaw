@@ -283,6 +283,7 @@ import {
 import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
   resolvePreparedExtraParams,
 } from "./pi-embedded-runner/extra-params.js";
 import { createGoogleThinkingPayloadWrapper } from "./pi-embedded-runner/google-stream-wrappers.js";
@@ -1956,6 +1957,48 @@ describe("applyExtraParamsToAgent", () => {
     );
   });
 
+  it("passes explicit settings transport to transport extra-param hooks", () => {
+    const resolveProviderExtraParamsForTransport = vi.fn((_params) => ({
+      patch: {
+        hookApplied: true,
+      },
+    }));
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: (params) => ({
+        ...params.context.extraParams,
+        transport: "auto",
+      }),
+      resolveProviderExtraParamsForTransport,
+      wrapProviderStreamFn: (params) => params.context.streamFn,
+    });
+
+    const resolvedTransport = resolveExplicitSettingsTransport({
+      settingsManager: {
+        getGlobalSettings: () => ({ transport: "websocket" }),
+        getProjectSettings: () => ({}),
+      },
+      sessionTransport: "websocket",
+    });
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+      resolvedTransport,
+    });
+
+    expect(effectiveExtraParams).toMatchObject({
+      transport: "auto",
+      hookApplied: true,
+    });
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          transport: "websocket",
+        }),
+      }),
+    );
+  });
+
   it("applies transport hook parallel_tool_calls patches to request payloads", () => {
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: () => undefined,
@@ -2014,6 +2057,27 @@ describe("applyExtraParamsToAgent", () => {
         effectiveExtraParams,
       }),
     ).toBeUndefined();
+  });
+
+  it("resolves explicit settings transport from the active session transport", () => {
+    expect(
+      resolveExplicitSettingsTransport({
+        settingsManager: {
+          getGlobalSettings: () => ({}),
+          getProjectSettings: () => ({}),
+        },
+        sessionTransport: "websocket",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveExplicitSettingsTransport({
+        settingsManager: {
+          getGlobalSettings: () => ({ transport: "sse" }),
+          getProjectSettings: () => ({}),
+        },
+        sessionTransport: "websocket",
+      }),
+    ).toBe("websocket");
   });
 
   it("strips prototype pollution keys from extra params overrides", () => {
