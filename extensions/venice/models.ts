@@ -113,6 +113,15 @@ export const VENICE_MODEL_CATALOG = [
     privacy: "private",
   },
   {
+    id: "qwen-3-6-plus",
+    name: "Qwen 3.6 Plus",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 256000,
+    maxTokens: 65536,
+    privacy: "private",
+  },
+  {
     id: "qwen3-next-80b",
     name: "Qwen3 Next 80B",
     reasoning: false,
@@ -243,6 +252,15 @@ export const VENICE_MODEL_CATALOG = [
   {
     id: "kimi-k2-5",
     name: "Kimi K2.5",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 256000,
+    maxTokens: 65536,
+    privacy: "private",
+  },
+  {
+    id: "kimi-k2-6",
+    name: "Kimi K2.6",
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 256000,
