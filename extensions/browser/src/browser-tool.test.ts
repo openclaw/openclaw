@@ -308,6 +308,7 @@ describe("browser tool description", () => {
     expect(tool.description).toContain('profile="user"');
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
+    expect(tool.description).toContain("browser-automation skill");
   });
 });
 
