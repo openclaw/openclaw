@@ -157,7 +157,7 @@ function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>
 
 function isAriaRefsUnsupportedError(err: unknown): boolean {
   const msg = String(err).toLowerCase();
-  return msg.includes("refs=aria") && msg.includes("_snapshotforai");
+  return msg.includes("refs=aria") && msg.includes("not support");
 }
 
 function withRoleRefsFallback<T extends { refs?: "aria" | "role" }>(

@@ -481,22 +481,14 @@ export function registerBrowserAgentSnapshotRoutes(
 
           const snap = plan.wantsRoleSnapshot
             ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
-            : await pw
-                .snapshotAiViaPlaywright({
-                  cdpUrl: profileCtx.profile.cdpUrl,
-                  targetId: tab.targetId,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-                  ...(typeof plan.resolvedMaxChars === "number"
-                    ? { maxChars: plan.resolvedMaxChars }
-                    : {}),
-                })
-                .catch(async (err) => {
-                  // Public-API fallback when Playwright's private _snapshotForAI is missing.
-                  if (String(err).toLowerCase().includes("_snapshotforai")) {
-                    return await pw.snapshotRoleViaPlaywright(roleSnapshotArgs);
-                  }
-                  throw err;
-                });
+            : await pw.snapshotAiViaPlaywright({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                ...(typeof plan.resolvedMaxChars === "number"
+                  ? { maxChars: plan.resolvedMaxChars }
+                  : {}),
+              });
           if (plan.labels) {
             const labeled = await pw.screenshotWithLabelsViaPlaywright({
               cdpUrl: profileCtx.profile.cdpUrl,

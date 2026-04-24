@@ -57,13 +57,6 @@ export type BrowserNetworkRequest = {
   failureText?: string;
 };
 
-type SnapshotForAIResult = { full: string; incremental?: string };
-type SnapshotForAIOptions = { timeout?: number; track?: string };
-
-export type WithSnapshotForAI = {
-  _snapshotForAI?: (options?: SnapshotForAIOptions) => Promise<SnapshotForAIResult>;
-};
-
 type TargetInfoResponse = {
   targetInfo?: {
     targetId?: string;
