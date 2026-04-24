@@ -118,6 +118,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
   openaiWsWarmup?: boolean;
+  think?: boolean;
 };
 export type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
 
@@ -314,6 +315,9 @@ function createStreamFnWithExtraParams(
         : undefined;
   if (typeof cachedContent === "string" && cachedContent.trim()) {
     streamParams.cachedContent = cachedContent.trim();
+  }
+  if (typeof extraParams.think === "boolean") {
+    streamParams.think = extraParams.think;
   }
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
