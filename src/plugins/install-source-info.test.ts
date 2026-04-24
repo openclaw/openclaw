@@ -6,7 +6,7 @@ describe("describePluginInstallSource", () => {
     expect(
       describePluginInstallSource({
         npmSpec: "@vendor/demo@1.2.3",
-        expectedIntegrity: "sha512-demo",
+        expectedIntegrity: " sha512-demo ",
         defaultChoice: "npm",
       }),
     ).toEqual({
@@ -24,7 +24,64 @@ describe("describePluginInstallSource", () => {
     });
   });
 
-  it("surfaces floating or missing-integrity npm metadata without rejecting it", () => {
+  it("marks exact npm specs without integrity as version-pinned only", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "@vendor/demo@1.2.3",
+      }),
+    ).toEqual({
+      npm: {
+        spec: "@vendor/demo@1.2.3",
+        packageName: "@vendor/demo",
+        selector: "1.2.3",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        pinState: "exact-without-integrity",
+      },
+      warnings: ["npm-spec-missing-integrity"],
+    });
+  });
+
+  it("omits whitespace-only integrity from npm source facts", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "@vendor/demo@1.2.3",
+        expectedIntegrity: "   ",
+      }),
+    ).toEqual({
+      npm: {
+        spec: "@vendor/demo@1.2.3",
+        packageName: "@vendor/demo",
+        selector: "1.2.3",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        pinState: "exact-without-integrity",
+      },
+      warnings: ["npm-spec-missing-integrity"],
+    });
+  });
+
+  it("surfaces floating specs with integrity without rejecting them", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "@vendor/demo@beta",
+        expectedIntegrity: "sha512-demo",
+      }),
+    ).toEqual({
+      npm: {
+        spec: "@vendor/demo@beta",
+        packageName: "@vendor/demo",
+        selector: "beta",
+        selectorKind: "tag",
+        exactVersion: false,
+        expectedIntegrity: "sha512-demo",
+        pinState: "floating-with-integrity",
+      },
+      warnings: ["npm-spec-floating"],
+    });
+  });
+
+  it("surfaces floating specs without integrity without rejecting them", () => {
     expect(
       describePluginInstallSource({
         npmSpec: "@vendor/demo@beta",

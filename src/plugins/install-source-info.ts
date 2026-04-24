@@ -55,7 +55,8 @@ export function describePluginInstallSource(
     const parsed = parseRegistryNpmSpec(npmSpec);
     if (parsed) {
       const exactVersion = parsed.selectorKind === "exact-version";
-      const hasIntegrity = Boolean(install.expectedIntegrity?.trim());
+      const expectedIntegrity = install.expectedIntegrity?.trim();
+      const hasIntegrity = Boolean(expectedIntegrity);
       if (!exactVersion) {
         warnings.push("npm-spec-floating");
       }
@@ -69,7 +70,7 @@ export function describePluginInstallSource(
         exactVersion,
         pinState: resolveNpmPinState({ exactVersion, hasIntegrity }),
         ...(parsed.selector ? { selector: parsed.selector } : {}),
-        ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+        ...(expectedIntegrity ? { expectedIntegrity } : {}),
       };
     } else {
       warnings.push("invalid-npm-spec");
