@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/activation: expose activation plan reasons and a richer plan API so callers can inspect why a plugin was selected while preserving existing id-list activation behavior. (#70943) Thanks @vincentkoc.
 - Plugins/source metadata: expose normalized install-source facts on provider and channel catalogs so onboarding can explain npm pinning, integrity state, and local availability before runtime loads. (#70951) Thanks @vincentkoc.
 - Plugins/catalog: pin the official external WeCom channel source to an exact npm release plus dist integrity, with a guard that official external sources stay integrity-pinned. (#70997) Thanks @vincentkoc.
+- Plugins/source metadata: warn when `openclaw.install.defaultChoice` is invalid or points at a missing source, keeping catalog diagnostics explicit without breaking existing plugins. Thanks @vincentkoc.
 - Diagnostics/OTEL: add a lightweight diagnostic trace-context carrier for future span correlation without adding OTEL SDK state to core. Thanks @vincentkoc.
 - Diagnostics/OTEL: attach diagnostic trace context to exported OTEL logs so log records can correlate with future spans without adding retained process state. Thanks @vincentkoc.
 - Diagnostics/OTEL: pass immutable per-run diagnostic trace context through agent and tool hook contexts, and parent exported diagnostic spans from validated context without retaining global trace state. Thanks @vincentkoc.

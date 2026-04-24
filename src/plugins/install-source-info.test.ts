@@ -131,4 +131,50 @@ describe("describePluginInstallSource", () => {
       warnings: ["invalid-npm-spec"],
     });
   });
+
+  it("warns when defaultChoice is not a supported install source", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "@vendor/demo@1.2.3",
+        defaultChoice: "registry",
+      } as never),
+    ).toEqual({
+      npm: {
+        spec: "@vendor/demo@1.2.3",
+        packageName: "@vendor/demo",
+        selector: "1.2.3",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        pinState: "exact-without-integrity",
+      },
+      warnings: ["invalid-default-choice", "npm-spec-missing-integrity"],
+    });
+  });
+
+  it("warns when defaultChoice points at a missing source", () => {
+    expect(
+      describePluginInstallSource({
+        localPath: "extensions/demo",
+        defaultChoice: "npm",
+      }),
+    ).toEqual({
+      defaultChoice: "npm",
+      local: {
+        path: "extensions/demo",
+      },
+      warnings: ["default-choice-missing-source"],
+    });
+  });
+
+  it("warns when defaultChoice points at an invalid npm source", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "github:vendor/demo",
+        defaultChoice: "npm",
+      }),
+    ).toEqual({
+      defaultChoice: "npm",
+      warnings: ["invalid-npm-spec", "default-choice-missing-source"],
+    });
+  });
 });
