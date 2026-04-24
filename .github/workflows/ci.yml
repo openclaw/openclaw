@@ -1345,7 +1345,19 @@ jobs:
         env:
           OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
           OPENCLAW_VITEST_MAX_WORKERS: "1"
-        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
+        run: |
+          if [ "$OPENCLAW_CHANGED_EXTENSION" = "telegram" ]; then
+            mapfile -t telegram_tests < <(find extensions/telegram/src -name '*.test.ts' -print | sort)
+            chunk_size=25
+            for ((i = 0; i < ${#telegram_tests[@]}; i += chunk_size)); do
+              pnpm exec vitest run \
+                --config test/vitest/vitest.extension-telegram.config.ts \
+                --maxWorkers=1 \
+                "${telegram_tests[@]:i:chunk_size}"
+            done
+          else
+            pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
+          fi
 
   # Types, lint, and format check shards.
   check-shard:
