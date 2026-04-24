@@ -670,6 +670,7 @@ OpenClaw tools, it can call `openclaw_agent_consult`.
 The consult tool runs the regular OpenClaw agent behind the scenes with recent
 meeting transcript context and returns a concise spoken answer to the realtime
 voice session. The voice model can then speak that answer back into the meeting.
+It uses the same shared realtime consult tool as Voice Call.
 
 `realtime.toolPolicy` controls the consult run:
 

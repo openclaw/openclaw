@@ -126,6 +126,7 @@ Set config under `plugins.entries.voice-call.config`:
           realtime: {
             enabled: false,
             provider: "google", // optional; first registered realtime voice provider when unset
+            toolPolicy: "safe-read-only",
             providers: {
               google: {
                 model: "gemini-2.5-flash-native-audio-preview-12-2025",
@@ -174,6 +175,20 @@ Current runtime behavior:
 - Bundled realtime voice providers include Google Gemini Live (`google`) and
   OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
+- Voice Call exposes the shared `openclaw_agent_consult` realtime tool by
+  default. The realtime model can call it when the caller asks for deeper
+  reasoning, current information, or normal OpenClaw tools.
+- `realtime.toolPolicy` controls the consult run:
+  - `safe-read-only`: expose the consult tool and limit the regular agent to
+    `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, and
+    `memory_get`.
+  - `owner`: expose the consult tool and let the regular agent use the normal
+    agent tool policy.
+  - `none`: do not expose the consult tool. Custom `realtime.tools` are still
+    passed through to the realtime provider.
+- Consult session keys reuse the existing voice session when available, then
+  fall back to the caller/callee phone number so follow-up consult calls keep
+  context during the call.
 - If `realtime.provider` points at an unregistered provider, or no realtime
   voice provider is registered at all, Voice Call logs a warning and skips
   realtime media instead of failing the whole plugin.
@@ -199,7 +214,8 @@ Example:
           realtime: {
             enabled: true,
             provider: "google",
-            instructions: "Speak briefly and ask before using tools.",
+            instructions: "Speak briefly. Call openclaw_agent_consult before using deeper tools.",
+            toolPolicy: "safe-read-only",
             providers: {
               google: {
                 apiKey: "${GEMINI_API_KEY}",

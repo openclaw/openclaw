@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createMatrixQaClient } from "../../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -391,7 +391,9 @@ async function createMatrixQaCliSelfVerificationRuntime(params: {
   userId: string;
 }) {
   const outputDir = requireMatrixQaE2eeOutputDir(params.context);
-  const rootDir = await mkdtemp(path.join(tmpdir(), "openclaw-matrix-cli-qa-"));
+  const rootDir = await mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-cli-qa-"),
+  );
   const artifactDir = path.join(
     outputDir,
     "cli-self-verification",
