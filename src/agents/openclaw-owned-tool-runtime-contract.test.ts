@@ -51,8 +51,9 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     resetOpenClawOwnedToolHooks();
   });
 
-  it("preserves adjusted before_tool_call params through execution and after_tool_call", async () => {
-    const adjustedParams = { command: "pwd", mode: "safe" };
+  it("preserves partially adjusted before_tool_call params through execution and after_tool_call", async () => {
+    const adjustedParams = { mode: "safe" };
+    const mergedParams = { command: "pwd", mode: "safe" };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
     const execute = vi.fn(async () => textToolResult("done", { ok: true }));
     const tool = wrapToolWithBeforeToolCallHook(createContractTool("exec", execute), {
@@ -91,13 +92,13 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     );
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledWith(toolCallId, adjustedParams, undefined, undefined);
+    expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
     await vi.waitFor(() => {
       expect(hooks.afterToolCall).toHaveBeenCalledWith(
         expect.objectContaining({
           toolName: "exec",
           toolCallId,
-          params: adjustedParams,
+          params: mergedParams,
           result: expect.objectContaining({
             content: [{ type: "text", text: "done" }],
             details: { ok: true },
@@ -108,6 +109,75 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
           sessionId: "session-1",
           sessionKey: "agent:agent-1:session-1",
           runId: "run-contract",
+          toolCallId,
+        }),
+      );
+    });
+  });
+
+  it("reports Pi dynamic tool execution errors through after_tool_call", async () => {
+    const adjustedParams = { timeoutSec: 1 };
+    const mergedParams = { command: "false", timeoutSec: 1 };
+    const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
+    const execute = vi.fn(async () => {
+      throw new Error("tool failed");
+    });
+    const tool = wrapToolWithBeforeToolCallHook(createContractTool("exec", execute), {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-error",
+    });
+    const definition = toToolDefinitions([tool])[0];
+    if (!definition) {
+      throw new Error("missing Pi tool definition");
+    }
+    const ctx = createToolHandlerCtx();
+    ctx.params.runId = "run-error";
+    const toolCallId = "call-error";
+    const originalParams = { command: "false" };
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId,
+        args: originalParams,
+      } as never,
+    );
+    const result = await definition.execute(toolCallId, originalParams, undefined, undefined, {});
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          status: "error",
+          error: "tool failed",
+        }),
+      }),
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId,
+        isError: true,
+        result,
+      } as never,
+    );
+
+    expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
+    await vi.waitFor(() => {
+      expect(hooks.afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "exec",
+          toolCallId,
+          params: mergedParams,
+          error: "tool failed",
+        }),
+        expect.objectContaining({
+          runId: "run-error",
           toolCallId,
         }),
       );

@@ -9,7 +9,7 @@ import {
   resetGlobalHookRunner,
 } from "../../../src/plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../../src/plugins/hooks.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 
 export function textToolResult(
