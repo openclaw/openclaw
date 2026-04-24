@@ -36,3 +36,14 @@ Notes
 - Models download to `~/.cache/whisper` on first run.
 - `--model` defaults to `turbo` on this install.
 - Use smaller models for speed, larger for accuracy.
+
+## Performance Optimization: Faster-Whisper Server
+
+For sub-second transcription latency, a persistent faster-whisper server can replace the OpenAI Whisper CLI. See [docs/tools/faster-whisper.md](../tools/faster-whisper.md) for setup instructions.
+
+Benefits:
+
+- ~0.7-1s end-to-end latency (vs 3-5s with OpenAI Whisper CLI)
+- Model preloaded at startup, no per-call cold start
+- Fully backward compatible (falls back to OpenAI Whisper CLI if server is down)
+- Shared across all agents on the same machine
