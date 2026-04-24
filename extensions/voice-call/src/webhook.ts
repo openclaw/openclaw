@@ -643,7 +643,9 @@ export class VoiceCallWebhookServer {
 
       const realtimeParams = this.getRealtimeTwimlParams(ctx);
       if (realtimeParams) {
-        if (!this.shouldAcceptRealtimeInboundRequest(realtimeParams)) {
+        const direction = realtimeParams.get("Direction");
+        const isInboundRealtimeRequest = !direction || direction === "inbound";
+        if (isInboundRealtimeRequest && !this.shouldAcceptRealtimeInboundRequest(realtimeParams)) {
           console.log("[voice-call] Realtime inbound call rejected before stream setup");
           return buildRealtimeRejectedTwiML();
         }
@@ -718,8 +720,9 @@ export class VoiceCallWebhookServer {
 
     const params = new URLSearchParams(ctx.rawBody);
     const direction = params.get("Direction");
-    const isInbound = !direction || direction === "inbound";
-    if (!isInbound) {
+    const isSupportedDirection =
+      !direction || direction === "inbound" || direction.startsWith("outbound");
+    if (!isSupportedDirection) {
       return null;
     }
 

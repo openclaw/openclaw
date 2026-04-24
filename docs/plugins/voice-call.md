@@ -548,6 +548,7 @@ For outbound `conversation` calls, first-message handling is tied to live playba
 - Barge-in queue clear and auto-response are suppressed only while the initial greeting is actively speaking.
 - If initial playback fails, the call returns to `listening` and the initial message remains queued for retry.
 - Initial playback for Twilio streaming starts on stream connect without extra delay.
+- Realtime voice conversations use the realtime stream's own opening turn. Voice Call does not post a legacy `<Say>` TwiML update for that initial message, so outbound `<Connect><Stream>` sessions stay attached.
 
 ### Twilio stream disconnect grace
 
