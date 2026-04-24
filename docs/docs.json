@@ -1607,7 +1607,13 @@
             "groups": [
               {
                 "group": "Help",
-                "pages": ["help/index", "help/troubleshooting", "help/faq", "help/faq-first-run"]
+                "pages": [
+                  "help/index",
+                  "help/troubleshooting",
+                  "help/faq",
+                  "help/faq-first-run",
+                  "help/faq-models"
+                ]
               },
               {
                 "group": "Community",
