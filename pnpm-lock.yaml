@@ -63,9 +63,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
-      '@napi-rs/canvas':
-        specifier: ^0.1.89
-        version: 0.1.92
       '@vincentkoc/qrcode-tui':
         specifier: 0.2.1
         version: 0.2.1
@@ -120,9 +117,6 @@ importers:
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
-      pdfjs-dist:
-        specifier: ^5.6.205
-        version: 5.6.205
       proxy-agent:
         specifier: ^8.0.1
         version: 8.0.1
@@ -461,6 +455,16 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: ^1.40.0
         version: 1.40.0
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/document-extract:
+    dependencies:
+      pdfjs-dist:
+        specifier: ^5.6.205
+        version: 5.6.205
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

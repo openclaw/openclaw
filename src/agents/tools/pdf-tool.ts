@@ -432,6 +432,7 @@ export function createPdfTool(options?: {
             maxPixels: PDF_MAX_PIXELS,
             minTextChars: PDF_MIN_TEXT_CHARS,
             pageNumbers,
+            config: options?.config,
           });
           extractedAll.push(extracted);
         }

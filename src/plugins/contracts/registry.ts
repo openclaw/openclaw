@@ -64,6 +64,7 @@ type ManifestContractKey =
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
+  | "documentExtractors"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"
@@ -84,6 +85,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
       realtimeVoiceProviderIds: [...entry.realtimeVoiceProviderIds],
       mediaUnderstandingProviderIds: [...entry.mediaUnderstandingProviderIds],
+      documentExtractorIds: [...entry.documentExtractorIds],
       imageGenerationProviderIds: [...entry.imageGenerationProviderIds],
       videoGenerationProviderIds: [...entry.videoGenerationProviderIds],
       musicGenerationProviderIds: [...entry.musicGenerationProviderIds],
@@ -103,6 +105,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
           (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.mediaUnderstandingProviders?.length ?? 0) > 0 ||
+          (plugin.contracts?.documentExtractors?.length ?? 0) > 0 ||
           (plugin.contracts?.imageGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.videoGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.musicGenerationProviders?.length ?? 0) > 0 ||
@@ -123,6 +126,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       mediaUnderstandingProviderIds: uniqueStrings(
         plugin.contracts?.mediaUnderstandingProviders ?? [],
       ),
+      documentExtractorIds: uniqueStrings(plugin.contracts?.documentExtractors ?? []),
       imageGenerationProviderIds: uniqueStrings(plugin.contracts?.imageGenerationProviders ?? []),
       videoGenerationProviderIds: uniqueStrings(plugin.contracts?.videoGenerationProviders ?? []),
       musicGenerationProviderIds: uniqueStrings(plugin.contracts?.musicGenerationProviders ?? []),
@@ -175,6 +179,8 @@ function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKe
             return entry.realtimeVoiceProviderIds.length > 0;
           case "mediaUnderstandingProviders":
             return entry.mediaUnderstandingProviderIds.length > 0;
+          case "documentExtractors":
+            return entry.documentExtractorIds.length > 0;
           case "imageGenerationProviders":
             return entry.imageGenerationProviderIds.length > 0;
           case "videoGenerationProviders":
