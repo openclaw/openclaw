@@ -128,6 +128,24 @@ describe("pruneOrphanedEntries", () => {
     expect(pruned).toBe(0);
     expect(store["fallback-file"]).toBeDefined();
   });
+
+  it("does not throw when an orphaned entry has a malformed sessionId", async () => {
+    const storePath = path.join(testDir, "sessions.json");
+    const now = Date.now();
+    const store = makeStore([
+      [
+        "malformed",
+        {
+          sessionId: "../bad",
+          updatedAt: now - 10 * 60 * 1000,
+          sessionFile: "missing.jsonl",
+        },
+      ],
+    ]);
+
+    await expect(pruneOrphanedEntries(store, storePath, { nowMs: now })).resolves.toBe(1);
+    expect(store.malformed).toBeUndefined();
+  });
 });
 
 describe("resolveMaintenanceConfigFromInput", () => {

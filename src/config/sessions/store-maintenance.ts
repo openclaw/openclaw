@@ -204,16 +204,24 @@ function listSessionFileCandidates(params: { storePath: string; entry: SessionEn
   if (sessionFile) {
     candidates.add(path.resolve(storeDir, sessionFile));
   }
-  candidates.add(
-    resolveSessionFilePath(params.entry.sessionId, params.entry, {
-      sessionsDir: storeDir,
-    }),
-  );
-  candidates.add(
-    resolveSessionFilePath(params.entry.sessionId, undefined, {
-      sessionsDir: storeDir,
-    }),
-  );
+  try {
+    candidates.add(
+      resolveSessionFilePath(params.entry.sessionId, params.entry, {
+        sessionsDir: storeDir,
+      }),
+    );
+  } catch {
+    // Corrupt store rows should not prevent unrelated session store writes.
+  }
+  try {
+    candidates.add(
+      resolveSessionFilePath(params.entry.sessionId, undefined, {
+        sessionsDir: storeDir,
+      }),
+    );
+  } catch {
+    // Corrupt store rows should not prevent unrelated session store writes.
+  }
   return [...candidates];
 }
 
