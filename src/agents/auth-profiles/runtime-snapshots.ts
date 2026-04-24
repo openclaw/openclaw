@@ -3,7 +3,7 @@ import { resolveAuthStorePath } from "./path-resolve.js";
 import type { AuthProfileStore } from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
-let runtimeAuthStoreSnapshotsLoadedAtMs = 0;
+const runtimeAuthStoreSnapshotLoadedAtMsByKey = new Map<string, number>();
 
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
@@ -25,11 +25,12 @@ function clearStaleRuntimeSnapshotsIfNeeded(storeKey: string): boolean {
   if (!runtimeAuthStoreSnapshots.has(storeKey)) {
     return false;
   }
-  if (runtimeAuthStoreSnapshotsLoadedAtMs <= 0) {
+  const loadedAtMs = runtimeAuthStoreSnapshotLoadedAtMsByKey.get(storeKey) ?? 0;
+  if (loadedAtMs <= 0) {
     return false;
   }
   const mtimeMs = readAuthStoreMtimeMs(storeKey);
-  if (mtimeMs === null || mtimeMs <= runtimeAuthStoreSnapshotsLoadedAtMs) {
+  if (mtimeMs === null || mtimeMs <= loadedAtMs) {
     return false;
   }
   clearRuntimeAuthProfileStoreSnapshots();
@@ -72,26 +73,26 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
   loadedAtMs = Date.now(),
 ): void {
   runtimeAuthStoreSnapshots.clear();
-  runtimeAuthStoreSnapshotsLoadedAtMs = loadedAtMs;
+  runtimeAuthStoreSnapshotLoadedAtMsByKey.clear();
   for (const entry of entries) {
-    runtimeAuthStoreSnapshots.set(
-      resolveRuntimeStoreKey(entry.agentDir),
-      cloneAuthProfileStore(entry.store),
-    );
+    const storeKey = resolveRuntimeStoreKey(entry.agentDir);
+    runtimeAuthStoreSnapshots.set(storeKey, cloneAuthProfileStore(entry.store));
+    runtimeAuthStoreSnapshotLoadedAtMsByKey.set(storeKey, loadedAtMs);
   }
 }
 
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthStoreSnapshots.clear();
-  runtimeAuthStoreSnapshotsLoadedAtMs = 0;
+  runtimeAuthStoreSnapshotLoadedAtMsByKey.clear();
 }
 
 export function setRuntimeAuthProfileStoreSnapshot(
   store: AuthProfileStore,
   agentDir?: string,
 ): void {
-  runtimeAuthStoreSnapshotsLoadedAtMs = Date.now();
-  runtimeAuthStoreSnapshots.set(resolveRuntimeStoreKey(agentDir), cloneAuthProfileStore(store));
+  const storeKey = resolveRuntimeStoreKey(agentDir);
+  runtimeAuthStoreSnapshots.set(storeKey, cloneAuthProfileStore(store));
+  runtimeAuthStoreSnapshotLoadedAtMsByKey.set(storeKey, Date.now());
 }
 
 export function updateRuntimeAuthProfileStoreSnapshotIfPresent(
@@ -102,7 +103,7 @@ export function updateRuntimeAuthProfileStoreSnapshotIfPresent(
   if (!runtimeAuthStoreSnapshots.has(storeKey)) {
     return false;
   }
-  runtimeAuthStoreSnapshotsLoadedAtMs = Date.now();
   runtimeAuthStoreSnapshots.set(storeKey, cloneAuthProfileStore(store));
+  runtimeAuthStoreSnapshotLoadedAtMsByKey.set(storeKey, Date.now());
   return true;
 }

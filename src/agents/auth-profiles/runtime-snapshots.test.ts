@@ -160,4 +160,73 @@ describe("runtime auth profile snapshots", () => {
       key: "new-runtime-key",
     });
   });
+
+  it("keeps stale detection independent for each snapshotted store key", async () => {
+    await fixtureSuite.setup();
+    const agentADir = await fixtureSuite.createCaseDir("agent-a");
+    const agentBDir = await fixtureSuite.createCaseDir("agent-b");
+    replaceRuntimeAuthProfileStoreSnapshots(
+      [
+        {
+          agentDir: agentADir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "agent-a-old",
+              },
+            },
+          },
+        },
+        {
+          agentDir: agentBDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "agent-b-old",
+              },
+            },
+          },
+        },
+      ],
+      Date.now() - 10_000,
+    );
+    await fs.writeFile(
+      path.join(agentBDir, AUTH_PROFILE_FILENAME),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "agent-b-new-disk",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(
+      updateRuntimeAuthProfileStoreSnapshotIfPresent(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "agent-a-new-runtime",
+            },
+          },
+        },
+        agentADir,
+      ),
+    ).toBe(true);
+
+    expect(getRuntimeAuthProfileStoreSnapshot(agentBDir)).toBeUndefined();
+  });
 });
