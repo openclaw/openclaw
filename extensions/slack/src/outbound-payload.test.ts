@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import { createSlackOutboundPayloadHarness } from "../test-api.js";
 
@@ -92,5 +93,13 @@ describe("slackOutbound sendPayload", () => {
 
     await expect(run()).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
     expect(sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("Slack outbound payload contract", () => {
+  installChannelOutboundPayloadContractSuite({
+    channel: "slack",
+    chunking: { mode: "passthrough", longTextLength: 5000 },
+    createHarness: createSlackOutboundPayloadHarness,
   });
 });
