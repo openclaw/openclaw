@@ -54,6 +54,41 @@ function resolveZaiPresetBaseUrl(cfg: OpenClawConfig, endpoint?: string): string
   return endpoint ? resolveZaiBaseUrl(endpoint) : existingBaseUrl || resolveZaiBaseUrl();
 }
 
+function syncZaiVisionBaseUrls(cfg: OpenClawConfig, providerBaseUrl: string): OpenClawConfig {
+  // The shared preset preserves existing model entries by id, so previously
+  // onboarded vision models keep a stale baseUrl when the endpoint changes
+  // (e.g. coding-global -> coding-cn or coding-* -> global). Canonicalize the
+  // vision entries here: coding endpoints get the matching non-coding host,
+  // non-coding endpoints drop any prior override.
+  const zai = cfg.models?.providers?.zai;
+  if (!zai || !Array.isArray(zai.models)) {
+    return cfg;
+  }
+  const visionBaseUrl = isZaiCodingBaseUrl(providerBaseUrl)
+    ? resolveZaiNonCodingBaseUrl(providerBaseUrl)
+    : undefined;
+  const patched = zai.models.map((model) => {
+    if (!model.input?.includes("image")) {
+      return model;
+    }
+    if (visionBaseUrl) {
+      return model.baseUrl === visionBaseUrl ? model : { ...model, baseUrl: visionBaseUrl };
+    }
+    if (model.baseUrl === undefined) {
+      return model;
+    }
+    const { baseUrl: _drop, ...rest } = model;
+    return rest;
+  });
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      providers: { ...cfg.models?.providers, zai: { ...zai, models: patched } },
+    },
+  };
+}
+
 function applyZaiPreset(
   cfg: OpenClawConfig,
   params?: { endpoint?: string; modelId?: string },
@@ -62,7 +97,7 @@ function applyZaiPreset(
   const modelId = normalizeOptionalString(params?.modelId) ?? ZAI_DEFAULT_MODEL_ID;
   const modelRef = `zai/${modelId}`;
   const baseUrl = resolveZaiPresetBaseUrl(cfg, params?.endpoint);
-  return applyProviderConfigWithModelCatalogPreset(cfg, {
+  const next = applyProviderConfigWithModelCatalogPreset(cfg, {
     providerId: "zai",
     api: "openai-completions",
     baseUrl,
@@ -70,6 +105,7 @@ function applyZaiPreset(
     aliases: [{ modelRef, alias: "GLM" }],
     primaryModelRef,
   });
+  return syncZaiVisionBaseUrls(next, baseUrl);
 }
 
 export function applyZaiProviderConfig(

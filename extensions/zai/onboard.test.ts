@@ -70,4 +70,44 @@ describe("zai onboard", () => {
       }
     }
   });
+
+  it("backfills vision baseUrl for configs onboarded before the fix", () => {
+    // Simulate a stale config: coding endpoint already configured, vision
+    // models present without baseUrl (the buggy pre-fix shape).
+    const stale = applyZaiConfig({}, { endpoint: "coding-global" });
+    const staleZai = stale.models?.providers?.zai;
+    const stripped = {
+      ...stale,
+      models: {
+        ...stale.models,
+        providers: {
+          ...stale.models?.providers,
+          zai: {
+            ...staleZai,
+            models: (staleZai?.models ?? []).map(({ baseUrl: _drop, ...rest }) => rest),
+          },
+        },
+      },
+    };
+    const cfg = applyZaiConfig(stripped, { endpoint: "coding-global" });
+    const byId = new Map((cfg.models?.providers?.zai?.models ?? []).map((m) => [m.id, m]));
+    expect(byId.get("glm-4.6v")?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+    expect(byId.get("glm-4.5v")?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+    expect(byId.get("glm-5v-turbo")?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+  });
+
+  it("rewrites stale vision baseUrl when switching between endpoints", () => {
+    const first = applyZaiConfig({}, { endpoint: "coding-global" });
+    const second = applyZaiConfig(first, { endpoint: "coding-cn" });
+    const byCodingCn = new Map((second.models?.providers?.zai?.models ?? []).map((m) => [m.id, m]));
+    expect(second.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+    expect(byCodingCn.get("glm-4.6v")?.baseUrl).toBe(ZAI_CN_BASE_URL);
+    expect(byCodingCn.get("glm-4.5v")?.baseUrl).toBe(ZAI_CN_BASE_URL);
+
+    const third = applyZaiConfig(second, { endpoint: "global" });
+    const byGlobal = new Map((third.models?.providers?.zai?.models ?? []).map((m) => [m.id, m]));
+    expect(third.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+    expect(byGlobal.get("glm-4.6v")?.baseUrl).toBeUndefined();
+    expect(byGlobal.get("glm-4.5v")?.baseUrl).toBeUndefined();
+  });
 });
