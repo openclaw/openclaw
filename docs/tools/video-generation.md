@@ -437,5 +437,5 @@ openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2
 - [Together AI](/providers/together)
 - [Vydra](/providers/vydra)
 - [xAI](/providers/xai)
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults)
+- [Configuration Reference](/gateway/config-agents#agent-defaults)
 - [Models](/concepts/models)

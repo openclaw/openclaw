@@ -630,5 +630,5 @@ See also: [/gateway/configuration](/gateway/configuration) for full configuratio
 
 - [Models](/concepts/models) — model configuration and aliases
 - [Model Failover](/concepts/model-failover) — fallback chains and retry behavior
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — model config keys
+- [Configuration Reference](/gateway/config-agents#agent-defaults) — model config keys
 - [Providers](/providers) — per-provider setup guides

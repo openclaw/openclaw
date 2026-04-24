@@ -305,5 +305,5 @@ cross-provider `image_generate` contract.
 - [OpenAI](/providers/openai) — OpenAI Images provider setup
 - [Vydra](/providers/vydra) — Vydra image, video, and speech setup
 - [xAI](/providers/xai) — Grok image, video, search, code execution, and TTS setup
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — `imageGenerationModel` config
+- [Configuration Reference](/gateway/config-agents#agent-defaults) — `imageGenerationModel` config
 - [Models](/concepts/models) — model configuration and failover

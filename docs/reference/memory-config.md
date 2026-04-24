@@ -436,7 +436,7 @@ runtime environment.
 ### Scope
 
 Controls which sessions can receive QMD search results. Same schema as
-[`session.sendPolicy`](/gateway/configuration-reference#session):
+[`session.sendPolicy`](/gateway/config-agents#session):
 
 ```json5
 {

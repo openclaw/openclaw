@@ -1366,6 +1366,7 @@
                     "pages": [
                       "gateway/configuration",
                       "gateway/configuration-reference",
+                      "gateway/config-agents",
                       "gateway/configuration-examples",
                       "gateway/authentication",
                       "auth-credential-semantics",
