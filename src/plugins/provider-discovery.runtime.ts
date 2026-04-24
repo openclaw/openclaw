@@ -37,6 +37,12 @@ function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugi
   return [];
 }
 
+function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
+  return (
+    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
+  );
+}
+
 function resolveProviderDiscoveryEntryPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -86,11 +92,12 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   discoveryEntriesOnly?: boolean;
 }): ProviderPlugin[] {
   const entryProviders = resolveProviderDiscoveryEntryPlugins(params);
-  if (entryProviders.length > 0) {
+  if (params.discoveryEntriesOnly === true) {
     return entryProviders;
   }
-  if (params.discoveryEntriesOnly === true) {
-    return [];
+  const liveEntryProviders = entryProviders.filter(hasLiveProviderDiscoveryHook);
+  if (liveEntryProviders.length > 0) {
+    return liveEntryProviders;
   }
   return resolvePluginProviders({
     ...params,
