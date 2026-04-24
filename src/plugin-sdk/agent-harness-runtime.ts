@@ -2,7 +2,7 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
-import type { AgentHarnessResultClassification } from "../agents/harness/types.js";
+import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -153,6 +153,10 @@ export type AgentHarnessTerminalOutcomeInput = {
   turnCompleted: boolean;
 };
 
+export type AgentHarnessTerminalOutcomeClassification = NonNullable<
+  EmbeddedRunAttemptResult["agentHarnessResultClassification"]
+>;
+
 /**
  * Classify terminal harness turns that completed without user-visible assistant
  * text. This is intentionally SDK-level so plugin harness adapters such as
@@ -161,8 +165,12 @@ export type AgentHarnessTerminalOutcomeInput = {
  */
 export function classifyAgentHarnessTerminalOutcome(
   params: AgentHarnessTerminalOutcomeInput,
-): AgentHarnessResultClassification | undefined {
-  if (!params.turnCompleted || params.promptError || params.assistantTexts.length > 0) {
+): AgentHarnessTerminalOutcomeClassification | undefined {
+  if (
+    !params.turnCompleted ||
+    params.promptError ||
+    hasVisibleAssistantText(params.assistantTexts)
+  ) {
     return undefined;
   }
   if (params.planText?.trim()) {
@@ -172,4 +180,8 @@ export function classifyAgentHarnessTerminalOutcome(
     return "reasoning-only";
   }
   return "empty";
+}
+
+function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
+  return assistantTexts.some((text) => text.trim().length > 0);
 }

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { classifyAgentHarnessTerminalOutcome } from "./agent-harness-runtime.js";
+import {
+  classifyAgentHarnessTerminalOutcome,
+  type AgentHarnessTerminalOutcomeClassification,
+} from "./agent-harness-runtime.js";
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
   it("does not classify an in-flight turn", () => {
@@ -36,6 +39,18 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
         turnCompleted: true,
       }),
     ).toBeUndefined();
+  });
+
+  it("treats whitespace-only assistant text as not visible", () => {
+    expect(
+      classifyAgentHarnessTerminalOutcome({
+        assistantTexts: ["  ", "\n\t"],
+        reasoningText: "",
+        planText: "",
+        promptError: null,
+        turnCompleted: true,
+      }),
+    ).toBe("empty");
   });
 
   it("classifies a completed turn with plan text only as planning-only", () => {
@@ -84,5 +99,18 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
         turnCompleted: true,
       }),
     ).toBe("empty");
+  });
+
+  it("returns only terminal fallback classifications, not ok", () => {
+    const classification: AgentHarnessTerminalOutcomeClassification =
+      classifyAgentHarnessTerminalOutcome({
+        assistantTexts: [],
+        reasoningText: "",
+        planText: "",
+        promptError: null,
+        turnCompleted: true,
+      }) ?? "empty";
+
+    expect(classification).toBe("empty");
   });
 });
