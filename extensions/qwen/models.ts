@@ -123,16 +123,19 @@ export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
   }
 }
 
-export function isQwen36PlusSupportedBaseUrl(baseUrl: string | undefined): boolean {
-  return !isQwenCodingPlanBaseUrl(baseUrl);
+/**
+ * @deprecated qwen3.6-plus is now supported on all DashScope endpoints
+ * including the Coding Plan (coding.dashscope.aliyuncs.com). Kept for
+ * backward compatibility; always returns true.
+ */
+export function isQwen36PlusSupportedBaseUrl(_baseUrl: string | undefined): boolean {
+  return true;
 }
 
 export function buildQwenModelCatalogForBaseUrl(
-  baseUrl: string | undefined,
+  _baseUrl: string | undefined,
 ): ReadonlyArray<ModelDefinitionConfig> {
-  return isQwen36PlusSupportedBaseUrl(baseUrl)
-    ? QWEN_MODEL_CATALOG
-    : QWEN_MODEL_CATALOG.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+  return QWEN_MODEL_CATALOG;
 }
 
 export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {
