@@ -6,11 +6,6 @@
       "class": "core-runtime",
       "risk": ["protocol-client"]
     },
-    "@anthropic-ai/vertex-sdk": {
-      "owner": "provider:anthropic-vertex",
-      "class": "default-runtime-initially",
-      "risk": ["provider-sdk"]
-    },
     "@clack/prompts": {
       "owner": "core:cli",
       "class": "core-runtime",

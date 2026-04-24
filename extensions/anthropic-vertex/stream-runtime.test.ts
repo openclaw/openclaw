@@ -1,6 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
+
+const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
 
 const hoisted = vi.hoisted(() => {
   const streamAnthropicMock = vi.fn<(model: unknown, context: unknown, options: unknown) => symbol>(
@@ -31,28 +32,8 @@ vi.mock("@anthropic-ai/vertex-sdk", () => ({
   }),
 }));
 
-vi.mock("../plugin-sdk/anthropic-vertex.js", () => ({
-  resolveAnthropicVertexProjectId: (env: NodeJS.ProcessEnv = process.env) =>
-    env.ANTHROPIC_VERTEX_PROJECT_ID || env.GOOGLE_CLOUD_PROJECT || env.GOOGLE_CLOUD_PROJECT_ID,
-  resolveAnthropicVertexClientRegion: (params?: { baseUrl?: string; env?: NodeJS.ProcessEnv }) => {
-    const baseUrl = params?.baseUrl?.trim();
-    if (baseUrl) {
-      try {
-        const host = new URL(baseUrl).hostname;
-        const match = /^([a-z0-9-]+)-aiplatform\.googleapis\.com$/u.exec(host);
-        if (match?.[1]) {
-          return match[1];
-        }
-      } catch {
-        // noop; test seam only
-      }
-    }
-    return params?.env?.GOOGLE_CLOUD_LOCATION || params?.env?.CLOUD_ML_REGION || "global";
-  },
-}));
-
-let createAnthropicVertexStreamFn: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFn;
-let createAnthropicVertexStreamFnForModel: typeof import("./anthropic-vertex-stream.js").createAnthropicVertexStreamFnForModel;
+let createAnthropicVertexStreamFn: typeof import("./stream-runtime.js").createAnthropicVertexStreamFn;
+let createAnthropicVertexStreamFnForModel: typeof import("./stream-runtime.js").createAnthropicVertexStreamFnForModel;
 
 function makeModel(params: { id: string; maxTokens?: number }): Model<"anthropic-messages"> {
   return {
@@ -121,7 +102,7 @@ function buildExpectedCacheBoundaryPayload(messageText: string) {
 describe("createAnthropicVertexStreamFn", () => {
   beforeAll(async () => {
     ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
-      await import("./anthropic-vertex-stream.js"));
+      await import("./stream-runtime.js"));
   });
 
   beforeEach(() => {
