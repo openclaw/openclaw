@@ -1381,7 +1381,7 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
@@ -1462,7 +1462,7 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              pnpm lint --threads=4
+              pnpm lint --threads=8
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
