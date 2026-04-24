@@ -6,8 +6,11 @@ import {
   extensionForMime,
   imageMimeFromFormat,
   isAudioFileName,
+  isVerifiedAudioSource,
   kindFromMime,
   normalizeMimeType,
+  sanitizeFileName,
+  sanitizeMediaMime,
 } from "./mime.js";
 
 async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
@@ -162,6 +165,90 @@ describe("isAudioFileName", () => {
     { fileName: "voice.bin", expected: false },
   ] as const)("matches audio extension for $fileName", ({ fileName, expected }) => {
     expectAudioFileNameCase(fileName, expected);
+  });
+});
+
+describe("isVerifiedAudioSource", () => {
+  it.each([
+    { media: { kind: "audio", contentType: null }, expected: true },
+    { media: { kind: "document", contentType: "audio/ogg" }, expected: true },
+    { media: { kind: "document", contentType: "audio/mpeg" }, expected: true },
+    { media: { kind: "document", contentType: "AUDIO/OGG" }, expected: true },
+    { media: { kind: "document", contentType: "audio/ogg\r\nX-Inj: bad" }, expected: false },
+    { media: { kind: "document", contentType: "audio/" }, expected: false },
+    { media: { kind: "document", contentType: null }, expected: false },
+    { media: { kind: "document", contentType: "application/pdf" }, expected: false },
+    { media: { kind: undefined, contentType: undefined }, expected: false },
+  ] as const)("classifies $media as $expected", ({ media, expected }) => {
+    expect(isVerifiedAudioSource(media)).toBe(expected);
+  });
+});
+
+describe("sanitizeMediaMime", () => {
+  it.each([
+    { input: "audio/ogg", expected: "audio/ogg" },
+    { input: "AUDIO/OGG", expected: "audio/ogg" },
+    { input: "audio/ogg; codecs=opus", expected: "audio/ogg" },
+    { input: "audio/ogg\r\nX-Inj: bad", expected: null },
+    { input: "audio/ogg\nfoo", expected: null },
+    { input: "audio/ogg\0nul", expected: null },
+    { input: "", expected: null },
+    { input: "  ", expected: null },
+    { input: undefined, expected: null },
+    { input: null, expected: null },
+    { input: "invalid mime", expected: null },
+    { input: "audio/", expected: null },
+    { input: "/ogg", expected: null },
+  ] as const)("sanitizes $input to $expected", ({ input, expected }) => {
+    expect(sanitizeMediaMime(input)).toBe(expected);
+  });
+
+  it("preserves codecs parameter when requested", () => {
+    expect(sanitizeMediaMime("audio/ogg; codecs=opus", { preserveCodecsParam: true })).toBe(
+      "audio/ogg; codecs=opus",
+    );
+  });
+});
+
+describe("sanitizeFileName", () => {
+  it.each([
+    { input: "report.pdf", expected: "report.pdf" },
+    { input: "voice.ogg", expected: "voice.ogg" },
+    { input: "  trimmed.txt  ", expected: "trimmed.txt" },
+    { input: "evil.pdf\r\nX-Inj: bad", expected: "evil.pdfX-Inj: bad" },
+    { input: "name\nwith\nnewlines.txt", expected: "namewithnewlines.txt" },
+    { input: "name\twith\ttab.txt", expected: "namewithtab.txt" },
+    { input: "null\0byte.txt", expected: "nullbyte.txt" },
+    { input: "del\x7fchar.txt", expected: "delchar.txt" },
+    { input: "../../../etc/passwd", expected: ".._.._.._etc_passwd" },
+    { input: "C:\\Windows\\System32", expected: "C:_Windows_System32" },
+    { input: 'name"with"quotes.txt', expected: "name_with_quotes.txt" },
+    { input: "invoice\u202Egnp.exe", expected: "invoicegnp.exe" },
+    { input: "name\u200Ewith\u200Fmarks.txt", expected: "namewithmarks.txt" },
+    { input: "iso\u2066late\u2069d.txt", expected: "isolated.txt" },
+    { input: "arabic\u061Cmark.txt", expected: "arabicmark.txt" },
+    { input: "", expected: "file" },
+    { input: "   ", expected: "file" },
+    { input: null, expected: "file" },
+    { input: undefined, expected: "file" },
+    { input: "\r\n\t\0", expected: "file" },
+    { input: "a".repeat(200), expected: "a".repeat(128) },
+    { input: "a".repeat(127) + ".txt", expected: "a".repeat(127) + "." },
+    {
+      input:
+        "extremely-long-filename-that-exceeds-the-cap-limit-of-128-characters-for-testing-purposes-and-should-be-truncated-properly-here.pdf",
+      expected:
+        "extremely-long-filename-that-exceeds-the-cap-limit-of-128-characters-for-testing-purposes-and-should-be-truncated-properly-here.",
+    },
+  ] as const)("sanitizes $input correctly", ({ input, expected }) => {
+    expect(sanitizeFileName(input)).toBe(expected);
+  });
+
+  it("caps very long inputs at 128 characters without quadratic-time blowup", () => {
+    const longInput = "a".repeat(100000);
+    const result = sanitizeFileName(longInput);
+    expect(result).toBe("a".repeat(128));
+    expect(result.length).toBe(128);
   });
 });
 

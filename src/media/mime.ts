@@ -115,6 +115,112 @@ export function isAudioFileName(fileName?: string | null): boolean {
   return AUDIO_FILE_EXTENSIONS.has(ext);
 }
 
+/**
+ * Determines whether a media payload qualifies as a verified audio source
+ * for voice-note delivery.
+ */
+export function isVerifiedAudioSource(media: {
+  kind?: string | null;
+  contentType?: string | null;
+}): boolean {
+  if (media.kind === "audio") {
+    return true;
+  }
+  // Normalize through sanitizeMediaMime before classifying audio content.
+  const sanitized = sanitizeMediaMime(media.contentType);
+  return sanitized?.startsWith("audio/") === true;
+}
+
+/**
+ * Validates and normalizes a MIME type for outbound media headers.
+ * Returns null when the input is unsafe or malformed.
+ */
+// Reject ASCII control characters (U+0000-U+001F) and DEL (U+007F) to avoid
+// downstream header injection (CWE-93). Implemented via charCodeAt instead of
+// a control-character regex to keep the intent explicit and to avoid the
+// no-control-regex lint rule.
+function hasAsciiControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function sanitizeMediaMime(
+  input: string | null | undefined,
+  options?: { preserveCodecsParam?: boolean },
+): string | null {
+  if (input == null) {
+    return null;
+  }
+  const value = input.trim();
+  if (!value) {
+    return null;
+  }
+
+  if (hasAsciiControlChar(value)) {
+    return null;
+  }
+
+  const parts = value.split(";");
+  const base = parts[0]?.trim().toLowerCase() ?? "";
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(base)) {
+    return null;
+  }
+
+  if (options?.preserveCodecsParam && parts.length > 1) {
+    const codecsParam = parts
+      .slice(1)
+      .map((part) => part.trim().toLowerCase())
+      .find((part) => /^codecs=[a-z0-9._-]+$/.test(part));
+    if (codecsParam) {
+      return `${base}; ${codecsParam}`;
+    }
+  }
+
+  return base;
+}
+
+// Unicode bidirectional and invisible format characters that can be used for
+// filename UI spoofing (RTLO trick and similar).
+const BIDI_AND_INVISIBLE_CHARS = /[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/g;
+
+/**
+ * Sanitizes an outbound document filename for safe use in downstream payloads.
+ * Strips ASCII control characters and Unicode bidirectional/invisible format
+ * characters, replaces path separators and quotes, caps length at 128 chars,
+ * and falls back to "file" when empty.
+ *
+ * The bidi-stripping prevents UI spoofing via right-to-left override (RTLO,
+ * U+202E) and related directional formatting characters.
+ * Linear time complexity: the loop bounds itself by min(input length, 128)
+ * to avoid O(n^2) build cost on attacker-controlled large filenames.
+ */
+export function sanitizeFileName(input: string | null | undefined): string {
+  const trimmed = (input ?? "").trim().replace(BIDI_AND_INVISIBLE_CHARS, "");
+  if (!trimmed) {
+    return "file";
+  }
+
+  const out: string[] = [];
+  for (let i = 0; i < trimmed.length && out.length < 128; i += 1) {
+    const ch = trimmed[i];
+    if (!ch) {
+      continue;
+    }
+    const code = ch.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) {
+      continue;
+    }
+    out.push(ch === "/" || ch === "\\" || ch === '"' ? "_" : ch);
+  }
+  const safe = out.join("");
+  return safe || "file";
+}
+
 export function detectMime(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
