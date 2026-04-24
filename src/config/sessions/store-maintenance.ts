@@ -200,7 +200,8 @@ async function canAccessSessionFile(filePath: string): Promise<boolean | null> {
 function listSessionFileCandidates(params: { storePath: string; entry: SessionEntry }): string[] {
   const storeDir = path.dirname(path.resolve(params.storePath));
   const candidates = new Set<string>();
-  const sessionFile = params.entry.sessionFile?.trim();
+  const sessionFile =
+    typeof params.entry.sessionFile === "string" ? params.entry.sessionFile.trim() : "";
   if (sessionFile) {
     candidates.add(path.resolve(storeDir, sessionFile));
   }
@@ -249,6 +250,12 @@ export async function pruneOrphanedEntries(
       continue;
     }
     if (!entry?.sessionId || (entry.updatedAt ?? 0) >= cutoffMs) {
+      continue;
+    }
+    // Entries without explicit transcript metadata can be legitimate
+    // metadata-only rows (for example cron/subagent indexes). Stale pruning
+    // owns their lifecycle; orphan pruning only verifies declared files.
+    if (typeof entry.sessionFile !== "string" || !entry.sessionFile.trim()) {
       continue;
     }
     let hasAccessibleFile = false;
