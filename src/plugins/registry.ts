@@ -336,6 +336,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
   ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register agent tool result middleware",
+      });
+      return;
+    }
     if (typeof (handler as unknown) !== "function") {
       pushDiagnostic({
         level: "error",
@@ -377,11 +386,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       try {
         return await handler(event, ctx);
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
         registryParams.logger.warn(
-          `[plugins] agent tool result middleware failed for ${record.id}: ${detail}`,
+          `[plugins] agent tool result middleware failed for ${record.id}`,
         );
-        return undefined;
+        throw error;
       }
     };
     registry.agentToolResultMiddlewares.push({

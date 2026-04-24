@@ -170,11 +170,12 @@ A single plugin can register any number of capabilities via the `api` object:
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
-Use `api.registerAgentToolResultMiddleware(...)` when a plugin needs async
-tool-result rewriting before the model sees the output. Declare the targeted
-harnesses in `contracts.agentToolResultMiddleware`, for example
-`["pi", "codex-app-server"]`. Prefer regular OpenClaw plugin hooks when the
-work does not need pre-model tool-result timing.
+Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when they
+need async tool-result rewriting before the model sees the output. Declare the
+targeted harnesses in `contracts.agentToolResultMiddleware`, for example
+`["pi", "codex-app-server"]`. This is a trusted bundled-plugin seam; external
+plugins should prefer regular OpenClaw plugin hooks unless OpenClaw grows an
+explicit trust policy for this capability.
 
 If your plugin registers custom gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,
