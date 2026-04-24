@@ -111,7 +111,33 @@ async function isAuthorizedGoogleChatTarget(
     audience: target.audience,
     expectedAddOnPrincipal: target.account.config.appPrincipal,
   });
+  if (!verification.ok) {
+    target.runtime.log?.(
+      `[${target.account.accountId}] Google Chat webhook auth rejected: ${verification.reason}`,
+    );
+  }
   return verification.ok;
+}
+
+export function warnAppPrincipalMisconfiguration(params: {
+  accountId: string;
+  audienceType?: string;
+  appPrincipal?: string | null;
+  log?: (message: string) => void;
+}): void {
+  if (params.audienceType !== "app-url") {
+    return;
+  }
+  const principal = params.appPrincipal?.trim();
+  if (!principal) {
+    params.log?.(
+      `[${params.accountId}] appPrincipal is missing for audienceType "app-url"; add-on token verification will fail. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.`,
+    );
+  } else if (principal.includes("@")) {
+    params.log?.(
+      `[${params.accountId}] appPrincipal "${principal}" looks like an email address. Set appPrincipal to the numeric OAuth 2.0 client ID (uniqueId, 21 digits), not an email.`,
+    );
+  }
 }
 
 export function createGoogleChatWebhookRequestHandler(params: {
