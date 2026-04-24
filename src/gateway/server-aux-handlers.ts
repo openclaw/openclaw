@@ -10,7 +10,12 @@ import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { buildGatewayReloadPlan, diffConfigPaths, type ChannelKind } from "./config-reload.js";
+import {
+  buildGatewayReloadPlan,
+  diffConfigPaths,
+  type ChannelKind,
+  type GatewayReloadPlan,
+} from "./config-reload.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
@@ -37,6 +42,7 @@ type ReloadSecretsResult = {
 export function createGatewayAuxHandlers(params: {
   log: GatewayAuxHandlerLogger;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
+  buildReloadPlan?: (changedPaths: string[]) => GatewayReloadPlan;
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
   clients: Iterable<SharedGatewayAuthClient>;
@@ -51,6 +57,7 @@ export function createGatewayAuxHandlers(params: {
     forwarder: execApprovalForwarder,
     iosPushDelivery: execApprovalIosPushDelivery,
   });
+  const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
   const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>();
   const pluginApprovalHandlers = createPluginApprovalHandlers(pluginApprovalManager, {
     forwarder: execApprovalForwarder,
@@ -96,9 +103,7 @@ export function createGatewayAuxHandlers(params: {
           });
           nextSharedGatewaySessionGeneration =
             params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-          const plan = buildGatewayReloadPlan(
-            diffConfigPaths(previousSnapshot.config, prepared.config),
-          );
+          const plan = buildReloadPlan(diffConfigPaths(previousSnapshot.config, prepared.config));
           setCurrentSharedGatewaySessionGeneration(
             params.sharedGatewaySessionGenerationState,
             nextSharedGatewaySessionGeneration,

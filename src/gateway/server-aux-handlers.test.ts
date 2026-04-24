@@ -13,18 +13,6 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-const { buildGatewayReloadPlanMock } = vi.hoisted(() => ({
-  buildGatewayReloadPlanMock: vi.fn(),
-}));
-
-vi.mock("./config-reload.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./config-reload.js")>();
-  return {
-    ...actual,
-    buildGatewayReloadPlan: buildGatewayReloadPlanMock,
-  };
-});
-
 function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReloadPlan {
   return {
     changedPaths: overrides?.changedPaths ?? [],
@@ -73,14 +61,13 @@ async function invokeSecretsReload(params: {
 
 afterEach(() => {
   clearSecretsRuntimeSnapshot();
-  buildGatewayReloadPlanMock.mockReset();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
 });
 
 describe("gateway aux handlers", () => {
   it("restarts only channels whose resolved secret-backed config changed on secrets.reload", async () => {
-    buildGatewayReloadPlanMock.mockReturnValue(
+    const buildReloadPlan = vi.fn().mockReturnValue(
       createReloadPlan({
         restartChannels: new Set(["slack", "zalo"]),
       }),
@@ -116,6 +103,7 @@ describe("gateway aux handlers", () => {
     const { extraHandlers } = createGatewayAuxHandlers({
       log: {},
       activateRuntimeSecrets,
+      buildReloadPlan,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
@@ -127,7 +115,7 @@ describe("gateway aux handlers", () => {
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
     expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
-    expect(buildGatewayReloadPlanMock).toHaveBeenCalledWith([
+    expect(buildReloadPlan).toHaveBeenCalledWith([
       "channels.slack.signingSecret",
       "channels.zalo.webhookSecret",
     ]);
@@ -141,7 +129,7 @@ describe("gateway aux handlers", () => {
   });
 
   it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
-    buildGatewayReloadPlanMock.mockReturnValue(
+    const buildReloadPlan = vi.fn().mockReturnValue(
       createReloadPlan({
         restartChannels: new Set(["slack"]),
       }),
@@ -180,6 +168,7 @@ describe("gateway aux handlers", () => {
     const { extraHandlers } = createGatewayAuxHandlers({
       log: {},
       activateRuntimeSecrets,
+      buildReloadPlan,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
@@ -202,7 +191,7 @@ describe("gateway aux handlers", () => {
   });
 
   it("rolls back stopped channels when a later restart fails", async () => {
-    buildGatewayReloadPlanMock.mockReturnValue(
+    const buildReloadPlan = vi.fn().mockReturnValue(
       createReloadPlan({
         restartChannels: new Set(["slack", "zalo"]),
       }),
@@ -241,6 +230,7 @@ describe("gateway aux handlers", () => {
     const { extraHandlers } = createGatewayAuxHandlers({
       log: {},
       activateRuntimeSecrets,
+      buildReloadPlan,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
@@ -286,7 +276,7 @@ describe("gateway aux handlers", () => {
   });
 
   it("fails reload when channel restarts are required but skip flags block them", async () => {
-    buildGatewayReloadPlanMock.mockReturnValue(
+    const buildReloadPlan = vi.fn().mockReturnValue(
       createReloadPlan({
         restartChannels: new Set(["slack"]),
       }),
@@ -317,6 +307,7 @@ describe("gateway aux handlers", () => {
     const { extraHandlers } = createGatewayAuxHandlers({
       log: {},
       activateRuntimeSecrets,
+      buildReloadPlan,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
@@ -347,7 +338,7 @@ describe("gateway aux handlers", () => {
   });
 
   it("does not restart channels when resolved secrets do not change channel config", async () => {
-    buildGatewayReloadPlanMock.mockReturnValue(createReloadPlan());
+    const buildReloadPlan = vi.fn().mockReturnValue(createReloadPlan());
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -379,6 +370,7 @@ describe("gateway aux handlers", () => {
     const { extraHandlers } = createGatewayAuxHandlers({
       log: {},
       activateRuntimeSecrets,
+      buildReloadPlan,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],
@@ -389,7 +381,7 @@ describe("gateway aux handlers", () => {
 
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
-    expect(buildGatewayReloadPlanMock).toHaveBeenCalledWith(["gateway.auth.token"]);
+    expect(buildReloadPlan).toHaveBeenCalledWith(["gateway.auth.token"]);
     expect(stopChannel).not.toHaveBeenCalled();
     expect(startChannel).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
