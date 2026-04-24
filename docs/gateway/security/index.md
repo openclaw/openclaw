@@ -115,8 +115,9 @@ Use this as the quick model when triaging risk:
 ## Not vulnerabilities by design
 
 <Accordion title="Common findings that are out of scope">
-  These patterns get reported often and are usually closed as no-action unless
-  a real boundary bypass is demonstrated:
+
+These patterns get reported often and are usually closed as no-action unless
+a real boundary bypass is demonstrated:
 
 - Prompt-injection-only chains without a policy, auth, or sandbox bypass.
 - Claims that assume hostile multi-tenant operation on one shared host or
@@ -134,7 +135,8 @@ Use this as the quick model when triaging risk:
   approvals.
 - "Missing per-user authorization" findings that treat `sessionKey` as an
   auth token.
-  </Accordion>
+
+</Accordion>
 
 ## Hardened baseline in 60 seconds
 
@@ -461,6 +463,10 @@ Two built-in tools can make persistent control-plane changes:
 The owner-only `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
+Agent-driven `gateway config.apply` and `gateway config.patch` edits are
+fail-closed by default: only a narrow set of prompt, model, and mention-gating
+paths are agent-tunable. New sensitive config trees are therefore protected
+unless they are deliberately added to the allowlist.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
@@ -843,6 +849,10 @@ Plaintext `ws://` is loopback-only by default. For trusted private-network
 paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
 break-glass. This is intentionally process environment only, not an
 `openclaw.json` config key.
+Mobile pairing and Android manual or scanned gateway routes are stricter:
+cleartext is accepted for loopback, but private-LAN, link-local, `.local`, and
+dotless hostnames must use TLS unless you explicitly opt into the trusted
+private-network cleartext path.
 
 Local device pairing:
 

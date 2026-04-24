@@ -219,14 +219,43 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
 }
 
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+  const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
     "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
-    renderCodexPromptOverlay({ modelId: params.modelId }),
+    promptOverlay,
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function renderCodexRuntimePromptOverlay(params: EmbeddedRunAttemptParams): string | undefined {
+  const contribution = params.runtimePlan?.prompt.resolveSystemPromptContribution({
+    config: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    provider: params.provider,
+    modelId: params.modelId,
+    promptMode: "full",
+    agentId: params.agentId,
+  });
+  if (!contribution) {
+    return renderCodexPromptOverlay({
+      config: params.config,
+      providerId: params.provider,
+      modelId: params.modelId,
+    });
+  }
+  return [
+    contribution.stablePrefix,
+    ...Object.values(contribution.sectionOverrides ?? {}),
+    contribution.dynamicSuffix,
+  ]
+    .filter(
+      (section): section is string => typeof section === "string" && section.trim().length > 0,
+    )
+    .join("\n\n");
 }
 
 function buildUserInput(

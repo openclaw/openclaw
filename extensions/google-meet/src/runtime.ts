@@ -274,6 +274,9 @@ export class GoogleMeetRuntime {
   async testSpeech(request: GoogleMeetJoinRequest): Promise<{
     createdSession: boolean;
     inCall?: boolean;
+    manualActionRequired?: boolean;
+    manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+    manualActionMessage?: string;
     spoken: boolean;
     session: GoogleMeetSession;
   }> {
@@ -283,9 +286,13 @@ export class GoogleMeetRuntime {
       result.session.id,
       request.message ?? "Say exactly: Google Meet speech test complete.",
     ).spoken;
+    const health = result.session.chrome?.health;
     return {
       createdSession: !before.has(result.session.id),
-      inCall: result.session.chrome?.health?.inCall,
+      inCall: health?.inCall,
+      manualActionRequired: health?.manualActionRequired,
+      manualActionReason: health?.manualActionReason,
+      manualActionMessage: health?.manualActionMessage,
       spoken,
       session: result.session,
     };

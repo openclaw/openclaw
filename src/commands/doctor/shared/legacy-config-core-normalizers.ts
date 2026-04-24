@@ -9,8 +9,28 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+
+export function normalizeLegacyCommandsConfig(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawCommands = cfg.commands;
+  if (!isRecord(rawCommands) || !("modelsWrite" in rawCommands)) {
+    return cfg;
+  }
+
+  const commands = { ...rawCommands };
+  delete commands.modelsWrite;
+  changes.push("Removed deprecated commands.modelsWrite (/models add is deprecated).");
+
+  return {
+    ...cfg,
+    commands: commands as OpenClawConfig["commands"],
+  };
+}
 
 export function normalizeLegacyBrowserConfig(
   cfg: OpenClawConfig,
@@ -204,8 +224,10 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
         })
       ) {
         providerChanged = true;
+        const safeProviderId = sanitizeForLog(providerId);
+        const safeModelId = sanitizeForLog(model.id);
         changes.push(
-          `Marked models.providers.${providerId}.models.${model.id} as /models add metadata so official OpenAI Codex metadata can override it.`,
+          `Marked models.providers.${safeProviderId}.models.${safeModelId} as /models add metadata so official OpenAI Codex metadata can override it.`,
         );
         nextModels.push(Object.assign({}, model, { metadataSource: "models-add" }));
       } else {

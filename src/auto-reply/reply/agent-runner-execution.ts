@@ -26,9 +26,9 @@ import {
   isTransientHttpError,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -885,11 +885,12 @@ export async function runAgentTurnWithFallback(params: {
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
+      const outcomePlan = buildAgentRuntimeOutcomePlan();
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
         classifyResult: async ({ result, provider, model }) => {
-          const classification = classifyEmbeddedPiRunResultForModelFallback({
+          const classification = outcomePlan.classifyRunResult({
             result,
             provider,
             model,
