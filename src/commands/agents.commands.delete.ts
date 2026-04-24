@@ -79,6 +79,13 @@ export async function agentsDeleteCommand(
   await replaceConfigFile({
     nextConfig: result.config,
     ...(baseHash !== undefined ? { baseHash } : {}),
+    ...(opts.json
+      ? {
+          writeOptions: {
+            logger: { warn: () => {}, error: () => {} },
+          },
+        }
+      : {}),
   });
   if (!opts.json) {
     logConfigUpdated(runtime);

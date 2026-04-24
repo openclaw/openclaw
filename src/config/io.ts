@@ -168,6 +168,12 @@ export type ConfigWriteOptions = {
    * Normal writers must keep this false so clobbers are rejected before disk commit.
    */
   allowDestructiveWrite?: boolean;
+  /**
+   * Optional logger override for the config write operation.
+   * When provided, this replaces the default console logger within the write path.
+   * Useful for suppressing diagnostics (e.g. `Config overwrite:`) in `--json` CLI modes.
+   */
+  logger?: Pick<typeof console, "error" | "warn">;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -2023,7 +2029,7 @@ export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<void> {
-  const io = createConfigIO();
+  const io = createConfigIO(options.logger ? { logger: options.logger } : undefined);
   let nextCfg = cfg;
   const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();

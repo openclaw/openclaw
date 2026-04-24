@@ -175,4 +175,53 @@ describe("agents delete command", () => {
       });
     });
   });
+
+  it("passes a silent logger to replaceConfigFile in --json mode to suppress Config overwrite output", async () => {
+    await withStateDirEnv("openclaw-agents-delete-json-silent-logger-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      };
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          writeOptions: expect.objectContaining({
+            logger: expect.objectContaining({
+              warn: expect.any(Function),
+              error: expect.any(Function),
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
+  it("does not pass a silent logger to replaceConfigFile without --json mode", async () => {
+    await withStateDirEnv("openclaw-agents-delete-no-json-logger-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      };
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: false }, runtime);
+
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          writeOptions: expect.anything(),
+        }),
+      );
+    });
+  });
 });
