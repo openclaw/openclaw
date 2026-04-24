@@ -1,6 +1,29 @@
 {
   "entries": [
     {
+      "name": "@tencent-weixin/openclaw-weixin",
+      "description": "OpenClaw WeChat (WeiXin) channel plugin by the Tencent Weixin team.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "openclaw-weixin",
+          "label": "WeChat",
+          "selectionLabel": "WeChat（微信）",
+          "detailLabel": "WeChat",
+          "docsPath": "/channels/wechat",
+          "docsLabel": "wechat",
+          "blurb": "Tencent WeChat channel via QR login for private chats.",
+          "aliases": ["weixin", "wechat", "wx"],
+          "order": 44
+        },
+        "install": {
+          "npmSpec": "@tencent-weixin/openclaw-weixin",
+          "defaultChoice": "npm"
+        }
+      }
+    },
+    {
       "name": "@wecom/wecom-openclaw-plugin",
       "description": "OpenClaw WeCom channel plugin by the Tencent WeCom team.",
       "source": "external",

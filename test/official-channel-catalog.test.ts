@@ -71,6 +71,19 @@ describe("buildOfficialChannelCatalog", () => {
     expect(buildOfficialChannelCatalog({ repoRoot }).entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          name: "@tencent-weixin/openclaw-weixin",
+          openclaw: expect.objectContaining({
+            channel: expect.objectContaining({
+              id: "openclaw-weixin",
+              label: "WeChat",
+            }),
+            install: {
+              npmSpec: "@tencent-weixin/openclaw-weixin",
+              defaultChoice: "npm",
+            },
+          }),
+        }),
+        expect.objectContaining({
           name: "@wecom/wecom-openclaw-plugin",
           openclaw: expect.objectContaining({
             channel: expect.objectContaining({
@@ -133,6 +146,9 @@ describe("buildOfficialChannelCatalog", () => {
     expect(fs.existsSync(outputPath)).toBe(true);
     expect(JSON.parse(fs.readFileSync(outputPath, "utf8")).entries).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          name: "@tencent-weixin/openclaw-weixin",
+        }),
         expect.objectContaining({
           name: "@wecom/wecom-openclaw-plugin",
         }),
