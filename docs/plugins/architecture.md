@@ -49,9 +49,11 @@ native OpenClaw plugin registers against one or more capability types:
 | Web fetch              | `api.registerWebFetchProvider(...)`              | `firecrawl`                          |
 | Web search             | `api.registerWebSearchProvider(...)`             | `google`                             |
 | Channel / messaging    | `api.registerChannel(...)`                       | `msteams`, `matrix`                  |
+| Gateway discovery      | `api.registerGatewayDiscoveryService(...)`       | `bonjour`                            |
 
-A plugin that registers zero capabilities but provides hooks, tools, or
-services is a **legacy hook-only** plugin. That pattern is still fully supported.
+A plugin that registers zero capabilities but provides hooks, tools, discovery
+services, or background services is a **legacy hook-only** plugin. That pattern
+is still fully supported.
 
 ### External compatibility stance
 

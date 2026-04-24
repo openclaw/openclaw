@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const { classifyCiaoUnhandledRejection, ignoreCiaoUnhandledRejection } =
-  await import("./bonjour-ciao.js");
+const { classifyCiaoUnhandledRejection, ignoreCiaoUnhandledRejection } = await import("./ciao.js");
 
 describe("bonjour-ciao", () => {
   it("classifies ciao cancellation rejections separately from side effects", () => {
