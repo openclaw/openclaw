@@ -60,6 +60,7 @@ async function handleMessageToolCall(
     threadId: "thread-1",
     turnId: "turn-1",
     callId: "call-1",
+    namespace: null,
     tool: "message",
     arguments: arguments_,
   });
@@ -85,6 +86,7 @@ describe("createCodexDynamicToolBridge", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         callId: "call-1",
+        namespace: null,
         tool: toolName,
         arguments: { prompt: "hello" },
       });
@@ -117,6 +119,7 @@ describe("createCodexDynamicToolBridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
+      namespace: null,
       tool: "tts",
       arguments: { text: "hello" },
     });
@@ -232,6 +235,7 @@ describe("createCodexDynamicToolBridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
+      namespace: null,
       tool: "exec",
       arguments: { command: "git status" },
     });
@@ -254,6 +258,7 @@ describe("createCodexDynamicToolBridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
+      namespace: null,
       tool: "exec",
       arguments: { command: "pwd" },
     });

@@ -40,6 +40,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import {
+  assertCodexTurnStartResponse,
+  readCodexDynamicToolCallParams,
+} from "./protocol-validators.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { clearSharedCodexAppServerClient } from "./shared-client.js";
 import {
@@ -301,15 +305,17 @@ export async function runCodexAppServerAttempt(
       event: llmInputEvent,
       ctx: hookContext,
     });
-    turn = await client.request<CodexTurnStartResponse>(
-      "turn/start",
-      buildTurnStartParams(params, {
-        threadId: thread.threadId,
-        cwd: effectiveWorkspace,
-        appServer,
-        promptText: promptBuild.prompt,
-      }),
-      { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
+    turn = assertCodexTurnStartResponse(
+      await client.request<unknown>(
+        "turn/start",
+        buildTurnStartParams(params, {
+          threadId: thread.threadId,
+          cwd: effectiveWorkspace,
+          appServer,
+          promptText: promptBuild.prompt,
+        }),
+        { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
+      ),
     );
   } catch (error) {
     trajectoryRecorder?.recordEvent("session.ended", {
@@ -346,14 +352,14 @@ export async function runCodexAppServerAttempt(
     throw error;
   }
   turnId = turn.turn.id;
+  const activeTurnId = turn.turn.id;
   trajectoryRecorder?.recordEvent("prompt.submitted", {
     threadId: thread.threadId,
-    turnId,
+    turnId: activeTurnId,
     prompt: promptBuild.prompt,
     imagesCount: params.images?.length ?? 0,
   });
-  projector = new CodexAppServerEventProjector(params, thread.threadId, turnId);
-  const activeTurnId = turnId;
+  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId);
   const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
@@ -375,7 +381,7 @@ export async function runCodexAppServerAttempt(
       await client.request("turn/steer", {
         threadId: thread.threadId,
         expectedTurnId: activeTurnId,
-        input: [{ type: "text", text }],
+        input: [{ type: "text", text, text_elements: [] }],
       });
     },
     isStreaming: () => !completed,
@@ -650,23 +656,7 @@ async function withCodexStartupTimeout<T>(params: {
 function readDynamicToolCallParams(
   value: JsonValue | undefined,
 ): CodexDynamicToolCallParams | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  const threadId = readString(value, "threadId");
-  const turnId = readString(value, "turnId");
-  const callId = readString(value, "callId");
-  const tool = readString(value, "tool");
-  if (!threadId || !turnId || !callId || !tool) {
-    return undefined;
-  }
-  return {
-    threadId,
-    turnId,
-    callId,
-    tool,
-    arguments: value.arguments,
-  };
+  return readCodexDynamicToolCallParams(value);
 }
 
 function isTurnNotification(

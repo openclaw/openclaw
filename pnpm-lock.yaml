@@ -379,6 +379,9 @@ importers:
       '@mariozechner/pi-coding-agent':
         specifier: 0.70.0
         version: 0.70.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
       ws:
         specifier: ^8.20.0
         version: 8.20.0

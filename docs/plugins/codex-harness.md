@@ -57,6 +57,13 @@ Codex OAuth configs should use `openai-codex/gpt-*`; new native app-server
 harness configs should use `openai/gpt-*` plus `embeddedHarness.runtime:
 "codex"`.
 
+`agents.defaults.imageModel` follows the same prefix split. Use
+`openai-codex/gpt-*` when image understanding should run through the OpenAI
+Codex OAuth provider path. Use `codex/gpt-*` when image understanding should run
+through a bounded Codex app-server turn. The Codex app-server model must
+advertise image input support; text-only Codex models fail before the media turn
+starts.
+
 Use `/status` to confirm the effective harness for the current session. If the
 selection is surprising, enable debug logging for the `agents/harness` subsystem
 and inspect the gateway's structured `agent harness selected` record. It
