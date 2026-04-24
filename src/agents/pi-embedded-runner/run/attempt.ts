@@ -127,10 +127,7 @@ import {
   shouldAllowProviderOwnedThinkingReplay,
 } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
-import {
-  DEFAULT_BOOTSTRAP_FILENAME,
-  reconcileWorkspaceBootstrapCompletion,
-} from "../../workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
@@ -2556,11 +2553,6 @@ export async function runEmbeddedAttempt(
             });
           } catch (entryErr) {
             log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
-          }
-          try {
-            await reconcileWorkspaceBootstrapCompletion(resolvedWorkspace);
-          } catch (repairErr) {
-            log.warn(`failed to reconcile workspace bootstrap completion: ${String(repairErr)}`);
           }
         }
 
