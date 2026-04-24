@@ -1,4 +1,5 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoUnhandledRejection } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
 
@@ -99,7 +100,7 @@ function defaultRegisterUnhandledRejectionHandler(handler: UnhandledRejectionHan
 }
 
 function isDisabledByEnv() {
-  if (process.env.OPENCLAW_DISABLE_BONJOUR === "1") {
+  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR)) {
     return true;
   }
   if (process.env.NODE_ENV === "test") {
@@ -155,18 +156,18 @@ function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
 }
 
 function installCiaoConsoleNoiseFilter(): () => void {
-  const originalConsoleLog = console.log as ConsoleLogFn;
-  console.log = ((...args: unknown[]) => {
+  const previousConsoleLog = console.log as ConsoleLogFn;
+  const wrapper = ((...args: unknown[]) => {
     if (shouldSuppressCiaoConsoleLog(args)) {
       return;
     }
-    originalConsoleLog(...args);
+    previousConsoleLog(...args);
   }) as ConsoleLogFn;
+  console.log = wrapper;
   return () => {
-    if (console.log === originalConsoleLog) {
-      return;
+    if (console.log === wrapper) {
+      console.log = previousConsoleLog;
     }
-    console.log = originalConsoleLog;
   };
 }
 

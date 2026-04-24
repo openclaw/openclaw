@@ -177,6 +177,19 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
+  it("honors truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
+    enableAdvertiserUnitMode();
+    process.env.OPENCLAW_DISABLE_BONJOUR = "true";
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
   it("attaches conflict listeners for services", async () => {
     enableAdvertiserUnitMode();
 
@@ -342,6 +355,33 @@ describe("gateway bonjour advertiser", () => {
       expect(baseConsoleLog).toHaveBeenCalledWith("ordinary console line");
 
       await started.stop();
+    } finally {
+      console.log = originalConsoleLog;
+    }
+  });
+
+  it("does not clobber console.log if another wrapper replaced it before shutdown", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const originalConsoleLog = console.log;
+    const baseConsoleLog = vi.fn();
+    const replacementConsoleLog = vi.fn();
+    console.log = baseConsoleLog as typeof console.log;
+
+    try {
+      const started = await startAdvertiser({
+        gatewayPort: 18789,
+        sshPort: 2222,
+      });
+
+      console.log = replacementConsoleLog as typeof console.log;
+      await started.stop();
+
+      expect(console.log).toBe(replacementConsoleLog);
     } finally {
       console.log = originalConsoleLog;
     }

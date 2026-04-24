@@ -140,6 +140,26 @@ describe("startGatewayDiscovery", () => {
     expect(result.bonjourStop).toBeNull();
   });
 
+  it("skips local discovery services for truthy OPENCLAW_DISABLE_BONJOUR values", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+    process.env.OPENCLAW_DISABLE_BONJOUR = "yes";
+
+    const service = makeDiscoveryService({ id: "bonjour" });
+    const result = await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      wideAreaDiscoveryEnabled: false,
+      tailscaleMode: "serve",
+      mdnsMode: "full",
+      gatewayDiscoveryServices: [service],
+      logDiscovery: makeLogs(),
+    });
+
+    expect(service.service.advertise).not.toHaveBeenCalled();
+    expect(result.bonjourStop).toBeNull();
+  });
+
   it("keeps wide-area DNS-SD publishing active when local discovery is off", async () => {
     process.env.NODE_ENV = "development";
     delete process.env.VITEST;
