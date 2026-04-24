@@ -34,6 +34,7 @@ function createCliBackendTestConfig() {
 
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
+const persistCliTurnTranscriptMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 const abortEmbeddedPiRunMock = vi.fn();
@@ -75,6 +76,10 @@ vi.mock("../../agents/pi-embedded.js", () => {
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
+}));
+
+vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
+  persistCliTurnTranscript: (...args: unknown[]) => persistCliTurnTranscriptMock(...args),
 }));
 
 vi.mock("../../runtime.js", () => {
@@ -142,6 +147,8 @@ beforeEach(() => {
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedPiAgentMock.mockClear();
   runCliAgentMock.mockClear();
+  persistCliTurnTranscriptMock.mockReset();
+  persistCliTurnTranscriptMock.mockResolvedValue(undefined);
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   abortEmbeddedPiRunMock.mockClear();
@@ -1465,7 +1472,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
 });
 
 describe("runReplyAgent claude-cli routing", () => {
-  function createRun() {
+  function createRun(overrides: { originatingThreadId?: string | number } = {}) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "webchat",
@@ -1478,6 +1485,7 @@ describe("runReplyAgent claude-cli routing", () => {
       prompt: "hello",
       summaryLine: "hello",
       enqueuedAt: Date.now(),
+      originatingThreadId: overrides.originatingThreadId,
       run: {
         sessionId: "session",
         sessionKey: "main",
@@ -1538,6 +1546,68 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("persists the CLI turn transcript after a successful CLI run", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+
+    await createRun();
+
+    expect(persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    const [persistArgs] = persistCliTurnTranscriptMock.mock.calls[0];
+    expect(persistArgs).toMatchObject({
+      body: "hello",
+      sessionId: "session",
+      sessionKey: "session",
+      sessionCwd: "/tmp",
+    });
+    expect(persistArgs.result?.payloads?.[0]?.text).toBe("ok");
+  });
+
+  it("does not surface persistence failures to the caller", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+    persistCliTurnTranscriptMock.mockRejectedValueOnce(
+      new Error("disk full — transcript write failed"),
+    );
+
+    const result = await createRun();
+
+    expect(persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("forwards originatingThreadId to the CLI transcript persist call", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+
+    await createRun({ originatingThreadId: "1739142736.000100" });
+
+    expect(persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    const [persistArgs] = persistCliTurnTranscriptMock.mock.calls[0];
+    expect(persistArgs).toMatchObject({ threadId: "1739142736.000100" });
   });
 });
 
