@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -306,6 +308,7 @@ const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const QA_SUITE_PROGRESS_ENV = "OPENCLAW_QA_SUITE_PROGRESS";
 const TELEGRAM_QA_PROGRESS_DETAIL_LIMIT = 240;
 const TELEGRAM_QA_PROGRESS_PREFIX = "[qa-telegram-live]";
+const execFileAsync = promisify(execFile);
 
 const telegramQaCredentialPayloadSchema = z.object({
   groupId: z.string().trim().min(1),
@@ -962,9 +965,63 @@ function canaryFailureMessage(params: {
   ].join("\n");
 }
 
+async function runInstalledOpenClawTelegramOnboardingPreflight(params: {
+  openClawCommand: string;
+  sutToken: string;
+}) {
+  const tempRoot = await fs.mkdtemp(path.join(process.cwd(), ".tmp-openclaw-npm-telegram-"));
+  const homeDir = path.join(tempRoot, "home");
+  const stateDir = path.join(homeDir, ".openclaw");
+  await fs.mkdir(stateDir, { recursive: true });
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    OPENCLAW_HOME: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_GATEWAY_TOKEN: "npm-telegram-live-onboard",
+  };
+  try {
+    await execFileAsync(
+      params.openClawCommand,
+      [
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--mode",
+        "local",
+        "--auth-choice",
+        "openai-api-key",
+        "--secret-input-mode",
+        "ref",
+        "--gateway-port",
+        "18789",
+        "--gateway-bind",
+        "loopback",
+        "--skip-daemon",
+        "--skip-ui",
+        "--skip-skills",
+        "--skip-health",
+        "--json",
+      ],
+      { env },
+    );
+    await execFileAsync(
+      params.openClawCommand,
+      ["channels", "add", "--channel", "telegram", "--token", params.sutToken],
+      { env },
+    );
+    await execFileAsync(params.openClawCommand, ["doctor", "--non-interactive"], { env });
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function runTelegramQaLive(params: {
   repoRoot?: string;
   outputDir?: string;
+  sutOpenClawCommand?: string;
+  preflightInstalledOnboarding?: boolean;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
@@ -1022,6 +1079,15 @@ export async function runTelegramQaLive(params: {
   const cleanupIssues: string[] = [];
   let canaryFailure: string | null = null;
   try {
+    if (params.sutOpenClawCommand && params.preflightInstalledOnboarding === true) {
+      writeTelegramQaProgress(progressEnabled, "installed package onboarding preflight start");
+      await runInstalledOpenClawTelegramOnboardingPreflight({
+        openClawCommand: params.sutOpenClawCommand,
+        sutToken: runtimeEnv.sutToken,
+      });
+      writeTelegramQaProgress(progressEnabled, "installed package onboarding preflight pass");
+    }
+
     const driverIdentity = await getBotIdentity(runtimeEnv.driverToken);
     const sutIdentity = await getBotIdentity(runtimeEnv.sutToken);
     const sutUsername = sutIdentity.username?.trim();
@@ -1040,6 +1106,12 @@ export async function runTelegramQaLive(params: {
 
     const gatewayHarness = await startQaLiveLaneGateway({
       repoRoot,
+      command: params.sutOpenClawCommand
+        ? {
+            executablePath: params.sutOpenClawCommand,
+            usePackagedPlugins: true,
+          }
+        : undefined,
       transport: {
         requiredPluginIds: [],
         createGatewayConfig: () => ({}),
