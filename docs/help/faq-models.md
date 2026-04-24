@@ -4,7 +4,8 @@ read_when:
   - Choosing or switching models, configuring aliases
   - Debugging model failover / "All models failed"
   - Understanding auth profiles and how to manage them
-title: "FAQ — models and auth profiles"
+title: "FAQ: models and auth"
+sidebarTitle: "Models FAQ"
 ---
 
 Model- and auth-profile Q&A. For setup, sessions, gateway, channels, and

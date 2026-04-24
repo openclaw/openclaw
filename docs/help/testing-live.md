@@ -4,7 +4,8 @@ read_when:
   - Running live model matrix / CLI backend / ACP / media-provider smokes
   - Debugging live-test credential resolution
   - Adding a new provider-specific live test
-title: "Testing — live suites"
+title: "Testing: live suites"
+sidebarTitle: "Live tests"
 ---
 
 For quick start, QA runners, unit/integration suites, and Docker flows, see

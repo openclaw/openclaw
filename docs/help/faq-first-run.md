@@ -4,7 +4,8 @@ read_when:
   - New install, onboarding stuck, or first-run errors
   - Choosing auth and provider subscriptions
   - Cannot access docs.openclaw.ai, cannot open dashboard, install stuck
-title: "FAQ — quick start and first-run setup"
+title: "FAQ: first-run setup"
+sidebarTitle: "First-run FAQ"
 ---
 
 Quick-start and first-run Q&A. For everyday operations, models, auth, sessions,

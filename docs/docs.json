@@ -1004,6 +1004,10 @@
                   "install/uninstall",
                   "install/development-channels"
                 ]
+              },
+              {
+                "group": "Advanced setup",
+                "pages": ["start/setup", "pi-dev"]
               }
             ]
           },
@@ -1580,6 +1584,7 @@
                   "reference/transcript-hygiene",
                   "reference/memory-config",
                   "reference/rich-output-protocol",
+                  "reference/session-management-compaction",
                   "date-time"
                 ]
               },
@@ -1598,8 +1603,8 @@
                 "pages": ["reference/credits"]
               },
               {
-                "group": "Release policy",
-                "pages": ["reference/RELEASING", "reference/test"]
+                "group": "Release and CI",
+                "pages": ["reference/RELEASING", "reference/test", "ci"]
               }
             ]
           },
@@ -1607,46 +1612,24 @@
             "tab": "Help",
             "groups": [
               {
-                "group": "Help",
-                "pages": [
-                  "help/index",
-                  "help/troubleshooting",
-                  "help/faq",
-                  "help/faq-first-run",
-                  "help/faq-models"
-                ]
+                "group": "Start here",
+                "pages": ["help/index", "help/troubleshooting", "help/debugging"]
               },
               {
-                "group": "Community",
-                "pages": ["start/lore"]
+                "group": "FAQ",
+                "pages": ["help/faq", "help/faq-first-run", "help/faq-models"]
               },
               {
-                "group": "Environment and debugging",
-                "pages": [
-                  "help/environment",
-                  "help/debugging",
-                  "help/testing",
-                  "help/testing-live",
-                  "help/scripts",
-                  "debug/node-issue",
-                  "diagnostics/flags"
-                ]
+                "group": "Testing",
+                "pages": ["help/testing", "help/testing-live", "help/scripts"]
               },
               {
-                "group": "Compaction internals",
-                "pages": ["reference/session-management-compaction"]
+                "group": "Diagnostics",
+                "pages": ["help/environment", "diagnostics/flags", "debug/node-issue"]
               },
               {
-                "group": "Developer setup",
-                "pages": ["start/setup", "pi-dev"]
-              },
-              {
-                "group": "Contributing",
-                "pages": ["ci"]
-              },
-              {
-                "group": "Docs meta",
-                "pages": ["start/hubs", "start/docs-directory"]
+                "group": "Community and meta",
+                "pages": ["start/lore", "start/hubs", "start/docs-directory"]
               }
             ]
           }
