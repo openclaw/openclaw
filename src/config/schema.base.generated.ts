@@ -17250,7 +17250,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Tool-loop Detection",
                 description:
-                  "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+                  "Enable repetitive tool-call loop detection and backoff safety checks (default: true).",
               },
               historySize: {
                 type: "integer",

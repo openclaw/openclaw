@@ -231,13 +231,17 @@ export function resolveToolLoopDetectionConfig(params: {
       : undefined;
 
   if (!agent) {
-    return global;
+    const result = { ...global };
+    result.enabled ??= true;
+    return result;
   }
   if (!global) {
-    return agent;
+    const result = { ...agent };
+    result.enabled ??= true;
+    return result;
   }
 
-  return {
+  const merged = {
     ...global,
     ...agent,
     detectors: {
@@ -245,6 +249,8 @@ export function resolveToolLoopDetectionConfig(params: {
       ...agent.detectors,
     },
   };
+  merged.enabled ??= true;
+  return merged;
 }
 
 export const __testing = {

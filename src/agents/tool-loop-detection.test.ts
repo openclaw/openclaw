@@ -267,15 +267,34 @@ describe("tool-loop-detection", () => {
   });
 
   describe("detectToolCallLoop", () => {
-    it("is disabled by default", () => {
+    it("blocks when explicitly configured as disabled", () => {
       const state = createState();
 
-      for (let i = 0; i < 20; i += 1) {
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `disabled-${i}`);
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        { enabled: false },
+      );
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("fires generic_repeat with no config passed (enabled by default)", () => {
+      const state = createState();
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
         recordToolCall(state, "read", { path: "/same.txt" }, `default-${i}`);
       }
 
-      const loopResult = detectToolCallLoop(state, "read", { path: "/same.txt" });
-      expect(loopResult.stuck).toBe(false);
+      const result = detectToolCallLoop(state, "read", { path: "/same.txt" });
+      expect(result.stuck).toBe(true);
+      if (result.stuck) {
+        expect(result.detector).toBe("generic_repeat");
+      }
     });
 
     it("does not flag unique tool calls", () => {
