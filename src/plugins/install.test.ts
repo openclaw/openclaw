@@ -1292,6 +1292,45 @@ describe("installPluginFromArchive", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "fails package installs when non-exact openclaw peer names point at the host package root",
+    async () => {
+      const cases = [
+        { entryName: "OpenClaw", pluginId: "uppercase-openclaw-peer-plugin" },
+        { entryName: "openclaw ", pluginId: "trailing-space-openclaw-peer-plugin" },
+      ] as const;
+
+      for (const testCase of cases) {
+        const { pluginDir } = setupPluginInstallDirs();
+        vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
+
+        fs.writeFileSync(
+          path.join(pluginDir, "package.json"),
+          JSON.stringify({
+            name: testCase.pluginId,
+            version: "1.0.0",
+            openclaw: { extensions: ["index.js"] },
+          }),
+        );
+        fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.symlinkSync(process.cwd(), path.join(nodeModulesDir, testCase.entryName), "junction");
+
+        await expect(
+          installSecurityScan.scanPackageInstallSource({
+            extensions: ["index.js"],
+            logger: { warn: vi.fn() },
+            packageDir: pluginDir,
+            pluginId: testCase.pluginId,
+            packageName: testCase.pluginId,
+          }),
+        ).rejects.toThrow(path.join("node_modules", testCase.entryName));
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "fails package installs when nested node_modules/openclaw points at the host package root",
     async () => {
       const { pluginDir } = setupPluginInstallDirs();

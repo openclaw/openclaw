@@ -177,7 +177,7 @@ function pathContainsNodeModulesSegment(relativePath: string): boolean {
 }
 
 function isTrustedOpenClawPeerSymlink(relativePath: string): boolean {
-  const segments = relativePath.split(/[\\/]+/).map((segment) => segment.trim().toLowerCase());
+  const segments = relativePath.split(/[\\/]+/);
   return (
     (segments.length === 2 && segments[0] === "node_modules" && segments[1] === "openclaw") ||
     (segments.length === 3 &&
