@@ -238,6 +238,164 @@ describe("web outbound", () => {
     );
   });
 
+  it("rejects voice-note coercion when audioAsVoice is true but media is not verified audio", async () => {
+    const buf = Buffer.from("voice-bytes");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/octet-stream",
+      kind: "document",
+      fileName: "voice.ogg",
+    });
+
+    await sendMessageWhatsApp("+1555", "voice override", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/voice.ogg",
+      audioAsVoice: true,
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "voice override",
+      buf,
+      "application/octet-stream",
+      { fileName: "voice.ogg" },
+    );
+  });
+
+  it("forces voice-note when audioAsVoice is true and contentType is null", async () => {
+    const buf = Buffer.from("aud");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: null,
+      kind: "audio",
+      fileName: "voice.ogg",
+    });
+
+    await sendMessageWhatsApp("+1555", "voice null content type", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/voice.ogg",
+      audioAsVoice: true,
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "voice null content type",
+      buf,
+      "audio/ogg; codecs=opus",
+    );
+  });
+
+  it("falls back to opus mimetype when contentType contains control characters", async () => {
+    const buf = Buffer.from("voice");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "audio/ogg\r\nX-Inj: bad",
+      kind: "audio",
+      fileName: "voice.ogg",
+    });
+
+    await sendMessageWhatsApp("+1555", "voice crlf", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/voice.ogg",
+      audioAsVoice: true,
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "voice crlf",
+      buf,
+      "audio/ogg; codecs=opus",
+    );
+  });
+
+  it("uses image/jpeg fallback when image contentType contains control characters", async () => {
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/png\r\nX-Inj: bad",
+      kind: "image",
+      fileName: "photo.png",
+    });
+
+    await sendMessageWhatsApp("+1555", "img cap", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/photo.png",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "img cap", buf, "image/jpeg");
+  });
+
+  it("sanitizes documentFileName when it contains control characters", async () => {
+    const buf = Buffer.from("doc");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/pdf",
+      kind: "document",
+      fileName: "evil.pdf\r\nX-Inj: bad",
+    });
+
+    await sendMessageWhatsApp("+1555", "doc cap", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/report.pdf",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc cap", buf, "application/pdf", {
+      fileName: "evil.pdfX-Inj: bad",
+    });
+  });
+
+  it("does not force voice-note for non-audio files when audioAsVoice is true", async () => {
+    const buf = Buffer.from("pdf");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/pdf",
+      kind: "document",
+      fileName: "file.pdf",
+    });
+
+    await sendMessageWhatsApp("+1555", "doc", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/file.pdf",
+      audioAsVoice: true,
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
+      fileName: "file.pdf",
+    });
+  });
+
+  it("keeps document path for audio-like file when audioAsVoice is unset", async () => {
+    const buf = Buffer.from("voice-doc");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/octet-stream",
+      kind: "document",
+      fileName: "voice.ogg",
+    });
+
+    await sendMessageWhatsApp("+1555", "doc voice", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/voice.ogg",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "doc voice",
+      buf,
+      "application/octet-stream",
+      {
+        fileName: "voice.ogg",
+      },
+    );
+  });
+
   it("maps video with caption", async () => {
     const buf = Buffer.from("video");
     loadWebMediaMock.mockResolvedValueOnce({

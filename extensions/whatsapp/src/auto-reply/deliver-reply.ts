@@ -1,4 +1,9 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  isVerifiedAudioSource,
+  sanitizeFileName,
+  sanitizeMediaMime,
+} from "openclaw/plugin-sdk/media-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -135,27 +140,39 @@ export async function deliverWebReply(params: {
       }
       if (media.kind === "image") {
         const quote = getQuote();
+        const safeMime = sanitizeMediaMime(media.mimetype);
         await sendWithRetry(
           () =>
             msg.sendMedia(
               {
                 image: media.buffer,
                 caption,
-                mimetype: media.mimetype,
+                mimetype: safeMime?.startsWith("image/") ? safeMime : "image/jpeg",
               },
               quote,
             ),
           "media:image",
         );
-      } else if (media.kind === "audio") {
+      } else if (
+        media.kind === "audio" ||
+        (replyResult.audioAsVoice === true &&
+          isVerifiedAudioSource({ kind: media.kind, contentType: media.mimetype }))
+      ) {
         const quote = getQuote();
+        const sanitized = sanitizeMediaMime(media.mimetype, { preserveCodecsParam: true });
+        const voiceMimetype =
+          sanitized === "audio/ogg"
+            ? "audio/ogg; codecs=opus"
+            : sanitized?.startsWith("audio/")
+              ? sanitized
+              : "audio/ogg; codecs=opus";
         await sendWithRetry(
           () =>
             msg.sendMedia(
               {
                 audio: media.buffer,
                 ptt: true,
-                mimetype: media.mimetype,
+                mimetype: voiceMimetype,
                 caption,
               },
               quote,
@@ -164,28 +181,31 @@ export async function deliverWebReply(params: {
         );
       } else if (media.kind === "video") {
         const quote = getQuote();
+        const safeMime = sanitizeMediaMime(media.mimetype);
         await sendWithRetry(
           () =>
             msg.sendMedia(
               {
                 video: media.buffer,
                 caption,
-                mimetype: media.mimetype,
+                mimetype: safeMime?.startsWith("video/") ? safeMime : "video/mp4",
               },
               quote,
             ),
           "media:video",
         );
       } else {
+        const fileName = sanitizeFileName(media.fileName);
+        const mimetype = sanitizeMediaMime(media.mimetype) ?? "application/octet-stream";
         const quote = getQuote();
         await sendWithRetry(
           () =>
             msg.sendMedia(
               {
                 document: media.buffer,
-                fileName: media.fileName,
+                fileName,
                 caption,
-                mimetype: media.mimetype,
+                mimetype,
               },
               quote,
             ),

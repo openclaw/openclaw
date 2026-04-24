@@ -32,6 +32,7 @@ type WhatsAppSendTextOptions = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
   accountId?: string;
+  audioAsVoice?: boolean;
   quotedMessageKey?: {
     id: string;
     remoteJid: string;
@@ -175,6 +176,7 @@ export function createWhatsAppOutboundBase({
         to,
         text,
         mediaUrl,
+        audioAsVoice,
         mediaAccess,
         mediaLocalRoots,
         mediaReadFile,
@@ -197,6 +199,7 @@ export function createWhatsAppOutboundBase({
           verbose: false,
           cfg,
           mediaUrl,
+          audioAsVoice: audioAsVoice === true ? true : undefined,
           mediaAccess,
           mediaLocalRoots,
           mediaReadFile,

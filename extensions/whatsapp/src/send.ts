@@ -6,6 +6,11 @@ import {
   convertMarkdownTables,
   resolveMarkdownTableMode,
 } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  isVerifiedAudioSource,
+  sanitizeFileName,
+  sanitizeMediaMime,
+} from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -67,6 +72,7 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
+    audioAsVoice?: boolean;
     accountId?: string;
     quotedMessageKey?: {
       id: string;
@@ -126,12 +132,42 @@ export async function sendMessageWhatsApp(
       );
       const caption = text || undefined;
       mediaBuffer = media.buffer;
-      mediaType = media.mimetype;
-      if (media.kind === "document") {
+      const sanitizedMediaType = sanitizeMediaMime(media.mimetype);
+      mediaType = sanitizedMediaType ?? "application/octet-stream";
+      const forceVoiceDelivery =
+        options.audioAsVoice === true &&
+        isVerifiedAudioSource({ kind: media.kind, contentType: media.mimetype });
+      if (forceVoiceDelivery) {
+        // WhatsApp PTT requires opus codec. Preserve a sanitized codecs param and fall back
+        // to canonical opus when the input is unsafe or lacks an audio base type.
+        const sanitized = sanitizeMediaMime(media.mimetype, { preserveCodecsParam: true });
+        mediaType =
+          sanitized === "audio/ogg"
+            ? "audio/ogg; codecs=opus"
+            : sanitized?.startsWith("audio/")
+              ? sanitized
+              : "audio/ogg; codecs=opus";
         text = caption ?? "";
-        documentFileName = media.fileName;
+      } else if (media.kind === "audio") {
+        // Non-PTT audio. normalizeWhatsAppLoadedMedia already rewrites "audio/ogg" to
+        // "audio/ogg; codecs=opus"; sanitize with preserveCodecsParam to guard header
+        // injection while keeping the opus codec intact.
+        const sanitized = sanitizeMediaMime(media.mimetype, { preserveCodecsParam: true });
+        mediaType =
+          sanitized === "audio/ogg"
+            ? "audio/ogg; codecs=opus"
+            : (sanitized ?? "application/octet-stream");
+        text = caption ?? "";
+      } else if (media.kind === "video") {
+        mediaType = sanitizedMediaType?.startsWith("video/") ? sanitizedMediaType : "video/mp4";
+        text = caption ?? "";
+      } else if (media.kind === "image") {
+        mediaType = sanitizedMediaType?.startsWith("image/") ? sanitizedMediaType : "image/jpeg";
+        text = caption ?? "";
       } else {
+        mediaType = sanitizedMediaType ?? "application/octet-stream";
         text = caption ?? "";
+        documentFileName = sanitizeFileName(media.fileName);
       }
     }
     outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);

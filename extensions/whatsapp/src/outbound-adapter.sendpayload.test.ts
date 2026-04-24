@@ -41,6 +41,29 @@ describe("whatsappOutbound sendPayload", () => {
     });
   });
 
+  it("forwards audioAsVoice when delegating media sends", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendMedia!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "voice",
+      mediaUrl: "/tmp/test.ogg",
+      audioAsVoice: true,
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "voice", {
+      verbose: false,
+      cfg: {},
+      mediaUrl: "/tmp/test.ogg",
+      audioAsVoice: true,
+      mediaLocalRoots: undefined,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+  });
+
   it("trims leading whitespace for sendPayload text and caption delivery", async () => {
     const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
 

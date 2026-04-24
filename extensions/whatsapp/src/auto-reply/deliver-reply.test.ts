@@ -546,6 +546,252 @@ describe("deliverWebReply", () => {
     );
   });
 
+  it("rejects voice-note coercion when audioAsVoice is true but media is not verified audio", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "application/octet-stream",
+      kind: "document",
+      fileName: "voice.ogg",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/voice.ogg", audioAsVoice: true },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.any(Buffer),
+        fileName: "voice.ogg",
+        mimetype: "application/octet-stream",
+        caption: "cap",
+      }),
+      undefined,
+    );
+  });
+
+  it("falls back to opus mimetype when contentType contains control characters", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/ogg\r\nX-Inj: bad",
+      kind: "audio",
+      fileName: "voice.ogg",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/voice.ogg", audioAsVoice: true },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: expect.any(Buffer),
+        ptt: true,
+        mimetype: "audio/ogg; codecs=opus",
+        caption: "cap",
+      }),
+      undefined,
+    );
+  });
+
+  it("uses image/jpeg fallback when image contentType contains control characters", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/png\r\nX-Inj: bad",
+      kind: "image",
+      fileName: "photo.png",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "img cap", mediaUrl: "http://example.com/photo.png" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        image: expect.any(Buffer),
+        mimetype: "image/jpeg",
+        caption: "img cap",
+      }),
+      undefined,
+    );
+  });
+
+  it("uses video/mp4 fallback when video contentType contains control characters", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("vid"),
+      contentType: "video/quicktime\r\nX-Inj: bad",
+      kind: "video",
+      fileName: "movie.mov",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "vid cap", mediaUrl: "http://example.com/movie.mov" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        video: expect.any(Buffer),
+        mimetype: "video/mp4",
+        caption: "vid cap",
+      }),
+      undefined,
+    );
+  });
+
+  it("uses octet-stream fallback when document contentType contains control characters", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("doc"),
+      contentType: "application/pdf\r\nX-Inj: bad",
+      kind: "document",
+      fileName: "report.pdf",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "doc cap", mediaUrl: "http://example.com/report.pdf" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.any(Buffer),
+        fileName: "report.pdf",
+        mimetype: "application/octet-stream",
+        caption: "doc cap",
+      }),
+      undefined,
+    );
+  });
+
+  it("sanitizes document fileName when it contains control characters", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("doc"),
+      contentType: "application/pdf",
+      kind: "document",
+      fileName: "evil.pdf\r\nX-Inj: bad",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "doc cap", mediaUrl: "http://example.com/report.pdf" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.any(Buffer),
+        fileName: "evil.pdfX-Inj: bad",
+        mimetype: "application/pdf",
+        caption: "doc cap",
+      }),
+      undefined,
+    );
+  });
+
+  it("keeps non-audio documents as documents even when audioAsVoice is true", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      kind: "document",
+      fileName: "file.pdf",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/file.pdf", audioAsVoice: true },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.any(Buffer),
+        fileName: "file.pdf",
+        mimetype: "application/pdf",
+        caption: "cap",
+      }),
+      undefined,
+    );
+  });
+
+  it("keeps document path for audio-like file when audioAsVoice is unset", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "application/octet-stream",
+      kind: "document",
+      fileName: "voice.ogg",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/voice.ogg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.any(Buffer),
+        fileName: "voice.ogg",
+        mimetype: "application/octet-stream",
+        caption: "cap",
+      }),
+      undefined,
+    );
+  });
+
   it("sends video media", async () => {
     const msg = makeMsg();
     (
