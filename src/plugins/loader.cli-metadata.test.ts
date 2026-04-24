@@ -137,6 +137,9 @@ describe("plugin loader CLI metadata", () => {
       body: `module.exports = {
   id: "config-cli-optional-preflight",
   register(api) {
+    if (!api.pluginConfig || typeof api.pluginConfig !== "object" || Array.isArray(api.pluginConfig)) {
+      throw new Error("plugin config should stay normalized");
+    }
     api.registerCli(() => {}, {
       descriptors: [
         {

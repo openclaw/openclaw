@@ -2535,7 +2535,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
       let validatedConfig: { ok: boolean; value?: Record<string, unknown>; errors?: string[] } = {
         ok: true,
-        value: entry?.config as Record<string, unknown> | undefined,
+        value: (entry?.config as Record<string, unknown> | undefined) ?? {},
       };
       if (
         shouldValidatePluginConfigForLoad({
@@ -3196,7 +3196,7 @@ export async function loadOpenClawPluginCliRegistry(
 
     let validatedConfig: { ok: boolean; value?: Record<string, unknown>; errors?: string[] } = {
       ok: true,
-      value: entry?.config as Record<string, unknown> | undefined,
+      value: (entry?.config as Record<string, unknown> | undefined) ?? {},
     };
     if (
       shouldValidatePluginConfigForLoad({
