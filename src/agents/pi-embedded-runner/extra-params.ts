@@ -214,7 +214,7 @@ function applyDefaultOpenAIGptRuntimeParams(
     merged.text_verbosity = "low";
   }
   if (!Object.hasOwn(merged, "openaiWsWarmup")) {
-    merged.openaiWsWarmup = true;
+    merged.openaiWsWarmup = false;
   }
 }
 
@@ -334,6 +334,7 @@ function createParallelToolCallsWrapper(
     if (
       model.api !== "openai-completions" &&
       model.api !== "openai-responses" &&
+      model.api !== "openai-codex-responses" &&
       model.api !== "azure-openai-responses"
     ) {
       return underlying(model, context, options);

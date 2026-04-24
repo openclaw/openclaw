@@ -19,7 +19,10 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
+import {
+  extractModelCompat,
+  resolveToolCallArgumentsEncoding,
+} from "../../../plugins/provider-model-compat.js";
 import {
   resolveProviderSystemPromptContribution,
   resolveProviderTextTransforms,
@@ -550,7 +553,7 @@ export async function runEmbeddedAttempt(
             abortSignal: runAbortController.signal,
             modelProvider: params.model.provider,
             modelId: params.modelId,
-            modelCompat: params.model.compat,
+            modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
             modelContextWindowTokens: params.model.contextWindow,
             modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
@@ -2069,15 +2072,23 @@ export async function runEmbeddedAttempt(
             leafMessage: leafEntry.message,
           });
           effectivePrompt = orphanPromptMerge.prompt;
-          if (leafEntry.parentId) {
-            sessionManager.branch(leafEntry.parentId);
-          } else {
-            sessionManager.resetLeaf();
+          if (orphanPromptMerge.removeLeaf) {
+            if (leafEntry.parentId) {
+              sessionManager.branch(leafEntry.parentId);
+            } else {
+              sessionManager.resetLeaf();
+            }
+            const sessionContext = sessionManager.buildSessionContext();
+            activeSession.agent.state.messages = sessionContext.messages;
           }
-          const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.state.messages = sessionContext.messages;
           const orphanRepairMessage =
-            `${orphanPromptMerge.merged ? "Merged and removed" : "Removed"} orphaned user message ` +
+            `${
+              orphanPromptMerge.removeLeaf
+                ? orphanPromptMerge.merged
+                  ? "Merged and removed"
+                  : "Removed already-queued"
+                : "Preserved"
+            } orphaned user message ` +
             `to prevent consecutive user turns. ` +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
           if (shouldWarnOnOrphanedUserRepair(params.trigger)) {

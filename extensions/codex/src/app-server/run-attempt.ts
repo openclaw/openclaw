@@ -70,6 +70,10 @@ import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
+type OpenClawCodingToolsOptions = NonNullable<
+  Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
+>;
+
 let clientFactory = defaultCodexAppServerClientFactory;
 
 function emitCodexAppServerEvent(
@@ -709,7 +713,10 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     abortSignal: input.runAbortController.signal,
     modelProvider: params.model.provider,
     modelId: params.modelId,
-    modelCompat: params.model.compat,
+    modelCompat:
+      params.model.compat && typeof params.model.compat === "object"
+        ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
+        : undefined,
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
     modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
