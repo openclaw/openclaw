@@ -640,8 +640,11 @@ export async function prepareSlackMessage(params: {
     effectiveDirectMedia,
   });
 
-  // Use direct media (including forwarded attachment media) if available, else thread starter media
-  const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
+  // Use the reply's own direct media if available.
+  // Thread starter media is never hydrated for thread replies (the parent
+  // image was already processed on the channel-level turn), so the
+  // fallback here is always null — kept only as a defensive guard.
+  const effectiveMedia = effectiveDirectMedia ?? null;
   const firstMedia = effectiveMedia?.[0];
 
   const inboundHistory =

@@ -1,8 +1,9 @@
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
+import * as mediaModule from "../media.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import {
   createInboundSlackTestContext,
@@ -198,5 +199,193 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadStarterBody).toBeUndefined();
     expect(result.threadHistoryBody).toContain("allowed follow-up");
     expect(result.threadHistoryBody).not.toContain("self starter");
+  });
+});
+
+describe("resolveSlackThreadContextData — thread starter media", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  function makeTmpStorePath() {
+    if (!fixtureRoot) {
+      throw new Error("fixtureRoot missing");
+    }
+    const dir = path.join(fixtureRoot, `case-media-${caseId++}`);
+    fs.mkdirSync(dir);
+    return { dir, storePath: path.join(dir, "sessions.json") };
+  }
+
+  function makeTmpStorePathWithSession(sessionKey: string) {
+    const { dir, storePath } = makeTmpStorePath();
+    // Write a minimal session store with updatedAt so readSessionUpdatedAt returns a value.
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { updatedAt: Date.now() - 60_000 } }),
+    );
+    return { dir, storePath };
+  }
+
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-thread-media-"));
+  });
+
+  afterAll(() => {
+    if (fixtureRoot) {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      fixtureRoot = "";
+    }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function createThreadContext() {
+    return createInboundSlackTestContext({
+      cfg: {
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: {
+        conversations: {
+          replies: vi.fn().mockResolvedValue({
+            messages: [],
+            response_metadata: { next_cursor: "" },
+          }),
+        },
+      } as unknown as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+    });
+  }
+
+  const starterFiles = [
+    { id: "F001", name: "photo.jpg", url_private_download: "https://files.slack.com/photo.jpg" },
+  ];
+  const fakeMedia = [
+    { path: "/tmp/photo.jpg", contentType: "image/jpeg", placeholder: "[Slack file: photo.jpg]" },
+  ];
+
+  it("never hydrates thread starter media for a new thread session (first turn)", async () => {
+    const { storePath } = makeTmpStorePath(); // no prior session
+    const resolveSlackMediaSpy = vi
+      .spyOn(mediaModule, "resolveSlackMedia")
+      .mockResolvedValue(fakeMedia);
+
+    const result = await resolveSlackThreadContextData({
+      ctx: createThreadContext(),
+      account: createSlackTestAccount({ thread: { initialHistoryLimit: 0 } }),
+      message: {
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "follow-up reply",
+        ts: "101.000",
+        thread_ts: "100.000",
+      } as SlackMessageEvent,
+      isThreadReply: true,
+      threadTs: "100.000",
+      threadStarter: {
+        text: "starter with image",
+        userId: "U1",
+        ts: "100.000",
+        files: starterFiles,
+      },
+      roomLabel: "#general",
+      storePath,
+      sessionKey: "thread-session",
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+      contextVisibilityMode: "all",
+      envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
+      effectiveDirectMedia: null,
+    });
+
+    // Thread replies never hydrate parent media — the image was already
+    // processed on the channel-level turn that started the thread.
+    expect(result.threadStarterMedia).toBeNull();
+    expect(resolveSlackMediaSpy).not.toHaveBeenCalled();
+  });
+
+  it("never hydrates thread starter media for subsequent replies in an existing session", async () => {
+    const sessionKey = "thread-session";
+    const { storePath } = makeTmpStorePathWithSession(sessionKey); // existing session
+    const resolveSlackMediaSpy = vi
+      .spyOn(mediaModule, "resolveSlackMedia")
+      .mockResolvedValue(fakeMedia);
+
+    const result = await resolveSlackThreadContextData({
+      ctx: createThreadContext(),
+      account: createSlackTestAccount({ thread: { initialHistoryLimit: 0 } }),
+      message: {
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "second reply",
+        ts: "102.000",
+        thread_ts: "100.000",
+      } as SlackMessageEvent,
+      isThreadReply: true,
+      threadTs: "100.000",
+      threadStarter: {
+        text: "starter with image",
+        userId: "U1",
+        ts: "100.000",
+        files: starterFiles,
+      },
+      roomLabel: "#general",
+      storePath,
+      sessionKey,
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+      contextVisibilityMode: "all",
+      envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
+      effectiveDirectMedia: null,
+    });
+
+    expect(result.threadStarterMedia).toBeNull();
+    expect(resolveSlackMediaSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT hydrate thread starter media when the reply has its own direct media", async () => {
+    const { storePath } = makeTmpStorePath(); // new session
+    const resolveSlackMediaSpy = vi
+      .spyOn(mediaModule, "resolveSlackMedia")
+      .mockResolvedValue(fakeMedia);
+    const ownMedia = [
+      { path: "/tmp/own.jpg", contentType: "image/jpeg", placeholder: "[Slack file: own.jpg]" },
+    ];
+
+    const result = await resolveSlackThreadContextData({
+      ctx: createThreadContext(),
+      account: createSlackTestAccount({ thread: { initialHistoryLimit: 0 } }),
+      message: {
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "reply with own image",
+        ts: "101.000",
+        thread_ts: "100.000",
+      } as SlackMessageEvent,
+      isThreadReply: true,
+      threadTs: "100.000",
+      threadStarter: {
+        text: "starter with image",
+        userId: "U1",
+        ts: "100.000",
+        files: starterFiles,
+      },
+      roomLabel: "#general",
+      storePath,
+      sessionKey: "thread-session",
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+      contextVisibilityMode: "all",
+      envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
+      effectiveDirectMedia: ownMedia, // reply has its own media
+    });
+
+    // Thread replies never hydrate parent media regardless of own media
+    expect(result.threadStarterMedia).toBeNull();
+    expect(resolveSlackMediaSpy).not.toHaveBeenCalled();
   });
 });
