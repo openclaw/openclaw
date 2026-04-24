@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { diagnosticErrorCategory } from "../../../infra/diagnostic-error-metadata.js";
 import {
   emitDiagnosticEvent,
   type DiagnosticEventInput,
@@ -26,27 +27,32 @@ type ModelCallEventBase = Omit<
   "type"
 >;
 
-export function diagnosticErrorCategory(err: unknown): string {
-  if (err instanceof Error && err.name.trim()) {
-    return err.name;
-  }
-  return typeof err;
-}
+const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as { then?: unknown }).then === "function"
-  );
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+    return false;
+  }
+  try {
+    return typeof (value as { then?: unknown }).then === "function";
+  } catch {
+    return false;
+  }
 }
 
-function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    typeof (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function"
-  );
+function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
+  if (value === null || typeof value !== "object") {
+    return undefined;
+  }
+  try {
+    const asyncIterator = (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator];
+    if (typeof asyncIterator !== "function") {
+      return undefined;
+    }
+    return () => asyncIterator.call(value) as AsyncIterator<unknown>;
+  } catch {
+    return undefined;
+  }
 }
 
 function baseModelCallEvent(
@@ -65,6 +71,38 @@ function baseModelCallEvent(
     ...(ctx.transport && { transport: ctx.transport }),
     trace,
   };
+}
+
+async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<void> {
+  let returnResult: PromiseLike<unknown> | unknown;
+  try {
+    returnResult = iterator.return?.();
+  } catch {
+    return;
+  }
+  if (!returnResult) {
+    return;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve(returnResult).catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, MODEL_CALL_STREAM_RETURN_TIMEOUT_MS);
+        const unref =
+          typeof timeout === "object" && timeout
+            ? (timeout as { unref?: () => void }).unref
+            : undefined;
+        if (unref) {
+          unref.call(timeout);
+        }
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 async function* observeModelCallIterator<T>(
@@ -98,7 +136,7 @@ async function* observeModelCallIterator<T>(
     throw err;
   } finally {
     if (!terminalEmitted) {
-      await iterator.return?.();
+      await safeReturnIterator(iterator);
       emitDiagnosticEvent({
         type: "model.call.error",
         ...eventBase,
@@ -111,16 +149,33 @@ async function* observeModelCallIterator<T>(
 
 function observeModelCallStream<T extends AsyncIterable<unknown>>(
   stream: T,
+  createIterator: () => AsyncIterator<unknown>,
   eventBase: ModelCallEventBase,
   startedAt: number,
 ): T {
-  const createIterator = stream[Symbol.asyncIterator].bind(stream);
-  Object.defineProperty(stream, Symbol.asyncIterator, {
-    configurable: true,
-    value: () =>
-      observeModelCallIterator(createIterator(), eventBase, startedAt)[Symbol.asyncIterator](),
+  const observedIterator = () =>
+    observeModelCallIterator(createIterator(), eventBase, startedAt)[Symbol.asyncIterator]();
+  let hasNonConfigurableIterator = false;
+  try {
+    hasNonConfigurableIterator =
+      Object.getOwnPropertyDescriptor(stream, Symbol.asyncIterator)?.configurable === false;
+  } catch {
+    hasNonConfigurableIterator = true;
+  }
+  if (hasNonConfigurableIterator) {
+    return {
+      [Symbol.asyncIterator]: observedIterator,
+    } as T;
+  }
+  return new Proxy(stream, {
+    get(target, property, receiver) {
+      if (property === Symbol.asyncIterator) {
+        return observedIterator;
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
   });
-  return stream;
 }
 
 function observeModelCallResult(
@@ -128,8 +183,14 @@ function observeModelCallResult(
   eventBase: ModelCallEventBase,
   startedAt: number,
 ): unknown {
-  if (isAsyncIterable(result)) {
-    return observeModelCallStream(result, eventBase, startedAt);
+  const createIterator = asyncIteratorFactory(result);
+  if (createIterator) {
+    return observeModelCallStream(
+      result as AsyncIterable<unknown>,
+      createIterator,
+      eventBase,
+      startedAt,
+    );
   }
   emitDiagnosticEvent({
     type: "model.call.completed",

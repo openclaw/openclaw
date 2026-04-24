@@ -17,6 +17,7 @@ async function collectModelCallEvents(run: () => Promise<void>): Promise<Diagnos
   });
   try {
     await run();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     return events;
   } finally {
     stop();
@@ -66,7 +67,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         {} as never,
         {} as never,
       ) as unknown as typeof originalStream;
-      expect(returned).toBe(originalStream);
+      expect(returned).not.toBe(originalStream);
       expect(await returned.result()).toBe("kept");
       await drain(returned);
     });
@@ -128,6 +129,42 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       errorCategory: "TypeError",
       durationMs: expect.any(Number),
     });
+  });
+
+  it("does not mutate non-configurable provider streams", async () => {
+    const stream = {};
+    Object.defineProperty(stream, Symbol.asyncIterator, {
+      configurable: false,
+      value: async function* () {
+        yield { type: "text", text: "ok" };
+      },
+    });
+    Object.freeze(stream);
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-frozen",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      const returned = wrapped(
+        {} as never,
+        {} as never,
+        {} as never,
+      ) as unknown as AsyncIterable<unknown>;
+      expect(returned).not.toBe(stream);
+      await drain(returned);
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
   });
 
   it("emits error events when stream consumption stops early", async () => {
