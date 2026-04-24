@@ -5133,6 +5133,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   isolatedSession: {
                     type: "boolean",
                   },
+                  preHook: {
+                    type: "object",
+                    properties: {
+                      file: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      args: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                      timeoutSeconds: {
+                        type: "integer",
+                        minimum: 1,
+                        maximum: 300,
+                      },
+                    },
+                    required: ["file"],
+                    additionalProperties: false,
+                  },
                 },
                 additionalProperties: false,
               },
@@ -6456,6 +6478,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     isolatedSession: {
                       type: "boolean",
+                    },
+                    preHook: {
+                      type: "object",
+                      properties: {
+                        file: {
+                          type: "string",
+                          minLength: 1,
+                        },
+                        args: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        timeoutSeconds: {
+                          type: "integer",
+                          minimum: 1,
+                          maximum: 300,
+                        },
+                      },
+                      required: ["file"],
+                      additionalProperties: false,
                     },
                   },
                   additionalProperties: false,

@@ -52,6 +52,7 @@ describe("cron protocol validators", () => {
   it("accepts update params for id and jobId selectors", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { enabled: false } })).toBe(true);
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-3", patch: { preHook: false } })).toBe(true);
   });
 
   it("accepts remove params for id and jobId selectors", () => {

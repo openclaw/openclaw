@@ -732,6 +732,7 @@ export async function runHeartbeatOnce(opts: {
   heartbeat?: HeartbeatConfig;
   reason?: string;
   deps?: HeartbeatDeps;
+  abortSignal?: AbortSignal;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
@@ -862,6 +863,60 @@ export async function runHeartbeatOnce(opts: {
       consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
     }
     return { status: "skipped", reason: "no-tasks-due" };
+  }
+
+  // Pre-hook gate: runs after preflight + no-tasks-due check, before agent turn.
+  // Placed here so the shell command is only invoked when there is actual work to do.
+  const preHookConfig = heartbeat?.preHook;
+  if (preHookConfig?.file) {
+    if (opts.abortSignal?.aborted) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "aborted",
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: "aborted" as const };
+    }
+    const { runPreHook, summarizePreHookOutput } = await import("../cron/pre-hook.runtime.js");
+    const hookResult = await runPreHook(preHookConfig, opts.abortSignal);
+    log.info("heartbeat preHook completed", {
+      outcome: hookResult.outcome,
+      exitCode: hookResult.exitCode,
+    });
+    if (hookResult.outcome !== "proceed") {
+      // Only log hook output (redacted + truncated) on non-success, and only at
+      // debug level. Avoids leaking credentials printed by hook scripts into
+      // routine info logs (CWE-532).
+      log.debug("heartbeat preHook output", {
+        outcome: hookResult.outcome,
+        exitCode: hookResult.exitCode,
+        stdout: summarizePreHookOutput(hookResult.stdout),
+        stderr: summarizePreHookOutput(hookResult.stderr),
+      });
+    }
+    if (hookResult.outcome === "skip") {
+      // Do NOT remove queued cron events here — the heartbeat preHook gates the
+      // entire heartbeat, but individual cron events should persist until their
+      // next eligible heartbeat. Per-job cleanup is handled in timer.ts for
+      // wakeMode:now jobs that initiated this heartbeat.
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "preHook-skip",
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: "preHook-skip" as const };
+    }
+    if (hookResult.outcome === "error") {
+      emitHeartbeatEvent({
+        status: "failed",
+        reason: `preHook-error`,
+        durationMs: Date.now() - startedAt,
+      });
+      return {
+        status: "failed",
+        reason: `preHook failed: ${hookResult.error ?? `exit ${hookResult.exitCode}`}`,
+      };
+    }
   }
 
   let runSessionKey = sessionKey;

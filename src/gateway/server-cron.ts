@@ -290,6 +290,7 @@ export function buildGatewayCronService(params: {
         contextKey: opts?.contextKey,
         trusted: opts?.trusted,
       });
+      return sessionKey;
     },
     requestHeartbeatNow: (opts) => {
       const { agentId, sessionKey } = resolveCronWakeTarget(opts);
@@ -328,6 +329,7 @@ export function buildGatewayCronService(params: {
         sessionKey,
         heartbeat: heartbeatOverride,
         deps: { ...params.deps, runtime: defaultRuntime },
+        abortSignal: opts?.abortSignal,
       });
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {

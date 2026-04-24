@@ -496,6 +496,42 @@ export function normalizeCronJobInput(
     delete next.isolation;
   }
 
+  // Normalize preHook: valid object with non-empty file path passes through;
+  // null clears (patch); primitives, malformed objects, and shell strings are rejected.
+  if ("preHook" in base) {
+    if (isRecord(base.preHook)) {
+      const rawFile = base.preHook.file;
+      if (typeof rawFile === "string") {
+        const file = rawFile.trim();
+        if (file) {
+          const hook: { file: string; args?: string[]; timeoutSeconds?: number } = { file };
+          const rawArgs = base.preHook.args;
+          if (Array.isArray(rawArgs) && rawArgs.every((a) => typeof a === "string")) {
+            hook.args = [...rawArgs];
+          }
+          const rawTimeout = base.preHook.timeoutSeconds;
+          if (typeof rawTimeout === "number" && Number.isFinite(rawTimeout) && rawTimeout > 0) {
+            hook.timeoutSeconds = Math.min(300, Math.max(1, Math.floor(rawTimeout)));
+          }
+          next.preHook = hook;
+        } else {
+          // Empty file string is malformed — reject silently.
+          // Clearing requires explicit null/false in a patch.
+          delete next.preHook;
+        }
+      } else {
+        // Object without valid file string — reject (also rejects legacy `command`).
+        delete next.preHook;
+      }
+    } else if (!options.applyDefaults && (base.preHook === null || base.preHook === false)) {
+      // Explicit null/false: allow patches to clear the hook (not valid for create)
+      next.preHook = null;
+    } else {
+      // Bare string or other primitive — reject silently
+      delete next.preHook;
+    }
+  }
+
   const payload = isRecord(next.payload) ? next.payload : null;
   if (payload && payload.kind === "agentTurn") {
     copyTopLevelAgentTurnFields(next, payload);

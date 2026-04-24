@@ -871,3 +871,98 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 });
+
+describe("preHook normalization", () => {
+  function createWithPreHook(preHook: unknown) {
+    return normalizeCronJobCreate({
+      name: "hook-test",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "test" },
+      preHook,
+    }) as Record<string, unknown> | null;
+  }
+
+  function patchWithPreHook(preHook: unknown) {
+    return normalizeCronJobPatch({ preHook }) as Record<string, unknown> | null;
+  }
+
+  it("passes through valid preHook with file", () => {
+    const result = createWithPreHook({ file: "/usr/local/bin/check-disk.sh" });
+    expect(result?.preHook).toEqual({ file: "/usr/local/bin/check-disk.sh" });
+  });
+
+  it("includes args array when valid", () => {
+    const result = createWithPreHook({ file: "/bin/ping", args: ["-c1", "api.example.com"] });
+    expect(result?.preHook).toEqual({
+      file: "/bin/ping",
+      args: ["-c1", "api.example.com"],
+    });
+  });
+
+  it("trims file whitespace", () => {
+    const result = createWithPreHook({ file: "  /usr/bin/true  " });
+    expect((result?.preHook as { file: string }).file).toBe("/usr/bin/true");
+  });
+
+  it("includes timeoutSeconds when valid", () => {
+    const result = createWithPreHook({ file: "/bin/true", timeoutSeconds: 60 });
+    expect(result?.preHook).toEqual({ file: "/bin/true", timeoutSeconds: 60 });
+  });
+
+  it("clamps timeoutSeconds to 1-300 range", () => {
+    const high = createWithPreHook({ file: "/bin/true", timeoutSeconds: 999 });
+    expect((high?.preHook as { timeoutSeconds: number }).timeoutSeconds).toBe(300);
+
+    const low = createWithPreHook({ file: "/bin/true", timeoutSeconds: 0.5 });
+    expect((low?.preHook as { timeoutSeconds: number }).timeoutSeconds).toBe(1);
+  });
+
+  it("strips preHook when file is empty string (create)", () => {
+    const result = createWithPreHook({ file: "   " });
+    expect(result?.preHook).toBeUndefined();
+  });
+
+  it("drops preHook with empty file in patch instead of clearing", () => {
+    const result = patchWithPreHook({ file: "   " });
+    expect(result).not.toHaveProperty("preHook");
+  });
+
+  it("strips preHook when file is not a string", () => {
+    const result = createWithPreHook({ file: 123 });
+    expect(result?.preHook).toBeUndefined();
+  });
+
+  it("rejects legacy `command` shell-string payload", () => {
+    // Legacy {command: string} must be rejected — using a shell command string
+    // is a shell-injection vector (CWE-78) and is no longer supported.
+    const result = createWithPreHook({ command: "ping host" });
+    expect(result?.preHook).toBeUndefined();
+  });
+
+  it("rejects bare string preHook", () => {
+    const result = createWithPreHook("/bin/true");
+    expect(result?.preHook).toBeUndefined();
+  });
+
+  it("drops non-string args entries", () => {
+    const result = createWithPreHook({ file: "/bin/echo", args: ["ok", 42] });
+    expect(result?.preHook).toEqual({ file: "/bin/echo" });
+  });
+
+  it("allows null preHook in patch to clear", () => {
+    const result = patchWithPreHook(null);
+    expect(result?.preHook).toBeNull();
+  });
+
+  it("allows false preHook in patch to clear", () => {
+    const result = patchWithPreHook(false);
+    expect(result?.preHook).toBeNull();
+  });
+
+  it("drops non-numeric timeoutSeconds", () => {
+    const result = createWithPreHook({ file: "/bin/true", timeoutSeconds: "fast" });
+    expect(result?.preHook).toEqual({ file: "/bin/true" });
+  });
+});

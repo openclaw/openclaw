@@ -184,6 +184,34 @@ export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }
 
+export function removeSystemEventEntries(
+  sessionKey: string,
+  predicate: (event: SystemEvent) => boolean,
+): SystemEvent[] {
+  const entry = getSessionQueue(sessionKey);
+  if (!entry || entry.queue.length === 0) {
+    return [];
+  }
+  const removed: SystemEvent[] = [];
+  entry.queue = entry.queue.filter((event) => {
+    if (!predicate(event)) {
+      return true;
+    }
+    removed.push(cloneSystemEvent(event));
+    return false;
+  });
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(requireSessionKey(sessionKey));
+  } else {
+    const last = entry.queue[entry.queue.length - 1];
+    entry.lastText = last?.text ?? null;
+    entry.lastContextKey = last?.contextKey ?? null;
+  }
+  return removed;
+}
+
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
   return getSessionQueue(sessionKey)?.queue.map(cloneSystemEvent) ?? [];
 }

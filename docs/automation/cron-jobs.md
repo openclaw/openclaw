@@ -353,6 +353,34 @@ Model override note:
   no explicit per-job fallback list no longer falls through to the agent
   primary as a silent extra retry target.
 
+## Pre-run hooks
+
+An optional `preHook` runs a fixed executable before agent execution. Use it to gate runs on preconditions like disk space, network reachability, or API availability. The hook is spawned directly — no shell — so metacharacters in `file` or `args` are passed as literal text.
+
+```json5
+{
+  schedule: "cron 0 8 * * 1-5",
+  payload: { kind: "agentTurn", message: "check PRs" },
+  preHook: {
+    file: "/usr/local/bin/check-api-reachable",
+    args: ["api.openai.com"],
+    timeoutSeconds: 10,
+  },
+}
+```
+
+The hook runs with the same permissions as the cron trigger. Exit codes control behavior:
+
+| Exit code | Behavior                                                            |
+| --------- | ------------------------------------------------------------------- |
+| 0         | Proceed with agent execution                                        |
+| 10        | Skip this run (not counted as a failure)                            |
+| Any other | Error (increments `consecutiveErrors`, triggers backoff and alerts) |
+
+- **Timeout**: default 30 seconds, maximum 300 seconds. The process is killed when the timeout is reached.
+- **Output**: stdout and stderr are captured (up to 64 KB), truncated and redacted before being written to structured logs. Keep secrets out of hook output; do not rely on raw output appearing in logs.
+- **Shell**: not used. If you need shell features (pipes, globs, redirection), wrap them in a script file and set `file` to that script.
+
 ## Configuration
 
 ```json5
