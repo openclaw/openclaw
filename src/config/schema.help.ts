@@ -704,6 +704,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
     'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
+  "agents.list[].tools.sessions.visibility":
+    'Per-agent override for session visibility. When set, takes priority over tools.sessions.visibility for this agent. Same values: "self", "tree", "agent", "all".',
+  "agents.list[].tools.agentToAgent.enabled":
+    "Per-agent toggle for agent-to-agent access. When set, overrides tools.agentToAgent.enabled for this agent.",
+  "agents.list[].tools.agentToAgent.allow":
+    "Per-agent allowlist of agent ID patterns for agent-to-agent access. When set, overrides tools.agentToAgent.allow for this agent. Supports wildcards (e.g. dev-*).",
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":

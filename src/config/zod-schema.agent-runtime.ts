@@ -610,6 +610,19 @@ export const AgentToolsSchema = z
       })
       .strict()
       .optional(),
+    sessions: z
+      .object({
+        visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+      })
+      .strict()
+      .optional(),
+    agentToAgent: z
+      .object({
+        enabled: z.boolean().optional(),
+        allow: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

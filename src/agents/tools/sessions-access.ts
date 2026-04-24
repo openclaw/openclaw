@@ -24,7 +24,18 @@ export type SessionAccessResult =
   | { allowed: true }
   | { allowed: false; error: string; status: "forbidden" };
 
-export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
+export function resolveSessionToolsVisibility(
+  cfg: OpenClawConfig,
+  agentTools?: { sessions?: { visibility?: string } },
+): SessionToolsVisibility {
+  // Per-agent override takes priority
+  if (agentTools?.sessions?.visibility) {
+    const perAgent = agentTools.sessions.visibility.trim().toLowerCase()
+    if (perAgent === "self" || perAgent === "tree" || perAgent === "agent" || perAgent === "all") {
+      return perAgent
+    }
+  }
+  // Fall back to global
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
   const value = normalizeLowercaseStringOrEmpty(raw);
@@ -37,8 +48,9 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
 export function resolveEffectiveSessionToolsVisibility(params: {
   cfg: OpenClawConfig;
   sandboxed: boolean;
+  agentTools?: { sessions?: { visibility?: string } };
 }): SessionToolsVisibility {
-  const visibility = resolveSessionToolsVisibility(params.cfg);
+  const visibility = resolveSessionToolsVisibility(params.cfg, params.agentTools);
   if (!params.sandboxed) {
     return visibility;
   }
@@ -91,10 +103,22 @@ export function resolveSandboxedSessionToolContext(params: {
   };
 }
 
-export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
-  const routingA2A = cfg.tools?.agentToAgent;
-  const enabled = routingA2A?.enabled === true;
-  const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+export function createAgentToAgentPolicy(
+  cfg: OpenClawConfig,
+  requesterAgentTools?: { agentToAgent?: { enabled?: boolean; allow?: string[] } },
+): AgentToAgentPolicy {
+  const globalA2A = cfg.tools?.agentToAgent;
+  const perAgentA2A = requesterAgentTools?.agentToAgent;
+
+  // Per-agent enabled overrides global (if explicitly set)
+  const enabled = perAgentA2A?.enabled !== undefined
+    ? perAgentA2A.enabled
+    : (globalA2A?.enabled === true)
+
+  // Per-agent allow overrides global allow (if explicitly set)
+  const allowPatterns = Array.isArray(perAgentA2A?.allow)
+    ? perAgentA2A.allow
+    : Array.isArray(globalA2A?.allow) ? globalA2A.allow : []
   const matchesAllow = (agentId: string) => {
     if (allowPatterns.length === 0) {
       return true;
@@ -124,6 +148,12 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
     if (!enabled) {
       return false;
     }
+
+    if (perAgentA2A?.allow !== undefined) {
+      // Per-agent allow only restricts the TARGET; requester is implicitly trusted
+      return matchesAllow(targetAgentId);
+    }
+    // Global: both sides must be on the mutual allowlist
     return matchesAllow(requesterAgentId) && matchesAllow(targetAgentId);
   };
   return { enabled, matchesAllow, isAllowed };

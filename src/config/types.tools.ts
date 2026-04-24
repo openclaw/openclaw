@@ -331,6 +331,15 @@ export type AgentToolsConfig = {
       deny?: string[];
     };
   };
+  /** Per-agent session visibility override. */
+  sessions?: {
+    visibility?: "self" | "tree" | "agent" | "all";
+  };
+  /** Per-agent agent-to-agent access override. */
+  agentToAgent?: {
+    enabled?: boolean;
+    allow?: string[];
+  };
 };
 
 export type MemorySearchConfig = {
