@@ -2,6 +2,7 @@ import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
@@ -250,6 +251,28 @@ function createPayloadReplyToResolver(params: {
   };
 }
 
+function resolveMessageSendingHookReplyToId(params: {
+  payload: ReplyPayload;
+  replyToMode: ReplyToMode;
+  fallbackReplyTo: string | undefined;
+  fallbackReplyUsed: boolean;
+}): string | undefined {
+  const payloadReplyTo = normalizeOptionalString(params.payload.replyToId);
+  const allowExplicitReplyWhenOff = Boolean(
+    payloadReplyTo && (params.payload.replyToTag || params.payload.replyToCurrent),
+  );
+  if (payloadReplyTo && (params.replyToMode !== "off" || allowExplicitReplyWhenOff)) {
+    return payloadReplyTo;
+  }
+  if (!params.fallbackReplyTo) {
+    return undefined;
+  }
+  if (!isSingleUseReplyToMode(params.replyToMode)) {
+    return params.fallbackReplyTo;
+  }
+  return params.fallbackReplyUsed ? undefined : params.fallbackReplyTo;
+}
+
 function resolveBindingPersona(
   cfg: OpenClawConfig,
   binding: DiscordThreadBindingLookupRecord | undefined,
@@ -412,6 +435,9 @@ export async function deliverDiscordReply(params: {
   const request: RetryRunner | undefined = channelId
     ? createDiscordRetryRunner({ configRetry: account.config.retry })
     : undefined;
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hookConversationId = channelId ?? params.target;
   let deliveredAny = false;
   for (const payload of params.replies) {
     const resolvePayloadReplyTo = createPayloadReplyToResolver({
@@ -420,9 +446,46 @@ export async function deliverDiscordReply(params: {
       resolveFallbackReplyTo: resolveReplyTo,
     });
     const tableMode = params.tableMode ?? "code";
-    const reply = resolveSendableOutboundReplyParts(payload, {
-      text: convertMarkdownTables(payload.text ?? "", tableMode),
-    });
+    let effectiveText = payload.text ?? "";
+    if (hasMessageSendingHooks) {
+      try {
+        const hookResult = await hookRunner?.runMessageSending(
+          {
+            to: hookConversationId,
+            content: effectiveText,
+            replyToId: resolveMessageSendingHookReplyToId({
+              payload,
+              replyToMode,
+              fallbackReplyTo: replyTo,
+              fallbackReplyUsed: replyUsed,
+            }),
+            metadata: {
+              channel: "discord",
+              mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+            },
+          },
+          {
+            channelId: "discord",
+            accountId: params.accountId,
+            conversationId: hookConversationId,
+          },
+        );
+        if (hookResult?.cancel) {
+          continue;
+        }
+        if (typeof hookResult?.content === "string") {
+          effectiveText = hookResult.content;
+        }
+      } catch (error) {
+        params.runtime.error?.(
+          `discord: message_sending hook failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    const reply = resolveSendableOutboundReplyParts(
+      { ...payload, text: effectiveText },
+      { text: convertMarkdownTables(effectiveText, tableMode) },
+    );
     if (!reply.hasContent) {
       continue;
     }
