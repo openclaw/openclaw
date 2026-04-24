@@ -134,12 +134,17 @@ export type CronServiceState = {
   warnedDisabled: boolean;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
-  /** Tracks in-flight promises returned by `enqueueCommandInLane` for
-   *  manual runs (CommandLane.Cron).  Those runs execute outside the
-   *  `locked()` queue, so `stopGraceful` awaits this set to ensure
-   *  `finishPreparedManualRun`'s final persist lands before the
-   *  replacement service loads from disk — see #30098. */
-  inFlightManualRuns: Set<Promise<unknown>>;
+  /** Tracks in-flight run promises whose final persist happens outside
+   *  the `locked()` queue:
+   *    - Timer ticks (`onTimer`): the worker phase runs outside the lock
+   *      between the phase-1 running-marker persist and the phase-3
+   *      outcome persist.
+   *    - Manual runs via `enqueueRun` on `CommandLane.Cron`:
+   *      `executeJobCoreWithTimeout` runs outside the lock between
+   *      `prepareManualRun` and `finishPreparedManualRun`.
+   *  `stopGraceful` awaits this set so those deferred persists land
+   *  before the replacement service loads from disk — see #30098. */
+  inFlightRuns: Set<Promise<unknown>>;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -153,7 +158,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     warnedDisabled: false,
     storeLoadedAtMs: null,
     storeFileMtimeMs: null,
-    inFlightManualRuns: new Set(),
+    inFlightRuns: new Set(),
   };
 }
 

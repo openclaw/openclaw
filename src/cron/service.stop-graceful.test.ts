@@ -12,7 +12,7 @@ import { createDeferred, writeCronStoreSnapshot } from "./service.test-harness.j
 import { locked } from "./service/locked.js";
 import { stopGraceful as stopGracefulOp } from "./service/ops.js";
 import { createCronServiceState } from "./service/state.js";
-import { armTimer } from "./service/timer.js";
+import { armTimer, onTimer } from "./service/timer.js";
 import { loadCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -259,6 +259,79 @@ describe("CronService.stopGraceful", () => {
     // recomputed for the next schedule, runningAtMs cleared.
     const diskStore = await loadCronStore(store.storePath);
     const diskJob = diskStore.jobs.find((j) => j.id === "manual-run-job");
+    expect(diskJob).toBeDefined();
+    expect(diskJob?.state.runningAtMs).toBeUndefined();
+    expect(diskJob?.state.lastRunAtMs).toBeDefined();
+
+    await store.cleanup();
+  });
+
+  it("drains an in-flight timer tick's worker + phase-3 persist", async () => {
+    const store = await makeStorePath();
+    const seedJob = makeFutureJob("timer-tick-job");
+    // Set nextRunAtMs in the past so collectRunnableJobs picks it up.
+    seedJob.state.nextRunAtMs = Date.now() - 1_000;
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [seedJob],
+    });
+
+    // Deferred runner — the timer tick's worker phase (outside locked())
+    // pauses here until we resolve.  If stopGraceful were to return
+    // before the tick resolves, the tick's phase-3 persist would write
+    // to disk *after* the replacement service loaded — the exact race
+    // the reviewer flagged.
+    const agentJobRelease = createDeferred<{ status: "ok" }>();
+    const runIsolatedAgentJob = vi.fn(async () => {
+      return await agentJobRelease.promise;
+    });
+
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: runIsolatedAgentJob as never,
+    });
+    // Load store so onTimer can observe the seeded job.
+    state.store = {
+      version: 1,
+      jobs: [{ ...seedJob, state: { ...seedJob.state } }],
+    };
+
+    // Kick the tick manually (do not await — onTimer is fire-and-forget
+    // from setTimeout in production).
+    void onTimer(state);
+
+    // Wait until the worker phase has been entered — at that point the
+    // tick is past the phase-1 locked() block and suspended outside
+    // the lock, which is the race window.
+    for (let i = 0; i < 100 && runIsolatedAgentJob.mock.calls.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(runIsolatedAgentJob).toHaveBeenCalled();
+
+    // stopGraceful must wait for the tick to finish its worker phase
+    // AND its phase-3 persist, even though the tick's locked() blocks
+    // are not currently held at this moment.
+    let stopResolved = false;
+    const stopPromise = stopGracefulOp(state).then(() => {
+      stopResolved = true;
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(stopResolved).toBe(false);
+
+    // Release the worker — tick completes phase-3 persist, stopGraceful
+    // resolves only after that persist lands.
+    agentJobRelease.resolve({ status: "ok" });
+    await stopPromise;
+    expect(stopResolved).toBe(true);
+
+    // On-disk state must reflect the completed tick run.
+    const diskStore = await loadCronStore(store.storePath);
+    const diskJob = diskStore.jobs.find((j) => j.id === "timer-tick-job");
     expect(diskJob).toBeDefined();
     expect(diskJob?.state.runningAtMs).toBeUndefined();
     expect(diskJob?.state.lastRunAtMs).toBeDefined();

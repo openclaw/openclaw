@@ -708,6 +708,22 @@ export async function onTimer(state: CronServiceState) {
     armRunningRecheckTimer(state);
     return;
   }
+  // Track the tick body so `stopGraceful` can wait for the worker phase
+  // (outside the `locked()` queue) and the post-worker phase-3 persist
+  // to complete before the replacement service loads from disk.  The
+  // add happens synchronously between `runTimerTickBody(state)` starting
+  // and the first `await` inside it, so it is visible to any later
+  // `stopGraceful` snapshot.
+  const tickPromise = runTimerTickBody(state);
+  state.inFlightRuns.add(tickPromise);
+  try {
+    await tickPromise;
+  } finally {
+    state.inFlightRuns.delete(tickPromise);
+  }
+}
+
+async function runTimerTickBody(state: CronServiceState) {
   state.running = true;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.

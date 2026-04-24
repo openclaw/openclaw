@@ -246,7 +246,7 @@ export function createMockCronStateForJobs(params: {
     storeFileMtimeMs: null,
     op: Promise.resolve(),
     warnedDisabled: false,
-    inFlightManualRuns: new Set(),
+    inFlightRuns: new Set(),
     deps: {
       storePath: "/mock/path",
       cronEnabled: true,

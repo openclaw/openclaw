@@ -152,35 +152,38 @@ export function stop(state: CronServiceState) {
  * a hot config reload — without draining, the old service's in-flight
  * persist can overwrite changes already loaded by the replacement service.
  *
- * Drains two independent execution paths:
- *  1. `locked()` operations (timer ticks, API mutations, status/list).
- *  2. `enqueueRun` manual runs dispatched on `CommandLane.Cron`, which
- *     execute outside `locked()`.  Their final persist happens inside
- *     `finishPreparedManualRun`'s own locked block, which is covered by
- *     the locked-queue drain below once the manual run returns.
+ * Drains every execution path that can produce a post-return persist:
+ *  1. `state.inFlightRuns` — timer ticks (`onTimer`) and manual runs
+ *     (`enqueueRun` on `CommandLane.Cron`).  Both run their heavy phase
+ *     outside `locked()` and then re-enter `locked()` to persist the
+ *     outcome; awaiting these promises ensures that final persist has
+ *     entered the chain (or already landed).
+ *  2. The `locked()` chain itself — picks up any late writes queued
+ *     behind us (API mutations or the onTimer phase-3 persist) and
+ *     flushes current in-memory state to disk.
  */
 export async function stopGraceful(state: CronServiceState) {
   // Signal armTimer/onTimer to stop re-arming the scheduler and reject
-  // new enqueueRun dispatches.  Snapshot pending manual runs *after* the
-  // flag is set so no new additions slip in after the snapshot.
+  // new enqueueRun dispatches.  Snapshot pending runs *after* the flag
+  // is set so no new additions slip in after the snapshot.
   state.stopping = true;
   stopTimer(state);
-  const pendingManualRuns = [...state.inFlightManualRuns];
+  const pendingRuns = [...state.inFlightRuns];
 
-  // Wait for manual runs to return.  Each run's task body awaits `run()`,
-  // which awaits both `prepareManualRun` and `finishPreparedManualRun`;
-  // the latter is the one that persists job completion state.  Settling
-  // these promises guarantees that any manual-run persist has entered
-  // the locked() chain (or already landed).
-  if (pendingManualRuns.length > 0) {
-    await Promise.allSettled(pendingManualRuns);
+  // Wait for timer ticks and manual runs to complete.  Each tick ends
+  // with its phase-3 locked() persist before the tick promise settles;
+  // manual runs end with finishPreparedManualRun's locked() persist.
+  // Settling these promises guarantees those persists have entered the
+  // locked() chain (or already landed).
+  if (pendingRuns.length > 0) {
+    await Promise.allSettled(pendingRuns);
   }
 
   // Drain the locked() chain.  Waits for any in-flight locked block
-  // (including a just-finished manual run's `finishPreparedManualRun`
-  // persist that may still be chained behind us) and then flushes
-  // current in-memory state to disk.  The `stopping` flag prevents a
-  // tick's finally block from re-arming the timer after this returns.
+  // (a late tail from a just-finished tick/manual-run, plus any
+  // concurrent API mutation) and then flushes current in-memory state
+  // to disk.  The `stopping` flag prevents a tick's finally from
+  // re-arming the timer after this returns.
   await locked(state, async () => {
     // Final timer kill inside the lock in case an in-flight operation
     // called armTimer() between our stopTimer() above and acquiring the lock.
@@ -786,9 +789,9 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   );
   // Track so stopGraceful can drain it.  Register removal before the
   // `.catch(...)` so settle-cleanup runs regardless of outcome.
-  state.inFlightManualRuns.add(runPromise);
+  state.inFlightRuns.add(runPromise);
   const cleanup = () => {
-    state.inFlightManualRuns.delete(runPromise);
+    state.inFlightRuns.delete(runPromise);
   };
   runPromise.then(cleanup, cleanup);
   runPromise.catch((err) => {
