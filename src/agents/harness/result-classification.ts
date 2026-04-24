@@ -2,7 +2,6 @@ import type {
   AgentHarness,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
-  AgentHarnessResultClassification,
 } from "./types.js";
 
 export function applyAgentHarnessResultClassification(
@@ -22,9 +21,6 @@ export function applyAgentHarnessResultClassification(
   return {
     ...resultWithoutPrevious,
     agentHarnessId: harness.id,
-    agentHarnessResultClassification: classification as Exclude<
-      AgentHarnessResultClassification,
-      "ok"
-    >,
+    agentHarnessResultClassification: classification,
   };
 }
