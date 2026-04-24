@@ -23,6 +23,11 @@ export type GoogleMeetPreflightReport = {
   blockers: string[];
 };
 
+export type GoogleMeetCreateSpaceResult = {
+  space: GoogleMeetSpace;
+  meetingUri: string;
+};
+
 export function normalizeGoogleMeetSpaceName(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -82,6 +87,42 @@ export async function fetchGoogleMeetSpace(params: {
       throw new Error("Google Meet spaces.get response was missing name");
     }
     return payload;
+  } finally {
+    await release();
+  }
+}
+
+export async function createGoogleMeetSpace(params: {
+  accessToken: string;
+}): Promise<GoogleMeetCreateSpaceResult> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${GOOGLE_MEET_API_BASE_URL}/spaces`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    },
+    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+    auditContext: "google-meet.spaces.create",
+  });
+  try {
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Google Meet spaces.create failed (${response.status}): ${detail}`);
+    }
+    const payload = (await response.json()) as GoogleMeetSpace;
+    if (!payload.name?.trim()) {
+      throw new Error("Google Meet spaces.create response was missing name");
+    }
+    const meetingUri = payload.meetingUri?.trim();
+    if (!meetingUri) {
+      throw new Error("Google Meet spaces.create response was missing meetingUri");
+    }
+    return { space: payload, meetingUri };
   } finally {
     await release();
   }

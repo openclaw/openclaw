@@ -2,7 +2,11 @@ import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
 import type { Command } from "commander";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
-import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./meet.js";
+import {
+  buildGoogleMeetPreflightReport,
+  createGoogleMeetSpace,
+  fetchGoogleMeetSpace,
+} from "./meet.js";
 import {
   buildGoogleMeetAuthUrl,
   createGoogleMeetOAuthState,
@@ -41,6 +45,15 @@ type ResolveSpaceOptions = {
 };
 
 type SetupOptions = {
+  json?: boolean;
+};
+
+type CreateOptions = {
+  accessToken?: string;
+  refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  expiresAt?: string;
   json?: boolean;
 };
 
@@ -105,6 +118,25 @@ function resolveTokenOptions(
 } {
   return {
     meeting: resolveMeetingInput(config, options.meeting),
+    clientId: options.clientId?.trim() || config.oauth.clientId,
+    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
+    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
+    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
+    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
+  };
+}
+
+function resolveCreateTokenOptions(
+  config: GoogleMeetConfig,
+  options: CreateOptions,
+): {
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+  accessToken?: string;
+  expiresAt?: number;
+} {
+  return {
     clientId: options.clientId?.trim() || config.oauth.clientId,
     clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
     refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
@@ -182,6 +214,38 @@ export function registerGoogleMeetCli(params: {
         writeStdoutLine("Paste this into plugins.entries.google-meet.config:");
       }
       writeStdoutJson(payload);
+    });
+
+  root
+    .command("create")
+    .description("Create a new Google Meet space and print its meeting URL")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--json", "Print JSON output", false)
+    .action(async (options: CreateOptions) => {
+      const token = await resolveGoogleMeetAccessToken(
+        resolveCreateTokenOptions(params.config, options),
+      );
+      const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
+      if (options.json) {
+        writeStdoutJson({
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
+      writeStdoutLine("meeting uri: %s", result.meetingUri);
+      writeStdoutLine("space: %s", result.space.name);
+      if (result.space.meetingCode) {
+        writeStdoutLine("meeting code: %s", result.space.meetingCode);
+      }
+      writeStdoutLine(
+        "token source: %s",
+        token.refreshed ? "refresh-token" : "cached-access-token",
+      );
     });
 
   root

@@ -2,6 +2,7 @@
 summary: "Google Meet plugin: join explicit Meet URLs through Chrome or Twilio with realtime voice defaults"
 read_when:
   - You want an OpenClaw agent to join a Google Meet call
+  - You want an OpenClaw agent to create a new Google Meet call
   - You are configuring Chrome, Chrome node, or Twilio as a Google Meet transport
 title: "Google Meet plugin"
 ---
@@ -9,6 +10,8 @@ title: "Google Meet plugin"
 Google Meet participant support for OpenClaw — the plugin is explicit by design:
 
 - It only joins an explicit `https://meet.google.com/...` URL.
+- It can create a new Meet space through the Google Meet API, then join the
+  returned URL.
 - `realtime` voice is the default mode.
 - Realtime voice can call back into the full OpenClaw agent when deeper
   reasoning or tools are needed.
@@ -89,6 +92,33 @@ Or let an agent join through the `google_meet` tool:
 {
   "action": "join",
   "url": "https://meet.google.com/abc-defg-hij",
+  "transport": "chrome-node",
+  "mode": "realtime"
+}
+```
+
+Create a new meeting, then join it:
+
+```bash
+openclaw googlemeet create
+openclaw googlemeet join https://meet.google.com/new-abcd-xyz --transport chrome-node
+```
+
+Or tell an agent: "Create a Google Meet, join it with realtime voice, and send
+me the link." The agent should call `google_meet` with `action: "create"`, copy
+the returned `meetingUri`, then call `google_meet` with `action: "join"` and
+that URL.
+
+```json
+{
+  "action": "create"
+}
+```
+
+```json
+{
+  "action": "join",
+  "url": "https://meet.google.com/new-abcd-xyz",
   "transport": "chrome-node",
   "mode": "realtime"
 }
@@ -381,6 +411,11 @@ The command prints an `oauth` config block with a refresh token. It uses PKCE,
 localhost callback on `http://localhost:8085/oauth2callback`, and a manual
 copy/paste flow with `--manual`.
 
+The OAuth consent includes Meet space creation, Meet space read access, and
+Meet conference media read access. If you authenticated before meeting creation
+support existed, rerun `openclaw googlemeet auth login --json` so the refresh
+token has the `meetings.space.created` scope.
+
 These environment variables are accepted as fallbacks:
 
 - `OPENCLAW_GOOGLE_MEET_CLIENT_ID` or `GOOGLE_MEET_CLIENT_ID`
@@ -403,6 +438,22 @@ Run preflight before media work:
 ```bash
 openclaw googlemeet preflight --meeting https://meet.google.com/abc-defg-hij
 ```
+
+Create a fresh Meet space with the same OAuth config:
+
+```bash
+openclaw googlemeet create
+```
+
+The command prints the new `meeting uri` and `space`. Agents can use the
+`google_meet` tool with `action: "create"` to create a meeting, then call
+`action: "join"` with the returned `meetingUri`.
+
+Creating a Meet space only creates the meeting URL. The Chrome or Chrome-node
+transport still needs a signed-in Google Chrome profile to join through the
+browser. If the profile is signed out, OpenClaw reports
+`manualActionRequired: true` and asks the operator to finish Google login before
+retrying the join.
 
 Set `preview.enrollmentAcknowledged: true` only after confirming your Cloud
 project, OAuth principal, and meeting participants are enrolled in the Google
@@ -686,6 +737,18 @@ Common manual actions:
 - Admit the guest from the Meet host account.
 - Grant Chrome microphone/camera permissions.
 - Close or repair a stuck Meet permission dialog.
+
+### Meeting creation fails
+
+`googlemeet create` uses the Google Meet API `spaces.create` endpoint. Confirm:
+
+- `oauth.clientId` and `oauth.refreshToken` are configured, or matching
+  `OPENCLAW_GOOGLE_MEET_*` environment variables are present.
+- The refresh token was minted after create support was added. Older tokens may
+  be missing the `meetings.space.created` scope; rerun
+  `openclaw googlemeet auth login --json` and update plugin config.
+- The Google Cloud project and OAuth principal are allowed to use the required
+  Google Meet API scopes.
 
 ### Agent joins but does not talk
 

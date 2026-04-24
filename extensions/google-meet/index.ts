@@ -10,7 +10,11 @@ import {
   type GoogleMeetMode,
   type GoogleMeetTransport,
 } from "./src/config.js";
-import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./src/meet.js";
+import {
+  buildGoogleMeetPreflightReport,
+  createGoogleMeetSpace,
+  fetchGoogleMeetSpace,
+} from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
@@ -134,6 +138,7 @@ const GoogleMeetToolSchema = Type.Object({
   action: Type.String({
     enum: [
       "join",
+      "create",
       "status",
       "setup_status",
       "resolve_space",
@@ -213,6 +218,18 @@ async function resolveSpaceFromParams(config: GoogleMeetConfig, raw: Record<stri
   return { meeting, token, space };
 }
 
+async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<string, unknown>) {
+  const token = await resolveGoogleMeetAccessToken({
+    clientId: normalizeOptionalString(raw.clientId) ?? config.oauth.clientId,
+    clientSecret: normalizeOptionalString(raw.clientSecret) ?? config.oauth.clientSecret,
+    refreshToken: normalizeOptionalString(raw.refreshToken) ?? config.oauth.refreshToken,
+    accessToken: normalizeOptionalString(raw.accessToken) ?? config.oauth.accessToken,
+    expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : config.oauth.expiresAt,
+  });
+  const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
+  return { token, ...result };
+}
+
 export default definePluginEntry({
   id: "google-meet",
   name: "Google Meet",
@@ -255,6 +272,19 @@ export default definePluginEntry({
             dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
             message: normalizeOptionalString(params?.message),
           });
+          respond(true, result);
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "googlemeet.create",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          const { token: _token, ...result } = await createSpaceFromParams(config, raw);
           respond(true, result);
         } catch (err) {
           sendError(respond, err);
@@ -363,6 +393,10 @@ export default definePluginEntry({
                   message: normalizeOptionalString(raw.message),
                 }),
               );
+            }
+            case "create": {
+              const { token: _token, ...result } = await createSpaceFromParams(config, raw);
+              return json(result);
             }
             case "test_speech": {
               const rt = await ensureRuntime();
