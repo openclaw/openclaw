@@ -427,9 +427,9 @@ describe("session-memory hook", () => {
       currentSessionFile: resetSessionFile,
       sessionId,
     });
-    expect(previousSessionFile).toBeUndefined();
+    expect(previousSessionFile).toBe(resetSessionFile);
 
-    const memoryContent = await getRecentSessionContentWithResetFallback(resetSessionFile);
+    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
     expect(memoryContent).toContain("user: Message from reset pointer");
     expect(memoryContent).toContain("assistant: Recovered directly from reset file");
   });
@@ -461,6 +461,40 @@ describe("session-memory hook", () => {
     const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
     expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
+  });
+
+  it("falls back to latest reset transcript when only archived copies remain", async () => {
+    const { sessionsDir } = await createSessionMemoryWorkspace();
+
+    const sessionId = "reset-only-session";
+    const olderResetFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Older archived session" },
+        { role: "assistant", content: "Older archived summary" },
+      ]),
+    });
+    const newerResetFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-34.000Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Newest archived session" },
+        { role: "assistant", content: "Newest archived summary" },
+      ]),
+    });
+
+    const previousSessionFile = await findPreviousSessionFile({
+      sessionsDir,
+      sessionId,
+    });
+    expect(previousSessionFile).toBe(newerResetFile);
+    expect(previousSessionFile).not.toBe(olderResetFile);
+
+    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
+    expect(memoryContent).toContain("user: Newest archived session");
+    expect(memoryContent).toContain("assistant: Newest archived summary");
+    expect(memoryContent).not.toContain("Older archived session");
   });
 
   it("prefers the newest reset transcript when multiple reset candidates exist", async () => {
