@@ -62,18 +62,31 @@ export async function hasProviderStaticCatalogForFilter(params: {
   env?: NodeJS.ProcessEnv;
   providerFilter: string;
 }): Promise<boolean> {
+  const env = params.env ?? process.env;
   const providerFilter = normalizeProviderId(params.providerFilter);
   if (!providerFilter) {
     return false;
   }
-  const pluginIds = await resolveProviderCatalogPluginIdsForFilter(params);
+  const pluginIds = await resolveProviderCatalogPluginIdsForFilter({
+    ...params,
+    env,
+  });
   if (!pluginIds || pluginIds.length === 0) {
+    return false;
+  }
+  const bundledPluginIds = resolveBundledProviderCompatPluginIds({
+    config: params.cfg,
+    env,
+  });
+  const bundledPluginIdSet = new Set(bundledPluginIds);
+  const scopedPluginIds = pluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId));
+  if (scopedPluginIds.length === 0) {
     return false;
   }
   const providers = await resolvePluginDiscoveryProviders({
     config: params.cfg,
-    env: params.env,
-    onlyPluginIds: pluginIds,
+    env,
+    onlyPluginIds: scopedPluginIds,
     includeUntrustedWorkspacePlugins: false,
     requireCompleteDiscoveryEntryCoverage: true,
     discoveryEntriesOnly: true,

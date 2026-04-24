@@ -187,6 +187,23 @@ describe("loadProviderCatalogModelsForList", () => {
     );
   });
 
+  it("does not skip registry for non-bundled static catalog owners", async () => {
+    providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce([
+      "workspace-static-provider",
+    ]);
+    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValueOnce(["moonshot"]);
+
+    await expect(
+      hasProviderStaticCatalogForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "workspace-static-provider",
+      }),
+    ).resolves.toBe(false);
+
+    expect(providerDiscoveryMocks.resolvePluginDiscoveryProviders).not.toHaveBeenCalled();
+  });
+
   it("recognizes bundled provider hook aliases before the unknown-provider short-circuit", async () => {
     await expect(
       resolveProviderCatalogPluginIdsForFilter({
