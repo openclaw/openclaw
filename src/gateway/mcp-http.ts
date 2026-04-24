@@ -94,6 +94,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             message,
             tools: scopedTools.tools,
             toolSchema: scopedTools.toolSchema,
+            hookContext: {
+              agentId: scopedTools.agentId,
+              sessionKey: requestContext.sessionKey,
+            },
           });
           if (response !== null) {
             const toolName =
