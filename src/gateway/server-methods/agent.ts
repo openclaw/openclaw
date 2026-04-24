@@ -354,6 +354,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
+      workspaceDir?: string;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
@@ -953,11 +954,13 @@ export const agentHandlers: GatewayRequestHandlers = {
         bootstrapContextRunKind: request.bootstrapContextRunKind,
         internalEvents: request.internalEvents,
         inputProvenance,
-        // Internal-only: allow workspace override for spawned subagent runs.
-        workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
-          spawnedBy: spawnedByValue,
-          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-        }),
+        // Internal-only: allow explicit workspace override, otherwise inherit for spawned subagent runs.
+        workspaceDir:
+          request.workspaceDir ??
+          resolveIngressWorkspaceOverrideForSpawnedRun({
+            spawnedBy: spawnedByValue,
+            workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+          }),
         senderIsOwner,
         allowModelOverride,
       },

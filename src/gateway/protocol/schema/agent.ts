@@ -162,6 +162,7 @@ export const AgentParamsSchema = Type.Object(
     ),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    workspaceDir: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
   },
