@@ -389,13 +389,13 @@ async function directSessionReq<TPayload = unknown>(
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog: async () => piSdkMock.models,
-      ...(opts?.context ?? {}),
+      ...opts?.context,
     } as never,
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
   });
   if (!result) {
-    throw new Error(`${String(method)} did not respond`);
+    throw new Error(`${method} did not respond`);
   }
   return result;
 }
