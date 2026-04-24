@@ -46,7 +46,34 @@ describe("resolveDiscordSenderIdentity", () => {
     expect(sender.trustedPrincipal).toBe("alice");
   });
 
-  it("resolves trusted principal through identity links for pluralkit messages", () => {
+  it("resolves trusted principal via pkInfo.sender (real Discord user) for pluralkit messages", () => {
+    const sender = resolveDiscordSenderIdentity({
+      author: {
+        id: "relay-webhook-id",
+        username: "relay-bot",
+      } as never,
+      pluralkitInfo: {
+        sender: "111222333",
+        member: {
+          id: "pk-member-1",
+          display_name: "Proxy Name",
+          name: "proxy",
+        },
+        system: {
+          id: "pk-system-1",
+          name: "System Name",
+        },
+      } as never,
+      identityLinks: {
+        alice: ["discord:111222333"],
+      },
+    });
+
+    expect(sender.id).toBe("pk-member-1");
+    expect(sender.trustedPrincipal).toBe("alice");
+  });
+
+  it("falls back to author.id for trust when pkInfo.sender is absent", () => {
     const sender = resolveDiscordSenderIdentity({
       author: {
         id: "444555666",

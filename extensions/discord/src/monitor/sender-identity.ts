@@ -59,11 +59,12 @@ export function resolveDiscordSenderIdentity(params: {
   pluralkitInfo?: PluralKitMessageInfo | null;
   identityLinks?: Record<string, string[]>;
 }): DiscordSenderIdentity {
-  // Trust is anchored to the relay-bot's Discord ID (author.id), not the PK member ID.
-  // All members of the same PK system share one principal — per-member granularity
-  // would require a second lookup on memberId after the PK branch is entered.
+  // For PluralKit messages, prefer the real sender's Discord ID (pkInfo.sender) over
+  // the relay-bot webhook ID (author.id) so that identity links use the human's actual
+  // Discord snowflake. Falls back to author.id when the sender field is absent.
+  const pkSenderId = params.pluralkitInfo?.sender?.trim() || null;
   const trustedPrincipal = resolveDiscordTrustedPrincipalFromUserId({
-    userId: params.author.id,
+    userId: pkSenderId ?? params.author.id,
     identityLinks: params.identityLinks,
   });
   const pkInfo = params.pluralkitInfo ?? null;
