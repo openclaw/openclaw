@@ -15,6 +15,7 @@ import {
   normalizeEnvVarKey,
 } from "../../infra/host-env-security.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
@@ -115,6 +116,19 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         } else {
           defaultRuntime.log(message);
         }
+      } else if (
+        gatewayServiceEmbedsStaleGatewayToken({
+          existingServiceEnv,
+          env: process.env,
+        })
+      ) {
+        const message =
+          "Gateway service embeds a stale OPENCLAW_GATEWAY_TOKEN; refreshing the install.";
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
       } else {
         emit({
           ok: true,
@@ -185,6 +199,27 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       });
     },
   });
+}
+
+// Detect the drift scenario from #70752: the loaded LaunchAgent / systemd unit
+// still embeds a previously-installed OPENCLAW_GATEWAY_TOKEN, but the operator's
+// current shell env has a different value (e.g. post-rotation). Without
+// refreshing the install, the gateway keeps running under the stale token and
+// every CLI call gets rejected with token_mismatch until the operator
+// remembers to run `openclaw gateway install --force`.
+function gatewayServiceEmbedsStaleGatewayToken(params: {
+  existingServiceEnv: Record<string, string> | undefined;
+  env: Record<string, string | undefined>;
+}): boolean {
+  const embedded = params.existingServiceEnv?.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (!embedded) {
+    return false;
+  }
+  const currentInvocation = normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN);
+  if (!currentInvocation) {
+    return false;
+  }
+  return embedded !== currentInvocation;
 }
 
 async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
