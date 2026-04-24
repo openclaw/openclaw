@@ -158,6 +158,28 @@ function formatCliLogValue(value: string | undefined, maxChars = 240): string {
   return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}...` : trimmed;
 }
 
+function resolveTimeoutRecoveryUsageSignal(params: {
+  usageSnapshot:
+    | {
+        input?: number;
+        cacheRead?: number;
+        total?: number;
+      }
+    | undefined;
+}): number | undefined {
+  const candidates = [
+    params.usageSnapshot?.total,
+    params.usageSnapshot?.cacheRead,
+    params.usageSnapshot?.input,
+  ].filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
+  );
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  return Math.max(...candidates);
+}
+
 function looksLikePartialReadToolResult(text: string | undefined): boolean {
   if (!text) {
     return false;
@@ -1440,6 +1462,120 @@ export async function executeWithOverflowProtection(
     }
   };
 
+  const estimateActivePromptTokens = (): number => {
+    const backend = context.preparedBackend.backend;
+    const imageTokenEstimate = backend.imageArg
+      ? (params.images?.length ?? 0) * ESTIMATED_TOKENS_PER_IMAGE
+      : 0;
+    return (
+      estimatePromptTokens(systemPrompt) + estimatePromptTokens(params.prompt) + imageTokenEstimate
+    );
+  };
+
+  const downgradeToMinimalProfile = () => {
+    if (activeProfile === "minimal") {
+      return;
+    }
+    const sessionLabel = params.sessionKey ?? params.sessionId;
+    const minimalConfig = getBootstrapProfileConfig("minimal");
+    const minimalContextFiles = buildBootstrapContextFiles(context.bootstrapFiles, {
+      maxChars: minimalConfig.maxCharsPerFile,
+      totalMaxChars: minimalConfig.totalMaxChars,
+      warn: makeBootstrapWarn({
+        sessionLabel,
+        warn: (message) => cliBackendLog.warn(message),
+      }),
+    });
+    const minimalWarning = buildBootstrapPromptWarning({
+      analysis: analyzeBootstrapBudget({
+        files: buildBootstrapInjectionStats({
+          bootstrapFiles: context.bootstrapFiles,
+          injectedFiles: minimalContextFiles,
+        }),
+        bootstrapMaxChars: minimalConfig.maxCharsPerFile,
+        bootstrapTotalMaxChars: minimalConfig.totalMaxChars,
+      }),
+      mode: context.bootstrapPromptWarningMode,
+      seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+      previousSignature: params.bootstrapPromptWarningSignature,
+    });
+    systemPrompt = prependBootstrapPromptWarning(
+      buildSystemPrompt({
+        workspaceDir: context.workspaceDir,
+        config: params.config,
+        defaultThinkLevel: params.thinkLevel,
+        extraSystemPrompt: context.extraSystemPrompt,
+        skillsPrompt: context.skillsPrompt,
+        ownerNumbers: params.ownerNumbers,
+        heartbeatPrompt: context.heartbeatPrompt,
+        docsPath: context.docsPath,
+        tools: context.promptTools,
+        contextFiles: minimalContextFiles,
+        modelDisplay: `${params.provider}/${context.modelId}`,
+        agentId: context.sessionAgentId,
+      }),
+      minimalWarning.lines,
+    );
+    _activeContextFiles = minimalContextFiles;
+    activeProfile = "minimal";
+  };
+
+  const tryCompactSession = async (params: {
+    sessionToCompact: string | undefined;
+    logReason: string;
+    noticeText: string;
+  }): Promise<boolean> => {
+    if (!params.sessionToCompact || !context.isClaude) {
+      return false;
+    }
+    try {
+      cliBackendLog.warn(`cli-runner: ${params.logReason}, sending /compact to session`);
+      if (context.params.sessionKey) {
+        executeDeps.enqueueSystemEvent(params.noticeText, {
+          sessionKey: context.params.sessionKey,
+        });
+      }
+      await executeCliWithSession(params.sessionToCompact, "/compact", true, false, "normal");
+      compactionsThisRun += 1;
+      cliBackendLog.warn(
+        "cli-runner: /compact succeeded, will retry with refreshed session context",
+      );
+      return true;
+    } catch (compactErr) {
+      if (compactErr instanceof FailoverError && compactErr.reason === "session_expired") {
+        throw compactErr;
+      }
+      if (compactErr instanceof Error && compactErr.name === "AbortError") {
+        throw compactErr;
+      }
+      cliBackendLog.warn(
+        `cli-runner: /compact failed (${compactErr instanceof Error ? compactErr.message : String(compactErr)}), proceeding with normal fallback handling`,
+      );
+      return false;
+    }
+  };
+
+  const retryAfterContextPressureRecovery = async (params: {
+    compactSucceeded: boolean;
+    downgradeProfile: boolean;
+  }) => {
+    if (params.downgradeProfile) {
+      downgradeToMinimalProfile();
+    }
+    const sessionForRetry = params.compactSucceeded ? cliSessionIdToUse : undefined;
+    const output = await executeCliWithLoaderFallback({
+      cliSessionId: sessionForRetry,
+      forceReloadSystemPromptFile: params.compactSucceeded,
+    });
+    return {
+      output,
+      cliSessionBinding: latestCliSessionBinding,
+      cliPromptLoad: latestCliPromptLoad,
+      compactionsThisRun,
+      systemPromptReport,
+    };
+  };
+
   // Layer 2: Context overflow recovery
   try {
     const output = await executeCliWithLoaderFallback({ cliSessionId: cliSessionIdToUse });
@@ -1451,110 +1587,58 @@ export async function executeWithOverflowProtection(
       systemPromptReport,
     };
   } catch (err) {
-    if (err instanceof FailoverError && isContextOverflowError(err.message)) {
-      const backend = context.preparedBackend.backend;
-      const imageTokenEstimate = backend.imageArg
-        ? (params.images?.length ?? 0) * ESTIMATED_TOKENS_PER_IMAGE
-        : 0;
-
-      // Step 2a: Send /compact to the existing session
-      const sessionToCompact = cliSessionIdToUse;
-      let compactSucceeded = false;
-      if (sessionToCompact && context.isClaude) {
-        try {
-          cliBackendLog.warn(`cli-runner: context overflow detected, sending /compact to session`);
-          if (params.sessionKey) {
-            executeDeps.enqueueSystemEvent(
-              "Context window limit reached. Compacting conversation context, please wait...",
-              { sessionKey: params.sessionKey },
-            );
-          }
-          await executeCliWithSession(sessionToCompact, "/compact", true, false, "normal");
-          compactSucceeded = true;
-          compactionsThisRun += 1;
-          cliBackendLog.warn("cli-runner: /compact succeeded, will retry with minimal profile");
-        } catch (compactErr) {
-          if (compactErr instanceof FailoverError && compactErr.reason === "session_expired") {
-            throw compactErr;
-          }
-          // /stop fired during /compact — don't swallow the abort into a
-          // profile-downgrade retry; propagate so the outer catch recognises
-          // it as a user abort.
-          if (compactErr instanceof Error && compactErr.name === "AbortError") {
-            throw compactErr;
-          }
-          cliBackendLog.warn(
-            `cli-runner: /compact failed (${compactErr instanceof Error ? compactErr.message : String(compactErr)}), proceeding with profile downgrade only`,
-          );
+    if (
+      err instanceof FailoverError &&
+      err.reason === "timeout" &&
+      context.isClaude &&
+      cliSessionIdToUse &&
+      !/produced no output/i.test(err.message)
+    ) {
+      const estimatedPromptTokens = estimateActivePromptTokens();
+      const recoveryThresholdTokens = Math.floor(context.contextWindowTokens * 0.65);
+      const usageSignal = resolveTimeoutRecoveryUsageSignal({
+        usageSnapshot:
+          params.cliSessionBinding?.sessionId?.trim() === cliSessionIdToUse.trim()
+            ? params.cliSessionBinding.usageSnapshot
+            : undefined,
+      });
+      const likelyHighHistoricalUsage =
+        typeof usageSignal === "number" && usageSignal > recoveryThresholdTokens;
+      if (likelyHighHistoricalUsage) {
+        cliBackendLog.warn(
+          `cli-runner: overall timeout with high context signal ` +
+            `(estimate=${estimatedPromptTokens}, usage=${usageSignal ?? "n/a"}, threshold=${recoveryThresholdTokens}); ` +
+            `attempting /compact recovery`,
+        );
+        const compactSucceeded = await tryCompactSession({
+          sessionToCompact: cliSessionIdToUse,
+          logReason: "overall timeout with high context signal",
+          noticeText:
+            "Model timed out with a large session context. Compacting conversation context, please wait...",
+        });
+        if (compactSucceeded) {
+          return await retryAfterContextPressureRecovery({
+            compactSucceeded: true,
+            downgradeProfile: false,
+          });
         }
       }
+    }
 
-      // Step 2b: Downgrade bootstrap profile to minimal
-      if (activeProfile !== "minimal") {
-        const sessionLabel = params.sessionKey ?? params.sessionId;
-        const minimalConfig = getBootstrapProfileConfig("minimal");
-        const minimalContextFiles = buildBootstrapContextFiles(context.bootstrapFiles, {
-          maxChars: minimalConfig.maxCharsPerFile,
-          totalMaxChars: minimalConfig.totalMaxChars,
-          warn: makeBootstrapWarn({
-            sessionLabel,
-            warn: (message) => cliBackendLog.warn(message),
-          }),
-        });
-        const minimalWarning = buildBootstrapPromptWarning({
-          analysis: analyzeBootstrapBudget({
-            files: buildBootstrapInjectionStats({
-              bootstrapFiles: context.bootstrapFiles,
-              injectedFiles: minimalContextFiles,
-            }),
-            bootstrapMaxChars: minimalConfig.maxCharsPerFile,
-            bootstrapTotalMaxChars: minimalConfig.totalMaxChars,
-          }),
-          mode: context.bootstrapPromptWarningMode,
-          seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
-          previousSignature: params.bootstrapPromptWarningSignature,
-        });
-        systemPrompt = prependBootstrapPromptWarning(
-          buildSystemPrompt({
-            workspaceDir: context.workspaceDir,
-            config: params.config,
-            defaultThinkLevel: params.thinkLevel,
-            extraSystemPrompt: context.extraSystemPrompt,
-            skillsPrompt: context.skillsPrompt,
-            ownerNumbers: params.ownerNumbers,
-            heartbeatPrompt: context.heartbeatPrompt,
-            docsPath: context.docsPath,
-            tools: context.promptTools,
-            contextFiles: minimalContextFiles,
-            modelDisplay: `${params.provider}/${context.modelId}`,
-            agentId: context.sessionAgentId,
-          }),
-          minimalWarning.lines,
-        );
-        _activeContextFiles = minimalContextFiles;
-        activeProfile = "minimal";
-      }
-
-      // Step 2c: Retry
-      const sessionForRetry = compactSucceeded ? cliSessionIdToUse : undefined;
+    if (err instanceof FailoverError && isContextOverflowError(err.message)) {
+      const compactSucceeded = await tryCompactSession({
+        sessionToCompact: cliSessionIdToUse,
+        logReason: "context overflow detected",
+        noticeText: "Context window limit reached. Compacting conversation context, please wait...",
+      });
       try {
-        const output = await executeCliWithLoaderFallback({
-          cliSessionId: sessionForRetry,
-          forceReloadSystemPromptFile: compactSucceeded,
+        return await retryAfterContextPressureRecovery({
+          compactSucceeded,
+          downgradeProfile: true,
         });
-        return {
-          output,
-          cliSessionBinding: latestCliSessionBinding,
-          cliPromptLoad: latestCliPromptLoad,
-          compactionsThisRun,
-          systemPromptReport,
-        };
       } catch (retryErr) {
         if (retryErr instanceof FailoverError && isContextOverflowError(retryErr.message)) {
-          const estimatedTks =
-            estimatePromptTokens(systemPrompt) +
-            estimatePromptTokens(params.prompt) +
-            imageTokenEstimate;
+          const estimatedTks = estimateActivePromptTokens();
           throw new FailoverError(
             `Current task exceeds context window for this runtime (estimated=${estimatedTks} tokens, profile=minimal, compact=${compactSucceeded}). Consider switching to the pi-embedded runtime or splitting the task.`,
             {

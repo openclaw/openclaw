@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  createSinglePromptClaudeStreamSuccess,
   createManagedRun,
   enqueueSystemEventMock,
   requestHeartbeatNowMock,
@@ -108,6 +112,181 @@ describe("runCliAgent reliability", () => {
         cliSessionId: "thread-123",
       }),
     ).rejects.toThrow("exceeded timeout");
+  });
+
+  it("compacts and retries after a claude overall timeout with high context pressure", async () => {
+    const runCliAgent = await setupCliRunnerTestModule();
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cli-runner-timeout-compact-"),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "overall-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      }),
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "compacted",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: createSinglePromptClaudeStreamSuccess(
+          sessionFile,
+          "done",
+          "existing-claude-session",
+        ),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      const result = await runCliAgent({
+        sessionId: "s1",
+        sessionFile,
+        workspaceDir: tempDir,
+        prompt: "hi",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-claude-timeout-compact",
+        cliSessionId: "existing-claude-session",
+        cliSessionBinding: {
+          sessionId: "existing-claude-session",
+          usageSnapshot: {
+            cacheRead: 180_000,
+            total: 181_000,
+          },
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "done" }]);
+      expect(result.meta.agentMeta?.compactionCount).toBe(1);
+
+      const compactCall = supervisorSpawnMock.mock.calls[1]?.[0] as {
+        argv?: string[];
+        input?: string;
+      };
+      expect([compactCall.input ?? "", ...(compactCall.argv ?? [])].join("\n")).toContain(
+        "/compact",
+      );
+
+      const retryCall = supervisorSpawnMock.mock.calls[2]?.[0] as { argv?: string[] };
+      expect(retryCall.argv).toContain("--append-system-prompt");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not compact on claude no-output watchdog timeouts", async () => {
+    const runCliAgent = await setupCliRunnerTestModule();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-timeout-skip-"));
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+
+    try {
+      await expect(
+        runCliAgent({
+          sessionId: "s1",
+          sessionKey: "agent:main:main",
+          sessionFile: path.join(tempDir, "session.jsonl"),
+          workspaceDir: tempDir,
+          prompt: "hi",
+          provider: "claude-cli",
+          model: "sonnet",
+          timeoutMs: 1_000,
+          runId: "run-claude-timeout-no-output",
+          cliSessionId: "existing-claude-session",
+          cliSessionBinding: {
+            sessionId: "existing-claude-session",
+            usageSnapshot: {
+              cacheRead: 180_000,
+              total: 181_000,
+            },
+          },
+        }),
+      ).rejects.toThrow("produced no output");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not compact on claude overall timeout without high historical usage", async () => {
+    const runCliAgent = await setupCliRunnerTestModule();
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cli-runner-timeout-no-history-"),
+    );
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "overall-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await expect(
+        runCliAgent({
+          sessionId: "s1",
+          sessionFile: path.join(tempDir, "session.jsonl"),
+          workspaceDir: tempDir,
+          prompt: "x".repeat(200_000),
+          provider: "claude-cli",
+          model: "sonnet",
+          timeoutMs: 1_000,
+          runId: "run-claude-timeout-no-history",
+          cliSessionId: "existing-claude-session",
+          cliSessionBinding: {
+            sessionId: "existing-claude-session",
+          },
+        }),
+      ).rejects.toThrow("exceeded timeout");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("rethrows the retry failure when session-expired recovery retry also fails", async () => {

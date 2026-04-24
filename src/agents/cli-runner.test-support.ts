@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
 import { buildAnthropicCliBackend } from "../../extensions/anthropic/test-api.js";
@@ -131,6 +132,69 @@ export function createManagedRun(
     wait: vi.fn().mockResolvedValue(exit),
     cancel: vi.fn(),
   };
+}
+
+function resolveClaudePromptFilePath(sessionFile: string): string {
+  const ext = path.extname(sessionFile);
+  const base = path.basename(sessionFile, ext);
+  return path.join(path.dirname(sessionFile), `${base}.claude-system-prompt.txt`);
+}
+
+export function createSinglePromptClaudeStreamSuccess(
+  sessionFile: string,
+  text = "ok",
+  sessionId = "sid-1",
+): string {
+  const promptPath = resolveClaudePromptFilePath(sessionFile);
+  const toolUseId = "toolu_test_read_1";
+  const records = [
+    JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+    JSON.stringify({
+      type: "assistant",
+      session_id: sessionId,
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: toolUseId,
+            name: "Read",
+            input: { file_path: promptPath },
+          },
+        ],
+      },
+    }),
+    JSON.stringify({
+      type: "user",
+      session_id: sessionId,
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: toolUseId,
+            startLine: 1,
+            numLines: 2,
+            totalLines: 2,
+            content: "prompt file 1",
+          },
+        ],
+      },
+    }),
+    JSON.stringify({
+      type: "assistant",
+      session_id: sessionId,
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    }),
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: text,
+      session_id: sessionId,
+    }),
+  ];
+  return records.join("\n");
 }
 
 export function mockSuccessfulCliRun() {
