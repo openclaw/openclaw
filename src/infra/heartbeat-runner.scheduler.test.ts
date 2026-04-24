@@ -305,6 +305,32 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("prefers targeted wakes before interval wakes to avoid duplicate runs for the same session", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 100 });
+    requestHeartbeatNow({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 100,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    runner.stop();
+  });
+
   it("merges targeted wake heartbeat overrides onto the agent heartbeat config", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
