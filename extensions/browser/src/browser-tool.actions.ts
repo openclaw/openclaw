@@ -244,6 +244,7 @@ export async function executeSnapshotAction(params: {
         ? "efficient"
         : undefined;
   const labels = typeof input.labels === "boolean" ? input.labels : undefined;
+  const urls = typeof input.urls === "boolean" ? input.urls : undefined;
   const refs: "aria" | "role" | undefined =
     input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
@@ -282,6 +283,7 @@ export async function executeSnapshotAction(params: {
     selector,
     frame,
     labels,
+    urls,
     mode,
   };
   let refsFallback: "role" | undefined;

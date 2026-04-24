@@ -35,4 +35,15 @@ describe("resolveSnapshotPlan", () => {
 
     expect(plan.format).toBe("ai");
   });
+
+  it("treats urls as a role snapshot feature", () => {
+    const plan = resolveSnapshotPlan({
+      profile: profile("openclaw"),
+      query: { urls: "1" },
+      hasPlaywright: true,
+    });
+
+    expect(plan.urls).toBe(true);
+    expect(plan.wantsRoleSnapshot).toBe(true);
+  });
 });

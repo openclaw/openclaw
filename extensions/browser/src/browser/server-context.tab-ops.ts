@@ -348,11 +348,11 @@ export function createProfileTabOps({
       if (resolved.reason === "ambiguous") {
         throw new BrowserTargetAmbiguousError();
       }
-      throw new BrowserTabNotFoundError();
+      throw new BrowserTabNotFoundError({ input: targetId });
     }
     const tab = tabs.find((candidate) => candidate.targetId === resolved.targetId);
     if (!tab) {
-      throw new BrowserTabNotFoundError();
+      throw new BrowserTabNotFoundError({ input: targetId });
     }
     return assignTabAlias({ profileState: getProfileState(), tab, label: normalizedLabel });
   };

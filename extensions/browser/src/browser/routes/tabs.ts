@@ -217,11 +217,11 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             if (resolved.reason === "ambiguous") {
               throw new BrowserTargetAmbiguousError();
             }
-            throw new BrowserTabNotFoundError();
+            throw new BrowserTabNotFoundError({ input: id });
           }
           const tab = tabs.find((currentTab) => currentTab.targetId === resolved.targetId);
           if (!tab) {
-            throw new BrowserTabNotFoundError();
+            throw new BrowserTabNotFoundError({ input: id });
           }
           const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
           if (ssrfPolicyOpts.ssrfPolicy) {

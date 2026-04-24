@@ -11,6 +11,7 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 ## Operating Loop
 
 1. Check browser state before acting:
+   - `openclaw browser doctor` or `action="status"` when the browser/plugin setup itself may be broken.
    - `action="status"` for availability.
    - `action="profiles"` if login state or profile choice matters.
    - `action="tabs"` before opening a new tab if retries/timeouts may have left windows behind.
@@ -22,6 +23,8 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - Use `action="snapshot"` on the intended `targetId`.
    - Use the same `targetId` for follow-up actions so refs stay on the same tab.
    - For durable Playwright refs, request `refs="aria"` when supported.
+   - Use `urls=true` when link text is ambiguous or a direct navigation target would avoid brittle clicks.
+   - Use `labels=true` on snapshot or screenshot when visual position matters.
 4. Act narrowly:
    - Prefer `action="act"` with a ref from the latest snapshot.
    - After navigation, modal changes, or form submission, snapshot again before the next action.
@@ -57,6 +60,8 @@ If a retry creates duplicates, close the extras by `tabId`:
 ```json
 { "action": "close", "targetId": "t3" }
 ```
+
+Do not pass bare numbers like `"2"` as `targetId`. Numeric tab positions are only for the CLI `openclaw browser tab select 2` helper; browser tool calls need a `suggestedTargetId`, label, `tabId`, or raw target id.
 
 ## Stale Ref Recovery
 
