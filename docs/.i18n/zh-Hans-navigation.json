@@ -138,7 +138,18 @@
             "zh-CN/concepts/session",
             "zh-CN/concepts/session-pruning",
             "zh-CN/concepts/session-tool",
-            "zh-CN/concepts/memory",
+            {
+              "group": "Memory",
+              "pages": [
+                "zh-CN/concepts/memory",
+                "zh-CN/concepts/memory-builtin",
+                "zh-CN/concepts/memory-qmd",
+                "zh-CN/concepts/memory-honcho",
+                "zh-CN/concepts/memory-search",
+                "zh-CN/concepts/active-memory",
+                "zh-CN/concepts/dreaming"
+              ]
+            },
             "zh-CN/concepts/compaction"
           ]
         },
