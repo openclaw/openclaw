@@ -112,7 +112,7 @@ function setup(
       : (options.nodesInvokeResult ?? { launched: true }),
   );
   const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-    if (argv[0] === "system_profiler") {
+    if (argv[0] === "/usr/sbin/system_profiler") {
       return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
     }
     return { code: 0, stdout: "", stderr: "" };
@@ -506,7 +506,7 @@ describe("google-meet plugin", () => {
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
         1,
-        ["system_profiler", "SPAudioDataType"],
+        ["/usr/sbin/system_profiler", "SPAudioDataType"],
         { timeoutMs: 10000 },
       );
       expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
