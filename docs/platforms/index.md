@@ -7,7 +7,8 @@ title: "Platforms"
 ---
 
 OpenClaw core is written in TypeScript. **Node is the recommended runtime**.
-Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
+Bun is not recommended for the Gateway — known issues with WhatsApp and
+Telegram channels; see [Bun (experimental)](/install/bun) for details.
 
 Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
 Linux companion apps are planned, but the Gateway is fully supported today.
