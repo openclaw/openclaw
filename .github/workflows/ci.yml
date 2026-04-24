@@ -1380,16 +1380,16 @@ jobs:
             runner: ubuntu-24.04
           - check_name: check-prod-types
             task: prod-types
-            runner: blacksmith-2vcpu-ubuntu-2404
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
           - check_name: check-test-types
             task: test-types
-            runner: blacksmith-2vcpu-ubuntu-2404
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-strict-smoke
             task: strict-smoke
             runner: ubuntu-24.04
