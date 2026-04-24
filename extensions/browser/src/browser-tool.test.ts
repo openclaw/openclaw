@@ -304,7 +304,7 @@ describe("browser tool description", () => {
     const tool = createBrowserTool();
 
     expect(tool.description).toContain('profile="user"');
-    expect(tool.description).toContain("omit timeoutMs on act:evaluate");
+    expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
   });
 });
