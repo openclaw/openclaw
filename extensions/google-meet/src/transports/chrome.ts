@@ -231,12 +231,24 @@ type BrowserTab = {
   url?: string;
 };
 
+function formatBrowserAutomationError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "unknown error";
+  }
+}
+
 export type GoogleMeetBrowserCreateResult = {
   meetingUri: string;
   nodeId: string;
   targetId?: string;
   browserUrl?: string;
   browserTitle?: string;
+  notes?: string[];
   source: "browser";
 };
 
@@ -297,6 +309,9 @@ function readBrowserCreateResult(result: unknown): {
   browserUrl?: string;
   browserTitle?: string;
   manualAction?: string;
+  manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+  notes?: string[];
+  retryAfterMs?: number;
 } {
   const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
   const nested =
@@ -308,39 +323,110 @@ function readBrowserCreateResult(result: unknown): {
     browserUrl: typeof nested.browserUrl === "string" ? nested.browserUrl : undefined,
     browserTitle: typeof nested.browserTitle === "string" ? nested.browserTitle : undefined,
     manualAction: typeof nested.manualAction === "string" ? nested.manualAction : undefined,
+    manualActionReason:
+      typeof nested.manualActionReason === "string"
+        ? (nested.manualActionReason as GoogleMeetChromeHealth["manualActionReason"])
+        : undefined,
+    notes: Array.isArray(nested.notes)
+      ? nested.notes.filter((note): note is string => typeof note === "string")
+      : undefined,
+    retryAfterMs:
+      typeof nested.retryAfterMs === "number" && Number.isFinite(nested.retryAfterMs)
+        ? nested.retryAfterMs
+        : undefined,
   };
 }
 
-const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
+export const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   const meetUrlPattern = /^https:\\/\\/meet\\.google\\.com\\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i;
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const current = () => location.href;
+  const notes = [];
+  const findButton = (pattern) =>
+    [...document.querySelectorAll("button")].find((button) => {
+      const label = [
+        button.getAttribute("aria-label"),
+        button.getAttribute("data-tooltip"),
+        text(button),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return pattern.test(label) && !button.disabled;
+    });
+  const clickButton = (pattern, note) => {
+    const button = findButton(pattern);
+    if (!button) {
+      return false;
+    }
+    button.click();
+    notes.push(note);
+    return true;
+  };
   if (!current().startsWith("https://meet.google.com/")) {
     return {
+      manualActionReason: "google-login-required",
       manualAction: "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
       browserUrl: current(),
       browserTitle: document.title,
+      notes,
     };
   }
-  for (let i = 0; i < 80; i += 1) {
-    const href = current();
-    if (meetUrlPattern.test(href)) {
-      return { meetingUri: href, browserUrl: href, browserTitle: document.title };
-    }
-    const text = document.body?.innerText ?? "";
-    if (/sign in|use your google account|couldn't create|unable to create/i.test(text)) {
-      return {
-        manualAction: "Sign in to Google in the OpenClaw browser profile or resolve the Meet page prompt, then retry meeting creation.",
-        browserUrl: href,
-        browserTitle: document.title,
-      };
-    }
-    await sleep(500);
+  const href = current();
+  if (meetUrlPattern.test(href)) {
+    return { meetingUri: href, browserUrl: href, browserTitle: document.title, notes };
+  }
+  const pageText = text(document.body);
+  if (clickButton(/\\buse microphone\\b/i, "Accepted Meet microphone prompt with browser automation.")) {
+    return { browserUrl: href, browserTitle: document.title, notes, retryAfterMs: 1000 };
+  }
+  if (
+    clickButton(
+      /continue without microphone/i,
+      "Continued through Meet microphone prompt with browser automation.",
+    )
+  ) {
+    return { browserUrl: href, browserTitle: document.title, notes, retryAfterMs: 1000 };
+  }
+  if (/do you want people to hear you in the meeting/i.test(pageText)) {
+    return {
+      manualActionReason: "meet-audio-choice-required",
+      manualAction: "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry meeting creation.",
+      browserUrl: href,
+      browserTitle: document.title,
+      notes,
+    };
+  }
+  if (/allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
+    return {
+      manualActionReason: "meet-permission-required",
+      manualAction: "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+      browserUrl: href,
+      browserTitle: document.title,
+      notes,
+    };
+  }
+  if (/couldn't create|unable to create/i.test(pageText)) {
+    return {
+      manualAction: "Resolve the Google Meet page prompt in the OpenClaw browser profile, then retry meeting creation.",
+      browserUrl: href,
+      browserTitle: document.title,
+      notes,
+    };
+  }
+  if (location.hostname.toLowerCase() === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText)) {
+    return {
+      manualActionReason: "google-login-required",
+      manualAction: "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+      browserUrl: href,
+      browserTitle: document.title,
+      notes,
+    };
   }
   return {
-    manualAction: "Google Meet did not return a meeting URL from the browser create flow before timeout.",
+    retryAfterMs: 500,
     browserUrl: current(),
     browserTitle: document.title,
+    notes,
   };
 }`;
 
@@ -367,32 +453,62 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   if (!targetId) {
     throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
   }
-  const evaluated = await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId,
-    method: "POST",
-    path: "/act",
-    body: {
-      kind: "evaluate",
-      targetId,
-      fn: CREATE_MEET_FROM_BROWSER_SCRIPT,
-    },
-    timeoutMs,
-  });
-  const result = readBrowserCreateResult(evaluated);
-  if (result.meetingUri) {
-    return {
-      source: "browser",
-      nodeId,
-      targetId,
-      meetingUri: result.meetingUri,
-      browserUrl: result.browserUrl,
-      browserTitle: result.browserTitle,
-    };
+  const notes = new Set<string>();
+  let lastResult: ReturnType<typeof readBrowserCreateResult> | undefined;
+  let lastError: unknown;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    try {
+      const evaluated = await callBrowserProxyOnNode({
+        runtime: params.runtime,
+        nodeId,
+        method: "POST",
+        path: "/act",
+        body: {
+          kind: "evaluate",
+          targetId,
+          fn: CREATE_MEET_FROM_BROWSER_SCRIPT,
+        },
+        timeoutMs: Math.min(timeoutMs, 10_000),
+      });
+      const result = readBrowserCreateResult(evaluated);
+      lastResult = result;
+      for (const note of result.notes ?? []) {
+        notes.add(note);
+      }
+      if (result.meetingUri) {
+        return {
+          source: "browser",
+          nodeId,
+          targetId,
+          meetingUri: result.meetingUri,
+          browserUrl: result.browserUrl,
+          browserTitle: result.browserTitle,
+          notes: [...notes],
+        };
+      }
+      if (result.manualAction) {
+        if (result.manualActionReason) {
+          throw new Error(`${result.manualActionReason}: ${result.manualAction}`);
+        }
+        throw new Error(result.manualAction);
+      }
+      await new Promise((resolve) => setTimeout(resolve, result.retryAfterMs ?? 500));
+    } catch (error) {
+      lastError = error;
+      if (!/execution context was destroyed|navigation|target closed/i.test(String(error))) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
   }
   throw new Error(
-    result.manualAction ??
-      "Browser fallback could not create a Google Meet URL. Sign in to the OpenClaw browser profile, then retry.",
+    lastResult?.manualAction ??
+      `Google Meet did not return a meeting URL from the browser create flow before timeout.${
+        lastError
+          ? ` Last browser automation error: ${formatBrowserAutomationError(lastError)}`
+          : ""
+      }`,
   );
 }
 
@@ -410,6 +526,7 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
     manualActionMessage?: string;
     url?: string;
     title?: string;
+    notes?: string[];
   };
   return {
     inCall: parsed.inCall,
@@ -420,12 +537,28 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
     browserUrl: parsed.url,
     browserTitle: parsed.title,
     status: "browser-control",
+    notes: Array.isArray(parsed.notes)
+      ? parsed.notes.filter((note): note is string => typeof note === "string")
+      : undefined,
   };
 }
 
 function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   return `() => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const buttons = [...document.querySelectorAll('button')];
+  const notes = [];
+  const findButton = (pattern) =>
+    buttons.find((button) => {
+      const label = [
+        button.getAttribute("aria-label"),
+        button.getAttribute("data-tooltip"),
+        text(button),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return pattern.test(label) && !button.disabled;
+    });
   const input = [...document.querySelectorAll('input')].find((el) =>
     /your name/i.test(el.getAttribute('aria-label') || el.placeholder || '')
   );
@@ -435,14 +568,18 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  const buttons = [...document.querySelectorAll('button')];
   const pageText = text(document.body).toLowerCase();
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
   const join = ${JSON.stringify(params.autoJoin)}
-    ? buttons.find((button) => /join now|ask to join/i.test(text(button)) && !button.disabled)
+    ? findButton(/join now|ask to join/i)
     : null;
   if (join) join.click();
+  const microphoneChoice = findButton(/\\buse microphone\\b/i);
+  if (microphoneChoice) {
+    microphoneChoice.click();
+    notes.push("Accepted Meet microphone prompt with browser automation.");
+  }
   const mic = buttons.find((button) => /turn off microphone|turn on microphone|microphone/i.test(button.getAttribute('aria-label') || text(button)));
   const inCall = buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
   let manualActionReason;
@@ -456,16 +593,21 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   } else if (!inCall && /allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
     manualActionReason = "meet-permission-required";
     manualActionMessage = "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry.";
+  } else if (!inCall && !microphoneChoice && /do you want people to hear you in the meeting/i.test(pageText)) {
+    manualActionReason = "meet-audio-choice-required";
+    manualActionMessage = "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry.";
   }
   return JSON.stringify({
     clickedJoin: Boolean(join),
+    clickedMicrophoneChoice: Boolean(microphoneChoice),
     inCall,
     micMuted: mic ? /turn on microphone/i.test(mic.getAttribute('aria-label') || text(mic)) : undefined,
     manualActionRequired: Boolean(manualActionReason),
     manualActionReason,
     manualActionMessage,
     title: document.title,
-    url: pageUrl
+    url: pageUrl,
+    notes
   });
 }`;
 }

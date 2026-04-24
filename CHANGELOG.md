@@ -84,6 +84,7 @@ Docs: https://docs.openclaw.ai
 - Group chats/silent replies: tighten `NO_REPLY` prompt guidance so groups stay quiet without narrating silence or emitting fallback chatter when silence is the intended outcome. (#70954, #71209) Thanks @Takhoffman.
 - WhatsApp/groups+direct: setting `systemPrompt: ""` on a specific `groups.<id>` or `direct.<peerId>` entry now suppresses the wildcard system prompt instead of falling through to it, so users can silence the global prompt for a specific group or peer. (#70381) Thanks @Bluetegu.
 - Browser/tool: tell agents not to pass per-call `timeoutMs` on existing-session type, evaluate, and other Chrome MCP actions that reject timeout overrides.
+- Plugins/Google Meet: use browser automation to classify and clear Meet's microphone-choice interstitial during browser meeting creation instead of reporting a false Google login failure.
 - Codex/GPT-5.4: harden fallback, auth-profile, tool-schema, and replay edge cases across native and embedded runtime paths. (#70743) Thanks @100yenadmin.
 - Models/fallback: resolve bare fallback model provider ids before model switching, so configured fallback chains keep working when a fallback is named without an explicit provider prefix.
 - Voice-call/Telnyx: preserve inbound/outbound callback metadata and read transcription text from Telnyx's current `transcription_data` payload.

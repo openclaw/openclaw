@@ -265,6 +265,7 @@ async function createMeetFromParams(params: {
       targetId: browser.targetId,
       browserUrl: browser.browserUrl,
       browserTitle: browser.browserTitle,
+      notes: browser.notes,
     },
   };
 }
