@@ -155,8 +155,8 @@ export function isLocalDirectRequest(
 
   const hasForwarded = Boolean(
     req.headers?.["x-forwarded-for"] ||
-      req.headers?.["x-real-ip"] ||
-      req.headers?.["x-forwarded-host"],
+    req.headers?.["x-real-ip"] ||
+    req.headers?.["x-forwarded-host"],
   );
   const remoteAddr = req.socket?.remoteAddress;
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
@@ -293,7 +293,13 @@ function authorizeTrustedProxy(params: {
   if (!remoteAddr || !isTrustedProxyAddress(remoteAddr, trustedProxies)) {
     return { reason: "trusted_proxy_untrusted_source" };
   }
-  if (isLoopbackAddress(remoteAddr)) {
+  // Permit loopback only when the request arrives through a legitimate same-host
+  // reverse proxy: a non-local-ish Host header combined with standard forwarding
+  // headers indicates nginx (or equivalent) is forwarding on behalf of an external
+  // client.  Plain loopback connections — and loopback requests that spoof a
+  // non-local Host without forwarding context — are still rejected.
+  const appearsProxied = !isLocalishHost(req.headers?.host) && hasAnyProxyForwardingContext(req);
+  if (isLoopbackAddress(remoteAddr) && !appearsProxied) {
     return { reason: "trusted_proxy_loopback_source" };
   }
 
