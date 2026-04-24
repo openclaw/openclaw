@@ -79,10 +79,23 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     expect(payloads[0]?.reasoning).toEqual({ effort: "low" });
   });
 
-  it("does not add reasoning for non-reasoning models without existing reasoning payload", () => {
+  it("does not add reasoning for proxy-routed models without existing reasoning payload", () => {
+    // Proxy routes fail shouldApplyOpenAIReasoningCompatibility, so the wrapper
+    // must not inject `body.reasoning` even with the #70904 !existingReasoning
+    // branch. Use a baseUrl that routes the request away from default OpenAI
+    // endpoints to exercise the non-compat path.
     const { baseStreamFn, payloads } = createPayloadCapture();
     const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
-    void wrapped(openaiModel, { messages: [] }, {});
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.2",
+        baseUrl: "https://proxy.example.com/v1",
+      } as Model<"openai-responses">,
+      { messages: [] },
+      {},
+    );
 
     expect(payloads[0]?.reasoning).toBeUndefined();
   });
