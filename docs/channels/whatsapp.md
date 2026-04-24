@@ -500,15 +500,15 @@ Resolution hierarchy for group messages:
 
 The effective `groups` map is determined first: if the account defines its own `groups`, it fully replaces the root `groups` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used if the specific group entry defines a `systemPrompt`.
-2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent or defines no `systemPrompt`.
+1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used when the specific group entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Resolution hierarchy for direct messages:
 
 The effective `direct` map is determined first: if the account defines its own `direct`, it fully replaces the root `direct` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used if the specific peer entry defines a `systemPrompt`.
-2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent or defines no `systemPrompt`.
+1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used when the specific peer entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Note: `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`); prompt overrides live under `direct`.
 
