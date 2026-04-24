@@ -106,6 +106,10 @@ Legacy sessions created before harness pins are treated as PI-pinned once they
 have transcript history. Use a new/reset session when changing between PI and a
 native plugin harness. `/status` shows non-default harness ids such as `codex`
 next to `Fast`; PI stays hidden because it is the default compatibility path.
+If the selected harness is surprising, enable `agents/harness` debug logging and
+inspect the gateway's structured `agent harness selected` record. It includes
+the selected harness id, selection reason, runtime/fallback policy, and, in
+`auto` mode, each plugin candidate's support result.
 
 The bundled Codex plugin registers `codex` as its harness id. Core treats that
 as an ordinary plugin harness id; Codex-specific aliases belong in the plugin
@@ -120,9 +124,8 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 The bundled Codex plugin follows this pattern:
 
 - provider id: `codex`
-- user model refs: canonical `openai/gpt-5.5` plus
-  `embeddedHarness.runtime: "codex"`; legacy `codex/gpt-*` refs remain accepted
-  for compatibility
+- user model refs: `openai/gpt-5.5` plus `embeddedHarness.runtime: "codex"`;
+  legacy `codex/gpt-*` refs remain accepted for compatibility
 - harness id: `codex`
 - auth: synthetic provider availability, because the Codex harness owns the
   native Codex login/session
@@ -141,22 +144,29 @@ OpenClaw requires Codex app-server `0.118.0` or newer. The Codex plugin checks
 the app-server initialize handshake and blocks older or unversioned servers so
 OpenClaw only runs against the protocol surface it has been tested with.
 
-### Codex app-server tool-result middleware
+### Tool-result middleware
 
-Bundled plugins can also attach Codex app-server-specific `tool_result`
-middleware through `api.registerCodexAppServerExtensionFactory(...)` when their
-manifest declares `contracts.embeddedExtensionFactories: ["codex-app-server"]`.
-This is the trusted-plugin seam for async tool-result transforms that need to
-run inside the native Codex harness before the tool output is projected back
-into the OpenClaw transcript.
+Bundled plugins can attach harness-neutral tool-result middleware through
+`api.registerAgentToolResultMiddleware(...)` when their manifest declares the
+targeted harness ids in `contracts.agentToolResultMiddleware`. This trusted
+seam is for async tool-result transforms that must run before PI or Codex feeds
+tool output back into the model.
+
+Legacy bundled plugins can still use
+`api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
+middleware, but new result transforms should use the harness-neutral API.
+The Pi-only `api.registerEmbeddedExtensionFactory(...)` hook is deprecated for
+tool-result transforms; keep it only for bundled compatibility code that still
+needs direct Pi embedded-runner events.
 
 ### Native Codex harness mode
 
 The bundled `codex` harness is the native Codex mode for embedded OpenClaw
 agent turns. Enable the bundled `codex` plugin first, and include `codex` in
-`plugins.allow` if your config uses a restrictive allowlist. New configs should
-use `openai/gpt-*` with `embeddedHarness.runtime: "codex"`. Legacy
-`openai-codex/*` and `codex/*` model refs remain compatibility aliases.
+`plugins.allow` if your config uses a restrictive allowlist. Native app-server
+configs should use `openai/gpt-*` with `embeddedHarness.runtime: "codex"`.
+Use `openai-codex/*` for Codex OAuth through PI instead. Legacy `codex/*`
+model refs remain compatibility aliases for the native harness.
 
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,

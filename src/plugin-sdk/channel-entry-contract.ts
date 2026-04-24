@@ -111,8 +111,12 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   loadSetupSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
-  loadLegacyStateMigrationDetector?: () => BundledChannelLegacyStateMigrationDetector;
-  loadLegacySessionSurface?: () => BundledChannelLegacySessionSurface;
+  loadLegacyStateMigrationDetector?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => BundledChannelLegacyStateMigrationDetector;
+  loadLegacySessionSurface?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => BundledChannelLegacySessionSurface;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
@@ -519,17 +523,19 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
       }
     : undefined;
   const loadLegacyStateMigrationDetector = legacyStateMigrations
-    ? () =>
+    ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
           importMetaUrl,
           legacyStateMigrations,
+          options,
         )
     : undefined;
   const loadLegacySessionSurface = legacySessionSurface
-    ? () =>
+    ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<BundledChannelLegacySessionSurface>(
           importMetaUrl,
           legacySessionSurface,
+          options,
         )
     : undefined;
   return {

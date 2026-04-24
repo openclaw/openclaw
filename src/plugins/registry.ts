@@ -28,6 +28,8 @@ import {
   registerDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
+import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
+import { normalizeAgentToolResultMiddlewareHarnesses } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
@@ -83,6 +85,7 @@ import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
+  isConversationHookName,
   isPluginHookName,
   isPromptInjectionHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -98,6 +101,7 @@ import type {
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
   OpenClawPluginGatewayRuntimeScopeSurface,
+  OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -165,6 +169,7 @@ export type {
 
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
+  allowConversationAccess?: boolean;
 };
 
 const constrainLegacyPromptInjectionHook = (
@@ -321,6 +326,78 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       rawFactory: factory,
       factory: safeFactory,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerAgentToolResultMiddleware = (
+    record: PluginRecord,
+    handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
+    options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register agent tool result middleware",
+      });
+      return;
+    }
+    if (typeof (handler as unknown) !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent tool result middleware must be a function",
+      });
+      return;
+    }
+    const harnesses = normalizeAgentToolResultMiddlewareHarnesses(options);
+    if (harnesses.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent tool result middleware must target at least one supported harness",
+      });
+      return;
+    }
+    const declared = record.contracts?.agentToolResultMiddleware ?? [];
+    const missing = harnesses.filter((harness) => !declared.includes(harness));
+    if (missing.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.agentToolResultMiddleware for: ${missing.join(", ")}`,
+      });
+      return;
+    }
+    const existing = registry.agentToolResultMiddlewares.find(
+      (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
+    );
+    if (existing) {
+      existing.harnesses = [...new Set([...existing.harnesses, ...harnesses])];
+      return;
+    }
+    const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
+      try {
+        return await handler(event, ctx);
+      } catch (error) {
+        registryParams.logger.warn(
+          `[plugins] agent tool result middleware failed for ${record.id}`,
+        );
+        throw error;
+      }
+    };
+    registry.agentToolResultMiddlewares.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      rawHandler: handler,
+      handler: safeHandler,
+      harnesses,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1116,6 +1193,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerGatewayDiscoveryService = (
+    record: PluginRecord,
+    service: OpenClawGatewayDiscoveryService,
+  ) => {
+    const id = service.id.trim();
+    if (!id) {
+      return;
+    }
+    const existing = registry.gatewayDiscoveryServices.find((entry) => entry.service.id === id);
+    if (existing) {
+      if (existing.pluginId === record.id) {
+        return;
+      }
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway discovery service already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.gatewayDiscoveryServiceIds.push(id);
+    registry.gatewayDiscoveryServices.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      service,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
     const name = command.name.trim();
     if (!name) {
@@ -1208,6 +1316,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         effectiveHandler = constrainLegacyPromptInjectionHook(
           handler as PluginHookHandlerMap["before_agent_start"],
         ) as PluginHookHandlerMap[K];
+      }
+    }
+    if (isConversationHookName(hookName)) {
+      const explicitConversationAccess = policy?.allowConversationAccess;
+      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+        });
+        return;
+      }
+      if (record.origin === "bundled" && explicitConversationAccess === false) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+        });
+        return;
       }
     }
     record.hookCount += 1;
@@ -1334,6 +1465,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
+              registerGatewayDiscoveryService: (service) =>
+                registerGatewayDiscoveryService(record, service),
               registerCliBackend: (backend) => registerCliBackend(record, backend),
               registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
               registerReload: (registration) => registerReload(record, registration),
@@ -1406,6 +1539,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerCodexAppServerExtensionFactory: (factory) => {
                 registerCodexAppServerExtensionFactory(record, factory);
+              },
+              registerAgentToolResultMiddleware: (handler, options) => {
+                registerAgentToolResultMiddleware(record, handler, options);
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {

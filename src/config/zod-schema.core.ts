@@ -202,6 +202,7 @@ export const ModelCompatSchema = z
       .union([
         z.literal("openai"),
         z.literal("openrouter"),
+        z.literal("deepseek"),
         z.literal("zai"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
@@ -339,6 +340,7 @@ export const ModelDefinitionSchema = z
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    metadataSource: z.literal("models-add").optional(),
   })
   .strict();
 

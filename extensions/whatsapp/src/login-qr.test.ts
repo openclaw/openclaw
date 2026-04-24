@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
-import { renderQrPngBase64 } from "./qr-image.js";
+import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
   logoutWeb,
@@ -40,7 +40,8 @@ vi.mock("./session.js", async () => {
 });
 
 vi.mock("./qr-image.js", () => ({
-  renderQrPngBase64: vi.fn(async (input: string) => `encoded:${input}`),
+  renderQrPngBase64: vi.fn(async () => "base64"),
+  renderQrPngDataUrl: vi.fn(async (input: string) => `data:image/png;base64,encoded:${input}`),
 }));
 
 const createWaSocketMock = vi.mocked(createWaSocket);
@@ -48,7 +49,7 @@ const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision)
 const readWebSelfIdMock = vi.mocked(readWebSelfId);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const logoutWebMock = vi.mocked(logoutWeb);
-const renderQrPngBase64Mock = vi.mocked(renderQrPngBase64);
+const renderQrPngDataUrlMock = vi.mocked(renderQrPngDataUrl);
 
 async function flushTasks() {
   await Promise.resolve();
@@ -61,7 +62,7 @@ async function waitMs(ms: number) {
 
 async function waitForQrRenderCallCount(count: number) {
   const deadline = Date.now() + 1000;
-  while (renderQrPngBase64Mock.mock.calls.length < count && Date.now() < deadline) {
+  while (renderQrPngDataUrlMock.mock.calls.length < count && Date.now() < deadline) {
     await waitMs(0);
     await flushTasks();
   }
@@ -95,7 +96,9 @@ describe("login-qr", () => {
     });
     readWebSelfIdMock.mockReset().mockReturnValue({ e164: null, jid: null, lid: null });
     logoutWebMock.mockReset().mockResolvedValue(true);
-    renderQrPngBase64Mock.mockReset().mockImplementation(async (input) => `encoded:${input}`);
+    renderQrPngDataUrlMock
+      .mockReset()
+      .mockImplementation(async (input) => `data:image/png;base64,encoded:${input}`);
   });
 
   it("restarts login once on status 515 and completes", async () => {
@@ -374,8 +377,10 @@ describe("login-qr", () => {
       },
     );
     waitForWaConnectionMock.mockImplementation(() => new Promise(() => {}));
-    renderQrPngBase64Mock.mockImplementation((qr) =>
-      qr === "qr-data-2" ? new Promise<string>(() => {}) : Promise.resolve(`encoded:${qr}`),
+    renderQrPngDataUrlMock.mockImplementation((qr) =>
+      qr === "qr-data-2"
+        ? new Promise<string>(() => {})
+        : Promise.resolve(`data:image/png;base64,encoded:${qr}`),
     );
 
     const start = await startWebLoginWithQr({
@@ -404,7 +409,7 @@ describe("login-qr", () => {
     let resolveRender: (value: string) => void = () => {
       throw new Error("Expected QR render promise to be pending");
     };
-    renderQrPngBase64Mock.mockImplementationOnce(
+    renderQrPngDataUrlMock.mockImplementationOnce(
       () =>
         new Promise<string>((resolve) => {
           resolveRender = resolve;
@@ -418,14 +423,14 @@ describe("login-qr", () => {
     });
     await waitForQrRenderCallCount(1);
 
-    expect(renderQrPngBase64Mock).toHaveBeenCalledTimes(1);
+    expect(renderQrPngDataUrlMock).toHaveBeenCalledTimes(1);
 
-    resolveRender("encoded:qr-data");
+    resolveRender("data:image/png;base64,encoded:qr-data");
     await expect(resultPromise).resolves.toEqual({
       qrDataUrl: "data:image/png;base64,encoded:qr-data",
       message: "Scan this QR in WhatsApp → Linked Devices.",
     });
-    expect(renderQrPngBase64Mock).toHaveBeenCalledTimes(1);
+    expect(renderQrPngDataUrlMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns the same rotated QR to concurrent waiters that share the same current image", async () => {

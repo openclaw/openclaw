@@ -28,8 +28,10 @@ inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspac
 
 ```json5
 {
-  agent: {
-    workspace: "~/.openclaw/workspace",
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+    },
   },
 }
 ```
@@ -43,7 +45,7 @@ If you already manage the workspace files yourself, you can disable bootstrap
 file creation:
 
 ```json5
-{ agent: { skipBootstrap: true } }
+{ agents: { defaults: { skipBootstrap: true } } }
 ```
 
 ## Extra workspace folders
@@ -90,7 +92,7 @@ These are the standard files OpenClaw expects inside the workspace:
   - Keep it short to avoid token burn.
 
 - `BOOT.md`
-  - Optional startup checklist executed on gateway restart when internal hooks are enabled.
+  - Optional startup checklist run automatically on gateway restart (when [internal hooks](/automation/hooks) are enabled).
   - Keep it short; use the message tool for outbound sends.
 
 - `BOOTSTRAP.md`

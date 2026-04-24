@@ -138,6 +138,34 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("annotates non-ok harness result classifications for outer model fallback", async () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
+    const classify = vi.fn(() => "empty" as const);
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Classifying Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        classify,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    const params = createAttemptParams();
+    const result = await runAgentHarnessAttemptWithFallback(params);
+
+    expect(classify).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionIdUsed: "codex" }),
+      params,
+    );
+    expect(result).toMatchObject({
+      agentHarnessId: "codex",
+      agentHarnessResultClassification: "empty",
+    });
+  });
+
   it("honors env fallback override over config fallback", async () => {
     process.env.OPENCLAW_AGENT_RUNTIME = "auto";
     process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
@@ -152,6 +180,80 @@ describe("runAgentHarnessAttemptWithFallback", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
+    const lowPrioritySupports = vi.fn(() => ({
+      supported: true as const,
+      priority: 10,
+      reason: "generic codex support",
+    }));
+    const highPrioritySupports = vi.fn(() => ({
+      supported: true as const,
+      priority: 100,
+      reason: "native codex app-server",
+    }));
+    const unsupportedSupports = vi.fn(() => ({
+      supported: false as const,
+      reason: "provider mismatch",
+    }));
+    registerAgentHarness(
+      {
+        id: "codex-low",
+        label: "Low Codex",
+        supports: lowPrioritySupports,
+        runAttempt: vi.fn(async () => createAttemptResult("codex-low")),
+      },
+      { ownerPluginId: "codex-low" },
+    );
+    registerAgentHarness(
+      {
+        id: "codex-high",
+        label: "High Codex",
+        supports: highPrioritySupports,
+        runAttempt: vi.fn(async () => createAttemptResult("codex-high")),
+      },
+      { ownerPluginId: "codex-high" },
+    );
+    registerAgentHarness(
+      {
+        id: "other",
+        label: "Other Harness",
+        supports: unsupportedSupports,
+        runAttempt: vi.fn(async () => createAttemptResult("other")),
+      },
+      { ownerPluginId: "other" },
+    );
+
+    const harness = selectAgentHarness({
+      provider: "codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(harness.id).toBe("codex-high");
+    expect(lowPrioritySupports).toHaveBeenCalledTimes(1);
+    expect(highPrioritySupports).toHaveBeenCalledTimes(1);
+    expect(unsupportedSupports).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps pinned PI selection from probing plugin support", () => {
+    const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    const harness = selectAgentHarness({
+      provider: "codex",
+      modelId: "gpt-5.4",
+      agentHarnessId: "pi",
+    });
+
+    expect(harness.id).toBe("pi");
+    expect(supports).not.toHaveBeenCalled();
+  });
+
   it("fails instead of choosing PI when no plugin harness matches and fallback is none", () => {
     expect(() =>
       selectAgentHarness({

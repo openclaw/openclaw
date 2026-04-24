@@ -211,7 +211,9 @@ describe("matrix CLI verification commands", () => {
     });
     const program = buildProgram();
 
-    await program.parseAsync(["matrix", "verify", "bootstrap", "--json"], { from: "user" });
+    await program.parseAsync(["matrix", "verify", "bootstrap", "--json"], {
+      from: "user",
+    });
 
     expect(process.exitCode).toBe(1);
   });
@@ -265,6 +267,76 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(process.exitCode).toBe(1);
+  });
+
+  it("passes loaded cfg to verify status action", async () => {
+    const fakeCfg = { channels: { matrix: {} } };
+    matrixRuntimeLoadConfigMock.mockReturnValue(fakeCfg);
+    mockMatrixVerificationStatus({ recoveryKeyCreatedAt: null });
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "status"], { from: "user" });
+
+    expect(getMatrixVerificationStatusMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: fakeCfg }),
+    );
+  });
+
+  it("passes loaded cfg to all verify subcommands", async () => {
+    const fakeCfg = { channels: { matrix: {} } };
+    matrixRuntimeLoadConfigMock.mockReturnValue(fakeCfg);
+
+    // verify bootstrap
+    const program1 = buildProgram();
+    await program1.parseAsync(["matrix", "verify", "bootstrap"], {
+      from: "user",
+    });
+    expect(bootstrapMatrixVerificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: fakeCfg }),
+    );
+
+    // verify device
+    verifyMatrixRecoveryKeyMock.mockResolvedValue({ success: true });
+    const program2 = buildProgram();
+    await program2.parseAsync(["matrix", "verify", "device", "test-key"], {
+      from: "user",
+    });
+    expect(verifyMatrixRecoveryKeyMock).toHaveBeenCalledWith(
+      "test-key",
+      expect.objectContaining({ cfg: fakeCfg }),
+    );
+
+    // verify backup status
+    getMatrixRoomKeyBackupStatusMock.mockResolvedValue({});
+    const program3 = buildProgram();
+    await program3.parseAsync(["matrix", "verify", "backup", "status"], {
+      from: "user",
+    });
+    expect(getMatrixRoomKeyBackupStatusMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: fakeCfg }),
+    );
+
+    // verify backup reset
+    const program4 = buildProgram();
+    await program4.parseAsync(["matrix", "verify", "backup", "reset", "--yes"], { from: "user" });
+    expect(resetMatrixRoomKeyBackupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: fakeCfg }),
+    );
+
+    // verify backup restore
+    restoreMatrixRoomKeyBackupMock.mockResolvedValue({
+      success: true,
+      imported: 0,
+      total: 0,
+      backup: {},
+    });
+    const program5 = buildProgram();
+    await program5.parseAsync(["matrix", "verify", "backup", "restore"], {
+      from: "user",
+    });
+    expect(restoreMatrixRoomKeyBackupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: fakeCfg }),
+    );
   });
 
   it("lists matrix devices", async () => {
@@ -332,7 +404,9 @@ describe("matrix CLI verification commands", () => {
       from: "user",
     });
 
-    expect(pruneMatrixStaleGatewayDevicesMock).toHaveBeenCalledWith({ accountId: "poe" });
+    expect(pruneMatrixStaleGatewayDevicesMock).toHaveBeenCalledWith({
+      accountId: "poe",
+    });
     expect(console.log).toHaveBeenCalledWith("Deleted stale OpenClaw devices: BritdXC6iL");
     expect(console.log).toHaveBeenCalledWith("Current device: A7hWrQ70ea");
     expect(console.log).toHaveBeenCalledWith("Remaining devices: 1");
@@ -452,7 +526,9 @@ describe("matrix CLI verification commands", () => {
       { from: "user" },
     );
 
-    expect(bootstrapMatrixVerificationMock).toHaveBeenCalledWith({ accountId: "ops" });
+    expect(bootstrapMatrixVerificationMock).toHaveBeenCalledWith({
+      accountId: "ops",
+    });
     expect(console.log).toHaveBeenCalledWith("Matrix verification bootstrap: complete");
     expect(console.log).toHaveBeenCalledWith(
       `Recovery key created at: ${formatExpectedLocalTimestamp("2026-03-09T06:00:00.000Z")}`,
@@ -705,7 +781,9 @@ describe("matrix CLI verification commands", () => {
     });
     const program = buildProgram();
 
-    await program.parseAsync(["matrix", "verify", "bootstrap", "--json"], { from: "user" });
+    await program.parseAsync(["matrix", "verify", "bootstrap", "--json"], {
+      from: "user",
+    });
 
     expect(process.exitCode).toBe(0);
   });
@@ -715,7 +793,9 @@ describe("matrix CLI verification commands", () => {
     mockMatrixVerificationStatus({ recoveryKeyCreatedAt: recoveryCreatedAt });
     const program = buildProgram();
 
-    await program.parseAsync(["matrix", "verify", "status", "--verbose"], { from: "user" });
+    await program.parseAsync(["matrix", "verify", "status", "--verbose"], {
+      from: "user",
+    });
 
     expect(console.log).toHaveBeenCalledWith(
       `Recovery key created at: ${formatExpectedLocalTimestamp(recoveryCreatedAt)}`,
@@ -920,7 +1000,9 @@ describe("matrix CLI verification commands", () => {
   it("requires --yes before resetting the Matrix room-key backup", async () => {
     const program = buildProgram();
 
-    await program.parseAsync(["matrix", "verify", "backup", "reset"], { from: "user" });
+    await program.parseAsync(["matrix", "verify", "backup", "reset"], {
+      from: "user",
+    });
 
     expect(process.exitCode).toBe(1);
     expect(resetMatrixRoomKeyBackupMock).not.toHaveBeenCalled();
@@ -936,7 +1018,10 @@ describe("matrix CLI verification commands", () => {
       from: "user",
     });
 
-    expect(resetMatrixRoomKeyBackupMock).toHaveBeenCalledWith({ accountId: "default" });
+    expect(resetMatrixRoomKeyBackupMock).toHaveBeenCalledWith({
+      accountId: "default",
+      cfg: {},
+    });
     expect(console.log).toHaveBeenCalledWith("Reset success: yes");
     expect(console.log).toHaveBeenCalledWith("Previous backup version: 1");
     expect(console.log).toHaveBeenCalledWith("Deleted backup version: 1");
@@ -981,6 +1066,7 @@ describe("matrix CLI verification commands", () => {
 
     expect(getMatrixVerificationStatusMock).toHaveBeenCalledWith({
       accountId: "assistant",
+      cfg: {},
       includeRecoveryKey: false,
     });
     expect(console.log).toHaveBeenCalledWith("Account: assistant");

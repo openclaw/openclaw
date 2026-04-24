@@ -7,6 +7,7 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
@@ -631,8 +632,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
           signal: options?.signal,
         });
         if (!response.ok) {
-          const message = await response.text().catch(() => "");
-          throw new Error(`Google Generative AI API error (${response.status}): ${message}`);
+          throw await createProviderHttpError(response, "Google Generative AI API error");
         }
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;

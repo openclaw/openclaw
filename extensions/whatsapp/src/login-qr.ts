@@ -9,7 +9,7 @@ import {
   waitForWhatsAppLoginResult,
   WHATSAPP_LOGGED_OUT_QR_MESSAGE,
 } from "./connection-controller.js";
-import { renderQrPngBase64 } from "./qr-image.js";
+import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
   readWebAuthExistsForDecision,
@@ -109,8 +109,7 @@ async function ensureQrDataUrl(params: {
     current.qrVersion !== params.qrVersion ||
     current.qr !== params.qr
   ) {
-    const base64 = await renderQrPngBase64(params.qr);
-    return `data:image/png;base64,${base64}`;
+    return await renderQrPngDataUrl(params.qr);
   }
 
   if (current.qrDataUrl && current.qrDataUrlVersion === params.qrVersion) {
@@ -133,8 +132,7 @@ async function ensureQrDataUrl(params: {
 
       const qr = latest.qr;
       const qrVersion = latest.qrVersion;
-      const base64 = await renderQrPngBase64(qr);
-      const dataUrl = `data:image/png;base64,${base64}`;
+      const dataUrl = await renderQrPngDataUrl(qr);
       const refreshed = activeLogins.get(params.accountId);
       if (!refreshed || refreshed.id !== params.loginId) {
         return dataUrl;
