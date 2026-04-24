@@ -121,10 +121,18 @@ describe("evaluateSystemRunPolicy", () => {
 
   it("denies allowlist misses without approval", () => {
     const denied = expectDeniedDecision(
-      evaluateSystemRunPolicy(buildPolicyParams({ analysisOk: false, allowlistSatisfied: false })),
+      evaluateSystemRunPolicy(buildPolicyParams({ analysisOk: true, allowlistSatisfied: false })),
     );
     expect(denied.eventReason).toBe("allowlist-miss");
     expect(denied.errorMessage).toBe("SYSTEM_RUN_DENIED: allowlist miss");
+  });
+
+  it("surfaces unparseable shell syntax with a distinct reason", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(buildPolicyParams({ analysisOk: false, allowlistSatisfied: false })),
+    );
+    expect(denied.eventReason).toBe("unsupported-shell-syntax");
+    expect(denied.errorMessage).toBe("SYSTEM_RUN_DENIED: unsupported shell syntax");
   });
 
   it("keeps POSIX shell wrapper decisions tied to allowlist analysis", () => {

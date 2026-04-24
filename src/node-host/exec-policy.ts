@@ -16,7 +16,11 @@ export type SystemRunPolicyDecision = {
     }
   | {
       allowed: false;
-      eventReason: "security=deny" | "approval-required" | "allowlist-miss";
+      eventReason:
+        | "security=deny"
+        | "approval-required"
+        | "allowlist-miss"
+        | "unsupported-shell-syntax";
       errorMessage: string;
     }
 );
@@ -47,6 +51,10 @@ export function formatSystemRunAllowlistMissMessage(params?: {
     );
   }
   return "SYSTEM_RUN_DENIED: allowlist miss";
+}
+
+export function formatSystemRunUnsupportedShellSyntaxMessage(): string {
+  return "SYSTEM_RUN_DENIED: unsupported shell syntax";
 }
 
 export function evaluateSystemRunPolicy(params: {
@@ -116,6 +124,20 @@ export function evaluateSystemRunPolicy(params: {
     if (params.durableApprovalSatisfied) {
       return {
         allowed: true,
+        analysisOk,
+        allowlistSatisfied,
+        shellWrapperBlocked,
+        windowsShellWrapperBlocked,
+        requiresAsk,
+        approvalDecision: params.approvalDecision,
+        approvedByAsk,
+      };
+    }
+    if (!analysisOk && !shellWrapperBlocked) {
+      return {
+        allowed: false,
+        eventReason: "unsupported-shell-syntax",
+        errorMessage: formatSystemRunUnsupportedShellSyntaxMessage(),
         analysisOk,
         allowlistSatisfied,
         shellWrapperBlocked,

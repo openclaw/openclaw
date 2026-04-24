@@ -80,62 +80,257 @@ function isShellCommentStart(source: string, index: number): boolean {
   return Boolean(prev && /\s/.test(prev));
 }
 
+type ParsedHeredocDelimiter = { delimiter: string; end: number; quoted: boolean };
+
+function parseHeredocDelimiter(source: string, start: number): ParsedHeredocDelimiter | null {
+  let i = start;
+  while (i < source.length && (source[i] === " " || source[i] === "\t")) {
+    i += 1;
+  }
+  if (i >= source.length) {
+    return null;
+  }
+
+  const first = source[i];
+  if (first === "'" || first === '"') {
+    const quote = first;
+    i += 1;
+    let delimiter = "";
+    while (i < source.length) {
+      const ch = source[i];
+      if (ch === "\n" || ch === "\r") {
+        return null;
+      }
+      if (quote === '"' && ch === "\\" && i + 1 < source.length) {
+        delimiter += source[i + 1];
+        i += 2;
+        continue;
+      }
+      if (ch === quote) {
+        return { delimiter, end: i + 1, quoted: true };
+      }
+      delimiter += ch;
+      i += 1;
+    }
+    return null;
+  }
+
+  let delimiter = "";
+  while (i < source.length) {
+    const ch = source[i];
+    if (/\s/.test(ch) || ch === "|" || ch === "&" || ch === ";" || ch === "<" || ch === ">") {
+      break;
+    }
+    delimiter += ch;
+    i += 1;
+  }
+  if (!delimiter) {
+    return null;
+  }
+  return { delimiter, end: i, quoted: false };
+}
+
+/**
+ * Splice POSIX `\<newline>` line continuations so downstream tokenization sees
+ * the same tokens the shell would after pre-processing.
+ *
+ * Per POSIX 2.2.1, outside single-quotes a `\` followed by a newline is removed
+ * entirely (the lines are joined). The splicing does NOT happen inside
+ * single-quoted strings, inside quoted-delimiter heredoc bodies (`<<'EOF'`),
+ * or inside `#` comments. Inside double-quotes and unquoted heredoc bodies,
+ * bash does splice `\<newline>` — matched here.
+ *
+ * The helper is a pure text transform: if it cannot confidently classify the
+ * string (e.g., an unterminated quote or heredoc), it returns the input
+ * unchanged so downstream analysis produces the canonical failure result.
+ */
+export function joinShellLineContinuations(command: string): string {
+  type HeredocSpec = { delimiter: string; stripTabs: boolean; quoted: boolean };
+
+  let out = "";
+  let inSingle = false;
+  let inDouble = false;
+  let inComment = false;
+  const pendingHeredocs: HeredocSpec[] = [];
+  let inHeredocBody = false;
+  let heredocLine = "";
+
+  const isContinuation = (i: number): 0 | 2 | 3 => {
+    if (command[i] !== "\\") {
+      return 0;
+    }
+    const a = command[i + 1];
+    if (a === "\n") {
+      return 2;
+    }
+    if (a === "\r" && command[i + 2] === "\n") {
+      return 3;
+    }
+    return 0;
+  };
+
+  let i = 0;
+  while (i < command.length) {
+    const ch = command[i];
+    const next = command[i + 1];
+
+    if (inHeredocBody) {
+      const current = pendingHeredocs[0];
+      if (current && !current.quoted) {
+        const skip = isContinuation(i);
+        if (skip) {
+          heredocLine = "";
+          i += skip;
+          continue;
+        }
+      }
+      if (ch === "\n" || ch === "\r") {
+        if (current) {
+          const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
+          if (line === current.delimiter) {
+            pendingHeredocs.shift();
+            if (pendingHeredocs.length === 0) {
+              inHeredocBody = false;
+            }
+          }
+        }
+        heredocLine = "";
+        out += ch;
+        if (ch === "\r" && next === "\n") {
+          out += "\n";
+          i += 2;
+        } else {
+          i += 1;
+        }
+        continue;
+      }
+      heredocLine += ch;
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (inComment) {
+      if (ch === "\n" || ch === "\r") {
+        inComment = false;
+      }
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      }
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (inDouble) {
+      const skip = isContinuation(i);
+      if (skip) {
+        i += skip;
+        continue;
+      }
+      if (ch === "\\" && next !== undefined && DOUBLE_QUOTE_ESCAPES.has(next)) {
+        out += ch;
+        out += next;
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = false;
+      }
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    const skip = isContinuation(i);
+    if (skip) {
+      i += skip;
+      continue;
+    }
+
+    if (ch === "\\" && next !== undefined) {
+      out += ch;
+      out += next;
+      i += 2;
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (isShellCommentStart(command, i)) {
+      inComment = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "<" && next === "<") {
+      out += "<<";
+      let scanIndex = i + 2;
+      let stripTabs = false;
+      if (command[scanIndex] === "-") {
+        stripTabs = true;
+        out += "-";
+        scanIndex += 1;
+      }
+      const parsed = parseHeredocDelimiter(command, scanIndex);
+      if (parsed) {
+        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs, quoted: parsed.quoted });
+        out += command.slice(scanIndex, parsed.end);
+        i = parsed.end;
+      } else {
+        i = scanIndex;
+      }
+      continue;
+    }
+
+    if (ch === "\n" || ch === "\r") {
+      out += ch;
+      if (ch === "\r" && next === "\n") {
+        out += "\n";
+        i += 2;
+      } else {
+        i += 1;
+      }
+      if (pendingHeredocs.length > 0) {
+        inHeredocBody = true;
+        heredocLine = "";
+      }
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  if (inSingle || inDouble || (inHeredocBody && pendingHeredocs.length > 0)) {
+    return command;
+  }
+  return out;
+}
+
 function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
   type HeredocSpec = {
     delimiter: string;
     stripTabs: boolean;
     quoted: boolean;
-  };
-
-  const parseHeredocDelimiter = (
-    source: string,
-    start: number,
-  ): { delimiter: string; end: number; quoted: boolean } | null => {
-    let i = start;
-    while (i < source.length && (source[i] === " " || source[i] === "\t")) {
-      i += 1;
-    }
-    if (i >= source.length) {
-      return null;
-    }
-
-    const first = source[i];
-    if (first === "'" || first === '"') {
-      const quote = first;
-      i += 1;
-      let delimiter = "";
-      while (i < source.length) {
-        const ch = source[i];
-        if (ch === "\n" || ch === "\r") {
-          return null;
-        }
-        if (quote === '"' && ch === "\\" && i + 1 < source.length) {
-          delimiter += source[i + 1];
-          i += 2;
-          continue;
-        }
-        if (ch === quote) {
-          return { delimiter, end: i + 1, quoted: true };
-        }
-        delimiter += ch;
-        i += 1;
-      }
-      return null;
-    }
-
-    let delimiter = "";
-    while (i < source.length) {
-      const ch = source[i];
-      if (/\s/.test(ch) || ch === "|" || ch === "&" || ch === ";" || ch === "<" || ch === ">") {
-        break;
-      }
-      delimiter += ch;
-      i += 1;
-    }
-    if (!delimiter) {
-      return null;
-    }
-    return { delimiter, end: i, quoted: false };
   };
 
   const segments: string[] = [];
