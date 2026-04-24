@@ -425,6 +425,39 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
+  it("passes diagnostic trace context to before_tool_call hooks", async () => {
+    const trace = {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    };
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "pwd" },
+      toolCallId: "tool-1",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-1", trace },
+    });
+
+    expect(result.blocked).toBe(false);
+    const call = hookRunner.runBeforeToolCall.mock.calls[0];
+    expect(call?.[0]).toMatchObject({
+      toolName: "exec",
+      runId: "run-1",
+      toolCallId: "tool-1",
+    });
+    const toolContext = call?.[1] as { trace?: typeof trace } | undefined;
+    expect(toolContext).toMatchObject({
+      toolName: "exec",
+      runId: "run-1",
+      toolCallId: "tool-1",
+      trace,
+    });
+    expect(toolContext?.trace).not.toBe(trace);
+    expect(Object.isFrozen(toolContext?.trace)).toBe(true);
+  });
+
   it("calls gateway RPC and unblocks on allow-once", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
