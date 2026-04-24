@@ -2,7 +2,6 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
-import { cacheInboundMessageMeta } from "../quoted-message.js";
 import type { WebInboundMsg } from "./types.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
@@ -29,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
 });
 
 let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
+let cacheInboundMessageMeta: (typeof import("../quoted-message.js"))["cacheInboundMessageMeta"];
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -96,6 +96,7 @@ describe("deliverWebReply", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ deliverWebReply } = await import("./deliver-reply.js"));
+    ({ cacheInboundMessageMeta } = await import("../quoted-message.js"));
   });
 
   it("suppresses payloads flagged as reasoning", async () => {
@@ -379,7 +380,7 @@ describe("deliverWebReply", () => {
       }),
       undefined,
     );
-    expect(msg.reply).toHaveBeenCalledWith("cap");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
 
   it("sends opus audio media as WhatsApp voice note when requested", async () => {
@@ -412,8 +413,9 @@ describe("deliverWebReply", () => {
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
       }),
+      undefined,
     );
-    expect(msg.reply).toHaveBeenCalledWith("cap");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
 
   it("sends non-voice audio without forcing ptt and keeps text as a normal reply", async () => {
@@ -440,9 +442,10 @@ describe("deliverWebReply", () => {
         audio: expect.any(Buffer),
         mimetype: "audio/mpeg",
       }),
+      undefined,
     );
     expect(msg.sendMedia).not.toHaveBeenCalledWith(expect.objectContaining({ ptt: true }));
-    expect(msg.reply).toHaveBeenCalledWith("cap");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
 
   it("keeps deferred audio text separate from later media items", async () => {
@@ -480,6 +483,7 @@ describe("deliverWebReply", () => {
         audio: expect.any(Buffer),
         mimetype: "audio/mpeg",
       }),
+      undefined,
     );
     expect(msg.sendMedia).toHaveBeenNthCalledWith(
       2,
@@ -488,9 +492,10 @@ describe("deliverWebReply", () => {
         caption: undefined,
         mimetype: "image/jpeg",
       }),
+      undefined,
     );
-    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
-    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
+    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa", undefined);
+    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa", undefined);
   });
 
   it("does not replay deferred audio caption after first media fallback", async () => {
@@ -517,7 +522,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa\n⚠️ Media failed: upload failed");
+    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa\n⚠️ Media failed: upload failed", undefined);
   });
 
   it("sends video media", async () => {
