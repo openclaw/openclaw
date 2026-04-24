@@ -6,6 +6,7 @@ import {
   readStringParam,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type {
   MemorySearchResult,
   MemorySearchRuntimeDebug,
@@ -242,6 +243,8 @@ export function createMemorySearchTool(options: {
               cfg,
               options.agentSessionKey,
             );
+            const searchSources: MemorySource[] | undefined =
+              requestedCorpus === "sessions" ? (["sessions"] as MemorySource[]) : undefined;
             rawResults = await memory.manager.search(query, {
               maxResults,
               minScore,
@@ -250,6 +253,7 @@ export function createMemorySearchTool(options: {
               onDebug: (debug) => {
                 runtimeDebug.push(debug);
               },
+              ...(searchSources ? { sources: searchSources } : {}),
             });
             rawResults = await filterMemorySearchHitsBySessionVisibility({
               cfg,

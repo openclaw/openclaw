@@ -1058,6 +1058,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      /** Subset of chunk sources to return; narrow single-source queries use a higher QMD fetch cap. */
+      sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
@@ -1071,10 +1073,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.maybeWarmSession(opts?.sessionKey);
     await this.maybeSyncDirtySearchState();
     await this.waitForPendingUpdateBeforeSearch();
-    const limit = Math.min(
+    const resultLimit = Math.min(
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
+    const requestedSources = opts?.sources ?? [];
+    const narrowRecall =
+      requestedSources.length > 0 &&
+      requestedSources.every((s) => s === "memory" || s === "sessions") &&
+      new Set(requestedSources).size < 2;
+    const limit = narrowRecall
+      ? Math.min(this.qmd.limits.maxResults, Math.max(resultLimit * 8, resultLimit))
+      : resultLimit;
     const collectionNames = this.listManagedCollectionNames();
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
@@ -1229,7 +1239,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       effectiveMode: effectiveSearchMode,
       fallback: searchFallbackReason,
     });
-    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
+    let ranked = results;
+    if (opts?.sources?.length) {
+      const allow = new Set(opts.sources);
+      ranked = results.filter((r) => allow.has(r.source));
+    }
+    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }
 
   async sync(params?: {
