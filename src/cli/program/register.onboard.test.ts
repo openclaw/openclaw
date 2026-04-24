@@ -133,6 +133,16 @@ describe("registerOnboardCommand", () => {
     );
   });
 
+  it("forwards --skip-bootstrap to setup wizard options", async () => {
+    await runCli(["onboard", "--skip-bootstrap"]);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skipBootstrap: true,
+      }),
+      runtime,
+    );
+  });
+
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(setupWizardCommandMock).toHaveBeenCalledWith(
