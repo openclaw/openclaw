@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Gradium: add a bundled text-to-speech provider with voice-note and telephony output support. (#64958) Thanks @LaurentMazare.
 - Plugins/setup: honor explicit `setup.requiresRuntime: false` as a descriptor-only setup contract while keeping omitted values on the legacy setup-api fallback path. Thanks @vincentkoc.
 - Plugins/setup: report descriptor/runtime drift when setup-api registrations disagree with `setup.providers` or `setup.cliBackends`, without rejecting legacy setup plugins. Thanks @vincentkoc.
+- Plugin hooks: expose first-class run, message, sender, session, and trace correlation fields on message hook contexts and run lifecycle events. Thanks @vincentkoc.
 - TUI/dependencies: remove direct `cli-highlight` usage from the OpenClaw TUI code-block renderer, keeping themed code coloring without the extra root dependency. Thanks @vincentkoc.
 - Diagnostics/OTEL: export run, model-call, and tool-execution diagnostic lifecycle events as OTEL spans without retaining live span state. Thanks @vincentkoc.
 - Plugins/activation: expose activation plan reasons and a richer plan API so callers can inspect why a plugin was selected while preserving existing id-list activation behavior. (#70943) Thanks @vincentkoc.
