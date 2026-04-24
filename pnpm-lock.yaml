@@ -84,9 +84,6 @@ importers:
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
-      cli-highlight:
-        specifier: ^2.1.11
-        version: 2.1.11
       commander:
         specifier: ^14.0.3
         version: 14.0.3
