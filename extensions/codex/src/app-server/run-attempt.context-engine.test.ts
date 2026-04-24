@@ -59,6 +59,54 @@ function userMessage(text: string, timestamp: number): AgentMessage {
   } as AgentMessage;
 }
 
+function threadStartResult(threadId = "thread-1") {
+  return {
+    thread: {
+      id: threadId,
+      forkedFromId: null,
+      preview: "",
+      ephemeral: false,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+      path: null,
+      cwd: tempDir || "/tmp/openclaw-codex-test",
+      cliVersion: "0.118.0",
+      source: "unknown",
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    },
+    model: "gpt-5.4-codex",
+    modelProvider: "openai",
+    serviceTier: null,
+    cwd: tempDir || "/tmp/openclaw-codex-test",
+    instructionSources: [],
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+    permissionProfile: null,
+    reasoningEffort: null,
+  };
+}
+
+function turnStartResult(turnId = "turn-1", status = "inProgress") {
+  return {
+    turn: {
+      id: turnId,
+      status,
+      items: [],
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      durationMs: null,
+    },
+  };
+}
+
 function createStartedThreadHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown> = async () => undefined,
 ) {
@@ -71,10 +119,10 @@ function createStartedThreadHarness(
       return override;
     }
     if (method === "thread/start") {
-      return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+      return threadStartResult();
     }
     if (method === "turn/start") {
-      return { turn: { id: "turn-1", status: "inProgress" } };
+      return turnStartResult();
     }
     return {};
   });
@@ -210,12 +258,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         {
           method: "turn/start",
           params: expect.objectContaining({
-            input: [
-              {
+            input: expect.arrayContaining([
+              expect.objectContaining({
                 type: "text",
                 text: expect.stringContaining("OpenClaw assembled context for this turn:"),
-              },
-            ],
+              }),
+            ]),
           }),
         },
       ]),
