@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  moveToTrash,
   normalizeGatewayTokenInput,
   openUrl,
   probeGatewayReachable,
@@ -220,6 +223,43 @@ describe("normalizeGatewayTokenInput", () => {
   it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
     expect(normalizeGatewayTokenInput("undefined")).toBe("");
     expect(normalizeGatewayTokenInput("null")).toBe("");
+  });
+});
+
+describe("moveToTrash", () => {
+  it("falls back to mv into ~/.Trash when trash exits successfully but leaves the path in place", async () => {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trash-home-"));
+    const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trash-target-"));
+    const target = path.join(targetDir, "workspace");
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, "stale.txt"), "old", "utf-8");
+    vi.spyOn(os, "homedir").mockReturnValue(tempHome);
+
+    mocks.runCommandWithTimeout.mockImplementationOnce(async () => ({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    }));
+    mocks.runCommandWithTimeout.mockImplementationOnce(async (argv) => {
+      await fs.rename(argv[1], argv[2]);
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+      };
+    });
+
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await moveToTrash(target, runtime as never);
+
+    await expect(fs.access(target)).rejects.toThrow();
+    await expect(fs.access(path.join(tempHome, ".Trash", "workspace"))).resolves.toBeUndefined();
+    expect(runtime.log).toHaveBeenCalledWith(`Moved to Trash: ${target}`);
   });
 });
 
