@@ -94,6 +94,7 @@ function baseProfileContext() {
       type: "page",
     })),
     labelTab: vi.fn(async (_targetId: string, label: string) => ({
+      suggestedTargetId: label,
       targetId: "T1",
       tabId: "t1",
       label,
@@ -347,6 +348,7 @@ describe("browser tab routes", () => {
       ok: true,
       tab: {
         targetId: "T1",
+        suggestedTargetId: "meet",
         tabId: "t1",
         label: "meet",
         title: "Tab 1",

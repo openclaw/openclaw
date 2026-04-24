@@ -56,6 +56,38 @@ type BrowserProxyRequest = (opts: {
   profile?: string;
 }) => Promise<unknown>;
 
+type BrowserTabLike = {
+  suggestedTargetId?: unknown;
+  tabId?: unknown;
+  label?: unknown;
+  title?: unknown;
+  url?: unknown;
+  type?: unknown;
+  targetId?: unknown;
+  wsUrl?: unknown;
+};
+
+function formatAgentTab(tab: unknown): Record<string, unknown> {
+  if (!tab || typeof tab !== "object") {
+    return { value: tab };
+  }
+  const source = tab as BrowserTabLike;
+  const targetId = readStringValue(source.targetId);
+  const tabId = readStringValue(source.tabId);
+  const label = readStringValue(source.label);
+  const suggestedTargetId = readStringValue(source.suggestedTargetId) ?? label ?? tabId ?? targetId;
+  return {
+    ...(suggestedTargetId ? { suggestedTargetId } : {}),
+    ...(tabId ? { tabId } : {}),
+    ...(label ? { label } : {}),
+    title: source.title,
+    url: source.url,
+    type: source.type,
+    ...(targetId ? { targetId } : {}),
+    ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
+  };
+}
+
 function wrapBrowserExternalJson(params: {
   kind: "snapshot" | "console" | "tabs";
   payload: unknown;
@@ -81,9 +113,10 @@ function wrapBrowserExternalJson(params: {
 }
 
 function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
+  const formattedTabs = tabs.map((tab) => formatAgentTab(tab));
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
-    payload: { tabs },
+    payload: { tabs: formattedTabs },
     includeWarning: false,
   });
   const content: AgentToolResult<unknown>["content"] = [
@@ -91,7 +124,11 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   ];
   return {
     content,
-    details: { ...wrapped.safeDetails, tabCount: tabs.length },
+    details: {
+      ...wrapped.safeDetails,
+      tabCount: tabs.length,
+      tabs: formattedTabs,
+    },
   };
 }
 
