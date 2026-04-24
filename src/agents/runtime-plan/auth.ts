@@ -22,6 +22,7 @@ export function buildAgentRuntimeAuthPlan(params: {
   workspaceDir?: string;
   harnessId?: string;
   harnessRuntime?: string;
+  allowHarnessAuthProfileForwarding?: boolean;
 }): AgentRuntimeAuthPlan {
   const aliasLookupParams = {
     config: params.config,
@@ -36,9 +37,12 @@ export function buildAgentRuntimeAuthPlan(params: {
   const harnessProviderForAuth = harnessAuthProvider
     ? resolveProviderIdForAuth(harnessAuthProvider, aliasLookupParams)
     : undefined;
+  const harnessCanForwardProfile =
+    params.allowHarnessAuthProfileForwarding !== false &&
+    harnessProviderForAuth &&
+    harnessProviderForAuth === authProfileProviderForAuth;
   const canForwardProfile =
-    providerForAuth === authProfileProviderForAuth ||
-    (harnessProviderForAuth && harnessProviderForAuth === authProfileProviderForAuth);
+    providerForAuth === authProfileProviderForAuth || harnessCanForwardProfile;
 
   return {
     providerForAuth,

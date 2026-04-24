@@ -287,6 +287,7 @@ export function runAgentAttempt(params: {
     workspaceDir: params.workspaceDir,
     harnessId: sessionPinnedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
+    allowHarnessAuthProfileForwarding: !isCliProvider(params.providerOverride, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
   if (isCliProvider(params.providerOverride, params.cfg)) {

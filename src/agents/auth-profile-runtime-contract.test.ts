@@ -275,6 +275,26 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
   });
 
+  it("does not let a configured Codex harness leak OpenAI Codex auth into unrelated CLI providers", async () => {
+    await runAuthContractAttempt({
+      tmpDir,
+      storePath,
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.claudeCliProvider,
+      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      cfg: {
+        agents: {
+          defaults: {
+            embeddedHarness: { runtime: "codex", fallback: "none" },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
+  });
+
   it("forwards an OpenAI Codex auth profile through the embedded Pi path", async () => {
     await runAuthContractAttempt({
       tmpDir,
