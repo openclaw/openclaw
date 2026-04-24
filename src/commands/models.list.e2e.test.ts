@@ -21,6 +21,7 @@ const loadModelCatalog = vi.fn(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
+const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
@@ -103,6 +104,14 @@ vi.mock("./models/list.runtime.js", () => {
   };
 });
 
+vi.mock("./models/list.provider-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./models/list.provider-catalog.js")>();
+  return {
+    ...actual,
+    hasProviderStaticCatalogForFilter,
+  };
+});
+
 vi.mock("../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModel,
 }));
@@ -152,6 +161,8 @@ beforeEach(() => {
   loadModelCatalog.mockResolvedValue([]);
   loadProviderCatalogModelsForList.mockReset();
   loadProviderCatalogModelsForList.mockResolvedValue([]);
+  hasProviderStaticCatalogForFilter.mockReset();
+  hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   shouldSuppressBuiltInModel.mockReset();
   shouldSuppressBuiltInModel.mockReturnValue(false);
   readConfigFileSnapshotForWrite.mockClear();
@@ -359,13 +370,14 @@ describe("models list/status", () => {
 
   it("models list all includes unauthenticated provider catalog rows", async () => {
     setDefaultZaiRegistry({ available: false });
+    hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
     loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
-    expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+    expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(payload.models).toEqual([
       expect.objectContaining({
         key: "moonshot/kimi-k2.6",
