@@ -27,6 +27,22 @@ export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+async function resolvePathVariants(targetPath: string): Promise<string[]> {
+  const variants = new Set<string>();
+  variants.add(path.resolve(targetPath));
+  try {
+    variants.add(await fs.realpath(targetPath));
+  } catch {
+    // Keep the unresolved absolute path so callers can still validate paths
+    // that live under symlinked roots such as /tmp on macOS.
+  }
+  return Array.from(variants);
+}
+
+function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
+  return targetPath === rootPath || targetPath.startsWith(rootPath + path.sep);
+}
+
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
@@ -42,12 +58,8 @@ export async function assertLocalMediaAllowed(
     });
   }
   const roots = localRoots ?? getDefaultLocalRoots();
-  let resolved: string;
-  try {
-    resolved = await fs.realpath(mediaPath);
-  } catch {
-    resolved = path.resolve(mediaPath);
-  }
+  const resolvedVariants = await resolvePathVariants(mediaPath);
+  const resolved = resolvedVariants[0] ?? path.resolve(mediaPath);
 
   if (localRoots === undefined) {
     const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
@@ -67,19 +79,20 @@ export async function assertLocalMediaAllowed(
   }
 
   for (const root of roots) {
-    let resolvedRoot: string;
-    try {
-      resolvedRoot = await fs.realpath(root);
-    } catch {
-      resolvedRoot = path.resolve(root);
-    }
-    if (resolvedRoot === path.parse(resolvedRoot).root) {
+    const resolvedRootVariants = await resolvePathVariants(root);
+    if (resolvedRootVariants.some((resolvedRoot) => resolvedRoot === path.parse(resolvedRoot).root)) {
       throw new LocalMediaAccessError(
         "invalid-root",
         `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
       );
     }
-    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
+    if (
+      resolvedVariants.some((resolvedVariant) =>
+        resolvedRootVariants.some((resolvedRoot) =>
+          isPathWithinRoot(resolvedVariant, resolvedRoot),
+        ),
+      )
+    ) {
       return;
     }
   }
