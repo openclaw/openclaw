@@ -49,6 +49,46 @@ pnpm openclaw qa suite \
 5. If the user wants to watch the live UI, find the current `openclaw-qa` listen port and report `http://127.0.0.1:<port>`.
 6. If a scenario fails, fix the product or harness root cause, then rerun the full lane.
 
+## QA credentials and 1Password
+
+- Use `op` only inside `tmux` for QA secret lookup in this repo.
+- Quick auth check inside tmux:
+
+```bash
+op account list
+```
+
+- Direct Telegram npm live test secrets currently live in 1Password item:
+  - vault: `OpenClaw`
+  - item: `Telegram E2E`
+- That item is the first place to look for:
+  - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
+  - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
+  - `OPENCLAW_QA_PROVIDER_MODE`
+  - `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC`
+- Convex QA secrets currently live in 1Password items:
+  - vault: `OpenClaw`
+  - item: `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
+  - item: `OPENCLAW_QA_CONVEX_SECRET_CI`
+- Additional related notes/login items seen during QA credential work:
+  - vault: `Private`
+  - items: `OPENCLAW QA`, `Convex`, `Telegram`
+- If a required value is missing from those notes:
+  - do not guess
+  - ask the maintainer/operator for the current value or the current 1Password item name
+  - for Telegram direct runs, `OPENCLAW_QA_TELEGRAM_GROUP_ID` may be stored separately from `Telegram E2E`
+  - for Convex runs, if the current `OPENCLAW_QA_CONVEX_SITE_URL` is not in the obvious notes, ask for the active pool URL before running
+- Prefer direct Telegram envs for the npm Telegram Docker lane when available:
+
+```bash
+OPENCLAW_QA_TELEGRAM_GROUP_ID="..." \
+OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN="..." \
+OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN="..." \
+OPENCLAW_QA_PROVIDER_MODE="mock-openai" \
+OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="openclaw@beta" \
+pnpm test:docker:npm-telegram-live
+```
+
 ## Character evals
 
 Use `qa character-eval` for style/persona/vibe checks across multiple live models.
