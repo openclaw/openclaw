@@ -49,24 +49,35 @@ Phase 2 tooling is live: `gemmaclaw setup` auto-detects hardware and provisions 
 
 ### Prerequisites
 
-- Node.js 22+ and [pnpm](https://pnpm.io/installation)
+- Node.js 22+
 - For gemma.cpp backend (advanced): cmake, g++ (or clang++), git, and a [HuggingFace token](https://huggingface.co/settings/tokens) (`HF_TOKEN`)
 
 No pre-installed Ollama, llama.cpp, or gemma.cpp required. Gemmaclaw downloads and manages everything under `~/.gemmaclaw/`.
 
-### Quick start
+### Quick setup (recommended)
 
-Clone, build, and run the setup wizard. Copy and paste the block below:
+Install the CLI globally, then run the setup wizard:
+
+```bash
+npm install -g github:gemmaclaw/gemmaclaw#main
+gemmaclaw setup
+```
+
+That's it. The setup command detects your hardware, picks the best backend, downloads the model, and runs a smoke test. When it finishes, your Gemma assistant is ready.
+
+### Developer install
+
+If you want to hack on Gemmaclaw itself, clone and build from source. You will need [pnpm](https://pnpm.io/installation) in addition to Node.js.
 
 ```bash
 git clone https://github.com/gemmaclaw/gemmaclaw.git
 cd gemmaclaw
 pnpm install
 pnpm build
-node gemmaclaw.mjs setup
+gemmaclaw setup
 ```
 
-The setup command detects your hardware, picks the best backend, downloads the model, and runs a smoke test. When it finishes, your Gemma assistant is ready.
+From a dev install you can also run commands directly via `node gemmaclaw.mjs <command>`.
 
 Example output:
 
@@ -96,7 +107,7 @@ Setup complete! Your Gemma assistant is ready.
 Step-by-step prompts to override backend, model, and port:
 
 ```bash
-node gemmaclaw.mjs setup --advanced
+gemmaclaw setup --advanced
 ```
 
 ### Manual provisioning (advanced)
@@ -105,13 +116,13 @@ node gemmaclaw.mjs setup --advanced
 
 ```bash
 # Ollama (recommended for GPU setups, ~815 MB model download)
-node gemmaclaw.mjs provision --backend ollama
+gemmaclaw provision --backend ollama
 
 # llama.cpp (flexible quants, ~726 MB GGUF download)
-node gemmaclaw.mjs provision --backend llama-cpp
+gemmaclaw provision --backend llama-cpp
 
 # gemma.cpp (CPU-first, requires cmake/g++, ~5 GB model download)
-HF_TOKEN=hf_... node gemmaclaw.mjs provision --backend gemma-cpp
+HF_TOKEN=hf_... gemmaclaw provision --backend gemma-cpp
 ```
 
 ### Verify it works
