@@ -454,6 +454,7 @@ describe("mcp loopback server", () => {
           agentId: "main",
           sessionKey: "agent:main:main",
         }),
+        signal: expect.any(AbortSignal),
       }),
     );
     expect(execute).not.toHaveBeenCalled();

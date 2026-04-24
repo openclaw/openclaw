@@ -37,6 +37,7 @@ export async function handleMcpJsonRpc(params: {
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
   hookContext?: HookContext;
+  signal?: AbortSignal;
 }): Promise<object | null> {
   const { id, method, params: methodParams } = params.message;
 
@@ -77,6 +78,7 @@ export async function handleMcpJsonRpc(params: {
           params: toolArgs,
           toolCallId,
           ctx: params.hookContext,
+          signal: params.signal,
         });
         if (hookResult.blocked) {
           return jsonRpcResult(id, {

@@ -38,7 +38,7 @@ export class McpLoopbackToolCache {
       params.sessionKey,
       params.messageProvider ?? "",
       params.accountId ?? "",
-      params.senderIsOwner === true ? "owner" : params.senderIsOwner === false ? "non-owner" : "",
+      params.senderIsOwner === true ? "owner" : "non-owner",
     ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
