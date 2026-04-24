@@ -9,3 +9,9 @@ read_when:
 This page moved to [Qwen](/providers/qwen). See [Qwen](/providers/qwen) for
 the canonical provider setup, endpoint details, compatibility aliases, and Wan
 video-generation notes.
+
+## Related
+
+- [Alibaba Model Studio](/providers/alibaba)
+- [Qwen](/providers/qwen)
+- [Model selection](/concepts/model-providers)
