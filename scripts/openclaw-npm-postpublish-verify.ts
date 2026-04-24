@@ -123,7 +123,10 @@ export function normalizeInstalledBinaryVersion(output: string): string {
   return versionMatch?.[0] ?? trimmed;
 }
 
-function listDistJavaScriptFiles(packageRoot: string): string[] {
+function listDistJavaScriptFiles(
+  packageRoot: string,
+  opts: { skipRelativePath?: (relativePath: string) => boolean } = {},
+): string[] {
   const distDir = join(packageRoot, "dist");
   if (!existsSync(distDir)) {
     return [];
@@ -138,6 +141,10 @@ function listDistJavaScriptFiles(packageRoot: string): string[] {
     }
     for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
       const entryPath = join(currentDir, entry.name);
+      const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
+      if (opts.skipRelativePath?.(relativePath)) {
+        continue;
+      }
       if (entry.isDirectory()) {
         pending.push(entryPath);
         continue;
@@ -166,35 +173,9 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
 }
 
 function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
-  const distDir = join(packageRoot, "dist");
-  if (!existsSync(distDir)) {
-    return [];
-  }
-
-  const pending = [distDir];
-  const files: string[] = [];
-  while (pending.length > 0) {
-    const currentDir = pending.pop();
-    if (!currentDir) {
-      continue;
-    }
-    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
-      const entryPath = join(currentDir, entry.name);
-      const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
-      if (relativePath.startsWith("extensions/")) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        pending.push(entryPath);
-        continue;
-      }
-      if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
-        files.push(entryPath);
-      }
-    }
-  }
-
-  return files;
+  return listDistJavaScriptFiles(packageRoot, {
+    skipRelativePath: (relativePath) => relativePath.startsWith("extensions/"),
+  });
 }
 
 type ParsedImportSpecifiersResult =

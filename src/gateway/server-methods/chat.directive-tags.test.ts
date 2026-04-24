@@ -234,23 +234,7 @@ vi.mock("../../media/store.js", async () => {
 const { chatHandlers } = await import("./chat.js");
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 2) {
-  vi.useFakeTimers();
-  try {
-    let lastError: unknown;
-    for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
-      try {
-        assertion();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(stepMs);
-    }
-    throw lastError ?? new Error("assertion did not pass in time");
-  } finally {
-    vi.useRealTimers();
-  }
+  await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
 function createTranscriptFixture(prefix: string) {

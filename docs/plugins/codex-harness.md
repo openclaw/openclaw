@@ -15,19 +15,21 @@ discovery, native thread resume, native compaction, and app-server execution.
 OpenClaw still owns chat channels, session files, model selection, tools,
 approvals, media delivery, and the visible transcript mirror.
 
-Native Codex turns also respect the shared plugin hooks so prompt shims,
-compaction-aware automation, tool middleware, and lifecycle observers stay
-aligned with the PI harness:
+Native Codex turns keep OpenClaw plugin hooks as the public compatibility layer.
+These are in-process OpenClaw hooks, not Codex `hooks.json` command hooks:
 
 - `before_prompt_build`
 - `before_compaction`, `after_compaction`
 - `llm_input`, `llm_output`
-- `tool_result`, `after_tool_call`
-- `before_message_write`
+- `after_tool_call`
+- `before_message_write` for mirrored transcript records
 - `agent_end`
 
 Bundled plugins can also register a Codex app-server extension factory to add
-async `tool_result` middleware.
+async `tool_result` middleware. That middleware runs for OpenClaw dynamic tools
+after OpenClaw executes the tool and before the result is returned to Codex. It
+is separate from the public `tool_result_persist` plugin hook, which transforms
+OpenClaw-owned transcript tool-result writes.
 
 The harness is off by default. New configs should keep OpenAI model refs
 canonical as `openai/gpt-*` and explicitly force
@@ -505,6 +507,39 @@ The command surface requires Codex app-server `0.118.0` or newer. Individual
 control methods are reported as `unsupported by this Codex app-server` if a
 future or custom app-server does not expose that JSON-RPC method.
 
+## Hook boundaries
+
+The Codex harness has three hook layers:
+
+| Layer                                 | Owner                    | Purpose                                                             |
+| ------------------------------------- | ------------------------ | ------------------------------------------------------------------- |
+| OpenClaw plugin hooks                 | OpenClaw                 | Product/plugin compatibility across PI and Codex harnesses.         |
+| Codex app-server extension middleware | OpenClaw bundled plugins | Per-turn adapter behavior around OpenClaw dynamic tools.            |
+| Codex native hooks                    | Codex                    | Low-level Codex lifecycle and native tool policy from Codex config. |
+
+OpenClaw does not use project or global Codex `hooks.json` files to route
+OpenClaw plugin behavior. Codex native hooks are useful for Codex-owned
+operations such as shell policy, native tool result review, stop handling, and
+native compaction/model lifecycle, but they are not the OpenClaw plugin API.
+
+For OpenClaw dynamic tools, OpenClaw executes the tool after Codex asks for the
+call, so OpenClaw fires the plugin and middleware behavior it owns in the
+harness adapter. For Codex-native tools, Codex owns the canonical tool record.
+OpenClaw can mirror selected events, but it cannot rewrite the native Codex
+thread unless Codex exposes that operation through app-server or native hook
+callbacks.
+
+When newer Codex app-server builds expose native compaction and model lifecycle
+hook events, OpenClaw should version-gate that protocol support and map the
+events into the existing OpenClaw hook contract where the semantics are honest.
+Until then, OpenClaw's `before_compaction`, `after_compaction`, `llm_input`, and
+`llm_output` events are adapter-level observations, not byte-for-byte captures
+of Codex's internal request or compaction payloads.
+
+Codex native `hook/started` and `hook/completed` app-server notifications are
+projected as `codex_app_server.hook` agent events for trajectory and debugging.
+They do not invoke OpenClaw plugin hooks.
+
 ## Tools, media, and compaction
 
 The Codex harness changes the low-level embedded agent executor only.
@@ -515,8 +550,10 @@ continue through the normal OpenClaw delivery path.
 
 Codex MCP tool approval elicitations are routed through OpenClaw's plugin
 approval flow when Codex marks `_meta.codex_approval_kind` as
-`"mcp_tool_call"`; other elicitation and free-form input requests still fail
-closed.
+`"mcp_tool_call"`. Codex `request_user_input` prompts are sent back to the
+originating chat, and the next queued follow-up message answers that native
+server request instead of being steered as extra context. Other MCP elicitation
+requests still fail closed.
 
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
@@ -526,6 +563,10 @@ reasoning or plan records when the app-server emits them. Today, OpenClaw only
 records native compaction start and completion signals. It does not yet expose a
 human-readable compaction summary or an auditable list of which entries Codex
 kept after compaction.
+
+Because Codex owns the canonical native thread, `tool_result_persist` does not
+currently rewrite Codex-native tool result records. It only applies when
+OpenClaw is writing an OpenClaw-owned session transcript tool result.
 
 Media generation does not require PI. Image, video, music, PDF, TTS, and media
 understanding continue to use the matching provider/model settings such as

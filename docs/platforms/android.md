@@ -240,3 +240,9 @@ Example configuration:
 <Note>
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
+
+## Related
+
+- [iOS app](/platforms/ios)
+- [Nodes](/nodes)
+- [Android node troubleshooting](/nodes/troubleshooting)

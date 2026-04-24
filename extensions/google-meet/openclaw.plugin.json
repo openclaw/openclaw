@@ -20,7 +20,7 @@
     },
     "defaultTransport": {
       "label": "Default Transport",
-      "help": "Chrome uses a signed-in browser profile. Twilio uses Meet dial-in numbers."
+      "help": "Chrome uses a signed-in browser profile. Chrome-node runs Chrome on a paired node. Twilio uses Meet dial-in numbers."
     },
     "defaultMode": {
       "label": "Default Mode",
@@ -53,6 +53,11 @@
     },
     "chrome.audioBridgeHealthCommand": {
       "label": "Audio Bridge Health Command",
+      "advanced": true
+    },
+    "chromeNode.node": {
+      "label": "Chrome Node",
+      "help": "Node id/name/IP that owns Chrome, BlackHole, and SoX for chrome-node transport.",
       "advanced": true
     },
     "twilio.defaultDialInNumber": {
@@ -102,6 +107,10 @@
     "realtime.instructions": {
       "label": "Realtime Instructions",
       "advanced": true
+    },
+    "realtime.introMessage": {
+      "label": "Realtime Intro Message",
+      "help": "Spoken once when the realtime bridge is ready. Set to an empty string to join silently."
     },
     "realtime.toolPolicy": {
       "label": "Realtime Tool Policy",
@@ -157,7 +166,7 @@
       },
       "defaultTransport": {
         "type": "string",
-        "enum": ["chrome", "twilio"],
+        "enum": ["chrome", "chrome-node", "twilio"],
         "default": "chrome"
       },
       "defaultMode": {
@@ -241,6 +250,15 @@
           }
         }
       },
+      "chromeNode": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "node": {
+            "type": "string"
+          }
+        }
+      },
       "twilio": {
         "type": "object",
         "additionalProperties": false,
@@ -297,6 +315,10 @@
           "instructions": {
             "type": "string",
             "default": "You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call openclaw_agent_consult before answering."
+          },
+          "introMessage": {
+            "type": "string",
+            "default": "Say exactly: I'm here and listening."
           },
           "toolPolicy": {
             "type": "string",

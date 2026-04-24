@@ -175,7 +175,7 @@ export function registerGoogleMeetCli(params: {
   root
     .command("join")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
-    .option("--transport <transport>", "Transport: chrome or twilio")
+    .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
     .option("--mode <mode>", "Mode: realtime or transcribe")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
@@ -303,5 +303,21 @@ export function registerGoogleMeetCli(params: {
         throw new Error("session not found");
       }
       writeStdoutLine("left %s", sessionId);
+    });
+
+  root
+    .command("speak")
+    .argument("<session-id>", "Meet session ID")
+    .argument("[message]", "Realtime instructions to speak now")
+    .action(async (sessionId: string, message?: string) => {
+      const rt = await params.ensureRuntime();
+      const result = rt.speak(sessionId, message);
+      if (!result.found) {
+        throw new Error("session not found");
+      }
+      if (!result.spoken) {
+        throw new Error("session has no active realtime audio bridge");
+      }
+      writeStdoutLine("speaking on %s", sessionId);
     });
 }

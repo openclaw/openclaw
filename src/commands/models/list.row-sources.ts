@@ -16,17 +16,53 @@ type AllModelRowSources = {
   useProviderCatalogFastPath: boolean;
 };
 
+type AppendAllModelRowSourcesResult = {
+  requiresRegistryFallback: boolean;
+};
+
 export function modelRowSourcesRequireRegistry(params: {
   all?: boolean;
+  providerFilter?: string;
   useProviderCatalogFastPath: boolean;
 }): boolean {
   if (!params.all) {
     return false;
   }
-  return !params.useProviderCatalogFastPath;
+  if (params.providerFilter && params.useProviderCatalogFastPath) {
+    return false;
+  }
+  return true;
 }
 
-export async function appendAllModelRowSources(params: AllModelRowSources): Promise<void> {
+export async function appendAllModelRowSources(
+  params: AllModelRowSources,
+): Promise<AppendAllModelRowSourcesResult> {
+  if (params.context.filter.provider && params.useProviderCatalogFastPath) {
+    let seenKeys = new Set<string>();
+    appendConfiguredProviderRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys,
+    });
+    const catalogRows = await appendProviderCatalogRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys,
+      staticOnly: true,
+    });
+    if (catalogRows === 0) {
+      if (!params.modelRegistry) {
+        return { requiresRegistryFallback: true };
+      }
+      appendDiscoveredRows({
+        rows: params.rows,
+        models: params.modelRegistry.getAll(),
+        context: params.context,
+      });
+    }
+    return { requiresRegistryFallback: false };
+  }
+
   const seenKeys = appendDiscoveredRows({
     rows: params.rows,
     models: params.modelRegistry?.getAll() ?? [],
@@ -39,23 +75,22 @@ export async function appendAllModelRowSources(params: AllModelRowSources): Prom
     seenKeys,
   });
 
-  if (params.modelRegistry) {
+  if (params.modelRegistry && !params.context.filter.provider) {
     await appendCatalogSupplementRows({
       rows: params.rows,
       modelRegistry: params.modelRegistry,
       context: params.context,
       seenKeys,
     });
-    return;
+    return { requiresRegistryFallback: false };
   }
 
-  if (params.useProviderCatalogFastPath) {
-    await appendProviderCatalogRows({
-      rows: params.rows,
-      context: params.context,
-      seenKeys,
-    });
-  }
+  await appendProviderCatalogRows({
+    rows: params.rows,
+    context: params.context,
+    seenKeys,
+  });
+  return { requiresRegistryFallback: false };
 }
 
 export function appendConfiguredModelRowSources(params: {

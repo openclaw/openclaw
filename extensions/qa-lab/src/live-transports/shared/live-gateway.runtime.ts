@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { startQaGatewayChild, type QaCliBackendAuthMode } from "../../gateway-child.js";
+import {
+  startQaGatewayChild,
+  type QaCliBackendAuthMode,
+  type QaGatewayChildCommand,
+} from "../../gateway-child.js";
 import type { QaProviderMode } from "../../model-selection.js";
 import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
@@ -32,6 +36,7 @@ async function stopQaLiveLaneResources(
 
 export async function startQaLiveLaneGateway(params: {
   repoRoot: string;
+  command?: QaGatewayChildCommand;
   transport: {
     requiredPluginIds: readonly string[];
     createGatewayConfig: (params: {
@@ -53,6 +58,7 @@ export async function startQaLiveLaneGateway(params: {
   try {
     const gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
+      command: params.command,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
       transport: params.transport,
       transportBaseUrl: params.transportBaseUrl,

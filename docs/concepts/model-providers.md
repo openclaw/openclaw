@@ -21,6 +21,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
   and `openai/<model>` plus `agents.defaults.embeddedHarness.runtime: "codex"`
   uses the native Codex app-server harness. See [OpenAI](/providers/openai)
   and [Codex harness](/plugins/codex-harness).
+- Plugin auto-enable follows that same boundary: `openai-codex/<model>` belongs
+  to the OpenAI plugin, while the Codex plugin is enabled by
+  `embeddedHarness.runtime: "codex"` or legacy `codex/<model>` refs.
 - GPT-5.5 is currently available through subscription/OAuth routes:
   `openai-codex/gpt-5.5` in PI or `openai/gpt-5.5` with the Codex app-server
   harness. The direct API-key route for `openai/gpt-5.5` is supported once
@@ -110,6 +113,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - PI model ref: `openai-codex/gpt-5.5`
 - Native Codex app-server harness ref: `openai/gpt-5.5` with `agents.defaults.embeddedHarness.runtime: "codex"`
 - Legacy model refs: `codex/gpt-*`
+- Plugin boundary: `openai-codex/*` loads the OpenAI plugin; the native Codex
+  app-server plugin is selected only by the Codex harness runtime or legacy
+  `codex/*` refs.
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per PI model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
@@ -630,5 +636,5 @@ See also: [/gateway/configuration](/gateway/configuration) for full configuratio
 
 - [Models](/concepts/models) — model configuration and aliases
 - [Model Failover](/concepts/model-failover) — fallback chains and retry behavior
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — model config keys
+- [Configuration Reference](/gateway/config-agents#agent-defaults) — model config keys
 - [Providers](/providers) — per-provider setup guides

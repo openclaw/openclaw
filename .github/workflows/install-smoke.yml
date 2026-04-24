@@ -1,10 +1,6 @@
 name: Install Smoke
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -30,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-{1}', github.workflow, github.run_id) || github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.ref) }}
   cancel-in-progress: true
 
 env:
@@ -38,7 +34,6 @@ env:
 
 jobs:
   preflight:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -56,67 +51,19 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Ensure preflight base commit
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && github.event_name != 'workflow_call'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
-      - name: Detect docs-only changes
-        id: docs_scope
-        uses: ./.github/actions/detect-docs-changes
-
-      - name: Detect changed smoke scope
-        id: changed_scope
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && github.event_name != 'workflow_call' && steps.docs_scope.outputs.docs_only != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
-          fi
-
-          node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
-
       - name: Build install-smoke CI manifest
         id: manifest
         env:
-          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
-          OPENCLAW_CI_FORCE_FULL_INSTALL_SMOKE: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_call') && 'true' || 'false' }}
           OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE: ${{ inputs.run_bun_global_install_smoke || 'false' }}
-          OPENCLAW_CI_RUN_FAST_INSTALL_SMOKE: ${{ steps.changed_scope.outputs.run_fast_install_smoke || steps.changed_scope.outputs.run_changed_smoke || 'false' }}
-          OPENCLAW_CI_RUN_FULL_INSTALL_SMOKE: ${{ steps.changed_scope.outputs.run_full_install_smoke || 'false' }}
         run: |
-          docs_only="${OPENCLAW_CI_DOCS_ONLY:-false}"
           event_name="${OPENCLAW_CI_EVENT_NAME:-}"
-          force_full_install_smoke="${OPENCLAW_CI_FORCE_FULL_INSTALL_SMOKE:-false}"
           workflow_bun_global_install_smoke="${OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:-false}"
-          run_changed_fast_install_smoke="${OPENCLAW_CI_RUN_FAST_INSTALL_SMOKE:-false}"
-          run_changed_full_install_smoke="${OPENCLAW_CI_RUN_FULL_INSTALL_SMOKE:-false}"
-          run_fast_install_smoke=false
-          run_full_install_smoke=false
+          docs_only=false
+          run_fast_install_smoke=true
+          run_full_install_smoke=true
           run_bun_global_install_smoke=false
-          run_install_smoke=false
-          if [ "$force_full_install_smoke" = "true" ]; then
-            run_fast_install_smoke=true
-            run_full_install_smoke=true
-            run_install_smoke=true
-          elif [ "$docs_only" != "true" ] && [ "$event_name" != "push" ] && [ "$run_changed_full_install_smoke" = "true" ]; then
-            run_fast_install_smoke=true
-            run_full_install_smoke=true
-            run_install_smoke=true
-          elif [ "$docs_only" != "true" ] && [ "$run_changed_full_install_smoke" = "true" ]; then
-            run_fast_install_smoke=true
-            run_install_smoke=true
-          elif [ "$docs_only" != "true" ] && [ "$run_changed_fast_install_smoke" = "true" ]; then
-            run_fast_install_smoke=true
-            run_install_smoke=true
-          fi
+          run_install_smoke=true
           if [ "$event_name" = "schedule" ]; then
             run_bun_global_install_smoke=true
           elif [ "$event_name" = "workflow_dispatch" ] || [ "$event_name" = "workflow_call" ]; then
@@ -326,7 +273,6 @@ jobs:
           provenance: false
 
       - name: Build installer non-root image
-        if: github.event_name != 'pull_request'
         uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: ./scripts/docker
@@ -356,8 +302,8 @@ jobs:
           OPENCLAW_NO_ONBOARD: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1"
-          OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && '0' || '1' }}
-          OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: "0"
           OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
           OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: latest

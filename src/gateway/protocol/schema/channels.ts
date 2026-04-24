@@ -42,7 +42,6 @@ export const TalkRealtimeSessionParamsSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
-    instructions: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

@@ -14,6 +14,7 @@ const targetRoot = path.resolve(
 const selectedJsonSchemas = [
   "DynamicToolCallParams.json",
   "v2/ErrorNotification.json",
+  "v2/GetAccountResponse.json",
   "v2/ModelListResponse.json",
   "v2/ThreadResumeResponse.json",
   "v2/ThreadStartResponse.json",

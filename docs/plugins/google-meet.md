@@ -2,8 +2,8 @@
 summary: "Google Meet plugin: join explicit Meet URLs through Chrome or Twilio with realtime voice defaults"
 read_when:
   - You want an OpenClaw agent to join a Google Meet call
-  - You are configuring Chrome or Twilio as a Google Meet transport
-title: "Google Meet Plugin"
+  - You are configuring Chrome, Chrome node, or Twilio as a Google Meet transport
+title: "Google Meet plugin"
 ---
 
 # Google Meet (plugin)
@@ -19,6 +19,7 @@ The plugin is explicit by design:
 - Auth starts as personal Google OAuth or an already signed-in Chrome profile.
 - There is no automatic consent announcement.
 - The default Chrome audio backend is `BlackHole 2ch`.
+- Chrome can run locally or on a paired node host.
 - Twilio accepts a dial-in number plus optional PIN or DTMF sequence.
 - The CLI command is `googlemeet`; `meet` is reserved for broader agent
   teleconference workflows.
@@ -88,6 +89,137 @@ the microphone/speaker path used by OpenClaw. For clean duplex audio, use
 separate virtual devices or a Loopback-style graph; a single BlackHole device is
 enough for a first smoke test but can echo.
 
+### Local Gateway + Parallels Chrome
+
+You do **not** need a full OpenClaw Gateway or model API key inside a macOS VM
+just to make the VM own Chrome. Run the Gateway and agent locally, then run a
+node host in the VM. Enable the bundled plugin on the VM once so the node
+advertises the Chrome command:
+
+What runs where:
+
+- Gateway host: OpenClaw Gateway, agent workspace, model/API keys, realtime
+  provider, and the Google Meet plugin config.
+- Parallels macOS VM: OpenClaw CLI/node host, Google Chrome, SoX, BlackHole 2ch,
+  and a Chrome profile signed in to Google.
+- Not needed in the VM: Gateway service, agent config, OpenAI/GPT key, or model
+  provider setup.
+
+Install the VM dependencies:
+
+```bash
+brew install blackhole-2ch sox
+```
+
+Reboot the VM after installing BlackHole so macOS exposes `BlackHole 2ch`:
+
+```bash
+sudo reboot
+```
+
+After reboot, verify the VM can see the audio device and SoX commands:
+
+```bash
+system_profiler SPAudioDataType | grep -i BlackHole
+command -v rec play
+```
+
+Install or update OpenClaw in the VM, then enable the bundled plugin there:
+
+```bash
+openclaw plugins enable google-meet
+```
+
+Start the node host in the VM:
+
+```bash
+openclaw node run --host <gateway-host> --port 18789 --display-name parallels-macos
+```
+
+If `<gateway-host>` is a LAN IP and you are not using TLS, the node refuses the
+plaintext WebSocket unless you opt in for that trusted private network:
+
+```bash
+OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 \
+  openclaw node run --host <gateway-lan-ip> --port 18789 --display-name parallels-macos
+```
+
+Use the same environment variable when installing the node as a LaunchAgent:
+
+```bash
+OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 \
+  openclaw node install --host <gateway-lan-ip> --port 18789 --display-name parallels-macos --force
+openclaw node restart
+```
+
+`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` is process environment, not an
+`openclaw.json` setting. `openclaw node install` stores it in the LaunchAgent
+environment when it is present on the install command.
+
+Approve the node from the Gateway host:
+
+```bash
+openclaw devices list
+openclaw devices approve <requestId>
+```
+
+Confirm the Gateway sees the node and that it advertises `googlemeet.chrome`:
+
+```bash
+openclaw nodes status
+```
+
+Route Meet through that node on the Gateway host:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      allowCommands: ["googlemeet.chrome"],
+    },
+  },
+  plugins: {
+    entries: {
+      "google-meet": {
+        enabled: true,
+        config: {
+          defaultTransport: "chrome-node",
+          chromeNode: {
+            node: "parallels-macos",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Now join normally from the Gateway host:
+
+```bash
+openclaw googlemeet join https://meet.google.com/abc-defg-hij
+```
+
+or ask the agent to use the `google_meet` tool with `transport: "chrome-node"`.
+
+If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one
+connected node advertises `googlemeet.chrome`. If several capable nodes are
+connected, set `chromeNode.node` to the node id, display name, or remote IP.
+
+Common failure checks:
+
+- `No connected Google Meet-capable node`: start `openclaw node run` in the VM,
+  approve pairing, and make sure `openclaw plugins enable google-meet` was run
+  in the VM. Also confirm the Gateway host allows the node command with
+  `gateway.nodes.allowCommands: ["googlemeet.chrome"]`.
+- `BlackHole 2ch audio device not found on the node`: install `blackhole-2ch`
+  in the VM and reboot the VM.
+- Chrome opens but cannot join: sign in to Chrome inside the VM and confirm that
+  profile can join the Meet URL manually.
+- No audio: in Meet, route microphone/speaker through the virtual audio device
+  path used by OpenClaw; use separate virtual devices or Loopback-style routing
+  for clean duplex audio.
+
 ## Install notes
 
 The Chrome realtime default uses two external tools:
@@ -110,10 +242,13 @@ upstream licensing terms or get a separate license from Existential Audio.
 Chrome transport opens the Meet URL in Google Chrome and joins as the signed-in
 Chrome profile. On macOS, the plugin checks for `BlackHole 2ch` before launch.
 If configured, it also runs an audio bridge health command and startup command
-before opening Chrome.
+before opening Chrome. Use `chrome` when Chrome/audio live on the Gateway host;
+use `chrome-node` when Chrome/audio live on a paired node such as a Parallels
+macOS VM.
 
 ```bash
 openclaw googlemeet join https://meet.google.com/abc-defg-hij --transport chrome
+openclaw googlemeet join https://meet.google.com/abc-defg-hij --transport chrome-node
 ```
 
 Route Chrome microphone and speaker audio through the local OpenClaw audio
@@ -210,6 +345,7 @@ Defaults:
 
 - `defaultTransport: "chrome"`
 - `defaultMode: "realtime"`
+- `chromeNode.node`: optional node id/name/IP for `chrome-node`
 - `chrome.audioBackend: "blackhole-2ch"`
 - `chrome.audioInputCommand`: SoX `rec` command writing 8 kHz G.711 mu-law
   audio to stdout
@@ -219,6 +355,8 @@ Defaults:
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
   `openclaw_agent_consult` for deeper answers
+- `realtime.introMessage`: short spoken readiness check when the realtime bridge
+  connects; set it to `""` to join silently
 
 Optional overrides:
 
@@ -230,8 +368,12 @@ Optional overrides:
   chrome: {
     browserProfile: "Default",
   },
+  chromeNode: {
+    node: "parallels-macos",
+  },
   realtime: {
     toolPolicy: "owner",
+    introMessage: "Say exactly: I'm here.",
   },
 }
 ```
@@ -259,13 +401,27 @@ Agents can use the `google_meet` tool:
 {
   "action": "join",
   "url": "https://meet.google.com/abc-defg-hij",
-  "transport": "chrome",
+  "transport": "chrome-node",
   "mode": "realtime"
 }
 ```
 
+Use `transport: "chrome"` when Chrome runs on the Gateway host. Use
+`transport: "chrome-node"` when Chrome runs on a paired node such as a Parallels
+VM. In both cases the realtime model and `openclaw_agent_consult` run on the
+Gateway host, so model credentials stay there.
+
 Use `action: "status"` to list active sessions or inspect a session ID. Use
-`action: "leave"` to mark a session ended.
+`action: "speak"` with `sessionId` and `message` to make the realtime agent
+speak immediately. Use `action: "leave"` to mark a session ended.
+
+```json
+{
+  "action": "speak",
+  "sessionId": "meet_...",
+  "message": "Say exactly: I'm here and listening."
+}
+```
 
 ## Realtime agent consult
 
@@ -290,6 +446,12 @@ voice session. The voice model can then speak that answer back into the meeting.
 The consult session key is scoped per Meet session, so follow-up consult calls
 can reuse prior consult context during the same meeting.
 
+To force a spoken readiness check after Chrome has fully joined the call:
+
+```bash
+openclaw googlemeet speak meet_... "Say exactly: I'm here and listening."
+```
+
 ## Notes
 
 Google Meet's official media API is receive-oriented, so speaking into a Meet
@@ -309,6 +471,12 @@ For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared
 BlackHole device can echo other participants back into the call.
 
-`googlemeet leave` stops the command-pair realtime audio bridge for Chrome
-sessions. For Twilio sessions delegated through the Voice Call plugin, it also
-hangs up the underlying voice call.
+`googlemeet speak` triggers the active realtime audio bridge for a Chrome
+session. `googlemeet leave` stops that bridge. For Twilio sessions delegated
+through the Voice Call plugin, `leave` also hangs up the underlying voice call.
+
+## Related
+
+- [Voice call plugin](/plugins/voice-call)
+- [Talk mode](/nodes/talk)
+- [Building plugins](/plugins/building-plugins)

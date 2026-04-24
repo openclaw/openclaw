@@ -28,6 +28,12 @@ Both surfaces are now **deprecated**. They still work at runtime, but new
 plugins must not use them, and existing plugins should migrate before the next
 major release removes them.
 
+OpenClaw does not remove or reinterpret documented plugin behavior in the same
+change that introduces a replacement. Breaking contract changes must first go
+through a compatibility adapter, diagnostics, docs, and a deprecation window.
+That applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
+registration behavior.
+
 <Warning>
   The backwards-compatibility layer will be removed in a future major release.
   Plugins that still import from these surfaces will break when that happens.
@@ -61,6 +67,22 @@ Current bundled provider examples:
   builders in its own `api.ts`
 - OpenRouter keeps provider builder and onboarding/config helpers in its own
   `api.ts`
+
+## Compatibility policy
+
+For external plugins, compatibility work follows this order:
+
+1. add the new contract
+2. keep the old behavior wired through a compatibility adapter
+3. emit a diagnostic or warning that names the old path and replacement
+4. cover both paths in tests
+5. document the deprecation and migration path
+6. remove only after the announced migration window, usually in a major release
+
+If a manifest field is still accepted, plugin authors can keep using it until
+the docs and diagnostics say otherwise. New code should prefer the documented
+replacement, but existing plugins should not break during ordinary minor
+releases.
 
 ## How to migrate
 
@@ -248,7 +270,7 @@ Current bundled provider examples:
   | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
   | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
   | `plugin-sdk/reply-runtime` | Shared reply runtime | Inbound dispatch, heartbeat, reply planner, chunking |
-  | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch helpers | Finalize + provider dispatch helpers |
+  | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch helpers | Finalize, provider dispatch, and conversation-label helpers |
   | `plugin-sdk/reply-history` | Reply-history helpers | `buildHistoryContext`, `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, `clearHistoryEntriesIfEnabled` |
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |

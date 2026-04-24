@@ -35,6 +35,7 @@ export function expectCodexMissingAuthHint(
       listProfileIds: (providerId: string) => string[];
     };
   }) => string | undefined,
+  expectedModel = "openai/gpt-5.5",
 ) {
   expect(
     buildProviderMissingAuthMessageWithPlugin({
@@ -46,7 +47,7 @@ export function expectCodexMissingAuthHint(
         listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
       },
     }),
-  ).toContain("openai/gpt-5.5");
+  ).toContain(expectedModel);
 }
 
 export function expectCodexBuiltInSuppression(

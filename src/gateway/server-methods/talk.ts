@@ -195,10 +195,8 @@ function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: str
   };
 }
 
-function buildRealtimeInstructions(extra: string | undefined): string {
-  const base = `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
-  const trimmed = normalizeOptionalString(extra);
-  return trimmed ? `${base}\n\n${trimmed}` : base;
+function buildRealtimeInstructions(): string {
+  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
 }
 
 function isFallbackEligibleTalkReason(reason: TalkSpeakReason): boolean {
@@ -415,7 +413,6 @@ export const talkHandlers: GatewayRequestHandlers = {
       provider?: string;
       model?: string;
       voice?: string;
-      instructions?: string;
     };
     try {
       const runtimeConfig = loadConfig();
@@ -440,7 +437,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       }
       const session = await resolution.provider.createBrowserSession({
         providerConfig: resolution.providerConfig,
-        instructions: buildRealtimeInstructions(typedParams.instructions),
+        instructions: buildRealtimeInstructions(),
         tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
         model: normalizeOptionalString(typedParams.model),
         voice: normalizeOptionalString(typedParams.voice),

@@ -299,6 +299,16 @@ async function runSnapshotToolCall(params: {
   await tool.execute?.("call-1", { action: "snapshot", target: "host", ...params });
 }
 
+describe("browser tool description", () => {
+  it("warns agents about existing-session act timeout limits", () => {
+    const tool = createBrowserTool();
+
+    expect(tool.description).toContain('profile="user"');
+    expect(tool.description).toContain("omit timeoutMs on act:type");
+    expect(tool.description).toContain("existing-session profiles");
+  });
+});
+
 describe("browser tool snapshot maxChars", () => {
   registerBrowserToolAfterEachReset();
 
