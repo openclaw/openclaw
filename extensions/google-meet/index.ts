@@ -103,46 +103,27 @@ const googleMeetConfigSchema = {
   },
 };
 
-const GoogleMeetToolSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("join"),
-    url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
-    transport: Type.Optional(Type.Union([Type.Literal("chrome"), Type.Literal("twilio")])),
-    mode: Type.Optional(Type.Union([Type.Literal("realtime"), Type.Literal("transcribe")])),
-    dialInNumber: Type.Optional(Type.String({ description: "Meet dial-in number for Twilio" })),
-    pin: Type.Optional(Type.String({ description: "Meet phone PIN for Twilio" })),
-    dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
+const GoogleMeetToolSchema = Type.Object({
+  action: Type.String({
+    enum: ["join", "status", "setup_status", "resolve_space", "preflight", "leave"],
+    description: "Google Meet action to run",
   }),
-  Type.Object({
-    action: Type.Literal("status"),
-    sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
-  }),
-  Type.Object({
-    action: Type.Literal("setup_status"),
-  }),
-  Type.Object({
-    action: Type.Literal("resolve_space"),
-    meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
-    accessToken: Type.Optional(Type.String({ description: "Access token override" })),
-    refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
-    clientId: Type.Optional(Type.String({ description: "OAuth client id override" })),
-    clientSecret: Type.Optional(Type.String({ description: "OAuth client secret override" })),
-    expiresAt: Type.Optional(Type.Number({ description: "Cached access token expiry ms" })),
-  }),
-  Type.Object({
-    action: Type.Literal("preflight"),
-    meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
-    accessToken: Type.Optional(Type.String({ description: "Access token override" })),
-    refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
-    clientId: Type.Optional(Type.String({ description: "OAuth client id override" })),
-    clientSecret: Type.Optional(Type.String({ description: "OAuth client secret override" })),
-    expiresAt: Type.Optional(Type.Number({ description: "Cached access token expiry ms" })),
-  }),
-  Type.Object({
-    action: Type.Literal("leave"),
-    sessionId: Type.String({ description: "Meet session ID" }),
-  }),
-]);
+  url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
+  transport: Type.Optional(
+    Type.String({ enum: ["chrome", "twilio"], description: "Join transport" }),
+  ),
+  mode: Type.Optional(Type.String({ enum: ["realtime", "transcribe"], description: "Join mode" })),
+  dialInNumber: Type.Optional(Type.String({ description: "Meet dial-in number for Twilio" })),
+  pin: Type.Optional(Type.String({ description: "Meet phone PIN for Twilio" })),
+  dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
+  sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
+  meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
+  accessToken: Type.Optional(Type.String({ description: "Access token override" })),
+  refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
+  clientId: Type.Optional(Type.String({ description: "OAuth client id override" })),
+  clientSecret: Type.Optional(Type.String({ description: "OAuth client secret override" })),
+  expiresAt: Type.Optional(Type.Number({ description: "Cached access token expiry ms" })),
+});
 
 function asParamRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)

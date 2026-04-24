@@ -22,6 +22,7 @@ import { buildMeetDtmfSequence, normalizeDialInNumber } from "./src/transports/t
 
 const voiceCallMocks = vi.hoisted(() => ({
   joinMeetViaVoiceCallGateway: vi.fn(async () => ({ callId: "call-1", dtmfSent: true })),
+  endMeetVoiceCallGatewayCall: vi.fn(async () => {}),
 }));
 
 const fetchGuardMocks = vi.hoisted(() => ({
@@ -45,6 +46,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 vi.mock("./src/voice-call-gateway.js", () => ({
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
+  endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
 }));
 
 const noopLogger = {
@@ -165,6 +167,24 @@ describe("google-meet plugin", () => {
           hasSubcommands: true,
         },
       ],
+    });
+  });
+
+  it("uses a provider-safe flat tool parameter schema", () => {
+    const { tools } = setup();
+    const tool = tools[0] as { parameters: unknown };
+
+    expect(JSON.stringify(tool.parameters)).not.toContain("anyOf");
+    expect(tool.parameters).toMatchObject({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["join", "status", "setup_status", "resolve_space", "preflight", "leave"],
+        },
+        transport: { type: "string", enum: ["chrome", "twilio"] },
+        mode: { type: "string", enum: ["realtime", "transcribe"] },
+      },
     });
   });
 
@@ -323,6 +343,26 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it("hangs up delegated Twilio calls on leave", async () => {
+    const { tools } = setup({ defaultTransport: "twilio" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { session: { id: string } } }>;
+    };
+    const joined = await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    });
+
+    await tool.execute("id", { action: "leave", sessionId: joined.details.session.id });
+
+    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).toHaveBeenCalledWith({
+      config: expect.objectContaining({ defaultTransport: "twilio" }),
+      callId: "call-1",
+    });
+  });
+
   it("reports setup status through the tool", async () => {
     const { tools } = setup({
       chrome: {
@@ -415,6 +455,13 @@ describe("google-meet plugin", () => {
       | {
           onAudio: (audio: Buffer) => void;
           onMark?: (markName: string) => void;
+          onToolCall?: (event: {
+            itemId: string;
+            callId: string;
+            name: string;
+            args: unknown;
+          }) => void;
+          tools?: unknown[];
         }
       | undefined;
     const sendAudio = vi.fn();
@@ -464,12 +511,33 @@ describe("google-meet plugin", () => {
     const inputProcess = makeProcess({ stdout: inputStdout, stdin: null });
     const outputProcess = makeProcess({ stdin: outputStdin, stdout: null });
     const spawnMock = vi.fn().mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
+    const sessionStore: Record<string, unknown> = {};
+    const runtime = {
+      agent: {
+        resolveAgentDir: vi.fn(() => "/tmp/agent"),
+        resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+        ensureAgentWorkspace: vi.fn(async () => {}),
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+          loadSessionStore: vi.fn(() => sessionStore),
+          saveSessionStore: vi.fn(async () => {}),
+          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+        },
+        runEmbeddedPiAgent: vi.fn(async () => ({
+          payloads: [{ text: "Use the Portugal launch data." }],
+          meta: {},
+        })),
+        resolveAgentTimeoutMs: vi.fn(() => 1000),
+      },
+    };
 
     const handle = await startCommandRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { provider: "openai", model: "gpt-realtime" },
       }),
       fullConfig: {} as never,
+      runtime: runtime as never,
+      meetingSessionId: "meet-1",
       inputCommand: ["capture-meet"],
       outputCommand: ["play-meet"],
       logger: noopLogger,
@@ -480,6 +548,12 @@ describe("google-meet plugin", () => {
     inputStdout.write(Buffer.from([1, 2, 3]));
     callbacks?.onAudio(Buffer.from([4, 5]));
     callbacks?.onMark?.("mark-1");
+    callbacks?.onToolCall?.({
+      itemId: "item-1",
+      callId: "tool-call-1",
+      name: "openclaw_agent_consult",
+      args: { question: "What should I say about launch timing?" },
+    });
 
     expect(spawnMock).toHaveBeenNthCalledWith(1, "play-meet", [], {
       stdio: ["pipe", "ignore", "pipe"],
@@ -490,6 +564,25 @@ describe("google-meet plugin", () => {
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2, 3]));
     expect(outputStdinWrites).toEqual([Buffer.from([4, 5])]);
     expect(bridge.acknowledgeMark).toHaveBeenCalled();
+    expect(callbacks).toMatchObject({
+      tools: [
+        expect.objectContaining({
+          name: "openclaw_agent_consult",
+        }),
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(bridge.submitToolResult).toHaveBeenCalledWith("tool-call-1", {
+        text: "Use the Portugal launch data.",
+      });
+    });
+    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "google-meet",
+        thinkLevel: "high",
+        toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+      }),
+    );
 
     await handle.stop();
     expect(bridge.close).toHaveBeenCalled();

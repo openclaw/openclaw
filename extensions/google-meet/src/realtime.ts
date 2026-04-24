@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createRealtimeVoiceBridgeSession,
   resolveConfiguredRealtimeVoiceProvider,
@@ -10,6 +10,11 @@ import {
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  consultOpenClawAgentForGoogleMeet,
+  GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME,
+  resolveGoogleMeetRealtimeTools,
+} from "./agent-consult.js";
 import type { GoogleMeetConfig } from "./config.js";
 
 type BridgeProcess = {
@@ -70,6 +75,8 @@ export function resolveGoogleMeetRealtimeProvider(params: {
 export async function startCommandRealtimeAudioBridge(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
+  runtime: PluginRuntime;
+  meetingSessionId: string;
   inputCommand: string[];
   outputCommand: string[];
   logger: RuntimeLogger;
@@ -136,11 +143,13 @@ export async function startCommandRealtimeAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
+  const transcript: Array<{ role: "user" | "assistant"; text: string }> = [];
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
     providerConfig: resolved.providerConfig,
     instructions: params.config.realtime.instructions,
     markStrategy: "ack-immediately",
+    tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
     audioSink: {
       isOpen: () => !stopped,
       sendAudio: (muLaw) => {
@@ -149,8 +158,37 @@ export async function startCommandRealtimeAudioBridge(params: {
     },
     onTranscript: (role, text, isFinal) => {
       if (isFinal) {
+        transcript.push({ role, text });
+        if (transcript.length > 40) {
+          transcript.splice(0, transcript.length - 40);
+        }
         params.logger.debug?.(`[google-meet] ${role}: ${text}`);
       }
+    },
+    onToolCall: (event, session) => {
+      if (event.name !== GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME) {
+        session.submitToolResult(event.callId || event.itemId, {
+          error: `Tool "${event.name}" not available`,
+        });
+        return;
+      }
+      void consultOpenClawAgentForGoogleMeet({
+        config: params.config,
+        fullConfig: params.fullConfig,
+        runtime: params.runtime,
+        logger: params.logger,
+        meetingSessionId: params.meetingSessionId,
+        args: event.args,
+        transcript,
+      })
+        .then((result) => {
+          session.submitToolResult(event.callId || event.itemId, result);
+        })
+        .catch((error: Error) => {
+          session.submitToolResult(event.callId || event.itemId, {
+            error: formatErrorMessage(error),
+          });
+        });
     },
     onError: fail("realtime voice bridge"),
     onClose: (reason) => {

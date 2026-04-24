@@ -14,6 +14,8 @@ The plugin is explicit by design:
 
 - It only joins an explicit `https://meet.google.com/...` URL.
 - `realtime` voice is the default mode.
+- Realtime voice can call back into the full OpenClaw agent when deeper
+  reasoning or tools are needed.
 - Auth starts as personal Google OAuth or an already signed-in Chrome profile.
 - There is no automatic consent announcement.
 - The default Chrome audio backend is `BlackHole 2ch`.
@@ -211,6 +213,12 @@ Google Meet's official media API is receive-oriented, so speaking into a Meet
 call still needs a participant path. This plugin keeps that boundary visible:
 Chrome handles browser participation and local audio routing; Twilio handles
 phone dial-in participation.
+
+Realtime mode gives the voice model one tool, `openclaw_agent_consult`, unless
+`realtime.toolPolicy` is `none`. The tool asks the normal OpenClaw agent for a
+concise spoken answer, using recent meeting transcript as context. With
+`safe-read-only`, the consult run is limited to read/search/memory tools. With
+`owner`, it inherits the normal agent tool policy.
 
 Chrome realtime mode needs either:
 

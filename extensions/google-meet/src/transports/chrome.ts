@@ -46,6 +46,7 @@ export async function launchChromeMeet(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
+  meetingSessionId: string;
   mode: "realtime" | "transcribe";
   url: string;
   logger: RuntimeLogger;
@@ -99,6 +100,8 @@ export async function launchChromeMeet(params: {
       ...(await startCommandRealtimeAudioBridge({
         config: params.config,
         fullConfig: params.fullConfig,
+        runtime: params.runtime,
+        meetingSessionId: params.meetingSessionId,
         inputCommand: params.config.chrome.audioInputCommand,
         outputCommand: params.config.chrome.audioOutputCommand,
         logger: params.logger,
@@ -116,13 +119,30 @@ export async function launchChromeMeet(params: {
   }
   argv.push(params.url);
 
-  const result = await params.runtime.system.runCommandWithTimeout(argv, {
-    timeoutMs: params.config.chrome.joinTimeoutMs,
-  });
-  if (result.code !== 0) {
+  let commandPairBridgeStopped = false;
+  const stopCommandPairBridge = async () => {
+    if (commandPairBridgeStopped) {
+      return;
+    }
+    commandPairBridgeStopped = true;
+    if (audioBridge?.type === "command-pair") {
+      await audioBridge.stop();
+    }
+  };
+
+  try {
+    const result = await params.runtime.system.runCommandWithTimeout(argv, {
+      timeoutMs: params.config.chrome.joinTimeoutMs,
+    });
+    if (result.code === 0) {
+      return { launched: true, audioBridge };
+    }
+    await stopCommandPairBridge();
     throw new Error(
       `failed to launch Chrome for Meet: ${result.stderr || result.stdout || result.code}`,
     );
+  } catch (error) {
+    await stopCommandPairBridge();
+    throw error;
   }
-  return { launched: true, audioBridge };
 }

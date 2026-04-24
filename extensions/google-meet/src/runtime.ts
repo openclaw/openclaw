@@ -12,7 +12,7 @@ import type {
   GoogleMeetJoinResult,
   GoogleMeetSession,
 } from "./transports/types.js";
-import { joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
+import { endMeetVoiceCallGatewayCall, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -110,6 +110,7 @@ export class GoogleMeetRuntime {
           runtime: this.params.runtime,
           config: this.params.config,
           fullConfig: this.params.fullConfig,
+          meetingSessionId: session.id,
           mode,
           url,
           logger: this.params.logger,
@@ -161,6 +162,14 @@ export class GoogleMeetRuntime {
           voiceCallId: voiceCallResult?.callId,
           dtmfSent: voiceCallResult?.dtmfSent,
         };
+        if (voiceCallResult?.callId) {
+          this.#sessionStops.set(session.id, async () => {
+            await endMeetVoiceCallGatewayCall({
+              config: this.params.config,
+              callId: voiceCallResult.callId,
+            });
+          });
+        }
         session.notes.push(
           this.params.config.voiceCall.enabled
             ? "Twilio transport delegated the call to the voice-call plugin and sent configured DTMF."

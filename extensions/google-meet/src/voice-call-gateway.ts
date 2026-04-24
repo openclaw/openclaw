@@ -82,3 +82,23 @@ export async function joinMeetViaVoiceCallGateway(params: {
     await client?.stopAndWait({ timeoutMs: 1_000 });
   }
 }
+
+export async function endMeetVoiceCallGatewayCall(params: {
+  config: GoogleMeetConfig;
+  callId: string;
+}): Promise<void> {
+  let client: VoiceCallGatewayClient | undefined;
+
+  try {
+    client = await createConnectedGatewayClient(params.config);
+    await client.request(
+      "voicecall.end",
+      {
+        callId: params.callId,
+      },
+      { timeoutMs: params.config.voiceCall.requestTimeoutMs },
+    );
+  } finally {
+    await client?.stopAndWait({ timeoutMs: 1_000 });
+  }
+}
