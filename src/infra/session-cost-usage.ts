@@ -76,64 +76,33 @@ const emptyTotals = (): CostUsageTotals => ({
   missingCostEntries: 0,
 });
 
-const SESSION_TRANSCRIPT_EXT = ".jsonl";
-const COMPACTION_CHECKPOINT_MARKER = ".checkpoint.";
-const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-type CompactionCheckpointTranscriptName = {
-  baseFileName: string;
-  baseSessionId: string;
-};
-
-function parseCompactionCheckpointTranscriptFileName(
-  fileName: string,
-): CompactionCheckpointTranscriptName | null {
-  if (!fileName.endsWith(SESSION_TRANSCRIPT_EXT)) {
-    return null;
-  }
-  const markerIndex = fileName.lastIndexOf(COMPACTION_CHECKPOINT_MARKER);
-  if (markerIndex <= 0) {
-    return null;
-  }
-  const checkpointId = fileName.slice(
-    markerIndex + COMPACTION_CHECKPOINT_MARKER.length,
-    -SESSION_TRANSCRIPT_EXT.length,
-  );
-  if (!UUID_LIKE_RE.test(checkpointId)) {
-    return null;
-  }
-  const baseSessionId = fileName.slice(0, markerIndex);
-  return {
-    baseFileName: `${baseSessionId}${SESSION_TRANSCRIPT_EXT}`,
-    baseSessionId,
-  };
-}
-
-async function readTranscriptHeaderSessionId(filePath: string): Promise<string | null> {
+async function loadCompactionCheckpointFileNames(
+  sessionsDir: string,
+): Promise<ReadonlySet<string>> {
+  const fileNames = new Set<string>();
   try {
-    for await (const parsed of readJsonlRecords(filePath)) {
-      if (parsed.type !== "session") {
-        return null;
+    const raw = await fs.promises.readFile(path.join(sessionsDir, "sessions.json"), "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return fileNames;
+    }
+    const resolvedSessionsDir = path.resolve(sessionsDir);
+    for (const entry of Object.values(parsed as Record<string, SessionEntry>)) {
+      for (const checkpoint of entry?.compactionCheckpoints ?? []) {
+        const sessionFile = normalizeOptionalString(checkpoint?.preCompaction?.sessionFile);
+        if (!sessionFile) {
+          continue;
+        }
+        const resolvedSessionFile = path.resolve(sessionFile);
+        if (path.dirname(resolvedSessionFile) === resolvedSessionsDir) {
+          fileNames.add(path.basename(resolvedSessionFile));
+        }
       }
-      return normalizeOptionalString(parsed.id) ?? null;
     }
   } catch {
-    return null;
+    // Missing or corrupt stores should not block usage aggregation.
   }
-  return null;
-}
-
-async function isDuplicateCompactionCheckpointFile(
-  filePath: string,
-  fileName: string,
-  sessionFileNames: ReadonlySet<string>,
-): Promise<boolean> {
-  const checkpointName = parseCompactionCheckpointTranscriptFileName(fileName);
-  if (!checkpointName || !sessionFileNames.has(checkpointName.baseFileName)) {
-    return false;
-  }
-  const headerSessionId = await readTranscriptHeaderSessionId(filePath);
-  return headerSessionId === checkpointName.baseSessionId;
+  return fileNames;
 }
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
@@ -447,13 +416,16 @@ export async function loadCostUsageSummary(params?: {
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-  const sessionFileNames = new Set(
-    entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
-  );
+  const compactionCheckpointFileNames = await loadCompactionCheckpointFileNames(sessionsDir);
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            isUsageCountedSessionTranscriptFileName(entry.name) &&
+            !compactionCheckpointFileNames.has(entry.name),
+        )
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -462,9 +434,6 @@ export async function loadCostUsageSummary(params?: {
           }
           // Include file if it was modified after our start time
           if (stats.mtimeMs < sinceTime) {
-            return null;
-          }
-          if (await isDuplicateCompactionCheckpointFile(filePath, entry.name, sessionFileNames)) {
             return null;
           }
           return filePath;

@@ -150,48 +150,23 @@ describe("session cost usage", () => {
         },
       },
     };
-
-    await fs.writeFile(
-      path.join(sessionsDir, "sess-1.jsonl"),
-      transcriptText("sess-1", assistantEntry),
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
-      transcriptText("sess-1", assistantEntry),
-      "utf-8",
+    const sessionFile = path.join(sessionsDir, "sess-1.jsonl");
+    const checkpointFile = path.join(
+      sessionsDir,
+      "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
     );
 
-    await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30 });
-      expect(summary.daily.length).toBe(1);
-      expect(summary.totals.totalTokens).toBe(30);
-      expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
-    });
-  });
-
-  it("counts checkpoint-shaped explicit session ids in daily totals", async () => {
-    const root = await makeSessionCostRoot("cost-checkpoint-shaped-id");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-
+    await fs.writeFile(sessionFile, transcriptText("sess-1", assistantEntry), "utf-8");
+    await fs.writeFile(checkpointFile, transcriptText("sess-1", assistantEntry), "utf-8");
     await fs.writeFile(
-      path.join(sessionsDir, "sess.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      path.join(sessionsDir, "sessions.json"),
       JSON.stringify({
-        type: "message",
-        timestamp: new Date().toISOString(),
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: {
-            input: 10,
-            output: 20,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 30,
-            cost: { total: 0.03 },
-          },
+        "agent:main:main": {
+          compactionCheckpoints: [
+            {
+              preCompaction: { sessionFile: checkpointFile },
+            },
+          ],
         },
       }),
       "utf-8",
@@ -199,6 +174,7 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.daily.length).toBe(1);
       expect(summary.totals.totalTokens).toBe(30);
       expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
     });
