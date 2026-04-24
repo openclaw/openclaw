@@ -1,5 +1,4 @@
 import type {
-  AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
 } from "@mariozechner/pi-ai";
@@ -20,34 +19,37 @@ export const MODEL_APIS = [
 
 export type ModelApi = (typeof MODEL_APIS)[number];
 
-type SupportedOpenAICompatFields = Pick<
-  OpenAICompletionsCompat,
-  | "supportsStore"
-  | "supportsDeveloperRole"
-  | "supportsReasoningEffort"
-  | "supportsUsageInStreaming"
-  | "supportsStrictMode"
-  | "maxTokensField"
-  | "requiresToolResultName"
-  | "requiresAssistantAfterToolResult"
-  | "requiresThinkingAsText"
-  | "openRouterRouting"
-  | "vercelGatewayRouting"
-  | "zaiToolStream"
-  | "cacheControlFormat"
-  | "sendSessionAffinityHeaders"
-  | "supportsLongCacheRetention"
+type PickKnown<T, K extends PropertyKey> = Pick<T, Extract<keyof T, K>>;
+
+type SupportedOpenAICompatFields = Partial<
+  PickKnown<
+    OpenAICompletionsCompat,
+    | "supportsStore"
+    | "supportsDeveloperRole"
+    | "supportsReasoningEffort"
+    | "supportsUsageInStreaming"
+    | "supportsStrictMode"
+    | "maxTokensField"
+    | "requiresToolResultName"
+    | "requiresAssistantAfterToolResult"
+    | "requiresThinkingAsText"
+    | "openRouterRouting"
+    | "vercelGatewayRouting"
+    | "zaiToolStream"
+    | "cacheControlFormat"
+    | "sendSessionAffinityHeaders"
+    | "supportsLongCacheRetention"
+  >
 >;
 
-type SupportedOpenAIResponsesCompatFields = Pick<
-  OpenAIResponsesCompat,
-  "sendSessionIdHeader" | "supportsLongCacheRetention"
+type SupportedOpenAIResponsesCompatFields = Partial<
+  PickKnown<OpenAIResponsesCompat, "sendSessionIdHeader" | "supportsLongCacheRetention">
 >;
 
-type SupportedAnthropicMessagesCompatFields = Pick<
-  AnthropicMessagesCompat,
-  "supportsEagerToolInputStreaming" | "supportsLongCacheRetention"
->;
+type SupportedAnthropicMessagesCompatFields = {
+  supportsEagerToolInputStreaming?: boolean;
+  supportsLongCacheRetention?: boolean;
+};
 
 type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>

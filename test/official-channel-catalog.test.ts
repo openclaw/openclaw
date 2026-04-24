@@ -79,8 +79,10 @@ describe("buildOfficialChannelCatalog", () => {
               label: "WeChat",
             }),
             install: {
-              npmSpec: "@tencent-weixin/openclaw-weixin",
+              npmSpec: "@tencent-weixin/openclaw-weixin@2.1.10",
               defaultChoice: "npm",
+              expectedIntegrity:
+                "sha512-cEG6Iw5g2qqlA+8/TcmV+E8aFUEX0ruxF0+a5LgVy5wv56/qP07KoapfRa7YTRPzhRW5UDaz6zsZQArt/4ZNnA==",
             },
           }),
         }),
