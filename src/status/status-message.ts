@@ -743,7 +743,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: activeModel,
   });
   const optionParts = [
-    `Runtime: ${runtime.label}`,
+    `Runtime (sandbox): ${runtime.label}`,
     `Runner: ${runnerLabel}`,
     `Think: ${thinkLevel}`,
     formatFastModeLabel(fastMode),
