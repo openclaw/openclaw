@@ -1,4 +1,7 @@
-import { resolveProviderIdForAuth } from "../../../src/agents/provider-auth-aliases.js";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "../../../src/agents/provider-auth-aliases.js";
 import type { PluginManifestRegistry } from "../../../src/plugins/manifest-registry.js";
 
 export const AUTH_PROFILE_RUNTIME_CONTRACT = {
@@ -47,10 +50,11 @@ export function createAuthAliasManifestRegistry(): PluginManifestRegistry {
 export function expectedForwardedAuthProfile(params: {
   provider: string;
   authProfileProvider: string;
+  aliasLookupParams: ProviderAuthAliasLookupParams;
   sessionAuthProfileId: string | undefined;
 }): string | undefined {
-  return resolveProviderIdForAuth(params.provider) ===
-    resolveProviderIdForAuth(params.authProfileProvider)
+  return resolveProviderIdForAuth(params.provider, params.aliasLookupParams) ===
+    resolveProviderIdForAuth(params.authProfileProvider, params.aliasLookupParams)
     ? params.sessionAuthProfileId
     : undefined;
 }
