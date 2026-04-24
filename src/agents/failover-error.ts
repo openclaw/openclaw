@@ -1,6 +1,7 @@
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
+  isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
   type FailoverSignal,
 } from "./pi-embedded-helpers/errors.js";
@@ -8,6 +9,7 @@ import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
+const MAX_FAILOVER_CAUSE_DEPTH = 25;
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -186,11 +188,14 @@ function getErrorMessage(err: unknown): string {
   return findErrorProperty(err, readDirectErrorMessage) ?? "";
 }
 
-function getErrorCause(err: unknown): unknown {
-  if (!err || typeof err !== "object" || !("cause" in err)) {
-    return undefined;
-  }
-  return (err as { cause?: unknown }).cause;
+function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
+  const message = readDirectErrorMessage(err);
+  return {
+    status: readDirectStatusCode(err),
+    code: readDirectErrorCode(err),
+    message: message || undefined,
+    provider: readDirectProvider(err),
+  };
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -239,7 +244,72 @@ function normalizeErrorSignal(err: unknown): FailoverSignal {
   };
 }
 
-function resolveFailoverClassificationFromError(err: unknown): FailoverClassification | null {
+function getNestedErrorCandidates(err: unknown): unknown[] {
+  if (!err || typeof err !== "object") {
+    return [];
+  }
+  const candidate = err as { error?: unknown; cause?: unknown };
+  return [candidate.error, candidate.cause].filter(
+    (value): value is unknown => value !== undefined && value !== err,
+  );
+}
+
+function isFormatClassification(classification: FailoverClassification | null): boolean {
+  return classification?.kind === "reason" && classification.reason === "format";
+}
+
+function decideNestedFormatOverride(
+  candidate: unknown,
+  inheritedStatus: number | undefined,
+  seen: Set<object>,
+  depth: number,
+): boolean | null {
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
+    return null;
+  }
+  if (candidate && typeof candidate === "object") {
+    if (seen.has(candidate)) {
+      return null;
+    }
+    seen.add(candidate);
+  }
+
+  const directSignal = normalizeDirectErrorSignal(candidate);
+  const nestedCandidates = getNestedErrorCandidates(candidate);
+  const nestedStatus = directSignal.status ?? inheritedStatus;
+  const hasDirectMessage = Boolean(directSignal.message?.trim());
+  if (
+    hasDirectMessage &&
+    isUnclassifiedNoBodyHttpSignal({ ...directSignal, status: nestedStatus })
+  ) {
+    return true;
+  }
+  if (hasDirectMessage && (nestedCandidates.length === 0 || classifyFailoverSignal(directSignal))) {
+    return false;
+  }
+  for (const nestedCandidate of nestedCandidates) {
+    const decision = decideNestedFormatOverride(nestedCandidate, nestedStatus, seen, depth + 1);
+    if (decision !== null) {
+      return decision;
+    }
+  }
+  return null;
+}
+
+function resolveFailoverClassificationFromErrorInternal(
+  err: unknown,
+  seen: Set<object>,
+  depth: number,
+): FailoverClassification | null {
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
+    return null;
+  }
+  if (err && typeof err === "object") {
+    if (seen.has(err)) {
+      return null;
+    }
+    seen.add(err);
+  }
   if (isFailoverError(err)) {
     return {
       kind: "reason",
@@ -247,14 +317,36 @@ function resolveFailoverClassificationFromError(err: unknown): FailoverClassific
     };
   }
 
-  const classification = classifyFailoverSignal(normalizeErrorSignal(err));
+  const signal = normalizeErrorSignal(err);
+  const classification = classifyFailoverSignal(signal);
+  const nestedCandidates = getNestedErrorCandidates(err);
+
   if (!classification || classification.kind === "context_overflow") {
-    // Let wrapped causes override parent timeout/overflow guesses.
-    const cause = getErrorCause(err);
-    if (cause && cause !== err) {
-      const causeClassification = resolveFailoverClassificationFromError(cause);
-      if (causeClassification) {
-        return causeClassification;
+    for (const candidate of nestedCandidates) {
+      const nestedClassification = resolveFailoverClassificationFromErrorInternal(
+        candidate,
+        seen,
+        depth + 1,
+      );
+      if (nestedClassification) {
+        return nestedClassification;
+      }
+    }
+  }
+
+  if (isFormatClassification(classification)) {
+    for (const candidate of nestedCandidates) {
+      const shouldClearFormat = decideNestedFormatOverride(
+        candidate,
+        signal.status,
+        seen,
+        depth + 1,
+      );
+      if (shouldClearFormat === true) {
+        return null;
+      }
+      if (shouldClearFormat === false) {
+        break;
       }
     }
   }
@@ -270,6 +362,10 @@ function resolveFailoverClassificationFromError(err: unknown): FailoverClassific
     };
   }
   return null;
+}
+
+function resolveFailoverClassificationFromError(err: unknown): FailoverClassification | null {
+  return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0);
 }
 
 export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
