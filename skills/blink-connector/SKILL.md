@@ -14,8 +14,7 @@ description: >
   TikTok, YouTube, Mailchimp, Typeform, Calendly, Etsy, Vercel,
   Reddit, Facebook, Monday, Amplitude, Google Analytics, Zendesk, Apollo,
   Datagma, Mixpanel, PeopleDataLabs, Google BigQuery, Supabase, QuickBooks,
-  Brex, Google Ads, Intercom, ZoomInfo, Gong, DocuSign, Box, Todoist, Ashby,
-  Basecamp.
+  Brex, Google Ads, Intercom, Gong, Box, Todoist, Ashby, Basecamp.
   (3) Native Composio tool catalog (file uploads, attachments, complex
   writes): `blink connector tool-execute <composio_provider> <TOOL_SLUG>
   '<json>'` — unlocks 1000+ Composio tools, auto-uploads URL/path file
@@ -113,9 +112,7 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Brex | `composio_brex` | `https://platform.brexapis.com/v2/` |
 | Google Ads | `composio_googleads` | `https://googleads.googleapis.com/` (path: `v21/customers/...`, v18 sunset) |
 | Intercom | `composio_intercom` | `https://api.intercom.io/` |
-| ZoomInfo | `composio_zoominfo` | `https://api.zoominfo.com/` |
 | Gong | `composio_gong` | `https://api.gong.io/v2/` |
-| DocuSign | `composio_docusign` | account-specific (e.g. `https://na3.docusign.net/restapi/`); resolved from `metadata.docusign_base_uri` (path: `v2.1/accounts/{accountId}/...`) |
 | Box | `composio_box` | `https://api.box.com/2.0/` |
 | Todoist | `composio_todoist` | `https://api.todoist.com/api/v1/` |
 | Ashby | `composio_ashby` | `https://api.ashbyhq.com/` |
@@ -988,16 +985,6 @@ blink connector exec composio_intercom contacts POST '{"role":"user","email":"ne
 blink connector exec composio_intercom conversations/search POST '{"query":{"field":"open","operator":"=","value":"true"}}'
 ```
 
-### ZoomInfo
-
-```bash
-# Search people
-blink connector exec composio_zoominfo search/contact POST '{"firstName":"Jane","lastName":"Doe","companyName":"Acme"}'
-
-# Search companies
-blink connector exec composio_zoominfo search/company POST '{"companyName":"Acme"}'
-```
-
 ### Gong
 
 ```bash
@@ -1009,24 +996,6 @@ blink connector exec composio_gong calls GET '{"fromDateTime":"2026-04-16T00:00:
 
 # Get call transcript
 blink connector exec composio_gong calls/transcript POST '{"filter":{"callIds":["CALL_ID"]}}'
-```
-
-### DocuSign
-
-DocuSign is account-scoped. The connect callback captures both
-`docusign_account_id` and `docusign_base_uri` into `metadata` so the executor
-auto-routes to the correct account host (e.g. `https://na3.docusign.net/restapi/`).
-Get `ACCOUNT_ID` from `blink connector status` metadata (`docusign_account_id`).
-
-```bash
-# Get my account info
-blink connector exec composio_docusign v2.1/accounts/ACCOUNT_ID GET
-
-# List envelopes
-blink connector exec composio_docusign v2.1/accounts/ACCOUNT_ID/envelopes GET '{"from_date":"2026-01-01"}'
-
-# Create an envelope (use tool-execute for file attachments)
-blink connector tool-execute composio_docusign DOCUSIGN_CREATE_ENVELOPE '{...}'
 ```
 
 ### Box
