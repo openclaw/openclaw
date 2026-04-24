@@ -3,11 +3,9 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
-// Constants are owned by extensions/memory-core/src/dreaming.ts
-// (MANAGED_DREAMING_CRON_NAME, MANAGED_DREAMING_CRON_TAG,
-// DREAMING_SYSTEM_EVENT_TEXT). Mirrored here so doctor can rewrite stale
-// jobs without taking a runtime dep on the extension. Keep in sync if the
-// memory-core constants change.
+// Constants are owned by the memory-core dreaming implementation. Mirrored here
+// so doctor can rewrite stale jobs without taking a runtime dep on the
+// extension. Keep in sync if the memory-core constants change.
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 const DREAMING_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";

@@ -1086,7 +1086,7 @@ describe("memory-core dreaming phases", () => {
     ]);
   });
 
-  it("drops generated system wrapper chatter from ordinary session ingestion", async () => {
+  it("drops generated system wrapper text without suppressing paired assistant replies", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
@@ -1163,12 +1163,15 @@ describe("memory-core dreaming phases", () => {
       workspaceDir,
     );
 
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
     try {
       await beforeAgentReply(
         { cleanedBody: "__openclaw_memory_core_light_sleep__" },
         { trigger: "heartbeat", workspaceDir },
       );
     } finally {
+      vi.useRealTimers();
       vi.unstubAllEnvs();
     }
 
@@ -1179,7 +1182,7 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).toContain("User: What changed in the sync?");
     expect(corpus).toContain("Assistant: One new session was converted.");
     expect(corpus).not.toContain("System (untrusted):");
-    expect(corpus).not.toContain("Handled internally.");
+    expect(corpus).toContain("Assistant: Handled internally.");
   });
 
   it("drops archive, cron, and heartbeat chatter from fresh session corpus output", async () => {
@@ -1309,12 +1312,15 @@ describe("memory-core dreaming phases", () => {
       workspaceDir,
     );
 
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
     try {
       await beforeAgentReply(
         { cleanedBody: "__openclaw_memory_core_light_sleep__" },
         { trigger: "heartbeat", workspaceDir },
       );
     } finally {
+      vi.useRealTimers();
       vi.unstubAllEnvs();
     }
 
