@@ -284,7 +284,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       try {
         const cardHeader = resolveCardHeader(agentId, identity);
         const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        await streaming.start(chatId, resolveReceiveIdType(chatId), {
+        const receiveIdType = resolveReceiveIdType(chatId);
+        if (!receiveIdType) {
+          params.runtime.error?.(`feishu: cannot resolve receiveIdType for chatId ${chatId}`);
+          return;
+        }
+        await streaming.start(chatId, receiveIdType, {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
@@ -294,7 +299,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
-        streamingStartPromise = null; // allow retry on next deliver
+        streamingStartPromise = null; // allow retry on next delivery
       }
     })();
   };

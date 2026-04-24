@@ -64,7 +64,7 @@ export function formatFeishuTarget(id: string, type?: FeishuIdType): string {
   return trimmed;
 }
 
-export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" {
+export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" | null {
   const trimmed = id.trim();
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (
@@ -87,7 +87,13 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
   if (trimmed.startsWith(OPEN_ID_PREFIX)) {
     return "open_id";
   }
-  return "user_id";
+  // Unrecognized format: fall back to "user_id" if it looks like a valid
+  // bare user ID (alphanumeric), otherwise return null to let the caller
+  // throw before sending garbage to the API.
+  if (USER_ID_REGEX.test(trimmed)) {
+    return "user_id";
+  }
+  return null;
 }
 
 export function looksLikeFeishuId(raw: string): boolean {

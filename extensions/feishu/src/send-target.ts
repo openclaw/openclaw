@@ -2,6 +2,7 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
+import type { FeishuIdType } from "./types.js";
 
 type FeishuSendTarget = {
   client: ReturnType<typeof createFeishuClient>;
@@ -27,9 +28,13 @@ export function resolveFeishuSendTarget(params: {
   // Preserve explicit routing prefixes (chat/group/user/dm/open_id) when present.
   // normalizeFeishuTarget strips these prefixes, so infer type from the raw target first.
   const withoutProviderPrefix = target.replace(/^(feishu|lark):/i, "");
+  const receiveIdType = resolveReceiveIdType(withoutProviderPrefix);
+  if (!receiveIdType) {
+    throw new Error(`Cannot resolve Feishu ID type for target: ${params.to}`);
+  }
   return {
     client,
     receiveId,
-    receiveIdType: resolveReceiveIdType(withoutProviderPrefix),
+    receiveIdType: receiveIdType as FeishuIdType,
   };
 }
