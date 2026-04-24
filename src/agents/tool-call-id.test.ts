@@ -185,6 +185,10 @@ describe("normalizeMangledToolCallId", () => {
     expect(normalizeMangledToolCallId("functions exec:0")).toBe("functions.exec:0");
     expect(normalizeMangledToolCallId("functions.exec:0")).toBe("functions.exec:0");
   });
+
+  it("does not normalize embedded function prefixes", () => {
+    expect(normalizeMangledToolCallId("abcfunctions exec:0")).toBe("abcfunctions exec:0");
+  });
 });
 
 describe("extractToolResultId", () => {

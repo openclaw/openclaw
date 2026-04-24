@@ -21,7 +21,7 @@ export function normalizeMangledToolCallId(id: string): string {
   if (typeof id !== "string" || !id) {
     return id;
   }
-  return id.replace(/functions\s+/g, "functions.");
+  return id.replace(/^functions\s+/, "functions.");
 }
 
 export type ToolCallLike = {
