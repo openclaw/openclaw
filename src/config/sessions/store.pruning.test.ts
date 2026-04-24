@@ -1,8 +1,11 @@
 import crypto from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import {
   isProtectedSessionMaintenanceEntry,
+  pruneOrphanedTranscripts,
   resolveMaintenanceConfigFromInput,
   resolveSessionEntryMaintenanceHighWater,
 } from "./store-maintenance.js";
@@ -220,5 +223,186 @@ describe("getActiveSessionMaintenanceWarning", () => {
     });
 
     expect(warning?.wouldCap).toBe(true);
+  });
+});
+
+describe("pruneOrphanedTranscripts", () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = await fixtureSuite.createCaseDir("orphan-prune");
+  });
+
+  async function writeTranscript(
+    fileName: string,
+    headerSessionId: string,
+    mtimeOffsetMs: number,
+  ): Promise<void> {
+    const filePath = path.join(testDir, `${fileName}.jsonl`);
+    const header = {
+      type: "session",
+      version: 1,
+      id: headerSessionId,
+      timestamp: new Date().toISOString(),
+    };
+    await fs.writeFile(filePath, `${JSON.stringify(header)}\n`, "utf-8");
+    if (mtimeOffsetMs !== 0) {
+      const mtime = new Date(Date.now() + mtimeOffsetMs);
+      await fs.utimes(filePath, mtime, mtime);
+    }
+  }
+
+  it("warn mode: reports orphans but does not delete", async () => {
+    await writeTranscript("orphan-old", "orphan-old", -60 * DAY_MS);
+    await writeTranscript("kept", "kept", 0);
+    const store = makeStore([["active", { sessionId: "kept", updatedAt: Date.now() }]]);
+
+    const result = await pruneOrphanedTranscripts(testDir, store, {
+      mode: "warn",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(0);
+    expect(result.wouldPrune).toBe(1);
+    expect(result.wouldBytes).toBeGreaterThan(0);
+    const remaining = (await fs.readdir(testDir)).toSorted();
+    expect(remaining).toEqual(["kept.jsonl", "orphan-old.jsonl"]);
+  });
+
+  it("enforce mode: unlinks orphan older than grace window", async () => {
+    await writeTranscript("orphan-old", "orphan-old", -60 * DAY_MS);
+    await writeTranscript("kept", "kept", 0);
+    const store = makeStore([["active", { sessionId: "kept", updatedAt: Date.now() }]]);
+
+    const result = await pruneOrphanedTranscripts(testDir, store, {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(1);
+    expect(result.bytes).toBeGreaterThan(0);
+    expect(result.wouldPrune).toBe(0);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).toContain("kept.jsonl");
+    expect(remaining).not.toContain("orphan-old.jsonl");
+    // bytes actually reclaimed, not hidden in a sibling archive directory
+    expect(remaining).not.toContain(".orphans-archive");
+  });
+
+  it("preserves orphan transcripts younger than pruneAfterMs", async () => {
+    await writeTranscript("orphan-young", "orphan-young", -1 * DAY_MS);
+    const store = makeStore([]);
+
+    const result = await pruneOrphanedTranscripts(testDir, store, {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(0);
+    expect(result.wouldPrune).toBe(0);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).toContain("orphan-young.jsonl");
+  });
+
+  it("preserves topic-thread transcript (sessionId-topic-threadId.jsonl) without explicit sessionFile", async () => {
+    // Topic sessions derive transcript path as `${sessionId}-topic-${encoded-topicId}.jsonl`
+    // via resolveSessionTranscriptPathInDir. The stored SessionEntry may only carry sessionId;
+    // the live transcript file would otherwise look like an orphan to a naive scanner.
+    // File header carries the live sessionId; filename reflects the derived
+    // topic path produced by resolveSessionTranscriptPathInDir.
+    await writeTranscript("abc-uuid-topic-456", "abc-uuid", -60 * DAY_MS);
+    const store = makeStore([
+      ["agent:main:channel:thread-456", { sessionId: "abc-uuid", updatedAt: Date.now() }],
+    ]);
+
+    const result = await pruneOrphanedTranscripts(testDir, store, {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(0);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).toContain("abc-uuid-topic-456.jsonl");
+  });
+
+  it("treats sessionFile basename as a reference (transcript name != current sessionId)", async () => {
+    // Header id reflects the live sessionId written by ensureSessionHeader.
+    await writeTranscript("legacy-file-id", "new-session-id", -60 * DAY_MS);
+    const store = makeStore([
+      [
+        "active",
+        {
+          sessionId: "new-session-id",
+          sessionFile: path.join(testDir, "legacy-file-id.jsonl"),
+          updatedAt: Date.now(),
+        },
+      ],
+    ]);
+
+    const result = await pruneOrphanedTranscripts(testDir, store, {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(0);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).toContain("legacy-file-id.jsonl");
+  });
+
+  it("missing sessions dir: no-op, no throw", async () => {
+    const missingDir = path.join(testDir, "does-not-exist");
+    const result = await pruneOrphanedTranscripts(
+      missingDir,
+      {},
+      {
+        mode: "enforce",
+        pruneAfterMs: 30 * DAY_MS,
+      },
+    );
+    expect(result.pruned).toBe(0);
+    expect(result.wouldPrune).toBe(0);
+  });
+
+  it("ignores non-jsonl files and subdirectories", async () => {
+    await writeTranscript("orphan-old", "orphan-old", -60 * DAY_MS);
+    await fs.writeFile(path.join(testDir, "sessions.json"), "{}", "utf-8");
+    await fs.mkdir(path.join(testDir, "some-subdir"), { recursive: true });
+
+    const result = await pruneOrphanedTranscripts(
+      testDir,
+      {},
+      {
+        mode: "enforce",
+        pruneAfterMs: 30 * DAY_MS,
+      },
+    );
+
+    expect(result.pruned).toBe(1);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).toContain("sessions.json");
+    expect(remaining).toContain("some-subdir");
+  });
+
+  it("does not delete unrelated .jsonl files lacking a session header (custom session.store scenario)", async () => {
+    // Simulate a custom session.store dir that contains unrelated logs or
+    // exports. The old-enough .jsonl without a session header must be left
+    // alone even though its name would pass the filename filter.
+    const filePath = path.join(testDir, "my-unrelated-log.jsonl");
+    await fs.writeFile(filePath, `{"kind":"log","ts":"2025-01-01T00:00:00Z"}\n`, "utf-8");
+    const mtime = new Date(Date.now() - 60 * DAY_MS);
+    await fs.utimes(filePath, mtime, mtime);
+
+    const result = await pruneOrphanedTranscripts(
+      testDir,
+      {},
+      {
+        mode: "enforce",
+        pruneAfterMs: 30 * DAY_MS,
+      },
+    );
+
+    expect(result.pruned).toBe(0);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).toContain("my-unrelated-log.jsonl");
   });
 });
