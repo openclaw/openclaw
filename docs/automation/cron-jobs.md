@@ -7,8 +7,6 @@ read_when:
 title: "Scheduled tasks"
 ---
 
-# Scheduled Tasks (Cron)
-
 Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at the right time, and can deliver output back to a chat channel or webhook endpoint.
 
 ## Quick start

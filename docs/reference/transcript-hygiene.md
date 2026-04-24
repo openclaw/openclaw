@@ -7,8 +7,6 @@ read_when:
 title: "Transcript hygiene"
 ---
 
-# Transcript Hygiene (Provider Fixups)
-
 This document describes **provider-specific fixes** applied to transcripts before a run
 (building model context). These are **in-memory** adjustments used to satisfy strict
 provider requirements. These hygiene steps do **not** rewrite the stored JSONL transcript
