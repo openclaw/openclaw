@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { LocationMessageEventContent } from "../sdk.js";
 import { formatLocationText, toLocationContext, type NormalizedLocation } from "./runtime-api.js";
 import { EventType } from "./types.js";
@@ -72,7 +75,7 @@ export function resolveMatrixLocation(params: {
   if (!isLocation) {
     return null;
   }
-  const geoUri = typeof content.geo_uri === "string" ? content.geo_uri.trim() : "";
+  const geoUri = normalizeOptionalString(content.geo_uri) ?? "";
   if (!geoUri) {
     return null;
   }
@@ -80,7 +83,7 @@ export function resolveMatrixLocation(params: {
   if (!parsed) {
     return null;
   }
-  const caption = typeof content.body === "string" ? content.body.trim() : "";
+  const caption = normalizeOptionalString(content.body) ?? "";
   const location: NormalizedLocation = {
     latitude: parsed.latitude,
     longitude: parsed.longitude,

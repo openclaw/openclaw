@@ -10,7 +10,7 @@ export {
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
 export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export type { ChatType } from "../channels/chat-type.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
@@ -20,7 +20,7 @@ export {
   buildModelsProviderData,
   type ModelsProviderData,
 } from "../auto-reply/reply/commands-models.js";
-export { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/stored-model-override.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -49,7 +49,7 @@ export type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";

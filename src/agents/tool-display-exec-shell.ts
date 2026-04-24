@@ -338,6 +338,7 @@ export function stripShellPreamble(command: string): PreambleResult {
         first = { index: idx, length: 1 };
         return false;
       }
+      return undefined;
     });
     const head = (first ? rest.slice(0, first.index) : rest).trim();
     const isChdir = (first ? !first.isOr : i > 0) && isChdirCommand(head);

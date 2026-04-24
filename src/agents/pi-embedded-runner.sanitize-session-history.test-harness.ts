@@ -60,6 +60,45 @@ export function makeSimpleUserMessages(): AgentMessage[] {
   return messages as unknown as AgentMessage[];
 }
 
+export async function createSanitizeSessionHistoryHelpersMock(extra: Record<string, unknown> = {}) {
+  return {
+    ...(await vi.importActual("./pi-embedded-helpers.js")),
+    sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
+    ...extra,
+  };
+}
+
+export async function createSanitizeSessionHistoryProviderRuntimeMock(
+  extra: Record<string, unknown> = {},
+) {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
+    validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
+    ...extra,
+  };
+}
+
+export function createSanitizeSessionHistoryProviderHookRuntimeMock(
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderHookPlugin: vi.fn(() => undefined),
+    resolveProviderPluginsForHooks: vi.fn(() => []),
+    prepareProviderExtraParams: vi.fn(() => undefined),
+    wrapProviderStreamFn: vi.fn(() => undefined),
+    clearProviderRuntimeHookCache: vi.fn(),
+    resetProviderRuntimeHookCacheForTest: vi.fn(),
+    __testing: {},
+    ...extra,
+  };
+}
+
 export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<SanitizeSessionHistoryHarness> {
   vi.resetModules();
   vi.resetAllMocks();
@@ -123,7 +162,7 @@ export function expectOpenAIResponsesStrictSanitizeCall(
     "session:history",
     expect.objectContaining({
       sanitizeMode: "images-only",
-      sanitizeToolCallIds: true,
+      sanitizeToolCallIds: false,
       toolCallIdMode: "strict",
     }),
   );

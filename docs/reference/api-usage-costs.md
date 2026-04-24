@@ -4,7 +4,7 @@ read_when:
   - You want to understand which features may call paid APIs
   - You need to audit keys, costs, and usage visibility
   - You’re explaining /status or /usage cost reporting
-title: "API Usage and Costs"
+title: "API usage and costs"
 ---
 
 # API usage & costs
@@ -113,6 +113,7 @@ Semantic memory search uses **embedding APIs** when configured for remote provid
 - `memorySearch.provider = "gemini"` → Gemini embeddings
 - `memorySearch.provider = "voyage"` → Voyage embeddings
 - `memorySearch.provider = "mistral"` → Mistral embeddings
+- `memorySearch.provider = "lmstudio"` → LM Studio embeddings (local/self-hosted)
 - `memorySearch.provider = "ollama"` → Ollama embeddings (local/self-hosted; typically no hosted API billing)
 - Optional fallback to a remote provider if local embeddings fail
 
@@ -194,3 +195,9 @@ Skills can store `apiKey` in `skills.entries.<name>.apiKey`. If a skill uses tha
 APIs, it can incur costs according to the skill’s provider.
 
 See [Skills](/tools/skills).
+
+## Related
+
+- [Token use and costs](/reference/token-use)
+- [Prompt caching](/reference/prompt-caching)
+- [Usage tracking](/concepts/usage-tracking)

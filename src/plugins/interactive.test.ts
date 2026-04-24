@@ -480,6 +480,61 @@ describe("plugin interactive handlers", () => {
     vi.restoreAllMocks();
   });
 
+  it("hydrates legacy interactive state shapes before clearing handlers", async () => {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const stateKey = Symbol.for("openclaw.pluginInteractiveState");
+    const originalState = globalStore[stateKey];
+
+    globalStore[stateKey] = {
+      interactiveHandlers: new Map(),
+    };
+
+    try {
+      expect(() => clearPluginInteractiveHandlers()).not.toThrow();
+      const hydrated = globalStore[stateKey] as {
+        interactiveHandlers?: Map<string, unknown>;
+        callbackDedupe?: { clear: () => void };
+        inflightCallbackDedupe?: Set<string>;
+      };
+      expect(hydrated.interactiveHandlers).toBeInstanceOf(Map);
+      expect(hydrated.callbackDedupe?.clear).toEqual(expect.any(Function));
+      expect(hydrated.inflightCallbackDedupe).toBeInstanceOf(Set);
+
+      const handler = vi.fn(async () => ({ handled: true }));
+      expect(
+        registerPluginInteractiveHandler("codex-plugin", {
+          channel: "telegram",
+          namespace: "legacy",
+          handler,
+        }),
+      ).toEqual({ ok: true });
+
+      await expect(
+        dispatchInteractive(
+          createTelegramDispatchParams({
+            data: "legacy:resume",
+            callbackId: "legacy-state-cb",
+          }),
+        ),
+      ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
+      await expect(
+        dispatchInteractive(
+          createTelegramDispatchParams({
+            data: "legacy:resume",
+            callbackId: "legacy-state-cb",
+          }),
+        ),
+      ).resolves.toEqual({ matched: true, handled: true, duplicate: true });
+    } finally {
+      if (originalState === undefined) {
+        delete globalStore[stateKey];
+      } else {
+        globalStore[stateKey] = originalState;
+      }
+      clearPluginInteractiveHandlers();
+    }
+  });
+
   it.each([
     {
       name: "routes Telegram callbacks by namespace and dedupes callback ids",
@@ -773,6 +828,94 @@ describe("plugin interactive handlers", () => {
     });
 
     await expect(dispatchInteractive(baseParams)).rejects.toThrow("boom");
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("dedupes concurrent interactive dispatches while a handler is still running", async () => {
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const handler = vi.fn(async () => {
+      await handlerGate;
+      return { handled: true };
+    });
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "telegram",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = createTelegramDispatchParams({
+      data: "codex:resume:thread-1",
+      callbackId: "cb-concurrent",
+    });
+
+    const firstDispatch = dispatchInteractive(baseParams);
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+    const duplicateDispatch = await dispatchInteractive(baseParams);
+
+    expect(duplicateDispatch).toEqual({
+      matched: true,
+      handled: true,
+      duplicate: true,
+    });
+
+    releaseHandler();
+
+    await expect(firstDispatch).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases inflight interactive dedupe keys after a handler failure", async () => {
+    let rejectHandler!: (error: Error) => void;
+    const handlerGate = new Promise<never>((_, reject) => {
+      rejectHandler = reject;
+    });
+    const handler = vi
+      .fn(async () => ({ handled: true }))
+      .mockImplementationOnce(async () => await handlerGate)
+      .mockResolvedValueOnce({ handled: true });
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "telegram",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = createTelegramDispatchParams({
+      data: "codex:resume:thread-1",
+      callbackId: "cb-retry-after-failure",
+    });
+
+    const firstDispatch = dispatchInteractive(baseParams);
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: true,
+    });
+
+    rejectHandler(new Error("boom"));
+    await expect(firstDispatch).rejects.toThrow("boom");
+
     await expect(dispatchInteractive(baseParams)).resolves.toEqual({
       matched: true,
       handled: true,

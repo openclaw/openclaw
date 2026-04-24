@@ -11,13 +11,13 @@ import {
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import {
-  fitsTelegramCallbackData,
-  TELEGRAM_CALLBACK_DATA_MAX_BYTES,
-} from "./approval-callback-data.js";
-import type { TelegramButtonStyle, TelegramInlineButtons } from "./button-types.js";
+  normalizeMessagePresentation,
+  presentationToInteractiveReply,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -30,6 +30,7 @@ import {
   deleteMessageTelegram,
   editForumTopicTelegram,
   editMessageTelegram,
+  pinMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
   sendPollTelegram,
@@ -44,6 +45,7 @@ export const telegramActionRuntime = {
   editForumTopicTelegram,
   editMessageTelegram,
   getCacheStats,
+  pinMessageTelegram,
   reactMessageTelegram,
   searchStickers,
   sendMessageTelegram,
@@ -51,7 +53,6 @@ export const telegramActionRuntime = {
   sendStickerTelegram,
 };
 
-const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = ["danger", "success", "primary"];
 const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
   0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
 ] as const;
@@ -77,11 +78,6 @@ const TELEGRAM_ACTION_ALIASES = {
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
 type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
-type RawTelegramButton = {
-  callback_data?: unknown;
-  style?: unknown;
-  text?: unknown;
-};
 
 function readTelegramForumTopicIconColor(
   params: Record<string, unknown>,
@@ -95,57 +91,6 @@ function readTelegramForumTopicIconColor(
   }
   return iconColor as TelegramForumTopicIconColor;
 }
-export function readTelegramButtons(
-  params: Record<string, unknown>,
-): TelegramInlineButtons | undefined {
-  const raw = params.buttons;
-  if (raw == null) {
-    return undefined;
-  }
-  if (!Array.isArray(raw)) {
-    throw new Error("buttons must be an array of button rows");
-  }
-  const rows = raw.map((row, rowIndex) => {
-    if (!Array.isArray(row)) {
-      throw new Error(`buttons[${rowIndex}] must be an array`);
-    }
-    return row.map((button, buttonIndex) => {
-      if (!button || typeof button !== "object") {
-        throw new Error(`buttons[${rowIndex}][${buttonIndex}] must be an object`);
-      }
-      const rawButton = button as RawTelegramButton;
-      const text = typeof rawButton.text === "string" ? rawButton.text.trim() : "";
-      const callbackData =
-        typeof rawButton.callback_data === "string" ? rawButton.callback_data.trim() : "";
-      if (!text || !callbackData) {
-        throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
-      }
-      if (!fitsTelegramCallbackData(callbackData)) {
-        throw new Error(
-          `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} bytes)`,
-        );
-      }
-      const styleRaw = rawButton.style;
-      const style = normalizeOptionalLowercaseString(styleRaw);
-      if (styleRaw !== undefined && !style) {
-        throw new Error(`buttons[${rowIndex}][${buttonIndex}] style must be string`);
-      }
-      if (style && !TELEGRAM_BUTTON_STYLES.includes(style as TelegramButtonStyle)) {
-        throw new Error(
-          `buttons[${rowIndex}][${buttonIndex}] style must be one of ${TELEGRAM_BUTTON_STYLES.join(", ")}`,
-        );
-      }
-      return {
-        text,
-        callback_data: callbackData,
-        ...(style ? { style: style as TelegramButtonStyle } : {}),
-      };
-    });
-  });
-  const filtered = rows.filter((row) => row.length > 0);
-  return filtered.length > 0 ? filtered : undefined;
-}
-
 function normalizeTelegramActionName(action: string): TelegramActionName {
   const normalized = TELEGRAM_ACTION_ALIASES[action as keyof typeof TELEGRAM_ACTION_ALIASES];
   if (!normalized) {
@@ -176,10 +121,12 @@ function readTelegramReplyToMessageId(params: Record<string, unknown>) {
   );
 }
 
-function resolveTelegramButtonsFromParams(params: Record<string, unknown>) {
+function resolveTelegramButtonsFromParams(
+  params: Record<string, unknown>,
+  presentation = normalizeMessagePresentation(params.presentation),
+) {
   return resolveTelegramInlineButtons({
-    buttons: readTelegramButtons(params),
-    interactive: params.interactive,
+    interactive: presentation ? presentationToInteractiveReply(presentation) : params.interactive,
   });
 }
 
@@ -187,15 +134,77 @@ function readTelegramSendContent(params: {
   args: Record<string, unknown>;
   mediaUrl?: string;
   hasButtons: boolean;
+  presentation?: MessagePresentation;
 }) {
-  const content =
+  const explicitContent =
     readStringParam(params.args, "content", { allowEmpty: true }) ??
     readStringParam(params.args, "message", { allowEmpty: true }) ??
     readStringParam(params.args, "caption", { allowEmpty: true });
+  const presentationText =
+    explicitContent == null && params.presentation
+      ? renderMessagePresentationFallbackText({ presentation: params.presentation })
+      : undefined;
+  const content = explicitContent ?? (presentationText?.trim() ? presentationText : undefined);
   if (content == null && !params.mediaUrl && !params.hasButtons) {
     throw new Error("content required.");
   }
   return content ?? "";
+}
+
+function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
+  const delivery = params.delivery;
+  const pin =
+    delivery && typeof delivery === "object" && !Array.isArray(delivery)
+      ? (delivery as { pin?: unknown }).pin
+      : params.pin === true
+        ? true
+        : undefined;
+  if (pin === true) {
+    return { enabled: true } as const;
+  }
+  if (!pin || typeof pin !== "object" || Array.isArray(pin)) {
+    return undefined;
+  }
+  const raw = pin as { enabled?: unknown; notify?: unknown; required?: unknown };
+  if (raw.enabled !== true) {
+    return undefined;
+  }
+  return {
+    enabled: true,
+    ...(raw.notify === true ? { notify: true } : {}),
+    ...(raw.required === true ? { required: true } : {}),
+  } as const;
+}
+
+async function maybePinTelegramActionSend(params: {
+  args: Record<string, unknown>;
+  cfg: OpenClawConfig;
+  accountId?: string;
+  to: string;
+  messageId?: string;
+}) {
+  const pin = normalizeTelegramDeliveryPin(params.args);
+  if (!pin) {
+    return;
+  }
+  if (!params.messageId) {
+    if (pin.required) {
+      throw new Error("Telegram delivery pin requested, but no message id was returned.");
+    }
+    return;
+  }
+  try {
+    await telegramActionRuntime.pinMessageTelegram(params.to, params.messageId, {
+      cfg: params.cfg,
+      accountId: params.accountId,
+      notify: pin.notify,
+      verbose: false,
+    });
+  } catch (err) {
+    if (pin.required) {
+      throw err;
+    }
+  }
 }
 
 export async function handleTelegramAction(
@@ -306,11 +315,13 @@ export async function handleTelegramAction(
       readStringParam(params, "media", {
         trim: false,
       });
-    const buttons = resolveTelegramButtonsFromParams(params);
+    const presentation = normalizeMessagePresentation(params.presentation);
+    const buttons = resolveTelegramButtonsFromParams(params, presentation);
     const content = readTelegramSendContent({
       args: params,
       mediaUrl: mediaUrl ?? undefined,
       hasButtons: Array.isArray(buttons) && buttons.length > 0,
+      presentation,
     });
     if (buttons) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
@@ -366,6 +377,13 @@ export async function handleTelegramAction(
         readBooleanParam(params, "forceDocument") ??
         readBooleanParam(params, "asDocument") ??
         false,
+    });
+    await maybePinTelegramActionSend({
+      args: params,
+      cfg,
+      accountId: accountId ?? undefined,
+      to,
+      messageId: result.messageId,
     });
     return jsonResult({
       ok: true,

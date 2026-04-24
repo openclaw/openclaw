@@ -20,6 +20,33 @@ export type MSTeamsWebhookConfig = {
   path?: string;
 };
 
+/**
+ * Bot Framework OAuth SSO configuration for Microsoft Teams.
+ *
+ * When enabled, the plugin handles the `signin/tokenExchange` and
+ * `signin/verifyState` invoke activities that Teams sends after an
+ * `oauthCard` is presented to the user. The exchanged user token is
+ * persisted via the Bot Framework User Token service so downstream
+ * tools can call Microsoft Graph with delegated permissions.
+ *
+ * Prerequisites (Azure portal):
+ * - The bot's Azure AD (Entra) app is configured with an exposed API
+ *   scope (for example `access_as_user`) and lists the Teams client
+ *   IDs in `knownClientApplications`.
+ * - The Bot Framework channel registration has an OAuth Connection
+ *   Setting whose name matches `connectionName` below, pointing at
+ *   the same Azure AD app.
+ */
+export type MSTeamsSsoConfig = {
+  /** If true, handle signin/tokenExchange + signin/verifyState invokes. Default: false. */
+  enabled?: boolean;
+  /**
+   * Name of the OAuth connection configured on the Bot Framework channel
+   * registration (Azure Bot resource). Required when `enabled` is true.
+   */
+  connectionName?: string;
+};
+
 /** Reply style for MS Teams messages. */
 export type MSTeamsReplyStyle = "thread" | "top-level";
 
@@ -67,6 +94,20 @@ export type MSTeamsConfig = {
   appPassword?: SecretInput;
   /** Azure AD Tenant ID (for single-tenant bots). */
   tenantId?: string;
+  /**
+   * Authentication type.
+   * - `"secret"` (default): uses `appPassword` (client secret).
+   * - `"federated"`: uses workload identity / managed identity / certificate.
+   */
+  authType?: "secret" | "federated";
+  /** Path to a PEM certificate file for certificate-based auth. Used when `authType` is `"federated"`. */
+  certificatePath?: string;
+  /** Certificate thumbprint (hex SHA-1) for certificate-based auth. */
+  certificateThumbprint?: string;
+  /** If `true`, use Azure Managed Identity (system- or user-assigned) instead of a certificate. */
+  useManagedIdentity?: boolean;
+  /** User-assigned managed-identity client ID. When omitted with `useManagedIdentity: true`, system-assigned identity is used. */
+  managedIdentityClientId?: string;
   /** Webhook server configuration. */
   webhook?: MSTeamsWebhookConfig;
   /** Direct message access policy (default: pairing). */
@@ -140,6 +181,15 @@ export type MSTeamsConfig = {
   feedbackReflection?: boolean;
   /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
   feedbackReflectionCooldownMs?: number;
+  /** Delegated auth settings for user-scoped Graph API actions (e.g., reactions). */
+  delegatedAuth?: {
+    /** Enable delegated auth (user sign-in for Graph actions that need user scope). */
+    enabled?: boolean;
+    /** Additional scopes to request during OAuth consent. */
+    scopes?: string[];
+  };
+  /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
+  sso?: MSTeamsSsoConfig;
 };
 
 declare module "./types.channels.js" {

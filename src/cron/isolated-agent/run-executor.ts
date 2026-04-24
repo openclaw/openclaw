@@ -1,24 +1,23 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
+import {
+  resolveCronChannelOutputPolicy,
+  resolveCurrentChannelTarget,
+} from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
-  countActiveDescendantRuns,
-  listDescendantRunsForRequester,
-  LiveSessionModelSwitchError,
   getCliSessionId,
   isCliProvider,
+  LiveSessionModelSwitchError,
   logWarn,
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
-  resolveFastModeState,
-  resolveNestedAgentLane,
   resolveSessionTranscriptPath,
   runCliAgent,
-  runEmbeddedPiAgent,
   runWithModelFallback,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
@@ -32,6 +31,21 @@ import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
+type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
+type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
+
+let cronEmbeddedRuntimePromise: Promise<CronEmbeddedRuntime> | undefined;
+let cronSubagentRegistryRuntimePromise: Promise<CronSubagentRegistryRuntime> | undefined;
+
+async function loadCronEmbeddedRuntime() {
+  cronEmbeddedRuntimePromise ??= import("./run-embedded.runtime.js");
+  return await cronEmbeddedRuntimePromise;
+}
+
+async function loadCronSubagentRegistryRuntime() {
+  cronSubagentRegistryRuntimePromise ??= import("./run-subagent-registry.runtime.js");
+  return await cronSubagentRegistryRuntimePromise;
+}
 
 export type CronExecutionResult = {
   runResult: CronPromptRunResult;
@@ -55,10 +69,15 @@ export function createCronPromptExecutor(params: {
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   messageChannel: string | undefined;
-  resolvedDelivery: { accountId?: string };
+  resolvedDelivery: {
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
+    forceMessageTool: boolean;
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
@@ -67,10 +86,13 @@ export function createCronPromptExecutor(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
 }) {
-  const sessionFile = resolveSessionTranscriptPath(
-    params.cronSession.sessionEntry.sessionId,
-    params.agentId,
-  );
+  const sessionFile =
+    params.cronSession.sessionEntry.sessionFile?.trim() ||
+    resolveSessionTranscriptPath(params.cronSession.sessionEntry.sessionId, params.agentId);
+  // Fallback for callers that bypass prepareCronRunContext before persisting retries.
+  if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
+    params.cronSession.sessionEntry.sessionFile = sessionFile;
+  }
   const cronFallbacksOverride = resolveCronFallbacksOverride({
     cfg: params.cfg,
     job: params.job,
@@ -101,11 +123,12 @@ export function createCronPromptExecutor(params: {
         if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
-            : getCliSessionId(params.cronSession.sessionEntry, providerOverride);
+            : await getCliSessionId(params.cronSession.sessionEntry, providerOverride);
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.agentSessionKey,
             agentId: params.agentId,
+            trigger: "cron",
             sessionFile,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
@@ -116,23 +139,37 @@ export function createCronPromptExecutor(params: {
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             cliSessionId,
+            skillsSnapshot: params.skillsSnapshot,
+            messageChannel: params.messageChannel,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
           return result;
         }
+        const { resolveFastModeState, resolveNestedAgentLane, runEmbeddedPiAgent } =
+          await loadCronEmbeddedRuntime();
+        const currentChannelId = await resolveCurrentChannelTarget({
+          channel: params.messageChannel,
+          to: params.resolvedDelivery.to,
+          threadId: params.resolvedDelivery.threadId,
+        });
         const result = await runEmbeddedPiAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.agentSessionKey,
           agentId: params.agentId,
           trigger: "cron",
+          cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
-          senderIsOwner: true,
+          senderIsOwner: false,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
+          messageTo: params.resolvedDelivery.to,
+          messageThreadId: params.resolvedDelivery.threadId,
+          currentChannelId,
           sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
@@ -162,6 +199,7 @@ export function createCronPromptExecutor(params: {
           runId: params.cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
           disableMessageTool: params.toolPolicy.disableMessageTool,
+          forceMessageTool: params.toolPolicy.forceMessageTool,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           bootstrapPromptWarningSignaturesSeen,
@@ -205,10 +243,13 @@ export async function executeCronRun(params: {
   resolvedDelivery: {
     channel?: string;
     accountId?: string;
+    to?: string;
+    threadId?: string | number;
   };
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
+    forceMessageTool: boolean;
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
@@ -307,6 +348,10 @@ export async function executeCronRun(params: {
     } = resolveCronPayloadOutcome({
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
+      finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
+      preferFinalAssistantVisibleText: (
+        await resolveCronChannelOutputPolicy(params.resolvedDelivery.channel)
+      ).preferFinalAssistantVisibleText,
     });
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =
@@ -314,15 +359,22 @@ export async function executeCronRun(params: {
       !runResult.didSendViaMessagingTool &&
       !interimPayloadHasStructuredContent &&
       !interimPayloads.some((payload) => payload?.isError === true) &&
-      !listDescendantRunsForRequester(params.agentSessionKey).some((entry) => {
+      isLikelyInterimCronMessage(interimText);
+
+    let hasFreshDescendants = false;
+    let hasActiveDescendants = false;
+    if (shouldRetryInterimAck) {
+      const { countActiveDescendantRuns, listDescendantRunsForRequester } =
+        await loadCronSubagentRegistryRuntime();
+      hasFreshDescendants = listDescendantRunsForRequester(params.agentSessionKey).some((entry) => {
         const descendantStartedAt =
           typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
         return typeof descendantStartedAt === "number" && descendantStartedAt >= runStartedAt;
-      }) &&
-      countActiveDescendantRuns(params.agentSessionKey) === 0 &&
-      isLikelyInterimCronMessage(interimText);
+      });
+      hasActiveDescendants = countActiveDescendantRuns(params.agentSessionKey) > 0;
+    }
 
-    if (shouldRetryInterimAck) {
+    if (shouldRetryInterimAck && !hasFreshDescendants && !hasActiveDescendants) {
       const continuationPrompt = [
         "Your previous response was only an acknowledgement and did not complete this cron task.",
         "Complete the original task now.",

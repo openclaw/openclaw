@@ -78,6 +78,64 @@ func docsPiModel() string {
 	}
 }
 
+func docsPiProviderArg() string {
+	provider := docsPiProvider()
+	if provider == "" {
+		return ""
+	}
+	if docsPiOmitProvider() {
+		return ""
+	}
+	if strings.Contains(docsPiModel(), "/") {
+		return ""
+	}
+	if hasDocsPiAgentDirOverride() {
+		return ""
+	}
+	if !isBuiltInPiProvider(provider) {
+		return ""
+	}
+	return provider
+}
+
+func docsPiModelRef() string {
+	model := docsPiModel()
+	if model == "" {
+		return ""
+	}
+	if strings.Contains(model, "/") {
+		return model
+	}
+	if docsPiOmitProvider() {
+		provider := docsPiProvider()
+		if provider == "" {
+			return model
+		}
+		return provider + "/" + model
+	}
+	if docsPiProviderArg() != "" {
+		return model
+	}
+	provider := docsPiProvider()
+	if provider == "" {
+		return model
+	}
+	return provider + "/" + model
+}
+
+func isBuiltInPiProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic", "openai":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasDocsPiAgentDirOverride() bool {
+	return strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")) != ""
+}
+
 func segmentID(relPath, textHash string) string {
 	shortHash := textHash
 	if len(shortHash) > 16 {

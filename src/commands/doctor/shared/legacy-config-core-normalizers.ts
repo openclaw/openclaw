@@ -1,25 +1,16 @@
-import { isDeepStrictEqual } from "node:util";
-import { normalizeProviderId } from "../../../agents/model-selection.js";
-import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-helpers.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { isLegacyModelsAddCodexMetadataModel } from "../../../agents/openai-codex-models-add-legacy.js";
+import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
-import { normalizeTalkSection } from "../../../config/talk.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import { isRecord } from "./legacy-config-record-shared.js";
-
-function buildLegacyTalkProviderCompat(
-  talk: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const compat: Record<string, unknown> = {};
-  for (const key of ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"] as const) {
-    if (talk[key] !== undefined) {
-      compat[key] = talk[key];
-    }
-  }
-  return Object.keys(compat).length > 0 ? compat : undefined;
-}
+export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 export function normalizeLegacyBrowserConfig(
   cfg: OpenClawConfig,
@@ -49,7 +40,7 @@ export function normalizeLegacyBrowserConfig(
       if (!isRecord(rawProfile)) {
         continue;
       }
-      const rawDriver = typeof rawProfile.driver === "string" ? rawProfile.driver.trim() : "";
+      const rawDriver = normalizeOptionalString(rawProfile.driver) ?? "";
       if (rawDriver !== "extension") {
         continue;
       }
@@ -180,6 +171,70 @@ type ModelProviderEntry = Partial<
   NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
 >;
 type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
+type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
+
+export function normalizeLegacyOpenAICodexModelsAddMetadata(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawModels = cfg.models;
+  if (!isRecord(rawModels) || !isRecord(rawModels.providers)) {
+    return cfg;
+  }
+
+  let providersChanged = false;
+  const nextProviders = { ...rawModels.providers };
+  for (const [providerId, rawProvider] of Object.entries(rawModels.providers)) {
+    if (normalizeProviderId(providerId) !== "openai-codex" || !isRecord(rawProvider)) {
+      continue;
+    }
+    const rawProviderModels = rawProvider.models;
+    if (!Array.isArray(rawProviderModels)) {
+      continue;
+    }
+    let providerChanged = false;
+    const nextModels: typeof rawProviderModels = [];
+    for (const model of rawProviderModels) {
+      if (
+        isRecord(model) &&
+        !("metadataSource" in model) &&
+        isLegacyModelsAddCodexMetadataModel({
+          provider: providerId,
+          model: model as Partial<ModelDefinitionEntry>,
+        })
+      ) {
+        providerChanged = true;
+        changes.push(
+          `Marked models.providers.${providerId}.models.${model.id} as /models add metadata so official OpenAI Codex metadata can override it.`,
+        );
+        nextModels.push(Object.assign({}, model, { metadataSource: "models-add" }));
+      } else {
+        nextModels.push(model);
+      }
+    }
+
+    if (!providerChanged) {
+      continue;
+    }
+    nextProviders[providerId] = {
+      ...rawProvider,
+      models: nextModels,
+    } as (typeof nextProviders)[string];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    models: {
+      ...rawModels,
+      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
+    },
+  };
+}
 
 export function normalizeLegacyNanoBananaSkill(
   cfg: OpenClawConfig,
@@ -254,12 +309,11 @@ export function normalizeLegacyNanoBananaSkill(
   }
 
   const legacyEnv = isRecord(rawLegacyEntry.env) ? rawLegacyEntry.env : undefined;
-  const legacyEnvApiKey =
-    typeof legacyEnv?.GEMINI_API_KEY === "string" ? legacyEnv.GEMINI_API_KEY.trim() : "";
+  const legacyEnvApiKey = normalizeOptionalString(legacyEnv?.GEMINI_API_KEY) ?? "";
   const legacyApiKey =
     legacyEnvApiKey ||
     (typeof rawLegacyEntry.apiKey === "string"
-      ? rawLegacyEntry.apiKey.trim()
+      ? normalizeOptionalString(rawLegacyEntry.apiKey)
       : rawLegacyEntry.apiKey && isRecord(rawLegacyEntry.apiKey)
         ? structuredClone(rawLegacyEntry.apiKey)
         : undefined);
@@ -315,36 +369,6 @@ export function normalizeLegacyNanoBananaSkill(
   return {
     ...next,
     skills,
-  };
-}
-
-export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const rawTalk = cfg.talk;
-  if (!isRecord(rawTalk)) {
-    return cfg;
-  }
-
-  const normalizedTalk = normalizeTalkSection(rawTalk as OpenClawConfig["talk"]) ?? {};
-  const legacyProviderCompat = buildLegacyTalkProviderCompat(rawTalk);
-  if (legacyProviderCompat) {
-    normalizedTalk.providers = {
-      ...normalizedTalk.providers,
-      elevenlabs: {
-        ...legacyProviderCompat,
-        ...normalizedTalk.providers?.elevenlabs,
-      },
-    };
-  }
-  if (Object.keys(normalizedTalk).length === 0 || isDeepStrictEqual(normalizedTalk, rawTalk)) {
-    return cfg;
-  }
-
-  changes.push(
-    "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
-  );
-  return {
-    ...cfg,
-    talk: normalizedTalk,
   };
 }
 
@@ -545,7 +569,7 @@ export function normalizeLegacyMistralModelMaxTokens(
       if (!isRecord(model)) {
         return model;
       }
-      const modelId = typeof model.id === "string" ? model.id.trim() : "";
+      const modelId = normalizeOptionalString(model.id) ?? "";
       const contextWindow =
         typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
           ? model.contextWindow
@@ -572,10 +596,7 @@ export function normalizeLegacyMistralModelMaxTokens(
       changes.push(
         `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
       );
-      return {
-        ...model,
-        maxTokens: normalizedMaxTokens,
-      };
+      return Object.assign({}, model, { maxTokens: normalizedMaxTokens });
     });
 
     if (!modelsChanged) {

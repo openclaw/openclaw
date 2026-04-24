@@ -20,6 +20,72 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
     ).toBeUndefined();
   });
 
+  it("omits the heartbeat section when the default cadence is disabled", () => {
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config: {
+          agents: {
+            defaults: {
+              heartbeat: {
+                every: "0m",
+              },
+            },
+          },
+        },
+        agentId: "main",
+        defaultAgentId: "main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("omits the heartbeat section when the default-agent override disables cadence", () => {
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config: {
+          agents: {
+            defaults: {
+              heartbeat: {
+                every: "30m",
+              },
+            },
+            list: [
+              {
+                id: "main",
+                heartbeat: {
+                  every: "0m",
+                },
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        defaultAgentId: "main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("omits the heartbeat section when only a non-default agent has explicit heartbeat config", () => {
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config: {
+          agents: {
+            list: [
+              { id: "main", default: true },
+              {
+                id: "ops",
+                heartbeat: {
+                  every: "30m",
+                },
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        defaultAgentId: "main",
+      }),
+    ).toBeUndefined();
+  });
+
   it("honors default-agent overrides for the prompt text", () => {
     expect(
       resolveHeartbeatPromptForSystemPrompt({

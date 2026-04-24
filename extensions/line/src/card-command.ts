@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createActionCard,
   createImageCard,
@@ -136,7 +137,7 @@ function parseCardArgs(argsStr: string): {
   // Extract type (first word)
   const typeMatch = argsStr.match(/^(\w+)/);
   if (typeMatch) {
-    result.type = typeMatch[1].toLowerCase();
+    result.type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
     argsStr = argsStr.slice(typeMatch[0].length).trim();
   }
 

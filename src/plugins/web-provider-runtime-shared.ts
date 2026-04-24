@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withActivatedPluginIds } from "./activation-context.js";
 import {
   buildPluginSnapshotCacheEnvKey,
@@ -13,6 +13,7 @@ import {
 } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
@@ -66,6 +67,13 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
     registry: PluginRegistry;
     onlyPluginIds?: readonly string[];
   }) => TEntry[];
+  resolveBundledPublicArtifactProviders?: (params: {
+    config?: PluginLoadOptions["config"];
+    workspaceDir?: string;
+    env?: PluginLoadOptions["env"];
+    bundledAllowlistCompat?: boolean;
+    onlyPluginIds?: readonly string[];
+  }) => TEntry[] | null;
 };
 
 export function createWebProviderSnapshotCache<TEntry>(): WebProviderSnapshotCache<TEntry> {
@@ -87,13 +95,15 @@ function resolveWebProviderLoadOptions<TEntry>(
       workspaceDir,
       env,
     });
-  const onlyPluginIds = deps.resolveCandidatePluginIds({
-    config,
-    workspaceDir,
-    env,
-    onlyPluginIds: params.onlyPluginIds,
-    origin: params.origin,
-  });
+  const onlyPluginIds = normalizePluginIdScope(
+    deps.resolveCandidatePluginIds({
+      config,
+      workspaceDir,
+      env,
+      onlyPluginIds: params.onlyPluginIds,
+      origin: params.origin,
+    }),
+  );
   return buildPluginRuntimeLoadOptionsFromValues(
     {
       env,
@@ -106,7 +116,7 @@ function resolveWebProviderLoadOptions<TEntry>(
     {
       cache: params.cache ?? false,
       activate: params.activate ?? false,
-      ...(onlyPluginIds ? { onlyPluginIds } : {}),
+      ...(hasExplicitPluginIdScope(onlyPluginIds) ? { onlyPluginIds } : {}),
     },
   );
 }
@@ -128,6 +138,18 @@ export function resolvePluginWebProviders<TEntry>(
       }) ?? [];
     if (pluginIds.length === 0) {
       return [];
+    }
+    if (params.activate !== true) {
+      const bundledArtifactProviders = deps.resolveBundledPublicArtifactProviders?.({
+        config: params.config,
+        workspaceDir,
+        env,
+        bundledAllowlistCompat: params.bundledAllowlistCompat,
+        onlyPluginIds: pluginIds,
+      });
+      if (bundledArtifactProviders) {
+        return bundledArtifactProviders;
+      }
     }
     const registry = loadOpenClawPlugins(
       buildPluginRuntimeLoadOptionsFromValues(
@@ -220,9 +242,9 @@ export function resolveRuntimeWebProviders<TEntry>(
   params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
 ): TEntry[] {
-  const runtimeRegistry = resolveRuntimePluginRegistry(
-    params.config === undefined ? undefined : resolveWebProviderLoadOptions(params, deps),
-  );
+  const loadOptions =
+    params.config === undefined ? undefined : resolveWebProviderLoadOptions(params, deps);
+  const runtimeRegistry = resolveRuntimePluginRegistry(loadOptions);
   if (runtimeRegistry) {
     return deps.mapRegistryProviders({
       registry: runtimeRegistry,

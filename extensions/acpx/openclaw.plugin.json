@@ -16,6 +16,10 @@
         "type": "string",
         "minLength": 1
       },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
+      },
       "permissionMode": {
         "type": "string",
         "enum": ["approve-all", "approve-reads", "deny-all"]
@@ -27,16 +31,24 @@
       "pluginToolsMcpBridge": {
         "type": "boolean"
       },
+      "openClawToolsMcpBridge": {
+        "type": "boolean"
+      },
       "strictWindowsCmdWrapper": {
         "type": "boolean"
       },
       "timeoutSeconds": {
         "type": "number",
-        "minimum": 0.001
+        "minimum": 0.001,
+        "default": 120
       },
       "queueOwnerTtlSeconds": {
         "type": "number",
         "minimum": 0
+      },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
       },
       "mcpServers": {
         "type": "object",
@@ -99,6 +111,11 @@
       "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into embedded ACP sessions so ACP agents can call plugin-registered tools.",
       "advanced": true
     },
+    "openClawToolsMcpBridge": {
+      "label": "OpenClaw Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw core-tools MCP server into embedded ACP sessions so ACP agents can call selected built-in tools such as cron.",
+      "advanced": true
+    },
     "strictWindowsCmdWrapper": {
       "label": "Strict Windows cmd Wrapper",
       "help": "Legacy compatibility field. The current embedded acpx/runtime package uses its own Windows command resolution behavior. Setting this to false is accepted for compatibility and logged as ignored.",
@@ -106,12 +123,17 @@
     },
     "timeoutSeconds": {
       "label": "Prompt Timeout Seconds",
-      "help": "Optional timeout for each embedded runtime turn.",
+      "help": "Timeout for each embedded runtime turn. Defaults to 120 seconds so slower Gemini CLI ACP startups have room to initialize.",
       "advanced": true
     },
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
       "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
+      "advanced": true
+    },
+    "probeAgent": {
+      "label": "Health Probe Agent",
+      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the runtime built-in probe agent (codex). Set this to another configured ACP agent id (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
       "advanced": true
     },
     "mcpServers": {

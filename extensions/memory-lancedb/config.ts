@@ -10,10 +10,12 @@ export type MemoryConfig = {
     baseUrl?: string;
     dimensions?: number;
   };
+  dreaming?: Record<string, unknown>;
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
   captureMaxChars?: number;
+  storageOptions?: Record<string, string>;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -97,7 +99,15 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
+      [
+        "embedding",
+        "dreaming",
+        "dbPath",
+        "autoCapture",
+        "autoRecall",
+        "captureMaxChars",
+        "storageOptions",
+      ],
       "memory config",
     );
 
@@ -118,6 +128,32 @@ export const memoryConfigSchema = {
       throw new Error("captureMaxChars must be between 100 and 10000");
     }
 
+    const dreaming =
+      cfg.dreaming === undefined
+        ? undefined
+        : cfg.dreaming && typeof cfg.dreaming === "object" && !Array.isArray(cfg.dreaming)
+          ? (cfg.dreaming as Record<string, unknown>)
+          : (() => {
+              throw new Error("dreaming config must be an object");
+            })();
+
+    // Parse storageOptions (object with string values)
+    let storageOptions: Record<string, string> | undefined;
+    const storageOpts = cfg.storageOptions as Record<string, unknown> | undefined;
+    if (storageOpts !== undefined && storageOpts !== null) {
+      if (!storageOpts || typeof storageOpts !== "object" || Array.isArray(storageOpts)) {
+        throw new Error("storageOptions must be an object");
+      }
+      storageOptions = {};
+      // Validate all values are strings
+      for (const [key, value] of Object.entries(storageOpts)) {
+        if (typeof value !== "string") {
+          throw new Error(`storageOptions.${key} must be a string`);
+        }
+        storageOptions[key] = resolveEnvVars(value);
+      }
+    }
+
     return {
       embedding: {
         provider: "openai",
@@ -127,10 +163,12 @@ export const memoryConfigSchema = {
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
         dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
       },
+      dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      ...(storageOptions ? { storageOptions } : {}),
     };
   },
   uiHints: {
@@ -161,6 +199,7 @@ export const memoryConfigSchema = {
       label: "Database Path",
       placeholder: "~/.openclaw/memory/lancedb",
       advanced: true,
+      help: "Local filesystem path or cloud storage URI (s3://, gs://) for LanceDB database",
     },
     autoCapture: {
       label: "Auto-Capture",
@@ -175,6 +214,12 @@ export const memoryConfigSchema = {
       help: "Maximum message length eligible for auto-capture",
       advanced: true,
       placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
+    },
+    storageOptions: {
+      label: "Storage Options",
+      sensitive: true,
+      advanced: true,
+      help: "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values",
     },
   },
 };

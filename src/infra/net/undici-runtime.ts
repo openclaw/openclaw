@@ -5,6 +5,7 @@ export const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS
 export type UndiciRuntimeDeps = {
   Agent: typeof import("undici").Agent;
   EnvHttpProxyAgent: typeof import("undici").EnvHttpProxyAgent;
+  FormData?: typeof import("undici").FormData;
   ProxyAgent: typeof import("undici").ProxyAgent;
   fetch: typeof import("undici").fetch;
 };
@@ -44,6 +45,7 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
   return {
     Agent: undici.Agent,
     EnvHttpProxyAgent: undici.EnvHttpProxyAgent,
+    FormData: undici.FormData,
     ProxyAgent: undici.ProxyAgent,
     fetch: undici.fetch,
   };
@@ -51,36 +53,47 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
 
 function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
   options?: T,
+  timeoutMs?: number,
 ): (T extends object ? T : Record<never, never>) & { allowH2: false } {
-  if (!options) {
-    return { ...HTTP1_ONLY_DISPATCHER_OPTIONS } as (T extends object ? T : Record<never, never>) & {
-      allowH2: false;
-    };
+  const base = {} as (T extends object ? T : Record<never, never>) & { allowH2: false };
+  if (options) {
+    Object.assign(base, options);
   }
-  return {
-    ...options,
-    ...HTTP1_ONLY_DISPATCHER_OPTIONS,
-  } as (T extends object ? T : Record<never, never>) & { allowH2: false };
+  // Enforce HTTP/1.1-only — must come after options to prevent accidental override
+  Object.assign(base, HTTP1_ONLY_DISPATCHER_OPTIONS);
+  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    (base as Record<string, unknown>).bodyTimeout = timeoutMs;
+    (base as Record<string, unknown>).headersTimeout = timeoutMs;
+  }
+  return base;
 }
 
-export function createHttp1Agent(options?: UndiciAgentOptions): import("undici").Agent {
+export function createHttp1Agent(
+  options?: UndiciAgentOptions,
+  timeoutMs?: number,
+): import("undici").Agent {
   const { Agent } = loadUndiciRuntimeDeps();
-  return new Agent(withHttp1OnlyDispatcherOptions(options));
+  return new Agent(withHttp1OnlyDispatcherOptions(options, timeoutMs));
 }
 
 export function createHttp1EnvHttpProxyAgent(
   options?: UndiciEnvHttpProxyAgentOptions,
+  timeoutMs?: number,
 ): import("undici").EnvHttpProxyAgent {
   const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
-  return new EnvHttpProxyAgent(withHttp1OnlyDispatcherOptions(options));
+  return new EnvHttpProxyAgent(withHttp1OnlyDispatcherOptions(options, timeoutMs));
 }
 
 export function createHttp1ProxyAgent(
   options: UndiciProxyAgentOptions,
+  timeoutMs?: number,
 ): import("undici").ProxyAgent {
   const { ProxyAgent } = loadUndiciRuntimeDeps();
-  if (typeof options === "string" || options instanceof URL) {
-    return new ProxyAgent(withHttp1OnlyDispatcherOptions({ uri: options.toString() }));
-  }
-  return new ProxyAgent(withHttp1OnlyDispatcherOptions(options));
+  const normalized =
+    typeof options === "string" || options instanceof URL
+      ? { uri: options.toString() }
+      : { ...options };
+  return new ProxyAgent(
+    withHttp1OnlyDispatcherOptions(normalized as object, timeoutMs) as UndiciProxyAgentOptions,
+  );
 }

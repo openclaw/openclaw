@@ -214,6 +214,14 @@ describe("formatCliCommand", () => {
     ).toBe("openclaw --container demo gateway status --deep");
   });
 
+  it("ignores unsafe container hints", () => {
+    expect(
+      formatCliCommand("openclaw gateway status --deep", {
+        OPENCLAW_CONTAINER_HINT: "demo; rm -rf /",
+      }),
+    ).toBe("openclaw gateway status --deep");
+  });
+
   it("preserves both --container and --profile hints", () => {
     expect(
       formatCliCommand("openclaw doctor", {

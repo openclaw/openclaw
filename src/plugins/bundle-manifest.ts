@@ -7,8 +7,8 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
 import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
-import type { PluginBundleFormat } from "./types.js";
 
 export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
@@ -43,7 +43,9 @@ function normalizePathList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 export function normalizeBundlePathList(value: unknown): string[] {

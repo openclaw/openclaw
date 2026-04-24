@@ -1,37 +1,60 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { __testing as pluginLoaderTesting } from "../../../src/plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../../../src/plugins/types.js";
+import { resolveWorkspacePackagePublicModuleUrl } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnv } from "../../../src/test-utils/env.js";
-import * as tts from "../../../src/tts/tts.js";
+import type { ResolvedTtsConfig } from "../../../src/tts/tts-types.js";
 
+type TtsRuntimeModule = typeof import("../../../src/tts/tts.js");
+type TtsCoreModule = typeof import("../../../src/tts/tts-core.js");
+
+const speechCoreRuntimeApiModuleId = resolveWorkspacePackagePublicModuleUrl({
+  packageName: "@openclaw/speech-core",
+  artifactBasename: "runtime-api.js",
+});
+
+let ttsRuntime: TtsRuntimeModule;
+let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
+let ttsRuntimeInitialized = false;
+let ttsCorePromise: Promise<TtsCoreModule> | null = null;
 let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
 let getApiKeyForModelMock: typeof import("../../../src/agents/model-auth.js").getApiKeyForModel;
 let requireApiKeyMock: typeof import("../../../src/agents/model-auth.js").requireApiKey;
 let resolveModelAsyncMock: typeof import("../../../src/agents/pi-embedded-runner/model.js").resolveModelAsync;
 let ensureCustomApiRegisteredMock: typeof import("../../../src/agents/custom-api-registry.js").ensureCustomApiRegistered;
 let prepareModelForSimpleCompletionMock: typeof import("../../../src/agents/simple-completion-transport.js").prepareModelForSimpleCompletion;
+let summarizeTextCore: TtsCoreModule["summarizeText"];
+let resolveTtsConfig: TtsRuntimeModule["resolveTtsConfig"];
+let maybeApplyTtsToPayload: TtsRuntimeModule["maybeApplyTtsToPayload"];
+let getTtsProvider: TtsRuntimeModule["getTtsProvider"];
+let parseTtsDirectives: TtsRuntimeModule["_test"]["parseTtsDirectives"];
+let resolveModelOverridePolicy: TtsRuntimeModule["_test"]["resolveModelOverridePolicy"];
+let getResolvedSpeechProviderConfig: TtsRuntimeModule["_test"]["getResolvedSpeechProviderConfig"];
+let formatTtsProviderError: TtsRuntimeModule["_test"]["formatTtsProviderError"];
+let sanitizeTtsErrorForLog: TtsRuntimeModule["_test"]["sanitizeTtsErrorForLog"];
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@mariozechner/pi-ai", () => {
+  const getApiProvider = vi.fn(() => undefined);
   return {
-    ...original,
     completeSimple: vi.fn(),
+    createAssistantMessageEventStream: vi.fn(),
+    getApiProvider,
+    getModel: vi.fn(),
+    registerApiProvider: vi.fn(),
+    streamAnthropic: vi.fn(),
+    streamSimple: vi.fn(),
+    streamSimpleOpenAICompletions: vi.fn(),
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
-  );
+vi.mock("@mariozechner/pi-ai/oauth", () => {
   return {
-    ...actual,
     getOAuthProviders: () => [],
     getOAuthApiKey: vi.fn(async () => null),
+    loginOpenAICodex: vi.fn(),
   };
 });
 
@@ -74,17 +97,6 @@ vi.mock("../../../src/agents/model-auth.js", () => ({
 vi.mock("../../../src/agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
-
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
-
-const {
-  parseTtsDirectives,
-  resolveModelOverridePolicy,
-  summarizeText,
-  getResolvedSpeechProviderConfig,
-  formatTtsProviderError,
-  sanitizeTtsErrorForLog,
-} = _test;
 
 function asLegacyTtsConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -306,7 +318,8 @@ function buildTestMicrosoftSpeechProvider(): SpeechProviderPlugin {
         outputFormat: edgeConfig.outputFormat ?? "audio-24khz-48kbitrate-mono-mp3",
       };
     },
-    isConfigured: () => true,
+    isConfigured: ({ providerConfig }) =>
+      (providerConfig as Record<string, unknown> | undefined)?.enabled !== false,
     synthesize: async () => ({
       audioBuffer: createAudioBuffer(),
       outputFormat: "mp3",
@@ -367,7 +380,104 @@ function buildTestElevenLabsSpeechProvider(): SpeechProviderPlugin {
   };
 }
 
-beforeEach(async () => {
+function buildTestGoogleSpeechProvider(): SpeechProviderPlugin {
+  return {
+    id: "google",
+    label: "Google",
+    autoSelectOrder: 50,
+    resolveConfig: ({ rawConfig }) => resolveTestProviderConfig(rawConfig, "google"),
+    isConfigured: ({ cfg, providerConfig }) =>
+      typeof (providerConfig as Record<string, unknown> | undefined)?.apiKey === "string" ||
+      typeof cfg?.models?.providers?.google?.apiKey === "string" ||
+      typeof process.env.GEMINI_API_KEY === "string" ||
+      typeof process.env.GOOGLE_API_KEY === "string",
+    synthesize: async () => ({
+      audioBuffer: createAudioBuffer(),
+      outputFormat: "wav",
+      fileExtension: ".wav",
+      voiceCompatible: false,
+    }),
+    synthesizeTelephony: async () => ({
+      audioBuffer: createAudioBuffer(),
+      outputFormat: "pcm",
+      sampleRate: 24_000,
+    }),
+    listVoices: async () => [{ id: "Kore", label: "Kore" }],
+  };
+}
+
+async function loadTtsRuntime(): Promise<TtsRuntimeModule> {
+  ttsRuntimePromise ??= import(speechCoreRuntimeApiModuleId) as Promise<TtsRuntimeModule>;
+  return await ttsRuntimePromise;
+}
+
+async function loadTtsCore(): Promise<TtsCoreModule> {
+  ttsCorePromise ??= import("../../../src/tts/tts-core.js");
+  return await ttsCorePromise;
+}
+
+async function setupTtsRuntime() {
+  if (ttsRuntimeInitialized) {
+    return;
+  }
+  ttsRuntime = await loadTtsRuntime();
+  resolveTtsConfig = ttsRuntime.resolveTtsConfig;
+  maybeApplyTtsToPayload = ttsRuntime.maybeApplyTtsToPayload;
+  getTtsProvider = ttsRuntime.getTtsProvider;
+  ({
+    parseTtsDirectives,
+    resolveModelOverridePolicy,
+    getResolvedSpeechProviderConfig,
+    formatTtsProviderError,
+    sanitizeTtsErrorForLog,
+  } = ttsRuntime._test);
+  ttsRuntimeInitialized = true;
+}
+
+function setupTestSpeechProviderRegistry() {
+  prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
+  const registry = createEmptyPluginRegistry();
+  registry.speechProviders = [
+    { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
+    { pluginId: "microsoft", provider: buildTestMicrosoftSpeechProvider(), source: "test" },
+    { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
+    { pluginId: "google", provider: buildTestGoogleSpeechProvider(), source: "test" },
+  ];
+  setActivePluginRegistry(registry);
+}
+
+function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
+  const rawConfig =
+    typeof cfg.messages?.tts === "object" && cfg.messages?.tts !== null ? cfg.messages.tts : {};
+  return {
+    auto: "off",
+    mode: rawConfig.mode ?? "final",
+    provider: "",
+    providerSource:
+      typeof rawConfig.provider === "string" && rawConfig.provider ? "config" : "default",
+    summaryModel: typeof rawConfig.summaryModel === "string" ? rawConfig.summaryModel : undefined,
+    modelOverrides: {
+      enabled: true,
+      allowText: true,
+      allowProvider: false,
+      allowVoice: true,
+      allowModelId: true,
+      allowVoiceSettings: true,
+      allowNormalization: true,
+      allowSeed: true,
+    },
+    providerConfigs: {},
+    prefsPath: typeof rawConfig.prefsPath === "string" ? rawConfig.prefsPath : undefined,
+    maxTextLength: typeof rawConfig.maxTextLength === "number" ? rawConfig.maxTextLength : 4096,
+    timeoutMs: typeof rawConfig.timeoutMs === "number" ? rawConfig.timeoutMs : 30_000,
+    rawConfig,
+    sourceConfig: cfg,
+  };
+}
+
+async function setupSummarizationMocks() {
+  ({ summarizeText: summarizeTextCore } = await loadTtsCore());
+  prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
   ({ completeSimple } = await import("@mariozechner/pi-ai"));
   ({ getApiKeyForModel: getApiKeyForModelMock, requireApiKey: requireApiKeyMock } =
     await import("../../../src/agents/model-auth.js"));
@@ -375,23 +485,40 @@ beforeEach(async () => {
     await import("../../../src/agents/pi-embedded-runner/model.js"));
   ({ ensureCustomApiRegistered: ensureCustomApiRegisteredMock } =
     await import("../../../src/agents/custom-api-registry.js"));
-  prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
-  const registry = createEmptyPluginRegistry();
-  registry.speechProviders = [
-    { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
-    { pluginId: "microsoft", provider: buildTestMicrosoftSpeechProvider(), source: "test" },
-    { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
-  ];
-  const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-  setActivePluginRegistry(registry, cacheKey);
-  vi.clearAllMocks();
   vi.mocked(completeSimple).mockResolvedValue(
     mockAssistantMessage([{ type: "text", text: "Summary" }]),
   );
-});
+  vi.mocked(getApiKeyForModelMock).mockResolvedValue({
+    apiKey: "test-api-key",
+    source: "test",
+    mode: "api-key",
+  });
+  vi.mocked(requireApiKeyMock).mockImplementation((auth: { apiKey?: string }) => auth.apiKey ?? "");
+  vi.mocked(resolveModelAsyncMock).mockImplementation(
+    async (provider: string, modelId: string) =>
+      createResolvedModel(provider, modelId) as unknown as Awaited<
+        ReturnType<typeof resolveModelAsyncMock>
+      >,
+  );
+  vi.mocked(ensureCustomApiRegisteredMock).mockReset();
+  prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
+}
+
+async function setupTtsContractTest() {
+  await setupTtsRuntime();
+  setupTestSpeechProviderRegistry();
+  vi.clearAllMocks();
+}
+
+async function setupTtsSummarizationTest() {
+  vi.clearAllMocks();
+  await setupSummarizationMocks();
+}
 
 export function describeTtsConfigContract() {
   describe("tts config contract", () => {
+    beforeEach(setupTtsContractTest);
+
     describe("resolveEdgeOutputFormat", () => {
       const baseCfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -564,6 +691,44 @@ export function describeTtsConfigContract() {
           expect(provider).toBe(testCase.expected);
         });
       });
+
+      it("passes cfg into auto-selection so model-provider Google keys can configure TTS", () => {
+        withEnv(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
+            GEMINI_API_KEY: undefined,
+            GOOGLE_API_KEY: undefined,
+          },
+          () => {
+            const cfg = asLegacyOpenClawConfig({
+              agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+              models: {
+                providers: {
+                  google: {
+                    apiKey: "model-provider-google-key",
+                  },
+                },
+              },
+              messages: {
+                tts: {
+                  providers: {
+                    microsoft: {
+                      enabled: false,
+                    },
+                  },
+                },
+              },
+            });
+            const config = resolveTtsConfig(cfg);
+            const prefsPath = `/tmp/tts-prefs-google-model-provider-${Date.now()}.json`;
+
+            expect(getTtsProvider(config, prefsPath)).toBe("google");
+          },
+        );
+      });
     });
 
     describe("resolveTtsConfig provider normalization", () => {
@@ -669,6 +834,8 @@ export function describeTtsConfigContract() {
 
 export function describeTtsSummarizationContract() {
   describe("tts summarization contract", () => {
+    beforeEach(setupTtsSummarizationTest);
+
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
@@ -680,8 +847,8 @@ export function describeTtsSummarizationContract() {
       cfg?: OpenClawConfig;
     }) {
       const cfg = params?.cfg ?? baseCfg;
-      const config = resolveTtsConfig(cfg);
-      return await summarizeText(
+      const config = createResolvedSummarizationConfig(cfg);
+      return await summarizeTextCore(
         {
           text: params?.text ?? "Long text to summarize",
           targetLength: params?.targetLength ?? 500,
@@ -732,18 +899,18 @@ export function describeTtsSummarizationContract() {
       expect(resolveModelAsyncMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
-    it("keeps the Ollama api for direct summarization", async () => {
+    it("keeps native completion APIs for direct summarization", async () => {
       vi.mocked(resolveModelAsyncMock).mockResolvedValue({
-        ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
+        ...createResolvedModel("local-summary", "demo-model", "openai-completions"),
         model: {
-          ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
-          baseUrl: "http://127.0.0.1:11434",
+          ...createResolvedModel("local-summary", "demo-model", "openai-completions").model,
+          baseUrl: "http://127.0.0.1:4000/v1",
         },
       } as never);
 
       await runSummarizeText();
 
-      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("ollama");
+      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("openai-completions");
       expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
@@ -780,6 +947,8 @@ export function describeTtsSummarizationContract() {
 
 export function describeTtsProviderRuntimeContract() {
   describe("tts provider runtime contract", () => {
+    beforeEach(setupTtsContractTest);
+
     describe("provider error redaction", () => {
       it("redacts sensitive tokens in provider errors", () => {
         const result = formatTtsProviderError(
@@ -835,10 +1004,9 @@ export function describeTtsProviderRuntimeContract() {
           { pluginId: "openai", provider: throwingPrimary, source: "test" },
           { pluginId: "microsoft", provider: fallback, source: "test" },
         ];
-        const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-        setActivePluginRegistry(registry, cacheKey);
+        setActivePluginRegistry(registry);
 
-        const result = await tts.synthesizeSpeech({
+        const result = await ttsRuntime.synthesizeSpeech({
           text: "hello fallback",
           cfg: {
             messages: {
@@ -904,10 +1072,9 @@ export function describeTtsProviderRuntimeContract() {
           { pluginId: "primary-throws", provider: throwingPrimary, source: "test" },
           { pluginId: "microsoft", provider: fallback, source: "test" },
         ];
-        const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-        setActivePluginRegistry(registry, cacheKey);
+        setActivePluginRegistry(registry);
 
-        const result = await tts.textToSpeechTelephony({
+        const result = await ttsRuntime.textToSpeechTelephony({
           text: "hello telephony fallback",
           cfg: {
             messages: {
@@ -952,10 +1119,9 @@ export function describeTtsProviderRuntimeContract() {
         registry.speechProviders = [
           { pluginId: "openai", provider: failingProvider, source: "test" },
         ];
-        const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
-        setActivePluginRegistry(registry, cacheKey);
+        setActivePluginRegistry(registry);
 
-        const result = await tts.textToSpeech({
+        const result = await ttsRuntime.textToSpeech({
           text: "hello",
           cfg: {
             messages: {
@@ -985,7 +1151,7 @@ export function describeTtsProviderRuntimeContract() {
         expectedInstructions: string | undefined,
       ) {
         await withMockedSpeechFetch(async (fetchMock) => {
-          const result = await tts.textToSpeechTelephony({
+          const result = await ttsRuntime.textToSpeechTelephony({
             text: "Hello there, friendly caller.",
             cfg: createOpenAiTelephonyCfg(model),
           });
@@ -1018,6 +1184,8 @@ export function describeTtsProviderRuntimeContract() {
 
 export function describeTtsAutoApplyContract() {
   describe("tts auto-apply contract", () => {
+    beforeEach(setupTtsContractTest);
+
     const baseCfg: OpenClawConfig = asLegacyOpenClawConfig({
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: {

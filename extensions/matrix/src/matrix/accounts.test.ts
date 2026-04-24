@@ -33,6 +33,124 @@ const envKeys = [
   getMatrixScopedEnvVarNames("team-ops").accessToken,
 ];
 
+type MatrixRoomScopeKey = "groups" | "rooms";
+
+function createMatrixAccountConfig(accessToken: string) {
+  return {
+    homeserver: "https://matrix.example.org",
+    accessToken,
+  };
+}
+
+function createMatrixScopedEntriesConfig(scopeKey: MatrixRoomScopeKey): CoreConfig {
+  return {
+    channels: {
+      matrix: {
+        [scopeKey]: {
+          "!default-room:example.org": {
+            enabled: true,
+            account: "default",
+          },
+          "!axis-room:example.org": {
+            enabled: true,
+            account: "axis",
+          },
+          "!unassigned-room:example.org": {
+            enabled: true,
+          },
+        },
+        accounts: {
+          default: createMatrixAccountConfig("default-token"),
+          axis: createMatrixAccountConfig("axis-token"),
+        },
+      },
+    },
+  } as unknown as CoreConfig;
+}
+
+function createMatrixTopLevelDefaultScopedEntriesConfig(scopeKey: MatrixRoomScopeKey): CoreConfig {
+  return {
+    channels: {
+      matrix: {
+        ...createMatrixAccountConfig("default-token"),
+        [scopeKey]: {
+          "!default-room:example.org": {
+            enabled: true,
+            account: "default",
+          },
+          "!ops-room:example.org": {
+            enabled: true,
+            account: "ops",
+          },
+          "!shared-room:example.org": {
+            enabled: true,
+          },
+        },
+        accounts: {
+          ops: createMatrixAccountConfig("ops-token"),
+        },
+      },
+    },
+  } as unknown as CoreConfig;
+}
+
+function expectMatrixScopedEntries(
+  cfg: CoreConfig,
+  scopeKey: MatrixRoomScopeKey,
+  accountId: string,
+  expected: Record<string, { enabled: true; account?: string }>,
+): void {
+  expect(resolveMatrixAccount({ cfg, accountId }).config[scopeKey]).toEqual(expected);
+}
+
+function expectMultiAccountMatrixScopedEntries(
+  cfg: CoreConfig,
+  scopeKey: MatrixRoomScopeKey,
+): void {
+  expectMatrixScopedEntries(cfg, scopeKey, "default", {
+    "!default-room:example.org": {
+      enabled: true,
+      account: "default",
+    },
+    "!unassigned-room:example.org": {
+      enabled: true,
+    },
+  });
+  expectMatrixScopedEntries(cfg, scopeKey, "axis", {
+    "!axis-room:example.org": {
+      enabled: true,
+      account: "axis",
+    },
+    "!unassigned-room:example.org": {
+      enabled: true,
+    },
+  });
+}
+
+function expectTopLevelDefaultMatrixScopedEntries(
+  cfg: CoreConfig,
+  scopeKey: MatrixRoomScopeKey,
+): void {
+  expectMatrixScopedEntries(cfg, scopeKey, "default", {
+    "!default-room:example.org": {
+      enabled: true,
+      account: "default",
+    },
+    "!shared-room:example.org": {
+      enabled: true,
+    },
+  });
+  expectMatrixScopedEntries(cfg, scopeKey, "ops", {
+    "!ops-room:example.org": {
+      enabled: true,
+      account: "ops",
+    },
+    "!shared-room:example.org": {
+      enabled: true,
+    },
+  });
+}
+
 describe("resolveMatrixAccount", () => {
   let prevEnv: Record<string, string | undefined> = {};
 
@@ -471,203 +589,25 @@ describe("resolveMatrixAccount", () => {
   });
 
   it("filters channel-level groups by room account in multi-account setups", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          groups: {
-            "!default-room:example.org": {
-              enabled: true,
-              account: "default",
-            },
-            "!axis-room:example.org": {
-              enabled: true,
-              account: "axis",
-            },
-            "!unassigned-room:example.org": {
-              enabled: true,
-            },
-          },
-          accounts: {
-            default: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "default-token",
-            },
-            axis: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "axis-token",
-            },
-          },
-        },
-      },
-    } as unknown as CoreConfig;
-
-    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.groups).toEqual({
-      "!default-room:example.org": {
-        enabled: true,
-        account: "default",
-      },
-      "!unassigned-room:example.org": {
-        enabled: true,
-      },
-    });
-    expect(resolveMatrixAccount({ cfg, accountId: "axis" }).config.groups).toEqual({
-      "!axis-room:example.org": {
-        enabled: true,
-        account: "axis",
-      },
-      "!unassigned-room:example.org": {
-        enabled: true,
-      },
-    });
+    expectMultiAccountMatrixScopedEntries(createMatrixScopedEntriesConfig("groups"), "groups");
   });
 
   it("filters channel-level groups when the default account is configured at the top level", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          accessToken: "default-token",
-          groups: {
-            "!default-room:example.org": {
-              enabled: true,
-              account: "default",
-            },
-            "!ops-room:example.org": {
-              enabled: true,
-              account: "ops",
-            },
-            "!shared-room:example.org": {
-              enabled: true,
-            },
-          },
-          accounts: {
-            ops: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "ops-token",
-            },
-          },
-        },
-      },
-    } as unknown as CoreConfig;
-
-    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.groups).toEqual({
-      "!default-room:example.org": {
-        enabled: true,
-        account: "default",
-      },
-      "!shared-room:example.org": {
-        enabled: true,
-      },
-    });
-    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toEqual({
-      "!ops-room:example.org": {
-        enabled: true,
-        account: "ops",
-      },
-      "!shared-room:example.org": {
-        enabled: true,
-      },
-    });
+    expectTopLevelDefaultMatrixScopedEntries(
+      createMatrixTopLevelDefaultScopedEntriesConfig("groups"),
+      "groups",
+    );
   });
 
   it("filters legacy channel-level rooms by room account in multi-account setups", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          rooms: {
-            "!default-room:example.org": {
-              enabled: true,
-              account: "default",
-            },
-            "!axis-room:example.org": {
-              enabled: true,
-              account: "axis",
-            },
-            "!unassigned-room:example.org": {
-              enabled: true,
-            },
-          },
-          accounts: {
-            default: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "default-token",
-            },
-            axis: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "axis-token",
-            },
-          },
-        },
-      },
-    } as unknown as CoreConfig;
-
-    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.rooms).toEqual({
-      "!default-room:example.org": {
-        enabled: true,
-        account: "default",
-      },
-      "!unassigned-room:example.org": {
-        enabled: true,
-      },
-    });
-    expect(resolveMatrixAccount({ cfg, accountId: "axis" }).config.rooms).toEqual({
-      "!axis-room:example.org": {
-        enabled: true,
-        account: "axis",
-      },
-      "!unassigned-room:example.org": {
-        enabled: true,
-      },
-    });
+    expectMultiAccountMatrixScopedEntries(createMatrixScopedEntriesConfig("rooms"), "rooms");
   });
 
   it("filters legacy channel-level rooms when the default account is configured at the top level", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          accessToken: "default-token",
-          rooms: {
-            "!default-room:example.org": {
-              enabled: true,
-              account: "default",
-            },
-            "!ops-room:example.org": {
-              enabled: true,
-              account: "ops",
-            },
-            "!shared-room:example.org": {
-              enabled: true,
-            },
-          },
-          accounts: {
-            ops: {
-              homeserver: "https://matrix.example.org",
-              accessToken: "ops-token",
-            },
-          },
-        },
-      },
-    } as unknown as CoreConfig;
-
-    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.rooms).toEqual({
-      "!default-room:example.org": {
-        enabled: true,
-        account: "default",
-      },
-      "!shared-room:example.org": {
-        enabled: true,
-      },
-    });
-    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toEqual({
-      "!ops-room:example.org": {
-        enabled: true,
-        account: "ops",
-      },
-      "!shared-room:example.org": {
-        enabled: true,
-      },
-    });
+    expectTopLevelDefaultMatrixScopedEntries(
+      createMatrixTopLevelDefaultScopedEntriesConfig("rooms"),
+      "rooms",
+    );
   });
 
   it("honors injected env when scoping room entries in multi-account setups", () => {

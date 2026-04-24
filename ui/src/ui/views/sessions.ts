@@ -4,6 +4,7 @@ import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   GatewaySessionRow,
   SessionCompactionCheckpoint,
@@ -62,8 +63,7 @@ export type SessionsProps = {
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
 };
 
-const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
-const BINARY_THINK_LEVELS = ["", "off", "on"] as const;
+const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 const VERBOSE_LEVELS = [
   { value: "", label: "inherit" },
   { value: "off", label: "off (explicit)" },
@@ -78,23 +78,13 @@ const FAST_LEVELS = [
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
-function normalizeProviderId(provider?: string | null): string {
-  if (!provider) {
-    return "";
-  }
-  const normalized = provider.trim().toLowerCase();
-  if (normalized === "z.ai" || normalized === "z-ai") {
-    return "zai";
-  }
-  return normalized;
+function resolveThinkLevelOptions(row: GatewaySessionRow): readonly string[] {
+  const options = row.thinkingOptions?.length ? row.thinkingOptions : DEFAULT_THINK_LEVELS;
+  return ["", ...options];
 }
 
-function isBinaryThinkingProvider(provider?: string | null): boolean {
-  return normalizeProviderId(provider) === "zai";
-}
-
-function resolveThinkLevelOptions(provider?: string | null): readonly string[] {
-  return isBinaryThinkingProvider(provider) ? BINARY_THINK_LEVELS : THINK_LEVELS;
+function isBinaryThinkingRow(row: GatewaySessionRow): boolean {
+  return row.thinkingOptions?.includes("on") === true;
 }
 
 function withCurrentOption(options: readonly string[], current: string): string[] {
@@ -144,15 +134,15 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
 }
 
 function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
-  const q = query.trim().toLowerCase();
+  const q = normalizeLowercaseStringOrEmpty(query);
   if (!q) {
     return rows;
   }
   return rows.filter((row) => {
-    const key = (row.key ?? "").toLowerCase();
-    const label = (row.label ?? "").toLowerCase();
-    const kind = (row.kind ?? "").toLowerCase();
-    const displayName = (row.displayName ?? "").toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(row.key);
+    const label = normalizeLowercaseStringOrEmpty(row.label);
+    const kind = normalizeLowercaseStringOrEmpty(row.kind);
+    const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
     return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
   });
 }
@@ -452,9 +442,9 @@ export function renderSessions(props: SessionsProps) {
 function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const rawThinking = row.thinkingLevel ?? "";
-  const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
+  const isBinaryThinking = isBinaryThinkingRow(row);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
-  const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row.modelProvider), thinking);
+  const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row), thinking);
   const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
   const fastLevels = withCurrentLabeledOption(FAST_LEVELS, fastMode);
   const verbose = row.verboseLevel ?? "";
@@ -466,14 +456,10 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const isExpanded = props.expandedCheckpointKey === row.key;
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
-  const displayName =
-    typeof row.displayName === "string" && row.displayName.trim().length > 0
-      ? row.displayName.trim()
-      : null;
+  const displayName = normalizeOptionalString(row.displayName) ?? null;
+  const trimmedLabel = normalizeOptionalString(row.label) ?? "";
   const showDisplayName = Boolean(
-    displayName &&
-    displayName !== row.key &&
-    displayName !== (typeof row.label === "string" ? row.label.trim() : ""),
+    displayName && displayName !== row.key && displayName !== trimmedLabel,
   );
   const canLink = row.kind !== "global";
   const chatUrl = canLink
@@ -535,8 +521,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           placeholder="(optional)"
           style="width: 100%; max-width: 140px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);"
           @change=${(e: Event) => {
-            const value = (e.target as HTMLInputElement).value.trim();
-            props.onPatch(row.key, { label: value || null });
+            const value = normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
+            props.onPatch(row.key, { label: value });
           }}
         />
       </td>

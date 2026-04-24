@@ -1,6 +1,12 @@
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { isAnthropicFamilyCacheTtlEligible } from "./anthropic-family-cache-semantics.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
+import {
+  isAnthropicFamilyCacheTtlEligible,
+  isAnthropicModelRef,
+} from "./anthropic-family-cache-semantics.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
@@ -41,12 +47,14 @@ export function isCacheTtlEligibleProvider(
       provider: normalizedProvider,
       modelId: normalizedModelId,
       modelApi,
-    }) || isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
+    }) ||
+    (normalizedProvider === "kilocode" && isAnthropicModelRef(normalizedModelId)) ||
+    isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
   );
 }
 
 function normalizeCacheTtlKey(value: string | undefined): string | undefined {
-  return value?.trim().toLowerCase();
+  return normalizeOptionalLowercaseString(value);
 }
 
 function matchesCacheTtlContext(

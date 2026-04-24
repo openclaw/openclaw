@@ -1,5 +1,7 @@
 import { z, type ZodTypeAny } from "zod";
-import type { PluginConfigUiHint, OpenClawPluginConfigSchema } from "./types.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { PluginConfigUiHint } from "./manifest-types.js";
+import type { OpenClawPluginConfigSchema } from "./types.js";
 
 type Issue = { path: Array<string | number>; message: string };
 
@@ -91,7 +93,7 @@ export function buildPluginConfigSchema(
           io: "input",
           unrepresentable: "any",
         }),
-      ) as Record<string, unknown>,
+      ) as JsonSchemaObject,
     };
   }
 

@@ -607,7 +607,7 @@ function normalizeRole(role: string | undefined, isTool: boolean): SessionPrevie
   if (isTool) {
     return "tool";
   }
-  switch ((role ?? "").toLowerCase()) {
+  switch (normalizeLowercaseStringOrEmpty(role)) {
     case "user":
       return "user";
     case "assistant":

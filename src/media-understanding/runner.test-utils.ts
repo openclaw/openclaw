@@ -29,6 +29,7 @@ export async function withMediaFixture(
   const media = normalizeMediaAttachments(ctx);
   const cache = createMediaAttachmentCache(media, {
     localPathRoots: [path.dirname(tmpPath)],
+    includeDefaultLocalPathRoots: false,
   });
 
   try {

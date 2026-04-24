@@ -11,7 +11,10 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   type ResolvedGoogleChatAccount,
   chunkTextForOutbound,
@@ -147,7 +150,7 @@ export const googlechatOutboundAdapter = {
     textChunkLimit: 4000,
     sanitizeText: ({ text }: { text: string }) => sanitizeForPlainText(text),
     resolveTarget: ({ to }: { to?: string }) => {
-      const trimmed = to?.trim() ?? "";
+      const trimmed = normalizeOptionalString(to) ?? "";
 
       if (trimmed) {
         const normalized = normalizeGoogleChatTarget(trimmed);
@@ -189,9 +192,7 @@ export const googlechatOutboundAdapter = {
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
       const thread =
-        typeof threadId === "number"
-          ? String(threadId)
-          : (threadId ?? replyToId ?? undefined);
+        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
       const result = await sendGoogleChatMessage({
         account,
@@ -236,9 +237,7 @@ export const googlechatOutboundAdapter = {
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
       const thread =
-        typeof threadId === "number"
-          ? String(threadId)
-          : (threadId ?? replyToId ?? undefined);
+        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>

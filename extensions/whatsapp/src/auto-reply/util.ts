@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 export function elide(text?: string, limit = 400) {
   if (!text) {
     return text;
@@ -45,7 +47,7 @@ export function isLikelyWhatsAppCryptoError(reason: unknown) {
   };
   const raw =
     reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : formatReason(reason);
-  const haystack = raw.toLowerCase();
+  const haystack = normalizeLowercaseStringOrEmpty(raw);
   const hasAuthError =
     haystack.includes("unsupported state or unable to authenticate data") ||
     haystack.includes("bad mac");

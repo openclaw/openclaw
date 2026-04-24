@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -40,8 +41,9 @@ export type McpClientHandle = {
   rawMessages: unknown[];
 };
 
-const GATEWAY_WS_TIMEOUT_MS = 30_000;
-const GATEWAY_CONNECT_RETRY_WINDOW_MS = 45_000;
+const GATEWAY_WS_OPEN_TIMEOUT_MS = 5_000;
+const GATEWAY_RPC_TIMEOUT_MS = 30_000;
+const GATEWAY_CONNECT_RETRY_WINDOW_MS = 120_000;
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -118,7 +120,7 @@ async function connectGatewayOnce(params: {
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("gateway ws open timeout")),
-      GATEWAY_WS_TIMEOUT_MS,
+      GATEWAY_WS_OPEN_TIMEOUT_MS,
     );
     timeout.unref?.();
     ws.once("open", () => {
@@ -179,7 +181,7 @@ async function connectGatewayOnce(params: {
     }
     pending.delete(typed.id);
     if (typed.ok === true) {
-      match.resolve(typed.result);
+      match.resolve(typed.payload ?? typed.result);
       return;
     }
     match.reject(
@@ -227,7 +229,7 @@ async function connectGatewayOnce(params: {
     const timeout = setTimeout(() => {
       pending.delete(connectId);
       reject(new Error("gateway connect timeout"));
-    }, GATEWAY_WS_TIMEOUT_MS);
+    }, GATEWAY_RPC_TIMEOUT_MS);
     timeout.unref?.();
     pending.set(connectId, {
       resolve: () => {
@@ -246,7 +248,7 @@ async function connectGatewayOnce(params: {
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error("gateway sessions.subscribe timeout"));
-    }, GATEWAY_WS_TIMEOUT_MS);
+    }, GATEWAY_RPC_TIMEOUT_MS);
     timeout.unref?.();
     pending.set(id, {
       resolve: () => {
@@ -330,6 +332,10 @@ export async function connectMcpClient(params: {
   gatewayUrl: string;
   gatewayToken: string;
 }): Promise<McpClientHandle> {
+  const tokenDir = "/tmp/openclaw-mcp-client";
+  const tokenFile = `${tokenDir}/gateway.token`;
+  mkdirSync(tokenDir, { recursive: true });
+  writeFileSync(tokenFile, `${params.gatewayToken}\n`, { encoding: "utf8", mode: 0o600 });
   const transport = new StdioClientTransport({
     command: "node",
     args: [
@@ -338,8 +344,8 @@ export async function connectMcpClient(params: {
       "serve",
       "--url",
       params.gatewayUrl,
-      "--token",
-      params.gatewayToken,
+      "--token-file",
+      tokenFile,
       "--claude-channel-mode",
       "on",
     ],

@@ -1,11 +1,13 @@
-import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 import type { ChannelMessageActionName, ChannelPlugin } from "./channel-api.js";
+import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
@@ -71,8 +73,16 @@ function resolveActionTarget(
       : (currentChannelId?.trim() ?? "");
 }
 
+function resolveGraphActionTarget(
+  params: Record<string, unknown>,
+  currentChannelId?: string | null,
+  currentGraphChannelId?: string | null,
+): string {
+  return resolveActionTarget(params, currentGraphChannelId ?? currentChannelId);
+}
+
 function resolveActionMessageId(params: Record<string, unknown>): string {
-  return typeof params.messageId === "string" ? params.messageId.trim() : "";
+  return normalizeOptionalString(params.messageId) ?? "";
 }
 
 function resolveActionPinnedMessageId(params: Record<string, unknown>): string {
@@ -84,7 +94,7 @@ function resolveActionPinnedMessageId(params: Record<string, unknown>): string {
 }
 
 function resolveActionQuery(params: Record<string, unknown>): string {
-  return typeof params.query === "string" ? params.query.trim() : "";
+  return normalizeOptionalString(params.query) ?? "";
 }
 
 function resolveActionContent(params: Record<string, unknown>): string {
@@ -113,8 +123,16 @@ function resolveRequiredActionTarget(params: {
   actionLabel: string;
   toolParams: Record<string, unknown>;
   currentChannelId?: string | null;
+  currentGraphChannelId?: string | null;
+  graphOnly?: boolean;
 }): string | ReturnType<typeof actionError> {
-  const to = resolveActionTarget(params.toolParams, params.currentChannelId);
+  const to = params.graphOnly
+    ? resolveGraphActionTarget(
+        params.toolParams,
+        params.currentChannelId,
+        params.currentGraphChannelId,
+      )
+    : resolveActionTarget(params.toolParams, params.currentChannelId);
   if (!to) {
     return actionError(`${params.actionLabel} requires a target (to).`);
   }
@@ -125,8 +143,16 @@ function resolveRequiredActionMessageTarget(params: {
   actionLabel: string;
   toolParams: Record<string, unknown>;
   currentChannelId?: string | null;
+  currentGraphChannelId?: string | null;
+  graphOnly?: boolean;
 }): { to: string; messageId: string } | ReturnType<typeof actionError> {
-  const to = resolveActionTarget(params.toolParams, params.currentChannelId);
+  const to = params.graphOnly
+    ? resolveGraphActionTarget(
+        params.toolParams,
+        params.currentChannelId,
+        params.currentGraphChannelId,
+      )
+    : resolveActionTarget(params.toolParams, params.currentChannelId);
   const messageId = resolveActionMessageId(params.toolParams);
   if (!to || !messageId) {
     return actionError(`${params.actionLabel} requires a target (to) and messageId.`);
@@ -138,8 +164,16 @@ function resolveRequiredActionPinnedMessageTarget(params: {
   actionLabel: string;
   toolParams: Record<string, unknown>;
   currentChannelId?: string | null;
+  currentGraphChannelId?: string | null;
+  graphOnly?: boolean;
 }): { to: string; pinnedMessageId: string } | ReturnType<typeof actionError> {
-  const to = resolveActionTarget(params.toolParams, params.currentChannelId);
+  const to = params.graphOnly
+    ? resolveGraphActionTarget(
+        params.toolParams,
+        params.currentChannelId,
+        params.currentGraphChannelId,
+      )
+    : resolveActionTarget(params.toolParams, params.currentChannelId);
   const pinnedMessageId = resolveActionPinnedMessageId(params.toolParams);
   if (!to || !pinnedMessageId) {
     return actionError(`${params.actionLabel} requires a target (to) and pinnedMessageId.`);
@@ -151,12 +185,16 @@ async function runWithRequiredActionTarget<T>(params: {
   actionLabel: string;
   toolParams: Record<string, unknown>;
   currentChannelId?: string | null;
+  currentGraphChannelId?: string | null;
+  graphOnly?: boolean;
   run: (to: string) => Promise<T>;
 }): Promise<T | ReturnType<typeof actionError>> {
   const to = resolveRequiredActionTarget({
     actionLabel: params.actionLabel,
     toolParams: params.toolParams,
     currentChannelId: params.currentChannelId,
+    currentGraphChannelId: params.currentGraphChannelId,
+    graphOnly: params.graphOnly,
   });
   if (typeof to !== "string") {
     return to;
@@ -168,12 +206,16 @@ async function runWithRequiredActionMessageTarget<T>(params: {
   actionLabel: string;
   toolParams: Record<string, unknown>;
   currentChannelId?: string | null;
+  currentGraphChannelId?: string | null;
+  graphOnly?: boolean;
   run: (target: { to: string; messageId: string }) => Promise<T>;
 }): Promise<T | ReturnType<typeof actionError>> {
   const target = resolveRequiredActionMessageTarget({
     actionLabel: params.actionLabel,
     toolParams: params.toolParams,
     currentChannelId: params.currentChannelId,
+    currentGraphChannelId: params.currentGraphChannelId,
+    graphOnly: params.graphOnly,
   });
   if ("isError" in target) {
     return target;
@@ -185,12 +227,16 @@ async function runWithRequiredActionPinnedMessageTarget<T>(params: {
   actionLabel: string;
   toolParams: Record<string, unknown>;
   currentChannelId?: string | null;
+  currentGraphChannelId?: string | null;
+  graphOnly?: boolean;
   run: (target: { to: string; pinnedMessageId: string }) => Promise<T>;
 }): Promise<T | ReturnType<typeof actionError>> {
   const target = resolveRequiredActionPinnedMessageTarget({
     actionLabel: params.actionLabel,
     toolParams: params.toolParams,
     currentChannelId: params.currentChannelId,
+    currentGraphChannelId: params.currentGraphChannelId,
+    graphOnly: params.graphOnly,
   });
   if ("isError" in target) {
     return target;
@@ -225,11 +271,16 @@ export function describeMSTeamsMessageTool({
           "channel-info",
         ] satisfies ChannelMessageActionName[])
       : [],
-    capabilities: enabled ? ["cards"] : [],
+    capabilities: enabled ? ["presentation"] : [],
     schema: enabled
       ? {
           properties: {
-            card: createMessageToolCardSchema(),
+            pinnedMessageId: Type.Optional(
+              Type.String({
+                description:
+                  "Pinned message resource ID for unpin (from pin or list-pins, not the chat message ID).",
+              }),
+            ),
           },
         }
       : null,
@@ -239,8 +290,13 @@ export function describeMSTeamsMessageTool({
 export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
   describeMessageTool: describeMSTeamsMessageTool,
   handleAction: async (ctx) => {
-    if (ctx.action === "send" && ctx.params.card) {
-      const card = ctx.params.card as Record<string, unknown>;
+    const presentation =
+      ctx.action === "send" ? normalizeMessagePresentation(ctx.params.presentation) : undefined;
+    if (ctx.action === "send" && presentation) {
+      const card = buildMSTeamsPresentationCard({
+        presentation,
+        text: resolveActionContent(ctx.params),
+      });
       return await runWithRequiredActionTarget({
         actionLabel: "Card send",
         toolParams: ctx.params,
@@ -348,6 +404,8 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
         actionLabel: "Read",
         toolParams: ctx.params,
         currentChannelId: ctx.toolContext?.currentChannelId,
+        currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
+        graphOnly: true,
         run: async (target) => {
           const { getMessageMSTeams } = await loadMSTeamsChannelRuntime();
           const message = await getMessageMSTeams({
@@ -365,6 +423,8 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
         actionLabel: "Pin",
         toolParams: ctx.params,
         currentChannelId: ctx.toolContext?.currentChannelId,
+        currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
+        graphOnly: true,
         run: async (target) => {
           const { pinMessageMSTeams } = await loadMSTeamsChannelRuntime();
           const result = await pinMessageMSTeams({
@@ -382,6 +442,8 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
         actionLabel: "Unpin",
         toolParams: ctx.params,
         currentChannelId: ctx.toolContext?.currentChannelId,
+        currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
+        graphOnly: true,
         run: async (target) => {
           const { unpinMessageMSTeams } = await loadMSTeamsChannelRuntime();
           const result = await unpinMessageMSTeams({
@@ -399,6 +461,8 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
         actionLabel: "List-pins",
         toolParams: ctx.params,
         currentChannelId: ctx.toolContext?.currentChannelId,
+        currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
+        graphOnly: true,
         run: async (to) => {
           const { listPinsMSTeams } = await loadMSTeamsChannelRuntime();
           const result = await listPinsMSTeams({ cfg: ctx.cfg, to });
@@ -412,8 +476,10 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
         actionLabel: "React",
         toolParams: ctx.params,
         currentChannelId: ctx.toolContext?.currentChannelId,
+        currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
+        graphOnly: true,
         run: async (target) => {
-          const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
+          const emoji = normalizeOptionalString(ctx.params.emoji) ?? "";
           const remove = typeof ctx.params.remove === "boolean" ? ctx.params.remove : false;
           if (!emoji) {
             return {
@@ -464,6 +530,8 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
         actionLabel: "Reactions",
         toolParams: ctx.params,
         currentChannelId: ctx.toolContext?.currentChannelId,
+        currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
+        graphOnly: true,
         run: async (target) => {
           const { listReactionsMSTeams } = await loadMSTeamsChannelRuntime();
           const result = await listReactionsMSTeams({
@@ -481,13 +549,15 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
         actionLabel: "Search",
         toolParams: ctx.params,
         currentChannelId: ctx.toolContext?.currentChannelId,
+        currentGraphChannelId: ctx.toolContext?.currentGraphChannelId,
+        graphOnly: true,
         run: async (to) => {
           const query = resolveActionQuery(ctx.params);
           if (!query) {
             return actionError("Search requires a target (to) and query.");
           }
           const limit = typeof ctx.params.limit === "number" ? ctx.params.limit : undefined;
-          const from = typeof ctx.params.from === "string" ? ctx.params.from.trim() : undefined;
+          const from = normalizeOptionalString(ctx.params.from);
           const { searchMessagesMSTeams } = await loadMSTeamsChannelRuntime();
           const result = await searchMessagesMSTeams({
             cfg: ctx.cfg,
@@ -502,7 +572,7 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
     }
 
     if (ctx.action === "member-info") {
-      const userId = typeof ctx.params.userId === "string" ? ctx.params.userId.trim() : "";
+      const userId = normalizeOptionalString(ctx.params.userId) ?? "";
       if (!userId) {
         return actionError("member-info requires a userId.");
       }
@@ -512,7 +582,7 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
     }
 
     if (ctx.action === "channel-list") {
-      const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
+      const teamId = normalizeOptionalString(ctx.params.teamId) ?? "";
       if (!teamId) {
         return actionError("channel-list requires a teamId.");
       }
@@ -522,8 +592,8 @@ export const msteamsActionsAdapter: NonNullable<ChannelPlugin["actions"]> = {
     }
 
     if (ctx.action === "channel-info") {
-      const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
-      const channelId = typeof ctx.params.channelId === "string" ? ctx.params.channelId.trim() : "";
+      const teamId = normalizeOptionalString(ctx.params.teamId) ?? "";
+      const channelId = normalizeOptionalString(ctx.params.channelId) ?? "";
       if (!teamId || !channelId) {
         return actionError("channel-info requires teamId and channelId.");
       }

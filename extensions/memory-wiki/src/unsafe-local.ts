@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import {
+  createWikiPageFilename,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+  slugifyWikiSegment,
+} from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
@@ -24,7 +30,7 @@ type UnsafeLocalArtifact = {
 const DIRECTORY_TEXT_EXTENSIONS = new Set([".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"]);
 
 function detectFenceLanguage(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   if (ext === ".json" || ext === ".jsonl") {
     return "json";
   }
@@ -46,7 +52,10 @@ async function listAllowedFilesRecursive(rootDir: string): Promise<string[]> {
       files.push(...(await listAllowedFilesRecursive(fullPath)));
       continue;
     }
-    if (entry.isFile() && DIRECTORY_TEXT_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+    if (
+      entry.isFile() &&
+      DIRECTORY_TEXT_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(entry.name)))
+    ) {
       files.push(fullPath);
     }
   }
@@ -109,7 +118,9 @@ function resolveUnsafeLocalPagePath(params: { configuredPath: string; absolutePa
   const pageSlug = `${configuredBaseSlug}-${configuredHash}-${artifactBaseSlug}-${artifactHash}`;
   return {
     pageId: `source.unsafe-local.${pageSlug}`,
-    pagePath: path.join("sources", `unsafe-local-${pageSlug}.md`).replace(/\\/g, "/"),
+    pagePath: path
+      .join("sources", createWikiPageFilename(`unsafe-local-${pageSlug}`))
+      .replace(/\\/g, "/"),
   };
 }
 

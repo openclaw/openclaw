@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { parseDiscordTarget } from "./target-parsing.js";
 
 function normalizeDiscordTarget(
@@ -37,7 +40,7 @@ export function resolveDiscordCurrentConversationIdentity(params: {
   commandTo?: string | null;
   fallbackTo?: string | null;
 }): string | undefined {
-  if (normalizeOptionalString(params.chatType)?.toLowerCase() === "direct") {
+  if (normalizeOptionalLowercaseString(params.chatType) === "direct") {
     const senderTarget = normalizeDiscordTarget(params.from, "user");
     if (senderTarget?.startsWith("user:")) {
       return senderTarget;

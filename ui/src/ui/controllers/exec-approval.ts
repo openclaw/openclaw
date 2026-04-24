@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../string-coerce.ts";
+
 export type ExecApprovalRequestPayload = {
   command: string;
   cwd?: string | null;
@@ -36,12 +38,12 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
   if (!isRecord(payload)) {
     return null;
   }
-  const id = typeof payload.id === "string" ? payload.id.trim() : "";
+  const id = normalizeOptionalString(payload.id) ?? "";
   const request = payload.request;
   if (!id || !isRecord(request)) {
     return null;
   }
-  const command = typeof request.command === "string" ? request.command.trim() : "";
+  const command = normalizeOptionalString(request.command) ?? "";
   if (!command) {
     return null;
   }
@@ -72,7 +74,7 @@ export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolve
   if (!isRecord(payload)) {
     return null;
   }
-  const id = typeof payload.id === "string" ? payload.id.trim() : "";
+  const id = normalizeOptionalString(payload.id) ?? "";
   if (!id) {
     return null;
   }
@@ -88,7 +90,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   if (!isRecord(payload)) {
     return null;
   }
-  const id = typeof payload.id === "string" ? payload.id.trim() : "";
+  const id = normalizeOptionalString(payload.id) ?? "";
   if (!id) {
     return null;
   }
@@ -99,7 +101,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   }
   // title, description, severity, pluginId, agentId, sessionKey live inside payload.request
   const request = isRecord(payload.request) ? payload.request : {};
-  const title = typeof request.title === "string" ? request.title.trim() : "";
+  const title = normalizeOptionalString(request.title) ?? "";
   if (!title) {
     return null;
   }

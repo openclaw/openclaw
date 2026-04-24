@@ -14,10 +14,17 @@ assembly, and contract enforcement.
   - `src/plugins/types.ts`
   - `src/plugins/runtime/types.ts`
   - `src/plugins/contracts/registry.ts`
-  - `src/plugins/public-artifacts.ts`
+  - `src/plugins/public-surface-loader.ts`
+  - `src/plugins/public-surface-runtime.ts`
+  - `src/plugins/provider-public-artifacts.ts`
+  - `src/plugins/web-provider-public-artifacts.ts`
 
 ## Boundary Rules
 
+- Keep control-plane and runtime-plane concerns separate:
+  discovery, manifest parsing, config validation, setup/onboarding hints, and
+  activation planning belong to the control plane; actual plugin execution
+  belongs to runtime resolution.
 - Preserve manifest-first behavior: discovery, config validation, and setup
   should work from metadata before plugin runtime executes.
 - Keep loader behavior aligned with the documented Plugin SDK and manifest
@@ -31,6 +38,9 @@ assembly, and contract enforcement.
   needs the heavy module.
 - If a loader or registry change affects plugin authors, update the public SDK,
   docs, and contract tests instead of relying on incidental internals.
+- Prefer explicit activation planning from manifest/descriptor ownership over
+  “load everything in this scope” behavior. Broad registry materialization
+  should be the exception, not the design center.
 - Do not normalize "plugin-owned" into "core-owned" by scattering direct reads
   of `plugins.entries.<id>.config` through unrelated core paths. Prefer generic
   helpers, plugin runtime hooks, manifest metadata, and explicit auto-enable
@@ -52,6 +62,12 @@ assembly, and contract enforcement.
 - When a provider hook grows a nested chain of wrapper composition or repeated
   compat flags, treat that as a regression signal. Extract the shared helper or
   composer instead of letting one more plugin carry a near-copy.
+- Treat mutable global runtime registry state as compatibility scaffolding, not
+  the desired source of truth for request-time execution. Prefer immutable or
+  request-scoped handles when adding new runtime flows.
+- If setup, discovery, or doctor flows need plugin runtime, make that need
+  explicit and narrow. Do not let cold control-plane paths quietly import broad
+  runtime surfaces.
 
 ## Verification
 

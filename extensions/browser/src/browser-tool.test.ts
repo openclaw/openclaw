@@ -113,7 +113,12 @@ const gatewayMocks = vi.hoisted(() => ({
 vi.mock("../../../src/agents/tools/gateway.js", () => gatewayMocks);
 
 const configMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({ browser: {} })),
+  loadConfig: vi.fn<
+    () => {
+      browser: Record<string, unknown>;
+      gateway?: { nodes?: { browser?: { node?: string } } };
+    }
+  >(() => ({ browser: {} })),
 }));
 vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
@@ -141,6 +146,66 @@ vi.mock("../../../src/agents/tools/common.js", async () => {
   return {
     ...actual,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
+  };
+});
+
+vi.mock("./browser-tool.runtime.js", () => {
+  const readStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const readStringParam = (
+    params: Record<string, unknown>,
+    key: string,
+    opts?: { required?: boolean; label?: string },
+  ) => {
+    const value = readStringValue(params[key])?.trim();
+    if (value) {
+      return value;
+    }
+    if (opts?.required) {
+      throw new Error(`${opts.label ?? key} required`);
+    }
+    return undefined;
+  };
+
+  return {
+    DEFAULT_AI_SNAPSHOT_MAX_CHARS: 40_000,
+    DEFAULT_UPLOAD_DIR: "/tmp/openclaw-browser-uploads",
+    BrowserToolSchema: {},
+    ...browserActionsMocks,
+    ...browserClientMocks,
+    ...browserConfigMocks,
+    ...configMocks,
+    ...gatewayMocks,
+    ...sessionTabRegistryMocks,
+    applyBrowserProxyPaths: vi.fn(),
+    getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
+      usesChromeMcp: profile.driver === "existing-session",
+    }),
+    imageResultFromFile: toolCommonMocks.imageResultFromFile,
+    jsonResult: (result: unknown) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      details: result,
+    }),
+    listNodes: nodesUtilsMocks.listNodes,
+    normalizeOptionalString: (value: unknown) => readStringValue(value)?.trim() || undefined,
+    persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
+    readStringParam,
+    readStringValue,
+    resolveExistingPathsWithinRoot: vi.fn(async ({ requestedPaths }) => ({
+      ok: true,
+      paths: requestedPaths,
+    })),
+    resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
+      const node = nodes.find(
+        (entry) => entry.nodeId === requested || entry.displayName === requested,
+      );
+      if (!node?.nodeId || typeof node.nodeId !== "string") {
+        throw new Error(`Node not found: ${requested}`);
+      }
+      return node.nodeId;
+    },
+    selectDefaultNodeFromList: (nodes: Array<Record<string, unknown>>) => nodes[0] ?? null,
+    wrapExternalContent: (text: string) =>
+      `<<<EXTERNAL_UNTRUSTED_CONTENT source="browser">>>\n${text}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>`,
   };
 });
 
@@ -340,7 +405,7 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts?.mode).toBeUndefined();
   });
 
-  it("defaults to host when using profile=user (even in sandboxed sessions)", async () => {
+  it("keeps profile=user off the sandbox browser when no node is selected", async () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
@@ -360,7 +425,7 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
-  it("defaults to host for custom existing-session profiles too", async () => {
+  it("keeps custom existing-session profiles off the sandbox browser too", async () => {
     setResolvedBrowserProfiles({
       "chrome-live": { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
@@ -470,13 +535,120 @@ describe("browser tool snapshot maxChars", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("keeps user profile on host when node proxy is available", async () => {
+  it("routes profile=user through the node proxy when one is available", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", profile: "user" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          profile: "user",
+          path: "/",
+          method: "GET",
+          timeoutMs: 20000,
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the host for profile=user when node discovery errors", async () => {
+    nodesUtilsMocks.listNodes.mockRejectedValueOnce(new Error("gateway unavailable"));
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: "user" }),
+    );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("preserves configured node pins when profile=user node discovery errors", async () => {
+    nodesUtilsMocks.listNodes.mockRejectedValueOnce(new Error("gateway unavailable"));
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      gateway: { nodes: { browser: { node: "node-1" } } },
+    });
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status", profile: "user" })).rejects.toThrow(
+      /gateway unavailable/i,
+    );
+
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it('allows profile="user" with target="node"', async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user", target: "node" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          profile: "user",
+          path: "/",
+          method: "GET",
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it('allows profile="user" with an explicit node pin', async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user", node: "node-1" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          profile: "user",
+          path: "/",
+          method: "GET",
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps profile="user" on the host when target="host" is explicit', async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", profile: "user", target: "host" });
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
       undefined,

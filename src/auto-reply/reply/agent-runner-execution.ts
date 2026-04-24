@@ -4,6 +4,10 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailure,
+} from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -12,6 +16,7 @@ import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  formatRateLimitOrOverloadedErrorCopy,
   isCompactionFailureError,
   isContextOverflowError,
   isBillingErrorMessage,
@@ -19,8 +24,8 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTransientHttpError,
-  sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
@@ -54,17 +59,22 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   buildEmbeddedRunExecutionParams,
+  resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
+import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -77,6 +87,10 @@ const GPT_CHAT_BREVITY_ACK_MAX_CHARS = 420;
 const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
 const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
 const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
+
+function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
+  return value === "turn" || value === "session" ? value : undefined;
+}
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -106,6 +120,7 @@ type FallbackSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideSource"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -114,6 +129,7 @@ type FallbackSelectionState = Pick<
 const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
   "modelOverride",
+  "modelOverrideSource",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -137,6 +153,12 @@ function setFallbackSelectionStateField(
         return true;
       }
       return false;
+    case "modelOverrideSource":
+      if (entry.modelOverrideSource !== value) {
+        entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
+        return true;
+      }
+      return false;
     case "authProfileOverride":
       if (entry.authProfileOverride !== value) {
         entry.authProfileOverride = value as SessionEntry["authProfileOverride"];
@@ -157,12 +179,14 @@ function setFallbackSelectionStateField(
       }
       return false;
   }
+  throw new Error("Unsupported fallback selection state key");
 }
 
 function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
   return {
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
@@ -178,6 +202,7 @@ function buildFallbackSelectionState(params: {
   return {
     providerOverride: params.provider,
     modelOverride: params.model,
+    modelOverrideSource: "auto",
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
     authProfileOverrideCompactionCount: undefined,
@@ -293,6 +318,14 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
   );
 }
 
+function isPureBillingSummary(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.length > 0 &&
+    err.attempts.every((attempt) => attempt.reason === "billing")
+  );
+}
+
 function isToolResultTurnMismatchError(message: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
   return (
@@ -303,9 +336,51 @@ function isToolResultTurnMismatchError(message: string): boolean {
   );
 }
 
+function collapseRepeatedFailureDetail(message: string): string {
+  const parts = message
+    .split(/\s+\|\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length >= 2 && parts.every((part) => part === parts[0])) {
+    return parts[0];
+  }
+  return message.trim();
+}
+
+const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+
+function buildMissingApiKeyFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
+  const provider = providerMatch?.[1]?.trim().toLowerCase();
+  if (!provider) {
+    return null;
+  }
+  if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY`, then try again.";
+  }
+  if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
+    return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
+  }
+  return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+}
+
 function buildExternalRunFailureText(message: string): string {
-  if (isToolResultTurnMismatchError(message)) {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (isToolResultTurnMismatchError(normalizedMessage)) {
     return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
+  }
+  const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
+  if (missingApiKeyFailure) {
+    return missingApiKeyFailure;
+  }
+  const oauthRefreshFailure = classifyOAuthRefreshFailure(normalizedMessage);
+  if (oauthRefreshFailure) {
+    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
+    if (oauthRefreshFailure.reason) {
+      return `⚠️ Model login expired on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Re-auth with \`${loginCommand}\`, then try again.`;
+    }
+    return `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`;
   }
   return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 }
@@ -493,6 +568,7 @@ export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
+  replyThreading?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
   opts?: GetReplyOptions;
   typingSignals: TypingSignaler;
@@ -513,23 +589,44 @@ export async function runAgentTurnWithFallback(params: {
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  replyMediaContext?: ReplyMediaContext;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(params.followupRun.run.config);
+  const effectiveRun =
+    runtimeConfig === params.followupRun.run.config
+      ? params.followupRun.run
+      : {
+          ...params.followupRun.run,
+          config: runtimeConfig,
+        };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-    cfg: params.followupRun.run.config,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.followupRun.run.workspaceDir,
-  });
+  const replyMediaContext =
+    params.replyMediaContext ??
+    createReplyMediaContext({
+      cfg: runtimeConfig,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.followupRun.run.workspaceDir,
+      messageProvider: params.followupRun.run.messageProvider,
+      accountId: params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
+      groupId: params.followupRun.run.groupId,
+      groupChannel: params.followupRun.run.groupChannel,
+      groupSpace: params.followupRun.run.groupSpace,
+      requesterSenderId: params.followupRun.run.senderId,
+      requesterSenderName: params.followupRun.run.senderName,
+      requesterSenderUsername: params.followupRun.run.senderUsername,
+      requesterSenderE164: params.followupRun.run.senderE164,
+    });
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
     if (didNotifyAgentRunStart) {
@@ -537,6 +634,33 @@ export async function runAgentTurnWithFallback(params: {
     }
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
+  };
+  const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+  const shouldNotifyUserAboutCompaction =
+    runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
+  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
+    if (!params.opts?.onBlockReply) {
+      return;
+    }
+    const text =
+      phase === "start"
+        ? "🧹 Compacting context..."
+        : phase === "end"
+          ? "🧹 Compaction complete"
+          : "🧹 Compaction incomplete";
+    const noticePayload = params.applyReplyToMode({
+      text,
+      replyToId: currentMessageId,
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    try {
+      await params.opts.onBlockReply(noticePayload);
+    } catch (err) {
+      // Non-critical notice delivery failure should not bubble out of the
+      // fire-and-forget event handler.
+      logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
+    }
   };
   const shouldSurfaceToControlUi = isInternalMessageChannel(
     params.followupRun.run.messageProvider ??
@@ -561,19 +685,42 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
-  const persistFallbackCandidateSelection = async (provider: string, model: string) => {
+  const persistFallbackCandidateSelection = async (
+    provider: string,
+    model: string,
+  ): Promise<(() => Promise<void>) | undefined> => {
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
       (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
     ) {
-      return;
+      return undefined;
     }
 
     const activeSessionEntry =
       params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
     if (!activeSessionEntry) {
-      return;
+      return undefined;
+    }
+
+    // Don't overwrite a user-initiated model override (e.g. from /models or
+    // /model) with the fallback model.  The user's explicit selection should
+    // survive transient primary-model failures so subsequent messages still
+    // target the model the user chose.  Fallback persistence is only
+    // appropriate when the override was itself set by a previous fallback
+    // ("auto") or when there is no override yet.
+    //
+    // `modelOverrideSource` was added later, so older persisted sessions can
+    // carry a user-selected override without the source field.  Treat any
+    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
+    // user state, matching the backward-compat treatment in
+    // session-reset-service.
+    const isUserModelOverride =
+      activeSessionEntry.modelOverrideSource === "user" ||
+      (activeSessionEntry.modelOverrideSource === undefined &&
+        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)));
+    if (isUserModelOverride) {
+      return undefined;
     }
 
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
@@ -585,7 +732,7 @@ export async function runAgentTurnWithFallback(params: {
     });
     const nextState = applied.nextState;
     if (!applied.updated || !nextState) {
-      return;
+      return undefined;
     }
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
 
@@ -660,6 +807,9 @@ export async function runAgentTurnWithFallback(params: {
         ) {
           return { skip: true };
         }
+        if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
+          text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
+        }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.
           if (reply.hasMedia) {
@@ -695,9 +845,10 @@ export async function runAgentTurnWithFallback(params: {
         ? createBlockReplyDeliveryHandler({
             onBlockReply: params.opts.onBlockReply,
             currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            replyThreading: params.replyThreading,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
-            normalizeMediaPaths: normalizeReplyMediaPaths,
+            normalizeMediaPaths: replyMediaContext.normalizePayload,
             typingSignals: params.typingSignals,
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
@@ -728,7 +879,7 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          if (isCliProvider(provider, params.followupRun.run.config)) {
+          if (isCliProvider(provider, runtimeConfig)) {
             const startedAt = Date.now();
             notifyAgentRunStart();
             emitAgentEvent({
@@ -747,6 +898,10 @@ export async function runAgentTurnWithFallback(params: {
               provider === params.followupRun.run.provider
                 ? params.followupRun.run.authProfileId
                 : undefined;
+            const hookMessageProvider = resolveOriginMessageProvider({
+              originatingChannel: params.followupRun.originatingChannel,
+              provider: params.sessionCtx.Provider,
+            });
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
@@ -754,9 +909,10 @@ export async function runAgentTurnWithFallback(params: {
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
+                  trigger: params.isHeartbeat ? "heartbeat" : "user",
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
-                  config: params.followupRun.run.config,
+                  config: runtimeConfig,
                   prompt: params.commandBody,
                   provider,
                   model,
@@ -764,6 +920,7 @@ export async function runAgentTurnWithFallback(params: {
                   timeoutMs: params.followupRun.run.timeoutMs,
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding,
@@ -775,8 +932,11 @@ export async function runAgentTurnWithFallback(params: {
                     ],
                   images: params.opts?.images,
                   imageOrder: params.opts?.imageOrder,
-                  messageProvider: params.followupRun.run.messageProvider,
+                  skillsSnapshot: params.followupRun.run.skillsSnapshot,
+                  messageChannel: params.followupRun.originatingChannel ?? undefined,
+                  messageProvider: hookMessageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
+                  senderIsOwner: params.followupRun.run.senderIsOwner,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
@@ -850,7 +1010,7 @@ export async function runAgentTurnWithFallback(params: {
           }
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {
-              run: params.followupRun.run,
+              run: effectiveRun,
               sessionCtx: params.sessionCtx,
               hasRepliedRef: params.opts?.hasRepliedRef,
               provider,
@@ -873,6 +1033,7 @@ export async function runAgentTurnWithFallback(params: {
                 groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
+                sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
@@ -923,6 +1084,13 @@ export async function runAgentTurnWithFallback(params: {
                     : undefined,
                 onReasoningEnd: params.opts?.onReasoningEnd,
                 onAgentEvent: async (evt) => {
+                  if (evt.stream.startsWith("codex_app_server.")) {
+                    emitAgentEvent({
+                      runId,
+                      stream: evt.stream,
+                      data: evt.data,
+                    });
+                  }
                   // Signal run start only after the embedded agent emits real activity.
                   const hasLifecyclePhase =
                     evt.stream === "lifecycle" && typeof evt.data.phase === "string";
@@ -977,6 +1145,7 @@ export async function runAgentTurnWithFallback(params: {
                       command: readStringValue(evt.data.command),
                       host: readStringValue(evt.data.host),
                       reason: readStringValue(evt.data.reason),
+                      scope: readApprovalScopeValue(evt.data.scope),
                       message: readStringValue(evt.data.message),
                     });
                   }
@@ -1029,38 +1198,27 @@ export async function runAgentTurnWithFallback(params: {
                     if (phase === "start") {
                       // Keep custom compaction callbacks active, but gate the
                       // fallback user-facing notice behind explicit opt-in.
-                      const notifyUser =
-                        params.followupRun.run.config.agents?.defaults?.compaction?.notifyUser ===
-                        true;
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
-                      } else if (notifyUser && params.opts?.onBlockReply) {
+                      } else if (shouldNotifyUserAboutCompaction) {
                         // Send directly via opts.onBlockReply (bypassing the
                         // pipeline) so the notice does not cause final payloads
                         // to be discarded on non-streaming model paths.
-                        const currentMessageId =
-                          params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-                        const noticePayload = params.applyReplyToMode({
-                          text: "🧹 Compacting context...",
-                          replyToId: currentMessageId,
-                          replyToCurrent: true,
-                          isCompactionNotice: true,
-                        });
-                        try {
-                          await params.opts.onBlockReply(noticePayload);
-                        } catch (err) {
-                          // Non-critical notice delivery failure should not
-                          // bubble out of the fire-and-forget event handler.
-                          logVerbose(
-                            `compaction start notice delivery failed (non-fatal): ${String(err)}`,
-                          );
-                        }
+                        await sendCompactionNotice("start");
                       }
                     }
-                    const completed = evt.data?.completed === true;
-                    if (phase === "end" && completed) {
-                      attemptCompactionCount += 1;
-                      await params.opts?.onCompactionEnd?.();
+                    if (phase === "end") {
+                      const completed = evt.data?.completed === true;
+                      if (completed) {
+                        attemptCompactionCount += 1;
+                        if (params.opts?.onCompactionEnd) {
+                          await params.opts.onCompactionEnd();
+                        } else if (shouldNotifyUserAboutCompaction) {
+                          await sendCompactionNotice("end");
+                        }
+                      } else if (shouldNotifyUserAboutCompaction) {
+                        await sendCompactionNotice("incomplete");
+                      }
                     }
                   }
                 },
@@ -1146,12 +1304,12 @@ export async function runAgentTurnWithFallback(params: {
       fallbackModel = fallbackResult.model;
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
-            provider: String(attempt.provider ?? ""),
-            model: String(attempt.model ?? ""),
-            error: String(attempt.error ?? ""),
-            reason: attempt.reason ? String(attempt.reason) : undefined,
+            provider: attempt.provider,
+            model: attempt.model,
+            error: attempt.error,
+            reason: attempt.reason || undefined,
             status: typeof attempt.status === "number" ? attempt.status : undefined,
-            code: attempt.code ? String(attempt.code) : undefined,
+            code: attempt.code || undefined,
           }))
         : [];
 
@@ -1225,7 +1383,9 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
       const message = formatErrorMessage(err);
-      const isBilling = isBillingErrorMessage(message);
+      const isBilling = isFallbackSummaryError(err)
+        ? isPureBillingSummary(err)
+        : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
@@ -1364,24 +1524,34 @@ export async function runAgentTurnWithFallback(params: {
       // underlying error. FallbackSummaryError messages embed per-attempt
       // reason labels like `(rate_limit)`, so string-matching the summary text
       // would misclassify mixed-cause exhaustion as a pure transient cooldown.
-      const isRateLimit = isFallbackSummaryError(err)
+      const isFallbackSummary = isFallbackSummaryError(err);
+      const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
+        : false;
+      const isRateLimit = isFallbackSummary
+        ? isPureTransientSummary
         : isRateLimitErrorMessage(message);
+      const rateLimitOrOverloadedCopy =
+        !isFallbackSummary || isPureTransientSummary
+          ? formatRateLimitOrOverloadedErrorCopy(message)
+          : undefined;
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
-        : isRateLimit
+        : isRateLimit && !isOverloadedErrorMessage(message)
           ? buildRateLimitCooldownMessage(err)
-          : isContextOverflow
-            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-            : isRoleOrderingError
-              ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-              : shouldSurfaceToControlUi
-                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                : buildExternalRunFailureText(message);
+          : rateLimitOrOverloadedCopy
+            ? rateLimitOrOverloadedCopy
+            : isContextOverflow
+              ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+              : isRoleOrderingError
+                ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+                : shouldSurfaceToControlUi
+                  ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                  : buildExternalRunFailureText(message);
 
       params.replyOperation?.fail("run_failed", err);
       return {
@@ -1438,16 +1608,13 @@ export async function runAgentTurnWithFallback(params: {
           (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
         )?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
-      if (
-        errorCandidate &&
-        (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
-      ) {
-        const isOverloaded = isOverloadedErrorMessage(errorCandidate);
+      const formattedErrorCandidate = errorCandidate
+        ? formatRateLimitOrOverloadedErrorCopy(errorCandidate)
+        : undefined;
+      if (formattedErrorCandidate) {
         runResult.payloads = [
           {
-            text: isOverloaded
-              ? "⚠️ The AI service is temporarily overloaded. Please try again in a moment."
-              : "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
+            text: formattedErrorCandidate,
             isError: true,
           },
         ];

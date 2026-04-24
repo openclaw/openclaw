@@ -1,14 +1,12 @@
 ---
-title: "Plugin Runtime Helpers"
-sidebarTitle: "Runtime Helpers"
 summary: "api.runtime -- the injected runtime helpers available to plugins"
+title: "Plugin runtime helpers"
+sidebarTitle: "Runtime Helpers"
 read_when:
   - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
 ---
-
-# Plugin Runtime Helpers
 
 Reference for the `api.runtime` object injected into every plugin during
 registration. Use these helpers instead of importing host internals directly.
@@ -50,9 +48,9 @@ const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 // Ensure workspace exists
 await api.runtime.agent.ensureAgentWorkspace(cfg);
 
-// Run an embedded Pi agent
+// Run an embedded agent turn
 const agentDir = api.runtime.agent.resolveAgentDir(cfg);
-const result = await api.runtime.agent.runEmbeddedPiAgent({
+const result = await api.runtime.agent.runEmbeddedAgent({
   sessionId: "my-plugin:task-1",
   runId: crypto.randomUUID(),
   sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
@@ -61,6 +59,12 @@ const result = await api.runtime.agent.runEmbeddedPiAgent({
   timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
 });
 ```
+
+`runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw
+agent turn from plugin code. It uses the same provider/model resolution and
+agent-harness selection as channel-triggered replies.
+
+`runEmbeddedPiAgent(...)` remains as a compatibility alias.
 
 **Session store helpers** are under `api.runtime.agent.session`:
 
@@ -252,6 +256,18 @@ const kind = api.runtime.media.mediaKindFromMime("image/jpeg"); // "image"
 const isVoice = api.runtime.media.isVoiceCompatibleAudio(filePath);
 const metadata = await api.runtime.media.getImageMetadata(filePath);
 const resized = await api.runtime.media.resizeToJpeg(buffer, { maxWidth: 800 });
+const terminalQr = await api.runtime.media.renderQrTerminal("https://openclaw.ai");
+const pngQr = await api.runtime.media.renderQrPngBase64("https://openclaw.ai", {
+  scale: 6, // 1-12
+  marginModules: 4, // 0-16
+});
+const pngQrDataUrl = await api.runtime.media.renderQrPngDataUrl("https://openclaw.ai");
+const tmpRoot = resolvePreferredOpenClawTmpDir();
+const pngQrFile = await api.runtime.media.writeQrPngTempFile("https://openclaw.ai", {
+  tmpRoot,
+  dirPrefix: "my-plugin-qr-",
+  fileName: "qr.png",
+});
 ```
 
 ### `api.runtime.config`
@@ -379,7 +395,10 @@ the `register` callback:
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-const store = createPluginRuntimeStore<PluginRuntime>("my-plugin runtime not initialized");
+const store = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "my-plugin",
+  errorMessage: "my-plugin runtime not initialized",
+});
 
 // In your entry point
 export default defineChannelPluginEntry({
@@ -399,6 +418,10 @@ export function tryGetRuntime() {
   return store.tryGetRuntime(); // returns null if not initialized
 }
 ```
+
+Prefer `pluginId` for the runtime-store identity. The lower-level `key` form is
+for uncommon cases where one plugin intentionally needs more than one runtime
+slot.
 
 ## Other top-level `api` fields
 

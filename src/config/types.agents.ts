@@ -1,8 +1,17 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
-import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
+import type {
+  AgentContextLimitsConfig,
+  AgentDefaultsConfig,
+  EmbeddedPiExecutionContract,
+} from "./types.agent-defaults.js";
+import type {
+  AgentEmbeddedHarnessConfig,
+  AgentModelConfig,
+  AgentSandboxConfig,
+} from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
+import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
 export type AgentRuntimeAcpConfig = {
@@ -66,9 +75,11 @@ export type AgentConfig = {
   agentDir?: string;
   /** Optional per-agent full system prompt replacement. */
   systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];
+  /** Optional per-agent embedded harness policy override. */
+  embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */
   verboseDefault?: "off" | "on" | "full";
   /** Optional per-agent default reasoning visibility. */
@@ -80,6 +91,10 @@ export type AgentConfig = {
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
+  /** Optional per-agent skills subsystem overrides. */
+  skillsLimits?: Pick<SkillsLimitsConfig, "maxSkillsPromptChars">;
+  /** Optional per-agent overrides for selected context/token-heavy limits. */
+  contextLimits?: AgentContextLimitsConfig;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
@@ -91,6 +106,11 @@ export type AgentConfig = {
     model?: AgentModelConfig;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
+  };
+  /** Optional per-agent embedded Pi overrides. */
+  embeddedPi?: {
+    /** Optional per-agent execution contract override. */
+    executionContract?: EmbeddedPiExecutionContract;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

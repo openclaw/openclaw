@@ -163,22 +163,21 @@ export async function runBeforeToolCallHook(args: {
           blocked: true,
           reason: loopResult.message,
         };
-      } else {
-        const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
-        if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
-          log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
-          logToolLoopAction({
-            sessionKey: args.ctx.sessionKey,
-            sessionId: args.ctx?.agentId,
-            toolName,
-            level: "warning",
-            action: "warn",
-            detector: loopResult.detector,
-            count: loopResult.count,
-            message: loopResult.message,
-            pairedToolName: loopResult.pairedToolName,
-          });
-        }
+      }
+      const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
+      if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
+        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+        logToolLoopAction({
+          sessionKey: args.ctx.sessionKey,
+          sessionId: args.ctx?.agentId,
+          toolName,
+          level: "warning",
+          action: "warn",
+          detector: loopResult.detector,
+          count: loopResult.count,
+          message: loopResult.message,
+          pairedToolName: loopResult.pairedToolName,
+        });
       }
     }
 
@@ -233,11 +232,11 @@ export async function runBeforeToolCallHook(args: {
         }
       };
       try {
-        const requestResult = await callGatewayTool<{
+        const requestResult: {
           id?: string;
           status?: string;
           decision?: string | null;
-        }>(
+        } = await callGatewayTool(
           "plugin.approval.request",
           // Buffer beyond the approval timeout so the gateway can clean up
           // and respond before the client-side RPC timeout fires.
@@ -281,10 +280,10 @@ export async function runBeforeToolCallHook(args: {
         } else {
           // Wait for the decision, but abort early if the agent run is cancelled
           // so the user isn't blocked for the full approval timeout.
-          const waitPromise = callGatewayTool<{
+          const waitPromise: Promise<{
             id?: string;
             decision?: string | null;
-          }>(
+          }> = callGatewayTool(
             "plugin.approval.waitDecision",
             // Buffer beyond the approval timeout so the gateway can clean up
             // and respond before the client-side RPC timeout fires.
@@ -350,7 +349,7 @@ export async function runBeforeToolCallHook(args: {
             reason: "Approval cancelled (run aborted)",
           };
         }
-        log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
+        log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
         return {
           blocked: true,
           reason: "Plugin approval required (gateway unavailable)",

@@ -29,10 +29,13 @@ export * from "../utils/reaction-level.js";
 export * from "../utils/with-timeout.js";
 export {
   hasNonEmptyString,
+  localeLowercasePreservingWhitespace,
+  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeStringifiedOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
 export {

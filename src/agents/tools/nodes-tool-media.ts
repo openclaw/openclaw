@@ -52,6 +52,7 @@ export async function executeNodeMediaAction(
     case "screen_record":
       return await executeScreenRecord(input);
   }
+  throw new Error("Unsupported node media action");
 }
 
 async function executeCameraSnap({

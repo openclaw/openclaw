@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSenderCommandAuthorization } from "./command-auth.js";
+import {
+  buildCommandsMessage,
+  buildCommandsMessagePaginated,
+  buildHelpMessage,
+  resolveSenderCommandAuthorization,
+} from "./command-auth.js";
 
 const baseCfg = {
   commands: { useAccessGroups: true },
@@ -28,6 +33,20 @@ async function resolveAuthorization(params: {
 }
 
 describe("plugin-sdk/command-auth", () => {
+  it("keeps deprecated command status builders available for compatibility", () => {
+    const cfg = { commands: { config: false, debug: false } } as unknown as OpenClawConfig;
+
+    expect(buildHelpMessage(cfg)).toContain("/commands for full list");
+    expect(buildCommandsMessage(cfg)).toContain("More: /tools for available capabilities");
+    expect(buildCommandsMessage(cfg)).toContain(
+      "/models - List model providers/models or add a model.",
+    );
+    expect(buildCommandsMessagePaginated(cfg)).toMatchObject({
+      currentPage: 1,
+      totalPages: expect.any(Number),
+    });
+  });
+
   it("resolves command authorization across allowlist sources", async () => {
     const cases = [
       {
@@ -51,5 +70,27 @@ describe("plugin-sdk/command-auth", () => {
       expect(result.effectiveAllowFrom).toEqual(["dm-owner"]);
       expect(result.effectiveGroupAllowFrom).toEqual(["group-owner"]);
     }
+  });
+
+  it("does not grant command authorization to non-command DM input from pairing store", async () => {
+    const result = await resolveSenderCommandAuthorization({
+      cfg: baseCfg,
+      rawBody: "hello",
+      isGroup: false,
+      dmPolicy: "pairing",
+      configuredAllowFrom: [],
+      configuredGroupAllowFrom: [],
+      senderId: "paired-user",
+      isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
+      readAllowFromStore: async () => ["paired-user"],
+      shouldComputeCommandAuthorized: (rawBody) => rawBody.startsWith("/"),
+      resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
+        useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
+    });
+
+    expect(result.shouldComputeAuth).toBe(false);
+    expect(result.effectiveAllowFrom).toEqual(["paired-user"]);
+    expect(result.senderAllowedForCommands).toBe(true);
+    expect(result.commandAuthorized).toBeUndefined();
   });
 });

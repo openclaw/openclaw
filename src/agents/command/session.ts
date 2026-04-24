@@ -6,19 +6,20 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveExplicitAgentSessionKey,
+} from "../../config/sessions/main-session.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveChannelResetConfig,
-  resolveExplicitAgentSessionKey,
   resolveSessionResetPolicy,
-  resolveSessionResetType,
-  resolveSessionKey,
-  resolveStorePath,
-  type SessionEntry,
-} from "../../config/sessions.js";
+} from "../../config/sessions/reset-policy.js";
+import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
+import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";

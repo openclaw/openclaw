@@ -50,6 +50,13 @@ export type ContextEngineInfo = {
   version?: string;
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
+  /**
+   * Controls how turn-triggered maintenance should be executed.
+   *
+   * Engines remain compatible by default unless the host explicitly opts into
+   * background turn maintenance.
+   */
+  turnMaintenanceMode?: "foreground" | "background";
 };
 
 export type SubagentSpawnPreparation = {
@@ -128,6 +135,15 @@ export type ContextEnginePromptCacheInfo = {
 };
 
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /**
+   * True when the host has explicitly opted this maintenance run into
+   * consuming deferred compaction debt.
+   */
+  allowDeferredCompactionExecution?: boolean;
+  /** Runtime-resolved context window budget for the active model call. */
+  tokenBudget?: number;
+  /** Best-effort current prompt/context token estimate for this turn. */
+  currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
   promptCache?: ContextEnginePromptCacheInfo;
   /**
@@ -266,6 +282,11 @@ export interface ContextEngine {
   prepareSubagentSpawn?(params: {
     parentSessionKey: string;
     childSessionKey: string;
+    contextMode?: "isolated" | "fork";
+    parentSessionId?: string;
+    parentSessionFile?: string;
+    childSessionId?: string;
+    childSessionFile?: string;
     ttlMs?: number;
   }): Promise<SubagentSpawnPreparation | undefined>;
 

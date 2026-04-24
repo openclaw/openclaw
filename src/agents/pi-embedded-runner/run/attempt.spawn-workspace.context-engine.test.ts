@@ -7,18 +7,19 @@ import {
 } from "../../../plugins/memory-state.js";
 import {
   type AttemptContextEngine,
+  buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
+  buildContextEnginePromptCacheInfo,
+  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
+  resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
-  cacheTtlEligibleModel,
   cleanupTempPaths,
-  createContextEngineAttemptRunner,
   createContextEngineBootstrapAndAssemble,
   expectCalledWithSessionKey,
   getHoisted,
-  type MutableSession,
   resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 import {
@@ -32,27 +33,6 @@ const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
-type AfterTurnUnknownPromptCacheCall = { runtimeContext?: { promptCache?: unknown } };
-
-function appendAssistantWithUsage(usage: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-}) {
-  return async (session: MutableSession, _prompt: string, _options?: { images?: unknown[] }) => {
-    session.messages = [
-      ...session.messages,
-      {
-        role: "assistant",
-        content: "done",
-        timestamp: 2,
-        usage,
-      } as unknown as AgentMessage,
-    ];
-  };
-}
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
@@ -131,9 +111,8 @@ async function finalizeTurn(
 }
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
-  const sessionKey = "agent:main:discord:channel:test-ctx-engine";
+  const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
-
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
@@ -141,9 +120,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
     clearMemoryPluginState();
     vi.restoreAllMocks();
-    await cleanupTempPaths(tempPaths);
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
@@ -332,43 +311,20 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
-  it("passes prompt-cache retention, last-call usage, and cache-touch metadata to afterTurn", async () => {
-    const afterTurn = vi.fn(async (_params: AfterTurnPromptCacheCall) => {});
-
-    await createContextEngineAttemptRunner({
-      contextEngine: {
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
-        afterTurn,
-      },
-      attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              contextPruning: {
-                mode: "cache-ttl",
-              },
-            },
-          },
+  it("builds prompt-cache retention, last-call usage, and cache-touch metadata", () => {
+    expect(
+      buildContextEnginePromptCacheInfo({
+        retention: "short",
+        lastCallUsage: {
+          input: 10,
+          output: 5,
+          cacheRead: 40,
+          cacheWrite: 2,
+          total: 57,
         },
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-5",
-        model: cacheTtlEligibleModel,
-      },
-      sessionPrompt: appendAssistantWithUsage({
-        input: 10,
-        output: 5,
-        cacheRead: 40,
-        cacheWrite: 2,
-        total: 57,
+        lastCacheTouchAt: 123,
       }),
-      sessionKey,
-      tempPaths,
-    });
-
-    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
-    const runtimeContext = afterTurnCall?.runtimeContext;
-
-    expect(runtimeContext?.promptCache).toEqual(
+    ).toEqual(
       expect.objectContaining({
         retention: "short",
         lastCallUsage: {
@@ -378,80 +334,120 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           cacheWrite: 2,
           total: 57,
         },
-        lastCacheTouchAt: expect.any(Number),
+        lastCacheTouchAt: 123,
       }),
     );
   });
 
-  it("omits prompt-cache metadata from afterTurn when no cache data is available", async () => {
-    const afterTurn = vi.fn(async (_params: AfterTurnUnknownPromptCacheCall) => {});
-
-    await createContextEngineAttemptRunner({
-      contextEngine: {
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
-        afterTurn,
-      },
-      sessionKey,
-      tempPaths,
-    });
-
-    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
-    const runtimeContext = afterTurnCall?.runtimeContext;
-
-    expect(runtimeContext?.promptCache).toBeUndefined();
+  it("omits prompt-cache metadata when no cache data is available", () => {
+    expect(buildContextEnginePromptCacheInfo({})).toBeUndefined();
   });
 
-  it("does not reuse a prior turn's usage when the current attempt exits before a new assistant", async () => {
-    const afterTurn = vi.fn(async (_params: AfterTurnPromptCacheCall) => {});
-
-    await createContextEngineAttemptRunner({
-      contextEngine: {
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
-        afterTurn,
+  it("does not reuse a prior turn's usage when the current attempt has no assistant", () => {
+    const priorAssistant = {
+      role: "assistant",
+      content: "prior turn",
+      timestamp: 2,
+      usage: {
+        input: 99,
+        output: 7,
+        cacheRead: 1234,
+        total: 1340,
       },
-      attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              contextPruning: {
-                mode: "cache-ttl",
-              },
-            },
-          },
-        },
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-5",
-        model: cacheTtlEligibleModel,
-        contextTokenBudget: 1,
-        prompt: "force-preflight-overflow",
-      },
-      sessionMessages: [
-        seedMessage,
-        {
-          role: "assistant",
-          content: "prior turn",
-          timestamp: 2,
-          usage: {
-            input: 99,
-            output: 7,
-            cacheRead: 1234,
-            total: 1340,
-          },
-        } as unknown as AgentMessage,
-      ],
-      sessionKey,
-      tempPaths,
+    } as unknown as AgentMessage;
+    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+      messagesSnapshot: [seedMessage, priorAssistant],
+      prePromptMessageCount: 2,
+    });
+    const promptCache = buildContextEnginePromptCacheInfo({
+      retention: "short",
+      lastCallUsage: (currentAttemptAssistant as { usage?: undefined } | undefined)?.usage,
     });
 
-    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
-    const promptCache = afterTurnCall?.runtimeContext?.promptCache;
+    expect(currentAttemptAssistant).toBeUndefined();
+    expect(promptCache).toEqual({ retention: "short" });
+  });
 
-    expect(promptCache).toEqual(
+  it("derives live loop prompt-cache info from the current attempt assistant", () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: {
+        input: 1,
+        output: 2,
+        cacheRead: 39036,
+        cacheWrite: 59934,
+        total: 98973,
+      },
+    } as unknown as AgentMessage;
+
+    expect(
+      buildLoopPromptCacheInfo({
+        messagesSnapshot: [seedMessage, toolUseAssistant],
+        prePromptMessageCount: 1,
+        retention: "short",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toEqual(
       expect.objectContaining({
         retention: "short",
+        lastCallUsage: expect.objectContaining({
+          cacheRead: 39036,
+          cacheWrite: 59934,
+          total: 98973,
+        }),
+        lastCacheTouchAt: Date.parse("2026-04-16T16:49:59.536Z"),
       }),
     );
-    expect(promptCache?.lastCallUsage).toBeUndefined();
+  });
+
+  it("falls back to the persisted cache touch when loop usage has no cache metrics", () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: {
+        input: 1,
+        output: 2,
+        total: 3,
+      },
+    } as unknown as AgentMessage;
+
+    expect(
+      buildLoopPromptCacheInfo({
+        messagesSnapshot: [seedMessage, toolUseAssistant],
+        prePromptMessageCount: 1,
+        retention: "short",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        retention: "short",
+        lastCallUsage: expect.objectContaining({
+          total: 3,
+        }),
+        lastCacheTouchAt: 123,
+      }),
+    );
+  });
+
+  it("derives a live cache touch timestamp for final afterTurn usage snapshots", () => {
+    const lastCallUsage = {
+      input: 1,
+      output: 2,
+      cacheRead: 39036,
+      cacheWrite: 0,
+      total: 39039,
+    };
+
+    expect(
+      resolvePromptCacheTouchTimestamp({
+        lastCallUsage,
+        assistantTimestamp: "2026-04-16T17:04:46.974Z",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toBe(Date.parse("2026-04-16T17:04:46.974Z"));
   });
 
   it("threads prompt-cache break observations into afterTurn", async () => {

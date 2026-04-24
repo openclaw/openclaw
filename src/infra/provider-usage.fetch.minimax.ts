@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import {
   buildUsageHttpErrorSnapshot,
@@ -348,7 +349,11 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
   const chatRecord = records.find((r) => {
     const name = typeof r.model_name === "string" ? r.model_name : "";
     const total = parseFiniteNumber(r.current_interval_total_count);
-    return name.toLowerCase().startsWith("minimax-m") && total !== undefined && total > 0;
+    return (
+      normalizeLowercaseStringOrEmpty(name).startsWith("minimax-m") &&
+      total !== undefined &&
+      total > 0
+    );
   });
 
   if (chatRecord) {

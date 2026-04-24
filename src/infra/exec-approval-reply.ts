@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
+import { formatHumanList } from "../shared/human-list.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -62,19 +63,6 @@ export type ExecApprovalUnavailableReplyParams = {
   reason: ExecApprovalUnavailableReason;
   sentApproverDms?: boolean;
 };
-
-function formatHumanList(values: readonly string[]): string {
-  if (values.length === 0) {
-    return "";
-  }
-  if (values.length === 1) {
-    return values[0];
-  }
-  if (values.length === 2) {
-    return `${values[0]} or ${values[1]}`;
-  }
-  return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
-}
 
 function resolveNativeExecApprovalClientList(params?: { excludeChannel?: string }): string {
   return formatHumanList(
@@ -164,17 +152,20 @@ export function buildExecApprovalActionDescriptors(params: {
 }
 
 function buildApprovalInteractiveButtons(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-  approvalId: string,
+  descriptors: readonly ExecApprovalActionDescriptor[],
 ): InteractiveReplyButton[] {
-  return buildExecApprovalActionDescriptors({
-    approvalCommandId: approvalId,
-    allowedDecisions,
-  }).map((descriptor) => ({
+  return descriptors.map((descriptor) => ({
     label: descriptor.label,
     value: descriptor.command,
     style: descriptor.style,
   }));
+}
+
+export function buildApprovalInteractiveReplyFromActionDescriptors(
+  actions: readonly ExecApprovalActionDescriptor[],
+): InteractiveReply | undefined {
+  const buttons = buildApprovalInteractiveButtons(actions);
+  return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
 export function buildApprovalInteractiveReply(params: {
@@ -182,11 +173,13 @@ export function buildApprovalInteractiveReply(params: {
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
 }): InteractiveReply | undefined {
-  const buttons = buildApprovalInteractiveButtons(
-    resolveAllowedDecisions(params),
-    params.approvalId,
+  return buildApprovalInteractiveReplyFromActionDescriptors(
+    buildExecApprovalActionDescriptors({
+      approvalCommandId: params.approvalId,
+      ask: params.ask,
+      allowedDecisions: params.allowedDecisions,
+    }),
   );
-  return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
 export function buildExecApprovalInteractiveReply(params: {
@@ -215,7 +208,7 @@ export function parseExecApprovalCommandText(
   if (!match) {
     return null;
   }
-  const rawDecision = match[2].toLowerCase();
+  const rawDecision = normalizeOptionalLowercaseString(match[2]) ?? "";
   return {
     approvalId: match[1],
     decision:

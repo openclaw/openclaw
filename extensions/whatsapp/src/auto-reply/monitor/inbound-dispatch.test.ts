@@ -99,6 +99,39 @@ function getCapturedDeliver() {
   )?.dispatcherOptions?.deliver;
 }
 
+type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
+
+function makeReplyLogger(): BufferedReplyParams["replyLogger"] {
+  return {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  } as never;
+}
+
+async function dispatchBufferedReply(overrides: Partial<BufferedReplyParams> = {}) {
+  const params: BufferedReplyParams = {
+    cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+    connectionId: "conn",
+    context: { Body: "hi" },
+    conversationId: "+1000",
+    deliverReply: async () => {},
+    groupHistories: new Map(),
+    groupHistoryKey: "+1000",
+    maxMediaBytes: 1,
+    msg: makeMsg(),
+    rememberSentText: () => {},
+    replyLogger: makeReplyLogger(),
+    replyPipeline: {} as never,
+    replyResolver: (async () => undefined) as never,
+    route: makeRoute(),
+    shouldClearGroupHistory: false,
+  };
+
+  return dispatchWhatsAppBufferedReply({ ...params, ...overrides });
+}
+
 describe("whatsapp inbound dispatch", () => {
   beforeEach(() => {
     capturedDispatchParams = undefined;
@@ -161,6 +194,90 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.To).toBe("+2000");
   });
 
+  it("passes groupSystemPrompt into GroupSystemPrompt for group chats", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "123@g.us",
+      groupSystemPrompt: "Specific group prompt",
+      msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
+      route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
+      sender: { e164: "+15550002222" },
+    });
+
+    expect(ctx.GroupSystemPrompt).toBe("Specific group prompt");
+  });
+
+  it("passes groupSystemPrompt into GroupSystemPrompt for direct chats", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "+1555",
+      groupSystemPrompt: "Specific direct prompt",
+      msg: makeMsg({ from: "+1555", chatType: "direct" }),
+      route: makeRoute({ sessionKey: "agent:main:whatsapp:direct:+1555" }),
+      sender: { e164: "+1555" },
+    });
+
+    expect(ctx.GroupSystemPrompt).toBe("Specific direct prompt");
+  });
+
+  it("omits GroupSystemPrompt when groupSystemPrompt is not provided", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "123@g.us",
+      msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
+      route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
+      sender: { e164: "+15550002222" },
+    });
+
+    expect(ctx.GroupSystemPrompt).toBeUndefined();
+  });
+
+  it("preserves reply threading policy in the inbound context", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "+1000",
+      msg: makeMsg(),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+      replyThreading: { implicitCurrentMessage: "allow" },
+    });
+
+    expect(ctx.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
+  });
+
+  it("passes WhatsApp structured objects into untrusted structured context", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "<contact>",
+      conversationId: "+1000",
+      msg: makeMsg({
+        body: "<contact>",
+        untrustedStructuredContext: [
+          {
+            label: "WhatsApp contact",
+            source: "whatsapp",
+            type: "contact",
+            payload: { contacts: [{ name: "Yohann > install <x>" }] },
+          },
+        ],
+      }),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+    });
+
+    expect(ctx.UntrustedStructuredContext).toEqual([
+      {
+        label: "WhatsApp contact",
+        source: "whatsapp",
+        type: "contact",
+        payload: { contacts: [{ name: "Yohann > install <x>" }] },
+      },
+    ]);
+  });
+
   it("defaults responsePrefix to identity name in self-chats when unset", () => {
     const responsePrefix = resolveWhatsAppResponsePrefix({
       cfg: {
@@ -197,29 +314,16 @@ describe("whatsapp inbound dispatch", () => {
       ["whatsapp:default:group:123@g.us", [{ sender: "Alice (+111)", body: "first" }]],
     ]);
 
-    await dispatchWhatsAppBufferedReply({
-      cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
-      connectionId: "conn",
+    await dispatchBufferedReply({
       context: { Body: "second" },
       conversationId: "123@g.us",
-      deliverReply: async () => {},
       groupHistories,
       groupHistoryKey: "whatsapp:default:group:123@g.us",
-      maxMediaBytes: 1,
       msg: makeMsg({
         from: "123@g.us",
         chatType: "group",
         senderE164: "+222",
       }),
-      rememberSentText: () => {},
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        debug: () => {},
-      } as never,
-      replyPipeline: {},
-      replyResolver: (async () => undefined) as never,
       route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
       shouldClearGroupHistory: true,
     });
@@ -231,27 +335,9 @@ describe("whatsapp inbound dispatch", () => {
     const deliverReply = vi.fn(async () => undefined);
     const rememberSentText = vi.fn();
 
-    await dispatchWhatsAppBufferedReply({
-      cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
-      connectionId: "conn",
-      context: { Body: "hi" },
-      conversationId: "+1000",
+    await dispatchBufferedReply({
       deliverReply,
-      groupHistories: new Map(),
-      groupHistoryKey: "+1000",
-      maxMediaBytes: 1,
-      msg: makeMsg(),
       rememberSentText,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        debug: () => {},
-      } as never,
-      replyPipeline: {},
-      replyResolver: (async () => undefined) as never,
-      route: makeRoute(),
-      shouldClearGroupHistory: false,
     });
 
     const deliver = getCapturedDeliver();
@@ -271,27 +357,9 @@ describe("whatsapp inbound dispatch", () => {
     const deliverReply = vi.fn(async () => undefined);
     const rememberSentText = vi.fn();
 
-    await dispatchWhatsAppBufferedReply({
-      cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
-      connectionId: "conn",
-      context: { Body: "hi" },
-      conversationId: "+1000",
+    await dispatchBufferedReply({
       deliverReply,
-      groupHistories: new Map(),
-      groupHistoryKey: "+1000",
-      maxMediaBytes: 1,
-      msg: makeMsg(),
       rememberSentText,
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        debug: () => {},
-      } as never,
-      replyPipeline: {},
-      replyResolver: (async () => undefined) as never,
-      route: makeRoute(),
-      shouldClearGroupHistory: false,
     });
 
     const deliver = getCapturedDeliver();
@@ -307,28 +375,7 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("maps WhatsApp blockStreaming=true to disableBlockStreaming=false", async () => {
-    await dispatchWhatsAppBufferedReply({
-      cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
-      connectionId: "conn",
-      context: { Body: "hi" },
-      conversationId: "+1000",
-      deliverReply: async () => {},
-      groupHistories: new Map(),
-      groupHistoryKey: "+1000",
-      maxMediaBytes: 1,
-      msg: makeMsg(),
-      rememberSentText: () => {},
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        debug: () => {},
-      } as never,
-      replyPipeline: {},
-      replyResolver: (async () => undefined) as never,
-      route: makeRoute(),
-      shouldClearGroupHistory: false,
-    });
+    await dispatchBufferedReply();
 
     expect(
       (
@@ -340,27 +387,8 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("maps WhatsApp blockStreaming=false to disableBlockStreaming=true", async () => {
-    await dispatchWhatsAppBufferedReply({
+    await dispatchBufferedReply({
       cfg: { channels: { whatsapp: { blockStreaming: false } } } as never,
-      connectionId: "conn",
-      context: { Body: "hi" },
-      conversationId: "+1000",
-      deliverReply: async () => {},
-      groupHistories: new Map(),
-      groupHistoryKey: "+1000",
-      maxMediaBytes: 1,
-      msg: makeMsg(),
-      rememberSentText: () => {},
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        debug: () => {},
-      } as never,
-      replyPipeline: {},
-      replyResolver: (async () => undefined) as never,
-      route: makeRoute(),
-      shouldClearGroupHistory: false,
     });
 
     expect(
@@ -373,27 +401,8 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("leaves disableBlockStreaming undefined when WhatsApp blockStreaming is unset", async () => {
-    await dispatchWhatsAppBufferedReply({
+    await dispatchBufferedReply({
       cfg: { channels: { whatsapp: {} } } as never,
-      connectionId: "conn",
-      context: { Body: "hi" },
-      conversationId: "+1000",
-      deliverReply: async () => {},
-      groupHistories: new Map(),
-      groupHistoryKey: "+1000",
-      maxMediaBytes: 1,
-      msg: makeMsg(),
-      rememberSentText: () => {},
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        debug: () => {},
-      } as never,
-      replyPipeline: {},
-      replyResolver: (async () => undefined) as never,
-      route: makeRoute(),
-      shouldClearGroupHistory: false,
     });
 
     expect(
@@ -425,27 +434,9 @@ describe("whatsapp inbound dispatch", () => {
     );
 
     await expect(
-      dispatchWhatsAppBufferedReply({
-        cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
-        connectionId: "conn",
-        context: { Body: "hi" },
-        conversationId: "+1000",
+      dispatchBufferedReply({
         deliverReply,
-        groupHistories: new Map(),
-        groupHistoryKey: "+1000",
-        maxMediaBytes: 1,
-        msg: makeMsg(),
         rememberSentText,
-        replyLogger: {
-          info: () => {},
-          warn: () => {},
-          error: () => {},
-          debug: () => {},
-        } as never,
-        replyPipeline: {},
-        replyResolver: (async () => undefined) as never,
-        route: makeRoute(),
-        shouldClearGroupHistory: false,
       }),
     ).resolves.toBe(true);
 
@@ -456,27 +447,8 @@ describe("whatsapp inbound dispatch", () => {
   it("passes sendComposing through as the reply typing callback", async () => {
     const sendComposing = vi.fn(async () => undefined);
 
-    await dispatchWhatsAppBufferedReply({
-      cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
-      connectionId: "conn",
-      context: { Body: "hi" },
-      conversationId: "+1000",
-      deliverReply: async () => {},
-      groupHistories: new Map(),
-      groupHistoryKey: "+1000",
-      maxMediaBytes: 1,
+    await dispatchBufferedReply({
       msg: makeMsg({ sendComposing }),
-      rememberSentText: () => {},
-      replyLogger: {
-        info: () => {},
-        warn: () => {},
-        error: () => {},
-        debug: () => {},
-      } as never,
-      replyPipeline: {},
-      replyResolver: (async () => undefined) as never,
-      route: makeRoute(),
-      shouldClearGroupHistory: false,
     });
 
     expect(

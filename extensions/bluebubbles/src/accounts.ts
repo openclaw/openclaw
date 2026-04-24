@@ -4,9 +4,14 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveChannelStreamingChunkMode } from "openclaw/plugin-sdk/channel-streaming";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeBlueBubblesAccountsMap,
+  normalizeBlueBubblesPrivateNetworkAliases,
+  resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+  resolveBlueBubblesPrivateNetworkConfigValue as resolveBlueBubblesPrivateNetworkConfigValueFromRecord,
+} from "./accounts-normalization.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
 import { normalizeBlueBubblesServerUrl, type BlueBubblesAccountConfig } from "./types.js";
 
@@ -25,76 +30,13 @@ const {
 } = createAccountListHelpers("bluebubbles");
 export { listBlueBubblesAccountIds, resolveDefaultBlueBubblesAccountId };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function normalizeBlueBubblesPrivateNetworkAliases(
-  config: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  const record = asRecord(config);
-  if (!record) {
-    return config;
-  }
-  const network = asRecord(record.network);
-  const canonicalValue =
-    typeof network?.dangerouslyAllowPrivateNetwork === "boolean"
-      ? network.dangerouslyAllowPrivateNetwork
-      : typeof network?.allowPrivateNetwork === "boolean"
-        ? network.allowPrivateNetwork
-        : typeof record.dangerouslyAllowPrivateNetwork === "boolean"
-          ? record.dangerouslyAllowPrivateNetwork
-          : typeof record.allowPrivateNetwork === "boolean"
-            ? record.allowPrivateNetwork
-            : undefined;
-
-  if (canonicalValue === undefined) {
-    return config;
-  }
-
-  const {
-    allowPrivateNetwork: _legacyFlatAllow,
-    dangerouslyAllowPrivateNetwork: _legacyFlatDanger,
-    ...rest
-  } = record;
-  const {
-    allowPrivateNetwork: _legacyNetworkAllow,
-    dangerouslyAllowPrivateNetwork: _legacyNetworkDanger,
-    ...restNetwork
-  } = network ?? {};
-
-  return {
-    ...rest,
-    network: {
-      ...restNetwork,
-      dangerouslyAllowPrivateNetwork: canonicalValue,
-    },
-  };
-}
-
-function normalizeBlueBubblesAccountsMap(
-  accounts: Record<string, Partial<BlueBubblesAccountConfig>> | undefined,
-): Record<string, Partial<BlueBubblesAccountConfig>> | undefined {
-  if (!accounts) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    Object.entries(accounts).map(([accountKey, accountConfig]) => [
-      accountKey,
-      normalizeBlueBubblesPrivateNetworkAliases(accountConfig) as Partial<BlueBubblesAccountConfig>,
-    ]),
-  );
-}
-
 function mergeBlueBubblesAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): BlueBubblesAccountConfig {
   const channelConfig = normalizeBlueBubblesPrivateNetworkAliases(
     cfg.channels?.bluebubbles as BlueBubblesAccountConfig | undefined,
-  ) as BlueBubblesAccountConfig | undefined;
+  );
   const accounts = normalizeBlueBubblesAccountsMap(
     cfg.channels?.bluebubbles?.accounts as
       | Record<string, Partial<BlueBubblesAccountConfig>>
@@ -106,7 +48,7 @@ function mergeBlueBubblesAccountConfig(
     accountId,
     omitKeys: ["defaultAccount"],
     normalizeAccountId,
-    nestedObjectKeys: ["network"],
+    nestedObjectKeys: ["network", "catchup"],
   });
   return {
     ...merged,
@@ -141,43 +83,14 @@ export function resolveBlueBubblesAccount(params: {
 export function resolveBlueBubblesPrivateNetworkConfigValue(
   config: BlueBubblesAccountConfig | null | undefined,
 ): boolean | undefined {
-  const record = asRecord(config);
-  if (!record) {
-    return undefined;
-  }
-  const network = asRecord(record.network);
-  if (typeof network?.dangerouslyAllowPrivateNetwork === "boolean") {
-    return network.dangerouslyAllowPrivateNetwork;
-  }
-  if (typeof network?.allowPrivateNetwork === "boolean") {
-    return network.allowPrivateNetwork;
-  }
-  if (typeof record.dangerouslyAllowPrivateNetwork === "boolean") {
-    return record.dangerouslyAllowPrivateNetwork;
-  }
-  if (typeof record.allowPrivateNetwork === "boolean") {
-    return record.allowPrivateNetwork;
-  }
-  return undefined;
+  return resolveBlueBubblesPrivateNetworkConfigValueFromRecord(config);
 }
 
 export function resolveBlueBubblesEffectiveAllowPrivateNetwork(params: {
   baseUrl?: string;
   config?: BlueBubblesAccountConfig | null;
 }): boolean {
-  const configuredValue = resolveBlueBubblesPrivateNetworkConfigValue(params.config);
-  if (configuredValue !== undefined) {
-    return configuredValue;
-  }
-  if (!params.baseUrl) {
-    return false;
-  }
-  try {
-    const hostname = new URL(normalizeBlueBubblesServerUrl(params.baseUrl)).hostname.trim();
-    return Boolean(hostname) && isBlockedHostnameOrIp(hostname);
-  } catch {
-    return false;
-  }
+  return resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig(params);
 }
 
 export function listEnabledBlueBubblesAccounts(cfg: OpenClawConfig): ResolvedBlueBubblesAccount[] {

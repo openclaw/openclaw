@@ -1,70 +1,14 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import { beforeAll, describe, expect, it } from "vitest";
+import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => [
-    {
-      pluginId: "google",
-      id: "gemini",
-      label: "gemini",
-      hint: "gemini test provider",
-      envVars: ["GEMINI_API_KEY"],
-      placeholder: "gemini-...",
-      signupUrl: "https://example.com/gemini",
-      autoDetectOrder: 20,
-      credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-      inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
-      getCredentialValue: (searchConfig) => searchConfig?.apiKey,
-      setCredentialValue: (searchConfigTarget, value) => {
-        searchConfigTarget.apiKey = value;
-      },
-      getConfiguredCredentialValue: (config) =>
-        (config?.plugins?.entries?.google?.config as { webSearch?: { apiKey?: unknown } })
-          ?.webSearch?.apiKey,
-      setConfiguredCredentialValue: (configTarget, value) => {
-        const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-        const entries = (plugins.entries ??= {});
-        const entry = (entries.google ??= {}) as { config?: Record<string, unknown> };
-        const config = (entry.config ??= {});
-        const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
-        webSearch.apiKey = value;
-      },
-      createTool: () => null,
-    },
-  ]),
-}));
-
-vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
-
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let getActiveRuntimeWebToolsMetadata: typeof import("./runtime.js").getActiveRuntimeWebToolsMetadata;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 describe("runtime web tools state", () => {
   beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({
-      activateSecretsRuntimeSnapshot,
-      clearSecretsRuntimeSnapshot,
-      getActiveRuntimeWebToolsMetadata,
-      prepareSecretsRuntimeSnapshot,
-    } = await import("./runtime.js"));
-  });
-
-  afterEach(() => {
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
+    ({ activateSecretsRuntimeSnapshot, getActiveRuntimeWebToolsMetadata } =
+      await import("./runtime.js"));
   });
 
   it("exposes active runtime web tool metadata as a defensive clone", async () => {

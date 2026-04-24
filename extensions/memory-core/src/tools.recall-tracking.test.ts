@@ -1,11 +1,11 @@
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../api.js";
 import {
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
-} from "../../../test/helpers/memory-tool-manager-mock.js";
-import type { OpenClawConfig } from "../api.js";
+} from "./memory-tool-manager-mock.js";
 import { createMemorySearchTool } from "./tools.js";
 
 type RecordShortTermRecallsFn = (params: {
@@ -25,7 +25,7 @@ vi.mock("./short-term-promotion.js", () => ({
 }));
 
 function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
-  return config as OpenClawConfig;
+  return config;
 }
 
 function createSearchTool(config: OpenClawConfig) {

@@ -1,6 +1,9 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { RuntimeEnv } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
@@ -62,7 +65,7 @@ export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLik
 }): string[] {
   const additions: string[] = [];
   for (const entry of params.existing) {
-    const trimmed = String(entry).trim();
+    const trimmed = normalizeOptionalString(entry) ?? "";
     const resolved = params.resolvedMap.get(trimmed);
     if (resolved?.resolved && resolved.id) {
       additions.push(resolved.id);
@@ -76,7 +79,7 @@ export function canonicalizeAllowlistWithResolvedIds<
 >(params: { existing?: Array<string | number>; resolvedMap: Map<string, T> }): string[] {
   const canonicalized: string[] = [];
   for (const entry of params.existing ?? []) {
-    const trimmed = String(entry).trim();
+    const trimmed = normalizeOptionalString(entry) ?? "";
     if (!trimmed) {
       continue;
     }
@@ -137,7 +140,7 @@ export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entr
     return;
   }
   for (const value of users) {
-    const trimmed = String(value).trim();
+    const trimmed = normalizeOptionalString(value) ?? "";
     if (trimmed && trimmed !== "*") {
       target.add(trimmed);
     }

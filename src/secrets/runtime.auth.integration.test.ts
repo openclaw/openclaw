@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   asConfig,
@@ -11,9 +12,70 @@ import {
   OPENAI_ENV_KEY_REF,
   type SecretsRuntimeEnvSnapshot,
 } from "./runtime-auth.integration.test-helpers.js";
-import { activateSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from "./runtime.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "./runtime.js";
 
 vi.unmock("../version.js");
+
+vi.mock("./runtime-prepare.runtime.js", () => ({
+  createResolverContext: ({
+    sourceConfig,
+    env,
+  }: {
+    sourceConfig: unknown;
+    env: NodeJS.ProcessEnv;
+  }) => ({
+    sourceConfig,
+    env,
+    cache: {},
+    warnings: [],
+    warningKeys: new Set<string>(),
+    assignments: [],
+  }),
+  collectConfigAssignments: () => {},
+  collectAuthStoreAssignments: ({
+    store,
+    context,
+  }: {
+    store: AuthProfileStore;
+    context: { env: NodeJS.ProcessEnv };
+  }) => {
+    for (const profile of Object.values(store.profiles)) {
+      if (
+        profile?.type === "api_key" &&
+        profile.keyRef?.source === "env" &&
+        typeof profile.keyRef.id === "string"
+      ) {
+        const key = context.env[profile.keyRef.id];
+        if (typeof key === "string" && key.length > 0) {
+          profile.key = key;
+        }
+      }
+    }
+  },
+  resolveSecretRefValues: async () => new Map(),
+  applyResolvedAssignments: () => {},
+  resolveRuntimeWebTools: async () => ({
+    search: { providerSource: "none", diagnostics: [] },
+    fetch: { providerSource: "none", diagnostics: [] },
+    diagnostics: [],
+  }),
+}));
+
+function loadAuthStoreFromTestFile(agentDir?: string): AuthProfileStore {
+  if (!agentDir) {
+    return { version: 1, profiles: {} };
+  }
+  try {
+    const raw = readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8");
+    return JSON.parse(raw) as AuthProfileStore;
+  } catch {
+    return { version: 1, profiles: {} };
+  }
+}
 
 describe("secrets runtime snapshot auth integration", () => {
   let envSnapshot: SecretsRuntimeEnvSnapshot;
@@ -75,11 +137,16 @@ describe("secrets runtime snapshot auth integration", () => {
           OPENAI_API_KEY: "sk-main-runtime",
           ANTHROPIC_API_KEY: "sk-ops-runtime",
         },
+        loadAuthStore: loadAuthStoreFromTestFile,
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       });
 
       activateSecretsRuntimeSnapshot(prepared);
-      expect(ensureAuthProfileStore(opsAgentDir).profiles["anthropic:ops"]).toBeUndefined();
+      expect(
+        getActiveSecretsRuntimeSnapshot()?.authStores.find(
+          (entry) => entry.agentDir === opsAgentDir,
+        ),
+      ).toBeUndefined();
 
       const refreshed = await prepareSecretsRuntimeSnapshot({
         config: asConfig({
@@ -91,11 +158,16 @@ describe("secrets runtime snapshot auth integration", () => {
           OPENAI_API_KEY: "sk-main-runtime",
           ANTHROPIC_API_KEY: "sk-ops-runtime",
         },
+        loadAuthStore: loadAuthStoreFromTestFile,
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       });
       activateSecretsRuntimeSnapshot(refreshed);
 
-      expect(ensureAuthProfileStore(opsAgentDir).profiles["anthropic:ops"]).toMatchObject({
+      expect(
+        getActiveSecretsRuntimeSnapshot()?.authStores.find(
+          (entry) => entry.agentDir === opsAgentDir,
+        )?.store.profiles["anthropic:ops"],
+      ).toMatchObject({
         type: "api_key",
         key: "sk-ops-runtime",
         keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },

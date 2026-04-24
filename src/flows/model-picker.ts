@@ -10,8 +10,8 @@ import {
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
 import { formatTokenK } from "../commands/models/shared.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -45,7 +45,7 @@ export type PromptDefaultModelParams = {
 };
 
 export type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
-export type PromptModelAllowlistResult = { models?: string[] };
+export type PromptModelAllowlistResult = { models?: string[]; scopeKeys?: string[] };
 
 async function loadModelPickerRuntime() {
   return import("../commands/model-picker.runtime.js");
@@ -99,7 +99,7 @@ function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
 function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
   const models = cfg.agents?.defaults?.models ?? {};
   return Object.keys(models)
-    .map((key) => String(key ?? "").trim())
+    .map((key) => key.trim())
     .filter((key) => key.length > 0);
 }
 
@@ -107,7 +107,7 @@ function normalizeModelKeys(values: string[]): string[] {
   const seen = new Set<string>();
   const next: string[] = [];
   for (const raw of values) {
-    const value = String(raw ?? "").trim();
+    const value = raw.trim();
     if (!value || seen.has(value)) {
       continue;
     }
@@ -226,7 +226,7 @@ async function promptManualModel(params: {
       ? undefined
       : (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
-  const model = String(modelInput ?? "").trim();
+  const model = (modelInput ?? "").trim();
   if (!model) {
     return {};
   }
@@ -284,6 +284,7 @@ async function maybeFilterModelsByProvider(params: {
     const selection = await params.prompter.select({
       message: "Filter models by provider",
       options: [{ value: "*", label: "All providers" }, ...buildModelProviderFilterOptions(next)],
+      searchable: true,
     });
     if (selection !== "*") {
       next = next.filter((entry) => entry.provider === selection);
@@ -319,11 +320,12 @@ async function resolveProviderPluginSetupOptions(params: {
           workspaceDir: params.workspaceDir,
           env: params.env,
         });
-  return providerModelPickerOptions.map((entry) => ({
-    value: entry.value,
-    label: entry.label,
-    ...(entry.hint ? { hint: entry.hint } : {}),
-  }));
+  return providerModelPickerOptions.map((entry) =>
+    Object.assign(
+      { value: entry.value, label: entry.label },
+      entry.hint ? { hint: entry.hint } : {},
+    ),
+  );
 }
 
 async function maybeHandleProviderPluginSelection(params: {
@@ -426,7 +428,13 @@ export async function promptDefaultModel(
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
 
-  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  const catalogProgress = params.prompter.progress("Loading available models");
+  let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  try {
+    catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  } finally {
+    catalogProgress.stop();
+  }
   if (catalog.length === 0) {
     return promptManualModel({
       prompter: params.prompter,
@@ -531,11 +539,13 @@ export async function promptDefaultModel(
     message: params.message ?? "Default model",
     options,
     initialValue,
+    searchable: true,
   });
-  if (selection === KEEP_VALUE) {
+  const selectedValue = selection ?? "";
+  if (selectedValue === KEEP_VALUE) {
     return {};
   }
-  if (selection === MANUAL_VALUE) {
+  if (selectedValue === MANUAL_VALUE) {
     return promptManualModel({
       prompter: params.prompter,
       allowBlank: false,
@@ -544,7 +554,7 @@ export async function promptDefaultModel(
   }
 
   const providerPluginResult = await maybeHandleProviderPluginSelection({
-    selection: String(selection),
+    selection: selectedValue,
     cfg,
     prompter: params.prompter,
     agentDir: params.agentDir,
@@ -556,7 +566,7 @@ export async function promptDefaultModel(
     return providerPluginResult;
   }
 
-  const model = String(selection);
+  const model = selectedValue;
   const { runProviderModelSelectedHook } = await loadResolvedModelPickerRuntime();
   await runProviderModelSelectedHook({
     config: cfg,
@@ -601,7 +611,13 @@ export async function promptModelAllowlist(params: {
     ? initialSeeds.filter((key) => allowedKeySet.has(key))
     : initialSeeds;
 
-  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  const allowlistProgress = params.prompter.progress("Loading available models");
+  let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  try {
+    catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  } finally {
+    allowlistProgress.stop();
+  }
   if (catalog.length === 0 && allowedKeys.length === 0) {
     const raw = await params.prompter.text({
       message:
@@ -610,7 +626,7 @@ export async function promptModelAllowlist(params: {
       initialValue: existingKeys.join(", "),
       placeholder: "provider/model, other-provider/model",
     });
-    const parsed = String(raw ?? "")
+    const parsed = (raw ?? "")
       .split(",")
       .map((value) => value.trim())
       .filter((value) => value.length > 0);
@@ -642,6 +658,12 @@ export async function promptModelAllowlist(params: {
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
       : allowedCatalog;
 
+  const scopeKeys = allowedKeySet
+    ? allowedKeys
+    : preferredProvider
+      ? filteredCatalog.map((entry) => modelKey(entry.provider, entry.id))
+      : undefined;
+
   for (const entry of filteredCatalog) {
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
@@ -668,9 +690,19 @@ export async function promptModelAllowlist(params: {
     initialValues: initialKeys.length > 0 ? initialKeys : undefined,
     searchable: true,
   });
-  const selected = normalizeModelKeys(selection.map((value) => String(value)));
+  const selected = normalizeModelKeys(selection);
   if (selected.length > 0) {
-    return { models: selected };
+    return { models: selected, ...(scopeKeys ? { scopeKeys } : {}) };
+  }
+  if (scopeKeys) {
+    const confirmScopedClear = await params.prompter.confirm({
+      message: "Remove these provider models from the /model picker?",
+      initialValue: false,
+    });
+    if (!confirmScopedClear) {
+      return {};
+    }
+    return { models: [], scopeKeys };
   }
   if (existingKeys.length === 0) {
     return { models: [] };
@@ -685,12 +717,33 @@ export async function promptModelAllowlist(params: {
   return { models: [] };
 }
 
-export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {
+export function applyModelAllowlist(
+  cfg: OpenClawConfig,
+  models: string[],
+  opts: { scopeKeys?: string[] } = {},
+): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   const normalized = normalizeModelKeys(models);
+  const scopeKeys = opts.scopeKeys ? normalizeModelKeys(opts.scopeKeys) : [];
+  const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
   if (normalized.length === 0) {
     if (!defaults?.models) {
       return cfg;
+    }
+    if (scopeKeySet) {
+      const nextModels = { ...defaults.models };
+      for (const key of scopeKeySet) {
+        delete nextModels[key];
+      }
+      const { models: _ignored, ...restDefaults } = defaults;
+      return {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults:
+            Object.keys(nextModels).length > 0 ? { ...defaults, models: nextModels } : restDefaults,
+        },
+      };
     }
     const { models: _ignored, ...restDefaults } = defaults;
     return {
@@ -703,6 +756,26 @@ export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): Open
   }
 
   const existingModels = defaults?.models ?? {};
+  if (scopeKeySet) {
+    const nextModels = { ...existingModels };
+    for (const key of scopeKeySet) {
+      delete nextModels[key];
+    }
+    for (const key of normalized) {
+      nextModels[key] = existingModels[key] ?? {};
+    }
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...defaults,
+          models: nextModels,
+        },
+      },
+    };
+  }
+
   const nextModels: Record<string, { alias?: string }> = {};
   for (const key of normalized) {
     nextModels[key] = existingModels[key] ?? {};

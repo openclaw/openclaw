@@ -1,8 +1,11 @@
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { DIFF_INDICATORS, DIFF_LAYOUTS, DIFF_THEMES } from "./types.js";
 import type { DiffViewerPayload } from "./types.js";
 
 const OVERFLOW_VALUES = ["scroll", "wrap"] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 export function parseViewerPayloadJson(raw: string): DiffViewerPayload {
   let parsed: unknown;

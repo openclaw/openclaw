@@ -3,6 +3,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   isCommandFlagEnabled,
+  isModelsWriteEnabled,
   isRestartEnabled,
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -56,6 +57,17 @@ beforeEach(() => {
           },
         },
       },
+      {
+        pluginId: "demo-channel",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "demo-channel" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+            nativeSkillsAutoEnabled: true,
+          },
+        },
+      },
     ]),
   );
 });
@@ -104,6 +116,15 @@ describe("resolveNativeSkillsEnabled", () => {
       }),
     ).toBe(false);
   });
+
+  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
+    expect(
+      resolveNativeSkillsEnabled({
+        providerId: "demo-channel",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("resolveNativeCommandsEnabled", () => {
@@ -117,6 +138,15 @@ describe("resolveNativeCommandsEnabled", () => {
     expect(resolveNativeCommandsEnabled({ providerId: "slack", globalSetting: "auto" })).toBe(
       false,
     );
+  });
+
+  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
+    expect(
+      resolveNativeCommandsEnabled({
+        providerId: "demo-channel",
+        globalSetting: "auto",
+      }),
+    ).toBe(true);
   });
 
   it("honors explicit provider/global booleans", () => {
@@ -166,6 +196,24 @@ describe("isRestartEnabled", () => {
     expect(
       isRestartEnabled({
         commands: Object.create({ restart: false }) as Record<string, unknown>,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("isModelsWriteEnabled", () => {
+  it("defaults to enabled unless explicitly false", () => {
+    expect(isModelsWriteEnabled(undefined)).toBe(true);
+    expect(isModelsWriteEnabled({})).toBe(true);
+    expect(isModelsWriteEnabled({ commands: {} })).toBe(true);
+    expect(isModelsWriteEnabled({ commands: { modelsWrite: true } })).toBe(true);
+    expect(isModelsWriteEnabled({ commands: { modelsWrite: false } })).toBe(false);
+  });
+
+  it("ignores inherited modelsWrite flags", () => {
+    expect(
+      isModelsWriteEnabled({
+        commands: Object.create({ modelsWrite: false }) as Record<string, unknown>,
       }),
     ).toBe(true);
   });

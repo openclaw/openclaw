@@ -47,7 +47,7 @@ export function normalizeIMessageHandle(raw: string): string {
       return "";
     }
     const value = trimmed.slice(prefix.length).trim();
-    return `${prefix.toLowerCase()}${value}`;
+    return `${normalizeLowercaseStringOrEmpty(prefix)}${value}`;
   }
   if (trimmed.includes("@")) {
     return normalizeLowercaseStringOrEmpty(trimmed);

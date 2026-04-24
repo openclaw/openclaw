@@ -4,19 +4,25 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createPreCryptoDirectDmAuthorizer,
   DEFAULT_ACCOUNT_ID,
-  dispatchInboundDirectDmWithRuntime,
+  type ChannelOutboundAdapter,
   resolveInboundDirectDmAccessWithRuntime,
   type ChannelPlugin,
 } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
-import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
 import { resolveDefaultNostrAccountId, type ResolvedNostrAccount } from "./types.js";
 
 type NostrGatewayStart = NonNullable<
   NonNullable<ChannelPlugin<ResolvedNostrAccount>["gateway"]>["startAccount"]
 >;
-type NostrOutbound = NonNullable<ChannelPlugin<ResolvedNostrAccount>["outbound"]>;
+type NostrOutboundAdapter = Pick<
+  ChannelOutboundAdapter,
+  "deliveryMode" | "textChunkLimit" | "sendText"
+> & {
+  sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
+};
 
 const activeBuses = new Map<string, NostrBusHandle>();
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
@@ -142,6 +148,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         return;
       }
 
+      const { dispatchInboundDirectDmWithRuntime } = await import("./inbound-direct-dm-runtime.js");
       await dispatchInboundDirectDmWithRuntime({
         cfg: ctx.cfg,
         runtime,
@@ -163,7 +170,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         deliver: async (payload) => {
           const outboundText =
             payload && typeof payload === "object" && "text" in payload
-              ? String((payload as { text?: string }).text ?? "")
+              ? ((payload as { text?: string }).text ?? "")
               : "";
           if (!outboundText.trim()) {
             return;
@@ -266,10 +273,7 @@ export const nostrPairingTextAdapter = {
   },
 };
 
-export const nostrOutboundAdapter: Pick<
-  NostrOutbound,
-  "deliveryMode" | "textChunkLimit" | "sendText"
-> = {
+export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {

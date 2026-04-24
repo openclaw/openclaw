@@ -154,6 +154,7 @@ export async function executeNodeCommandAction(params: {
       return jsonResult(raw ?? {});
     }
   }
+  throw new Error("Unsupported node command action");
 }
 
 export async function invokeNodeCommandPayload(params: {

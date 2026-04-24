@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
@@ -10,6 +11,7 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedPiSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
@@ -109,6 +111,75 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   }
 
+  it("captures usage from completions timings on done events", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        timings: {
+          prompt_n: 30_834,
+          predicted_n: 34,
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 30_834,
+      output: 34,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 30_868,
+    });
+  });
+
+  it("does not double-count usage when done and message_end carry the same snapshot", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = {
+      input: 100,
+      output: 20,
+      totalTokens: 120,
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        message: {
+          role: "assistant",
+          usage,
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage,
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 120,
+    });
+  });
+
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
     async ({ open, close }) => {
@@ -154,7 +225,7 @@ describe("subscribeEmbeddedPiSession", () => {
     },
   );
 
-  it("does not let tool_execution_end delivery stall later assistant streaming", async () => {
+  it("suppresses assistant streaming while deterministic exec approval delivery is pending", async () => {
     let resolveToolResult: (() => void) | undefined;
     const onToolResult = vi.fn(
       () =>
@@ -200,13 +271,42 @@ describe("subscribeEmbeddedPiSession", () => {
 
     await vi.waitFor(() => {
       expect(onToolResult).toHaveBeenCalledTimes(1);
-      expect(onPartialReply).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "After tool", delta: "After tool" }),
-      );
     });
+    expect(onPartialReply).not.toHaveBeenCalled();
 
     expect(resolveToolResult).toBeTypeOf("function");
     resolveToolResult?.();
+    await Promise.resolve();
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
+    const onToolResult = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      verboseLevel: "full",
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "Web_Search",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Fetched page\nMEDIA:/tmp/secret.png" }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+    const payload = onToolResult.mock.calls.at(-1)?.[0] as
+      | { text?: string; mediaUrls?: string[] }
+      | undefined;
+    expect(payload?.text ?? "").toContain("Fetched page");
+    expect(payload?.mediaUrls).toBeUndefined();
   });
 
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
@@ -417,7 +517,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads).toHaveLength(1);
   });
 
-  it("emits a replacement snapshot when cleaned text rewinds mid-stream", () => {
+  it("emits one cleaned media snapshot when a streamed MEDIA line resolves to caption text", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -425,20 +525,26 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta(emit, " https://example.com/a.png\nCaption");
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("MEDIA:");
-    expect(payloads[0]?.delta).toBe("MEDIA:");
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Caption");
+    expect(payloads[0]?.delta).toBe("Caption");
     expect(payloads[0]?.replace).toBeUndefined();
-    expect(payloads[1]?.text).toBe("Caption");
-    expect(payloads[1]?.delta).toBe("");
-    expect(payloads[1]?.replace).toBe(true);
+    expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
-  it("emits agent events when media arrives without text", () => {
+  it("emits agent events when media-only text is finalized", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "MEDIA: https://example.com/a.png");
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "MEDIA: https://example.com/a.png",
+      },
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
@@ -548,5 +654,77 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(lifecycleError).toBeDefined();
     expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+  });
+
+  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-replay-invalid-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "edit",
+      toolCallId: "edit-1",
+      args: {
+        file_path: "/tmp/demo.txt",
+        old_string: "before",
+        new_string: "after",
+      },
+      isError: false,
+      result: { ok: true },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    expect(subscription.getReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      }),
+    );
+  });
+
+  it("preserves deterministic side-effect liveness across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-cron-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "cron",
+      toolCallId: "cron-1",
+      args: { action: "add", job: { name: "reminder" } },
+      isError: false,
+      result: { details: { status: "ok" } },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      }),
+    );
   });
 });

@@ -25,6 +25,7 @@ function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
       provider: "openrouter",
       id: modelId,
     } as Model<"openai-completions">,
+    mockProviderRuntime: true,
     payload,
   });
 }

@@ -111,6 +111,7 @@ function expectPluginLoaderCall(params: {
   autoEnabledReasons?: Record<string, string[]>;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: unknown;
   loadModules?: boolean;
 }) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
@@ -124,6 +125,7 @@ function expectPluginLoaderCall(params: {
         : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env ? { env: params.env } : {}),
+      ...(params.logger !== undefined ? { logger: params.logger } : {}),
       ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
     }),
   );
@@ -134,6 +136,7 @@ function expectMetadataSnapshotLoaderCall(params: {
   activationSourceConfig?: unknown;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: unknown;
   loadModules?: boolean;
 }) {
   expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
@@ -144,6 +147,7 @@ function expectMetadataSnapshotLoaderCall(params: {
         : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env ? { env: params.env } : {}),
+      ...(params.logger !== undefined ? { logger: params.logger } : {}),
       ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
     }),
   );
@@ -209,6 +213,50 @@ function createAutoEnabledStatusConfig(
     },
   };
   return { rawConfig, autoEnabledConfig };
+}
+
+function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
+  const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
+    {
+      demo: { enabled: true },
+    },
+    { channels: { demo: { enabled: true } } },
+  );
+  const autoEnabledReasons = {
+    demo: ["demo configured"],
+  };
+  applyPluginAutoEnableMock.mockReturnValue({
+    config: autoEnabledConfig,
+    changes: [],
+    autoEnabledReasons,
+  });
+  setSinglePluginLoadResult(
+    createPluginRecord({
+      id: "demo",
+      name: "Demo",
+      description: "Auto-enabled plugin",
+      origin: "bundled",
+      hookCount: 1,
+    }),
+    {
+      typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
+    },
+  );
+
+  expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
+    createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
+    createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
+  ]);
+
+  expectAutoEnabledStatusLoad({
+    rawConfig,
+  });
+  expectPluginLoaderCall({
+    config: autoEnabledConfig,
+    activationSourceConfig: rawConfig,
+    autoEnabledReasons,
+    loadModules: true,
+  });
 }
 
 function expectNoCompatibilityWarnings() {
@@ -323,6 +371,27 @@ describe("plugin status reports", () => {
     });
   });
 
+  it("forwards an explicit logger to plugin loading", () => {
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    buildPluginSnapshotReport({
+      config: {},
+      logger,
+      workspaceDir: "/workspace",
+    });
+
+    expectMetadataSnapshotLoaderCall({
+      config: {},
+      logger,
+      workspaceDir: "/workspace",
+      loadModules: false,
+    });
+  });
+
   it("uses a metadata snapshot load for snapshot reports", () => {
     buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
 
@@ -368,7 +437,7 @@ describe("plugin status reports", () => {
           enabled: true,
           subagent: {
             allowModelOverride: true,
-            allowedModels: ["openai/gpt-5.4"],
+            allowedModels: ["openai/gpt-5.5"],
             hasAllowedModelsConfig: true,
           },
         },
@@ -397,56 +466,16 @@ describe("plugin status reports", () => {
     expect(inspect).not.toBeNull();
     expectInspectPolicy(inspect!, {
       allowPromptInjection: undefined,
+      allowConversationAccess: undefined,
       allowModelOverride: true,
-      allowedModels: ["openai/gpt-5.4"],
+      allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
     });
     expectPluginLoaderCall({ loadModules: true });
   });
 
   it("preserves raw config activation context when compatibility notices build their own report", () => {
-    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
-      {
-        demo: { enabled: true },
-      },
-      { channels: { demo: { enabled: true } } },
-    );
-    applyPluginAutoEnableMock.mockReturnValue({
-      config: autoEnabledConfig,
-      changes: [],
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-    });
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "demo",
-        name: "Demo",
-        description: "Auto-enabled plugin",
-        origin: "bundled",
-        hookCount: 1,
-      }),
-      {
-        typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
-      },
-    );
-
-    expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
-      createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
-      createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
-    ]);
-
-    expectAutoEnabledStatusLoad({
-      rawConfig,
-    });
-    expectPluginLoaderCall({
-      config: autoEnabledConfig,
-      activationSourceConfig: rawConfig,
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-      loadModules: true,
-    });
+    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
@@ -468,48 +497,7 @@ describe("plugin status reports", () => {
   });
 
   it("preserves raw config activation context for compatibility-derived reports", () => {
-    const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
-      {
-        demo: { enabled: true },
-      },
-      { channels: { demo: { enabled: true } } },
-    );
-    applyPluginAutoEnableMock.mockReturnValue({
-      config: autoEnabledConfig,
-      changes: [],
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-    });
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "demo",
-        name: "Demo",
-        description: "Auto-enabled plugin",
-        origin: "bundled",
-        hookCount: 1,
-      }),
-      {
-        typedHooks: [createTypedHook({ pluginId: "demo", hookName: "before_agent_start" })],
-      },
-    );
-
-    expect(buildPluginCompatibilityNotices({ config: rawConfig })).toEqual([
-      createCompatibilityNotice({ pluginId: "demo", code: "legacy-before-agent-start" }),
-      createCompatibilityNotice({ pluginId: "demo", code: "hook-only" }),
-    ]);
-
-    expectAutoEnabledStatusLoad({
-      rawConfig,
-    });
-    expectPluginLoaderCall({
-      config: autoEnabledConfig,
-      activationSourceConfig: rawConfig,
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
-      loadModules: true,
-    });
+    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {
@@ -596,10 +584,10 @@ describe("plugin status reports", () => {
       plugins: {
         entries: {
           google: {
-            hooks: { allowPromptInjection: false },
+            hooks: { allowPromptInjection: false, allowConversationAccess: true },
             subagent: {
               allowModelOverride: true,
-              allowedModels: ["openai/gpt-5.4"],
+              allowedModels: ["openai/gpt-5.5"],
             },
           },
         },
@@ -636,8 +624,9 @@ describe("plugin status reports", () => {
     ]);
     expectInspectPolicy(inspect!, {
       allowPromptInjection: false,
+      allowConversationAccess: true,
       allowModelOverride: true,
-      allowedModels: ["openai/gpt-5.4"],
+      allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
     });
     expect(inspect?.diagnostics).toEqual([
@@ -692,6 +681,32 @@ describe("plugin status reports", () => {
       capabilityKinds: ["cli-backend"],
     });
     expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
+  });
+
+  it("treats a context-engine plugin as a plain capability", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "moon",
+          name: "Moon",
+          kind: "context-engine",
+          contextEngineIds: ["moon-engine"],
+          hookCount: 1,
+        }),
+      ],
+      hooks: [createCustomHook({ pluginId: "moon", events: ["message"] })],
+    });
+
+    const inspect = expectInspectReport("moon");
+
+    expectInspectShape(inspect, {
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["context-engine"],
+    });
+    expect(inspect.capabilities).toEqual([{ kind: "context-engine", ids: ["moon-engine"] }]);
+    expect(inspect.compatibility).toEqual([]);
+    expectNoCompatibilityWarnings();
   });
 
   it("builds compatibility warnings for legacy compatibility paths", () => {

@@ -14,6 +14,30 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
+async function resolveBridgeMissingArtifactsStatus() {
+  const config = resolveMemoryWikiConfig(
+    {
+      vaultMode: "bridge",
+      bridge: {
+        enabled: true,
+        readMemoryArtifacts: true,
+      },
+    },
+    { homedir: "/Users/tester" },
+  );
+
+  return resolveMemoryWikiStatus(config, {
+    appConfig: {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+      },
+    } as OpenClawConfig,
+    listPublicArtifacts: async () => [],
+    pathExists: async () => true,
+    resolveCommand: async () => null,
+  });
+}
+
 describe("resolveMemoryWikiStatus", () => {
   it("reports missing vault and missing requested obsidian cli", async () => {
     const config = resolveMemoryWikiConfig(
@@ -61,27 +85,7 @@ describe("resolveMemoryWikiStatus", () => {
   });
 
   it("warns when bridge mode has no exported memory artifacts", async () => {
-    const config = resolveMemoryWikiConfig(
-      {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-        },
-      },
-      { homedir: "/Users/tester" },
-    );
-
-    const status = await resolveMemoryWikiStatus(config, {
-      appConfig: {
-        agents: {
-          list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
-        },
-      } as OpenClawConfig,
-      listPublicArtifacts: async () => [],
-      pathExists: async () => true,
-      resolveCommand: async () => null,
-    });
+    const status = await resolveBridgeMissingArtifactsStatus();
 
     expect(status.bridgePublicArtifactCount).toBe(0);
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
@@ -235,27 +239,7 @@ describe("memory wiki doctor", () => {
   });
 
   it("suggests bridge fixes when no public artifacts are exported", async () => {
-    const config = resolveMemoryWikiConfig(
-      {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-        },
-      },
-      { homedir: "/Users/tester" },
-    );
-
-    const status = await resolveMemoryWikiStatus(config, {
-      appConfig: {
-        agents: {
-          list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
-        },
-      } as OpenClawConfig,
-      listPublicArtifacts: async () => [],
-      pathExists: async () => true,
-      resolveCommand: async () => null,
-    });
+    const status = await resolveBridgeMissingArtifactsStatus();
     const report = buildMemoryWikiDoctorReport(status);
 
     expect(report.fixes.map((fix) => fix.code)).toContain("bridge-artifacts-missing");

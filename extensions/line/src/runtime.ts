@@ -1,5 +1,5 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "../api.js";
 
 type LineChannelRuntime = {
   buildTemplateMessageFromPayload?: typeof import("./template-messages.js").buildTemplateMessageFromPayload;
@@ -25,5 +25,8 @@ const {
   setRuntime: setLineRuntime,
   clearRuntime: clearLineRuntime,
   getRuntime: getLineRuntime,
-} = createPluginRuntimeStore<LineRuntime>("LINE runtime not initialized - plugin not registered");
+} = createPluginRuntimeStore<LineRuntime>({
+  pluginId: "line",
+  errorMessage: "LINE runtime not initialized - plugin not registered",
+});
 export { clearLineRuntime, getLineRuntime, setLineRuntime };

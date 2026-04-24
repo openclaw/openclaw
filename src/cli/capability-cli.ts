@@ -1,10 +1,9 @@
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { Command } from "commander";
-import {
-  createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "../../extensions/memory-core/runtime-api.js";
 import { agentCommand } from "../agents/agent-command.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -17,13 +16,16 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { modelsAuthLoginCommand, modelsStatusCommand } from "../commands/models.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import {
   describeImageFile,
+  describeImageFileWithModel,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
@@ -31,11 +33,20 @@ import { getImageMetadata } from "../media/image-ops.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
+  createEmbeddingProvider,
+  registerBuiltInMemoryEmbeddingProviders,
+} from "../plugin-sdk/memory-core-bundled-runtime.js";
+import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
@@ -49,7 +60,6 @@ import {
   setTtsProvider,
   textToSpeech,
 } from "../tts/tts.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "../video-generation/runtime.js";
 import {
   isWebFetchProviderConfigured,
@@ -63,6 +73,7 @@ import {
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { createDefaultDeps } from "./deps.js";
+import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
 type CapabilityTransport = "local" | "gateway";
@@ -391,17 +402,14 @@ function resolveSelectedProviderFromModelRef(modelRef: string | undefined): stri
   return resolveModelRefOverride(modelRef).provider;
 }
 
-function getAuthProfileIdsForProvider(
-  cfg: ReturnType<typeof loadConfig>,
-  providerId: string,
-): string[] {
+function getAuthProfileIdsForProvider(cfg: OpenClawConfig, providerId: string): string[] {
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const store = loadAuthProfileStoreForRuntime(agentDir);
   return listProfilesForProvider(store, providerId);
 }
 
 function providerHasGenericConfig(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   providerId: string;
   envVars?: string[];
 }): boolean {
@@ -545,12 +553,12 @@ async function runModelRun(params: {
   }
 
   const { provider, model } = resolveModelRefOverride(params.model);
-  const response = await callGateway<{
+  const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
       meta?: { agentMeta?: { provider?: string; model?: string } };
     };
-  }>({
+  } = await callGateway({
     method: "agent",
     params: {
       agentId,
@@ -743,21 +751,32 @@ async function runImageDescribe(params: {
   model?: string;
 }) {
   const cfg = loadConfig();
+  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const result = await describeImageFile({
-        filePath: path.resolve(filePath),
-        cfg,
-        activeModel,
-      });
+      const resolvedPath = path.resolve(filePath);
+      const result = activeModel
+        ? await describeImageFileWithModel({
+            filePath: resolvedPath,
+            cfg,
+            agentDir,
+            provider: activeModel.provider,
+            model: activeModel.model,
+            prompt: "Describe the image.",
+          })
+        : await describeImageFile({
+            filePath: resolvedPath,
+            cfg,
+            agentDir,
+          });
       if (!result.text) {
-        throw new Error(`No description returned for image: ${path.resolve(filePath)}`);
+        throw new Error(`No description returned for image: ${resolvedPath}`);
       }
       return {
-        path: path.resolve(filePath),
+        path: resolvedPath,
         text: result.text,
-        provider: result.provider,
+        provider: activeModel?.provider ?? ("provider" in result ? result.provider : undefined),
         model: result.model,
         kind: "image.description",
       };
@@ -811,17 +830,52 @@ async function runVideoGenerate(params: { prompt: string; model?: string; output
     modelOverride: params.model,
   });
   const outputs = await Promise.all(
-    result.videos.map(async (video, index) => ({
-      ...(await writeOutputAsset({
-        buffer: video.buffer,
-        mimeType: video.mimeType,
-        originalFilename: video.fileName,
-        outputPath: params.output,
-        outputIndex: index,
-        outputCount: result.videos.length,
-        subdir: "generated",
-      })),
-    })),
+    result.videos.map(async (video, index) => {
+      if (!video.buffer && !video.url) {
+        throw new Error(`Video asset at index ${index} has neither buffer nor url`);
+      }
+
+      let videoBuffer = video.buffer;
+      if (!videoBuffer && video.url) {
+        const response = await fetch(video.url, { signal: AbortSignal.timeout(120_000) });
+        if (!response.ok) {
+          throw new Error(`Failed to download video from ${video.url}: ${response.status}`);
+        }
+        if (params.output && response.body) {
+          const mimeType = normalizeMimeType(video.mimeType);
+          const ext =
+            extensionForMime(mimeType) ||
+            path.extname(video.fileName ?? "") ||
+            path.extname(params.output ?? "");
+          const resolvedOutput = path.resolve(params.output);
+          const parsed = path.parse(resolvedOutput);
+          const filePath =
+            result.videos.length <= 1
+              ? path.join(parsed.dir, `${parsed.name}${ext}`)
+              : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
+          await fs.mkdir(path.dirname(filePath), { recursive: true });
+          await pipeline(
+            Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
+            createWriteStream(filePath),
+          );
+          const stat = await fs.stat(filePath);
+          return { path: filePath, mimeType: video.mimeType, size: stat.size };
+        }
+        videoBuffer = Buffer.from(await response.arrayBuffer());
+      }
+
+      return {
+        ...(await writeOutputAsset({
+          buffer: videoBuffer!,
+          mimeType: video.mimeType,
+          originalFilename: video.fileName,
+          outputPath: params.output,
+          outputIndex: index,
+          outputCount: result.videos.length,
+          subdir: "generated",
+        })),
+      };
+    }),
   );
   return {
     ok: true,
@@ -867,17 +921,17 @@ async function runTtsConvert(params: {
 }) {
   if (params.transport === "gateway") {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: loadConfig() });
-    const result = await callGateway<{
+    const result: {
       audioPath?: string;
       provider?: string;
       outputFormat?: string;
       voiceCompatible?: boolean;
-    }>({
+    } = await callGateway({
       method: "tts.convert",
       params: {
         text: params.text,
         channel: params.channel,
-        provider: params.provider?.trim() || undefined,
+        provider: normalizeOptionalString(params.provider),
         modelId: params.modelId,
         voiceId: params.voiceId,
       },
@@ -920,7 +974,9 @@ async function runTtsConvert(params: {
     voiceId: params.voiceId,
   });
   const hasExplicitSelection = Boolean(
-    overrides.provider || params.modelId?.trim() || params.voiceId?.trim(),
+    overrides.provider ||
+    normalizeOptionalString(params.modelId) ||
+    normalizeOptionalString(params.voiceId),
   );
   const result = await textToSpeech({
     text: params.text,
@@ -958,10 +1014,10 @@ async function runTtsConvert(params: {
 async function runTtsProviders(transport: CapabilityTransport) {
   const cfg = loadConfig();
   if (transport === "gateway") {
-    const payload = await callGateway<{
+    const payload: {
       providers?: Array<Record<string, unknown>>;
       active?: string;
-    }>({
+    } = await callGateway({
       method: "tts.providers",
       timeoutMs: 30_000,
     });
@@ -969,15 +1025,17 @@ async function runTtsProviders(transport: CapabilityTransport) {
       ...payload,
       providers: (payload.providers ?? []).map((provider) => {
         const id = typeof provider.id === "string" ? provider.id : "";
-        return {
-          available: true,
-          configured:
-            typeof provider.configured === "boolean"
-              ? provider.configured
-              : providerHasGenericConfig({ cfg, providerId: id }),
-          selected: Boolean(id && payload.active === id),
-          ...provider,
-        };
+        return Object.assign(
+          {
+            available: true,
+            configured:
+              typeof provider.configured === `boolean`
+                ? provider.configured
+                : providerHasGenericConfig({ cfg, providerId: id }),
+            selected: Boolean(id && payload.active === id),
+          },
+          provider,
+        );
       }),
     };
   }
@@ -1003,7 +1061,7 @@ async function runTtsVoices(providerRaw?: string) {
   const cfg = loadConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  const provider = providerRaw?.trim() || getTtsProvider(config, prefsPath);
+  const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
   return await listSpeechVoices({
     provider,
     cfg,
@@ -1105,7 +1163,7 @@ async function runMemoryEmbeddingCreate(params: {
   ensureMemoryEmbeddingProvidersRegistered();
   const cfg = loadConfig();
   const modelRef = resolveModelRefOverride(params.model);
-  const requestedProvider = params.provider?.trim() || modelRef.provider || "auto";
+  const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
   const result = await createEmbeddingProvider({
     config: cfg,
     agentDir: resolveAgentDir(cfg, resolveDefaultAgentId(cfg)),
@@ -1178,6 +1236,9 @@ function registerCapabilityListAndInspect(capability: Command) {
 }
 
 export function registerCapabilityCli(program: Command) {
+  removeCommandByName(program, "infer");
+  removeCommandByName(program, "capability");
+
   const capability = program
     .command("infer")
     .alias("capability")
@@ -1237,7 +1298,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const target = String(opts.model).trim();
+        const target = normalizeStringifiedOptionalString(opts.model) ?? "";
         const catalog = await loadModelCatalog({ config: loadConfig() });
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
@@ -1445,7 +1506,14 @@ export function registerCapabilityCli(program: Command) {
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
             available: true,
-            configured: providerHasGenericConfig({ cfg, providerId: provider.id }),
+            configured: providerHasGenericConfig({
+              cfg,
+              providerId: provider.id,
+              envVars: getProviderEnvVars(provider.id, {
+                config: cfg,
+                includeUntrustedWorkspacePlugins: false,
+              }),
+            }),
             selected: false,
             id: provider.id,
             capabilities: provider.capabilities,

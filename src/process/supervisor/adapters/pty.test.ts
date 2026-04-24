@@ -1,4 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectRealExitWinsOverSigkillFallback,
+  expectWaitStaysPendingUntilSigkillFallback,
+} from "./test-support.js";
 
 const { spawnMock, ptyKillMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -34,6 +38,14 @@ function createStubPty(pid = 1234) {
 function expectSpawnEnv() {
   const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
   return spawnOptions?.env;
+}
+
+function expectSpawnCommand() {
+  return spawnMock.mock.calls[0]?.[0] as string | undefined;
+}
+
+function expectSpawnArgs() {
+  return spawnMock.mock.calls[0]?.[1] as string[] | undefined;
 }
 
 describe("createPtyAdapter", () => {
@@ -98,20 +110,9 @@ describe("createPtyAdapter", () => {
       args: ["-lc", "sleep 10"],
     });
 
-    const waitPromise = adapter.wait();
-    const settled = vi.fn();
-    void waitPromise.then(() => settled());
-
-    adapter.kill();
-
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(3999);
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
+      adapter.kill();
+    });
   });
 
   it("prefers real PTY exit over SIGKILL fallback settle", async () => {
@@ -124,14 +125,16 @@ describe("createPtyAdapter", () => {
       args: ["-lc", "sleep 10"],
     });
 
-    const waitPromise = adapter.wait();
-    adapter.kill();
-    stub.emitExit({ exitCode: 0, signal: 9 });
-
-    await expect(waitPromise).resolves.toEqual({ code: 0, signal: 9 });
-
-    await vi.advanceTimersByTimeAsync(4_001);
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: 9 });
+    await expectRealExitWinsOverSigkillFallback({
+      waitPromise: adapter.wait(),
+      triggerKill: () => {
+        adapter.kill();
+      },
+      emitExit: () => {
+        stub.emitExit({ exitCode: 0, signal: 9 });
+      },
+      expected: { code: 0, signal: 9 },
+    });
   });
 
   it("resolves wait when exit fires before wait is called", async () => {
@@ -148,16 +151,55 @@ describe("createPtyAdapter", () => {
     await expect(adapter.wait()).resolves.toEqual({ code: 3, signal: null });
   });
 
-  it("keeps inherited env when no override env is provided", async () => {
-    const stub = createStubPty();
-    spawnMock.mockReturnValue(stub);
+  it("keeps inherited env when no override env is provided on non-Linux", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      const stub = createStubPty();
+      spawnMock.mockReturnValue(stub);
 
-    await createPtyAdapter({
-      shell: "bash",
-      args: ["-lc", "env"],
-    });
+      await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "env"],
+      });
 
-    expect(expectSpawnEnv()).toBeUndefined();
+      expect(expectSpawnCommand()).toBe("bash");
+      expect(expectSpawnArgs()).toEqual(["-lc", "env"]);
+      expect(expectSpawnEnv()).toBeUndefined();
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  });
+
+  it("wraps Linux PTY spawns so shell children inherit higher OOM score", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      const stub = createStubPty();
+      spawnMock.mockReturnValue(stub);
+
+      await createPtyAdapter({
+        shell: "bash",
+        args: ["-lc", "env"],
+        env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv" },
+      });
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+
+    expect(expectSpawnCommand()).toBe("/bin/sh");
+    expect(expectSpawnArgs()).toEqual([
+      "-c",
+      'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+      "bash",
+      "-lc",
+      "env",
+    ]);
+    expect(expectSpawnEnv()).toEqual({ PATH: "/usr/bin" });
   });
 
   it("passes explicit env overrides as strings", async () => {

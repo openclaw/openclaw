@@ -25,8 +25,7 @@ function buildLiveAnthropicModel(): {
   const modelId =
     (process.env.OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL || "claude-sonnet-4-6")
       .split(/[/:]/)
-      .filter(Boolean)
-      .pop() || "claude-sonnet-4-6";
+      .findLast(Boolean) || "claude-sonnet-4-6";
   return {
     apiKey,
     model: {
@@ -77,6 +76,8 @@ describeLive("pi embedded anthropic replay sanitization (live)", () => {
       const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["noop"]), {
         validateGeminiTurns: false,
         validateAnthropicTurns: true,
+        preserveSignatures: false,
+        dropThinkingBlocks: false,
       });
 
       await Promise.resolve(wrapped(model as never, { messages } as never, {} as never));

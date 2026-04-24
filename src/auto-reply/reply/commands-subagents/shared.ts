@@ -334,11 +334,11 @@ export async function resolveFocusTargetSession(params: {
 
   for (const attempt of attempts) {
     try {
-      const resolved = await callGateway<{ key?: string }>({
+      const resolved = await callGateway({
         method: "sessions.resolve",
         params: attempt,
       });
-      const key = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+      const key = normalizeOptionalString(resolved?.key) ?? "";
       if (!key) {
         continue;
       }

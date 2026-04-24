@@ -1,23 +1,20 @@
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { join } from "node:path";
+import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 
-export type ModelInputType = "text" | "image" | "document";
-
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-  input?: ModelInputType[];
-};
+export type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 
 type DiscoveredModel = {
   id: string;
@@ -28,7 +25,7 @@ type DiscoveredModel = {
   input?: ModelInputType[];
 };
 
-type PiSdkModule = typeof import("./pi-model-discovery.js");
+type PiSdkModule = typeof import("./pi-model-discovery-runtime.js");
 type PiRegistryInstance =
   | Array<DiscoveredModel>
   | {
@@ -54,10 +51,14 @@ function loadModelSuppression() {
   return modelSuppressionPromise;
 }
 
-export function resetModelCatalogCacheForTest() {
+export function resetModelCatalogCache() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
   importPiSdk = defaultImportPiSdk;
+}
+
+export function resetModelCatalogCacheForTest() {
+  resetModelCatalogCache();
 }
 
 // Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
@@ -80,15 +81,17 @@ function instantiatePiModelRegistry(
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
+  readOnly?: boolean;
 }): Promise<ModelCatalogEntry[]> {
-  if (params?.useCache === false) {
+  const readOnly = params?.readOnly === true;
+  if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
   }
-  if (modelCatalogPromise) {
+  if (!readOnly && modelCatalogPromise) {
     return modelCatalogPromise;
   }
 
-  modelCatalogPromise = (async () => {
+  const loadCatalog = async () => {
     const models: ModelCatalogEntry[] = [];
     const timingEnabled = shouldLogModelCatalogTiming();
     const startMs = timingEnabled ? Date.now() : 0;
@@ -109,8 +112,10 @@ export async function loadModelCatalog(params?: {
       });
     try {
       const cfg = params?.config ?? loadConfig();
-      await ensureOpenClawModelsJson(cfg);
-      logStage("models-json-ready");
+      if (!readOnly) {
+        await ensureOpenClawModelsJson(cfg);
+        logStage("models-json-ready");
+      }
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
@@ -120,8 +125,10 @@ export async function loadModelCatalog(params?: {
       const agentDir = resolveOpenClawAgentDir();
       const { shouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
-      const { join } = await import("node:path");
-      const authStorage = piSdk.discoverAuthStorage(agentDir);
+      const authStorage = piSdk.discoverAuthStorage(
+        agentDir,
+        readOnly ? { readOnly: true } : undefined,
+      );
       logStage("auth-storage-ready");
       const registry = instantiatePiModelRegistry(
         piSdk,
@@ -132,18 +139,18 @@ export async function loadModelCatalog(params?: {
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);
       for (const entry of entries) {
-        const id = String(entry?.id ?? "").trim();
+        const id = normalizeOptionalString(entry?.id) ?? "";
         if (!id) {
           continue;
         }
-        const provider = String(entry?.provider ?? "").trim();
+        const provider = normalizeOptionalString(entry?.provider) ?? "";
         if (!provider) {
           continue;
         }
-        if (shouldSuppressBuiltInModel({ provider, id })) {
+        if (shouldSuppressBuiltInModel({ provider, id, config: cfg })) {
           continue;
         }
-        const name = String(entry?.name ?? id).trim() || id;
+        const name = normalizeOptionalString(entry?.name ?? id) || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
@@ -182,7 +189,9 @@ export async function loadModelCatalog(params?: {
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
-        modelCatalogPromise = null;
+        if (!readOnly) {
+          modelCatalogPromise = null;
+        }
       }
 
       const sorted = sortModels(models);
@@ -194,14 +203,21 @@ export async function loadModelCatalog(params?: {
         log.warn(`Failed to load model catalog: ${String(error)}`);
       }
       // Don't poison the cache on transient dependency/filesystem issues.
-      modelCatalogPromise = null;
+      if (!readOnly) {
+        modelCatalogPromise = null;
+      }
       if (models.length > 0) {
         return sortModels(models);
       }
       return [];
     }
-  })();
+  };
 
+  if (readOnly) {
+    return loadCatalog();
+  }
+
+  modelCatalogPromise = loadCatalog();
   return modelCatalogPromise;
 }
 

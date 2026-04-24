@@ -15,19 +15,23 @@ import {
   getFreeGatewayPort,
   matchesCliBackendReply,
   parseImageMode,
-  parseJsonStringArray,
   resolveCliModelSwitchProbeTarget,
+  resolveCliBackendLiveArgs,
+  parseJsonStringArray,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
   shouldRunCliModelSwitchProbe,
   shouldRunCliMcpProbe,
   snapshotCliBackendLiveEnv,
   type SystemPromptReport,
-  verifyCliCronMcpProbe,
-  verifyCliBackendImageProbe,
   withClaudeMcpConfigOverrides,
   connectTestGatewayClient,
 } from "./gateway-cli-backend.live-helpers.js";
+import {
+  verifyCliBackendImageProbe,
+  verifyCliCronMcpLoopbackPreflight,
+  verifyCliCronMcpProbe,
+} from "./gateway-cli-backend.live-probe-helpers.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -35,12 +39,28 @@ const LIVE = isLiveTestEnabled();
 const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
 const CLI_DEBUG = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG);
+const CLI_CI_SAFE_CODEX_CONFIG = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG,
+);
+const CLI_MCP_SCHEMA_PROBE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CLI_BACKEND_MCP_SCHEMA_PROBE,
+);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
+
+const MCP_SCHEMA_PROBE_PLUGIN_ID = "mcp-schema-probe";
+const MCP_SCHEMA_PROBE_TOOL_NAME = "mcp_schema_probe_no_args";
 
 const DEFAULT_PROVIDER = "claude-cli";
 const DEFAULT_MODEL =
   resolveCliBackendLiveTest(DEFAULT_PROVIDER)?.defaultModelRef ?? "claude-cli/claude-sonnet-4-6";
-const CLI_BACKEND_LIVE_TIMEOUT_MS = 420_000;
+// The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
+// so the outer test budget needs enough headroom to finish those retries.
+const CLI_BACKEND_LIVE_TIMEOUT_MS = 720_000;
+const CLI_BACKEND_REQUEST_TIMEOUT_MS = 240_000;
+const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
+  1,
+  Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
+);
 
 function logCliBackendLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CLI_DEBUG) {
@@ -48,6 +68,44 @@ function logCliBackendLiveStep(step: string, details?: Record<string, unknown>):
   }
   const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
   console.error(`[gateway-cli-live] ${step}${suffix}`);
+}
+
+async function createMcpSchemaProbePlugin(tempDir: string): Promise<string> {
+  const pluginDir = path.join(tempDir, MCP_SCHEMA_PROBE_PLUGIN_ID);
+  await fs.mkdir(pluginDir, { recursive: true });
+  const pluginFile = path.join(pluginDir, "index.cjs");
+  await fs.writeFile(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    `${JSON.stringify(
+      {
+        id: MCP_SCHEMA_PROBE_PLUGIN_ID,
+        name: "MCP Schema Probe",
+        description: "Live test plugin for no-argument MCP tool schemas",
+        configSchema: { type: "object", properties: {} },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await fs.writeFile(
+    pluginFile,
+    `module.exports = {
+  id: "${MCP_SCHEMA_PROBE_PLUGIN_ID}",
+  name: "MCP Schema Probe",
+  register(api) {
+    api.registerTool({
+      name: "${MCP_SCHEMA_PROBE_TOOL_NAME}",
+      description: "Live test no-argument tool for MCP schema normalization",
+      parameters: { type: "object" },
+      async execute() {
+        return { content: [{ type: "text", text: "schema probe ok" }] };
+      },
+    });
+  },
+};
+`,
+  );
+  return pluginFile;
 }
 
 describeLive("gateway live (cli backend)", () => {
@@ -104,14 +162,11 @@ describeLive("gateway live (cli backend)", () => {
         );
       }
 
-      const baseCliArgs =
-        parseJsonStringArray(
-          "OPENCLAW_LIVE_CLI_BACKEND_ARGS",
-          process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS,
-        ) ?? providerDefaults?.args;
-      if (!baseCliArgs || baseCliArgs.length === 0) {
-        throw new Error(`OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`);
-      }
+      const { args: baseCliArgs, resumeArgs: baseCliResumeArgs } = resolveCliBackendLiveArgs({
+        providerId,
+        defaultArgs: providerDefaults?.args,
+        defaultResumeArgs: providerDefaults?.resumeArgs,
+      });
 
       const cliClearEnv =
         parseJsonStringArray(
@@ -140,6 +195,9 @@ describeLive("gateway live (cli backend)", () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cli-"));
       const stateDir = path.join(tempDir, "state");
       await fs.mkdir(stateDir, { recursive: true });
+      const schemaProbePluginPath = CLI_MCP_SCHEMA_PROBE
+        ? await createMcpSchemaProbePlugin(tempDir)
+        : undefined;
       process.env.OPENCLAW_STATE_DIR = stateDir;
       const bundleMcp = backendResolved?.bundleMcp === true;
       const bootstrapWorkspace =
@@ -169,6 +227,21 @@ describeLive("gateway live (cli backend)", () => {
       const existingBackends = cfgWithCliBackends.agents?.defaults?.cliBackends ?? {};
       const nextCfg = {
         ...cfg,
+        ...(schemaProbePluginPath
+          ? {
+              plugins: {
+                ...cfg.plugins,
+                load: {
+                  ...cfg.plugins?.load,
+                  paths: [...(cfg.plugins?.load?.paths ?? []), schemaProbePluginPath],
+                },
+                entries: {
+                  ...cfg.plugins?.entries,
+                  [MCP_SCHEMA_PROBE_PLUGIN_ID]: { enabled: true },
+                },
+              },
+            }
+          : {}),
         gateway: {
           mode: "local",
           ...cfg.gateway,
@@ -190,10 +263,17 @@ describeLive("gateway live (cli backend)", () => {
               [providerId]: {
                 command: cliCommand,
                 args: cliArgs,
+                resumeArgs: baseCliResumeArgs,
                 clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                 env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
                 systemPromptWhen: providerDefaults?.systemPromptWhen ?? "never",
-                ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
+                ...(cliImageArg
+                  ? {
+                      imageArg: cliImageArg,
+                      imageMode: cliImageMode,
+                      imagePathScope: providerDefaults?.imagePathScope,
+                    }
+                  : {}),
               },
             },
             sandbox: { mode: "off" },
@@ -244,8 +324,9 @@ describeLive("gateway live (cli backend)", () => {
                     " Do not include the note in your reply."
                   : `Reply with exactly: CLI backend OK ${nonce}.`,
             deliver: false,
+            timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
           },
-          { expectFinal: true },
+          { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
         );
         if (payload?.status !== "ok") {
           throw new Error(`agent status=${String(payload?.status)}`);
@@ -295,8 +376,9 @@ describeLive("gateway live (cli backend)", () => {
                 `What session note did I ask you to remember earlier? ` +
                 `Reply with exactly: CLI backend SWITCH OK ${switchNonce} <remembered-note>.`,
               deliver: false,
+              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
             },
-            { expectFinal: true },
+            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
           );
           if (switchPayload?.status !== "ok") {
             throw new Error(`switch status=${String(switchPayload?.status)}`);
@@ -322,8 +404,9 @@ describeLive("gateway live (cli backend)", () => {
                   ? `Please include the token CLI-RESUME-${resumeNonce} in your reply.`
                   : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`,
               deliver: false,
+              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
             },
-            { expectFinal: true },
+            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
           );
           if (resumePayload?.status !== "ok") {
             throw new Error(`resume status=${String(resumePayload?.status)}`);
@@ -340,11 +423,15 @@ describeLive("gateway live (cli backend)", () => {
         }
 
         if (enableCliImageProbe) {
-          logCliBackendLiveStep("image-probe:start", { sessionKey });
+          const imageSessionKey =
+            providerId === "codex-cli"
+              ? `agent:dev:live-cli-backend-image:${randomUUID()}`
+              : sessionKey;
+          logCliBackendLiveStep("image-probe:start", { sessionKey: imageSessionKey });
           await verifyCliBackendImageProbe({
             client,
             providerId,
-            sessionKey,
+            sessionKey: imageSessionKey,
             tempDir,
             bootstrapWorkspace,
           });
@@ -352,16 +439,38 @@ describeLive("gateway live (cli backend)", () => {
         }
 
         if (enableCliMcpProbe) {
-          logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
-          await verifyCliCronMcpProbe({
-            client,
-            providerId,
+          logCliBackendLiveStep("cron-mcp-loopback-preflight:start", {
+            sessionKey,
+            senderIsOwner: true,
+          });
+          await verifyCliCronMcpLoopbackPreflight({
             sessionKey,
             port,
             token,
             env: process.env,
+            senderIsOwner: true,
+            expectedSchemaProbeToolName: schemaProbePluginPath
+              ? MCP_SCHEMA_PROBE_TOOL_NAME
+              : undefined,
           });
-          logCliBackendLiveStep("cron-mcp-probe:done");
+          logCliBackendLiveStep("cron-mcp-loopback-preflight:done");
+          if (providerId === "codex-cli" && CLI_CI_SAFE_CODEX_CONFIG) {
+            logCliBackendLiveStep("cron-mcp-probe:skipped", {
+              providerId,
+              reason: "ci-safe-codex-config",
+            });
+          } else {
+            logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
+            await verifyCliCronMcpProbe({
+              client,
+              providerId,
+              sessionKey,
+              port,
+              token,
+              env: process.env,
+            });
+            logCliBackendLiveStep("cron-mcp-probe:done");
+          }
         }
       } finally {
         logCliBackendLiveStep("cleanup:start");

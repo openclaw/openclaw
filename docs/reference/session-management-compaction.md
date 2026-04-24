@@ -4,7 +4,7 @@ read_when:
   - You need to debug session ids, transcript JSONL, or sessions.json fields
   - You are changing auto-compaction behavior or adding “pre-compaction” housekeeping
   - You want to implement memory flushes or silent system turns
-title: "Session Management Deep Dive"
+title: "Session management deep dive"
 ---
 
 # Session Management & Compaction (Deep Dive)
@@ -275,6 +275,21 @@ Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.t
 
 ---
 
+## Pluggable compaction providers
+
+Plugins can register a compaction provider via `registerCompactionProvider()` on the plugin API. When `agents.defaults.compaction.provider` is set to a registered provider id, the safeguard extension delegates summarization to that provider instead of the built-in `summarizeInStages` pipeline.
+
+- `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization.
+- Setting a `provider` forces `mode: "safeguard"`.
+- Providers receive the same compaction instructions and identifier-preservation policy as the built-in path.
+- The safeguard still preserves recent-turn and split-turn suffix context after provider output.
+- If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
+- Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
+
+Source: `src/plugins/compaction-provider.ts`, `src/agents/pi-hooks/compaction-safeguard.ts`.
+
+---
+
 ## User-visible surfaces
 
 You can observe compaction and session state via:
@@ -350,3 +365,9 @@ flush logic lives on the Gateway side today.
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
   - tool-result bloat: enable/tune session pruning
 - Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you’re on a build that includes the streaming suppression fix.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)
+- [Context engine](/concepts/context-engine)

@@ -1,13 +1,13 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
+  type ExecAsk,
   type ExecHost,
+  type ExecSecurity,
   loadExecApprovals,
   maxAsk,
   minSecurity,
-  resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
@@ -22,8 +22,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
@@ -56,7 +58,6 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
@@ -104,6 +105,56 @@ const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
   "--split-string",
   "--unset",
 ]);
+
+const SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES = new Set([
+  "EACCES",
+  "EISDIR",
+  "ELOOP",
+  "EINVAL",
+  "ENAMETOOLONG",
+  "ENOENT",
+  "ENOTDIR",
+  "EPERM",
+]);
+
+function getNodeErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  return String((error as { code?: unknown }).code);
+}
+
+type FsSafeModule = typeof import("../infra/fs-safe.js");
+
+let fsSafeModulePromise: Promise<FsSafeModule> | undefined;
+
+async function loadFsSafeModule(): Promise<FsSafeModule> {
+  fsSafeModulePromise ??= import("../infra/fs-safe.js");
+  return await fsSafeModulePromise;
+}
+
+function shouldSkipScriptPreflightPathError(
+  error: unknown,
+  SafeOpenError: FsSafeModule["SafeOpenError"],
+): boolean {
+  if (error instanceof SafeOpenError) {
+    return true;
+  }
+  const errorCode = getNodeErrorCode(error);
+  return !!(errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode));
+}
+
+function resolvePreflightRelativePath(params: { rootDir: string; absPath: string }): string | null {
+  const root = path.resolve(params.rootDir);
+  const candidate = path.resolve(params.absPath);
+  const relative = path.relative(root, candidate);
+  if (/^\.\.(?:[\\/]|$)/u.test(relative) || path.isAbsolute(relative)) {
+    return null;
+  }
+  // Preserve literal "~" path segments under the workdir. `readFileWithinRoot`
+  // expands home prefixes for relative paths, so normalize `~/...` to `./~/...`.
+  return /^~(?:$|[\\/])/u.test(relative) ? `.${path.sep}${relative}` : relative;
+}
 
 function isShellEnvAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
@@ -726,12 +777,13 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   const rawArgv = splitShellArgs(raw);
   const argv = rawArgv ? stripPreflightEnvPrefix(rawArgv) : null;
   let commandIdx = 0;
-  while (
-    argv &&
-    commandIdx < argv.length &&
-    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx])
-  ) {
-    commandIdx += 1;
+  if (argv) {
+    while (
+      commandIdx < argv.length &&
+      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx] ?? "")
+    ) {
+      commandIdx += 1;
+    }
   }
   const directExecutable = normalizeOptionalLowercaseString(argv?.[commandIdx]);
   const args = argv ? argv.slice(commandIdx + 1) : [];
@@ -917,31 +969,41 @@ async function validateScriptFileForShellBleed(params: {
     return;
   }
 
+  const { SafeOpenError, readFileWithinRoot } = await loadFsSafeModule();
   for (const relOrAbsPath of target.relOrAbsPaths) {
     const absPath = path.isAbsolute(relOrAbsPath)
       ? path.resolve(relOrAbsPath)
       : path.resolve(params.workdir, relOrAbsPath);
+    const relativePath = resolvePreflightRelativePath({
+      rootDir: params.workdir,
+      absPath,
+    });
+    if (!relativePath) {
+      continue;
+    }
 
-    // Best-effort: only validate if file exists and is reasonably small.
-    let stat: { isFile(): boolean; size: number };
+    // Best-effort: only validate files that safely resolve within workdir and
+    // are reasonably small. This keeps preflight checks on a pinned file
+    // identity instead of trusting mutable pathnames across multiple ops.
+    // Use non-blocking open to avoid stalls if a path is swapped to a FIFO.
+    let content: string;
     try {
-      await assertSandboxPath({
-        filePath: absPath,
-        cwd: params.workdir,
-        root: params.workdir,
+      const safeRead = await readFileWithinRoot({
+        rootDir: params.workdir,
+        relativePath,
+        nonBlockingRead: true,
+        allowSymlinkTargetWithinRoot: true,
+        maxBytes: 512 * 1024,
       });
-      stat = await fs.stat(absPath);
-    } catch {
-      continue;
+      content = safeRead.buffer.toString("utf-8");
+    } catch (error) {
+      if (shouldSkipScriptPreflightPathError(error, SafeOpenError)) {
+        // Preflight validation is best-effort: skip path/read failures and
+        // continue to execute the command normally.
+        continue;
+      }
+      throw error;
     }
-    if (!stat.isFile()) {
-      continue;
-    }
-    if (stat.size > 512 * 1024) {
-      continue;
-    }
-
-    const content = await fs.readFile(absPath, "utf-8");
 
     // Common failure mode: shell env var syntax leaking into Python/JS.
     // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
@@ -979,6 +1041,14 @@ async function validateScriptFileForShellBleed(params: {
       }
     }
   }
+}
+
+function shouldSkipExecScriptPreflight(params: {
+  host: ExecHost;
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): boolean {
+  return params.host === "gateway" && params.security === "full" && params.ask === "off";
 }
 
 type ParsedExecApprovalCommand = {
@@ -1236,67 +1306,6 @@ function rejectExecApprovalShellCommand(command: string): void {
   }
 }
 
-/**
- * Show the exact approved token in hints. Absolute paths stay absolute so the
- * hint cannot imply an equivalent PATH lookup that resolves to a different binary.
- */
-function deriveExecShortName(fullPath: string): string {
-  if (path.isAbsolute(fullPath)) {
-    return fullPath;
-  }
-  const base = path.basename(fullPath);
-  return base.replace(/\.exe$/i, "") || base;
-}
-
-export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
-  const base = [
-    "Execute shell commands with background continuation for work that starts now.",
-    "Use yieldMs/background to continue later via process tool.",
-    "For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
-    params?.hasCronTool
-      ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
-      : undefined,
-    "Use pty=true for TTY-required commands (terminal UIs, coding agents).",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  if (process.platform !== "win32") {
-    return base;
-  }
-  const lines: string[] = [base];
-  lines.push(
-    "IMPORTANT (Windows): Run executables directly — do NOT wrap commands in `cmd /c`, `powershell -Command`, `& ` prefix, or WSL. Use backslash paths (C:\\path), not forward slashes. Use short executable names (e.g. `node`, `python3`) instead of full paths.",
-  );
-  try {
-    const approvalsFile = loadExecApprovals();
-    const approvals = resolveExecApprovalsFromFile({
-      file: approvalsFile,
-      agentId: params?.agentId,
-    });
-    const allowlist = approvals.allowlist.filter((entry) => {
-      const pattern = entry.pattern?.trim() ?? "";
-      return (
-        pattern.length > 0 &&
-        pattern !== "*" &&
-        !pattern.startsWith("=command:") &&
-        (pattern.includes("/") || pattern.includes("\\") || pattern.includes("~"))
-      );
-    });
-    if (allowlist.length > 0) {
-      lines.push(
-        "Pre-approved executables (exact arguments are enforced at runtime; no approval prompt needed when args match):",
-      );
-      for (const entry of allowlist.slice(0, 10)) {
-        const shortName = deriveExecShortName(entry.pattern);
-        const argNote = entry.argPattern ? "(restricted args)" : "(any arguments)";
-        lines.push(`  ${shortName} ${argNote}`);
-      }
-    }
-  } catch {
-    // Allowlist loading is best-effort; don't block tool creation.
-  }
-  return lines.join("\n");
-}
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
@@ -1341,6 +1350,12 @@ export function createExecTool(
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
+  const notifyDeliveryContext = normalizeDeliveryContext({
+    channel: defaults?.messageProvider,
+    to: defaults?.currentChannelId,
+    accountId: defaults?.accountId,
+    threadId: defaults?.currentThreadTs,
+  });
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -1670,7 +1685,9 @@ export function createExecTool(
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      if (!shouldSkipExecScriptPreflight({ host, security, ask })) {
+        await validateScriptFileForShellBleed({ command: params.command, workdir });
+      }
 
       const run = await runExecProcess({
         command: params.command,
@@ -1687,6 +1704,7 @@ export function createExecTool(
         notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
+        notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,
       });
@@ -1696,6 +1714,14 @@ export function createExecTool(
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
+        // Immediately suppress onUpdate calls so that any late stdout/stderr
+        // from the still-running process cannot push a rejected Promise into
+        // pi-agent-core's updateEvents after the agent run has ended (#62520).
+        // Intentionally placed *before* the yielded/backgrounded guard: the
+        // agent run is ending regardless, so no consumer exists for further
+        // tool_execution_update events even for backgrounded sessions (which
+        // retrieve output via process poll/log instead of onUpdate callbacks).
+        run.disableUpdates();
         if (yielded || run.session.backgrounded) {
           return;
         }
@@ -1787,3 +1813,7 @@ export function createExecTool(
 }
 
 export const execTool = createExecTool();
+
+export const __testing = {
+  validateScriptFileForShellBleed,
+};

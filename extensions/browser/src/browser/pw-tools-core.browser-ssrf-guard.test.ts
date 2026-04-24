@@ -52,8 +52,13 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it("re-checks click-triggered navigations with the session safety helper", async () => {
-    pageState.page = { url: vi.fn(() => "https://example.com") };
-    pageState.locator = { click: vi.fn(async () => {}) };
+    let currentUrl = "https://example.com";
+    pageState.page = { url: vi.fn(() => currentUrl) };
+    pageState.locator = {
+      click: vi.fn(async () => {
+        currentUrl = "https://target.example";
+      }),
+    };
 
     await interactions.clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -86,8 +91,13 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it("re-checks batched click-triggered navigations with the session safety helper", async () => {
-    pageState.page = { url: vi.fn(() => "https://example.com") };
-    pageState.locator = { click: vi.fn(async () => {}) };
+    let currentUrl = "https://example.com";
+    pageState.page = { url: vi.fn(() => currentUrl) };
+    pageState.locator = {
+      click: vi.fn(async () => {
+        currentUrl = "https://target.example";
+      }),
+    };
 
     await interactions.batchViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",

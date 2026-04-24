@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { GoogleGenAIMock, generateVideosMock, getVideosOperationMock } = vi.hoisted(() => {
+const { createGoogleGenAIMock, generateVideosMock, getVideosOperationMock } = vi.hoisted(() => {
   const generateVideosMock = vi.fn();
   const getVideosOperationMock = vi.fn();
-  const GoogleGenAIMock = vi.fn(function GoogleGenAI() {
+  const createGoogleGenAIMock = vi.fn(() => {
     return {
       models: {
         generateVideos: generateVideosMock,
@@ -16,14 +16,15 @@ const { GoogleGenAIMock, generateVideosMock, getVideosOperationMock } = vi.hoist
       },
     };
   });
-  return { GoogleGenAIMock, generateVideosMock, getVideosOperationMock };
+  return { createGoogleGenAIMock, generateVideosMock, getVideosOperationMock };
 });
 
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: GoogleGenAIMock,
+vi.mock("./google-genai-runtime.js", () => ({
+  createGoogleGenAI: createGoogleGenAIMock,
 }));
 
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
 
 describe("google video generation provider", () => {
@@ -31,7 +32,11 @@ describe("google video generation provider", () => {
     vi.restoreAllMocks();
     generateVideosMock.mockReset();
     getVideosOperationMock.mockReset();
-    GoogleGenAIMock.mockClear();
+    createGoogleGenAIMock.mockClear();
+  });
+
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildGoogleVideoGenerationProvider());
   });
 
   it("submits generation and returns inline video bytes", async () => {
@@ -41,10 +46,6 @@ describe("google video generation provider", () => {
       mode: "api-key",
     });
     generateVideosMock.mockResolvedValue({
-      done: false,
-      name: "operations/123",
-    });
-    getVideosOperationMock.mockResolvedValue({
       done: true,
       name: "operations/123",
       response: {
@@ -71,12 +72,13 @@ describe("google video generation provider", () => {
       audio: true,
     });
 
-    expect(generateVideosMock).toHaveBeenCalledWith(
+    expect(generateVideosMock).toHaveBeenCalledTimes(1);
+    const [request] = generateVideosMock.mock.calls[0] ?? [];
+    expect(request).toEqual(
       expect.objectContaining({
         model: "veo-3.1-fast-generate-preview",
         prompt: "A tiny robot watering a windowsill garden",
         config: expect.objectContaining({
-          numberOfVideos: 1,
           durationSeconds: 4,
           aspectRatio: "16:9",
           resolution: "720p",
@@ -84,9 +86,10 @@ describe("google video generation provider", () => {
         }),
       }),
     );
+    expect(request?.config).not.toHaveProperty("numberOfVideos");
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "google-key",
         httpOptions: expect.not.objectContaining({

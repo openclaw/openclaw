@@ -3,6 +3,7 @@ import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
@@ -55,7 +56,7 @@ function initSelfPresence() {
       const res = spawnSync("sysctl", ["-n", "hw.model"], {
         encoding: "utf-8",
       });
-      const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
+      const out = normalizeOptionalString(res.stdout) ?? "";
       return out.length > 0 ? out : undefined;
     }
     return os.arch();
@@ -64,7 +65,7 @@ function initSelfPresence() {
     const res = spawnSync("sw_vers", ["-productVersion"], {
       encoding: "utf-8",
     });
-    const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
+    const out = normalizeOptionalString(res.stdout) ?? "";
     return out.length > 0 ? out : os.release();
   };
   const platform = (() => {
@@ -178,7 +179,7 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
       continue;
     }
     for (const item of list) {
-      const trimmed = String(item).trim();
+      const trimmed = normalizeOptionalString(item) ?? "";
       if (trimmed) {
         out.add(trimmed);
       }

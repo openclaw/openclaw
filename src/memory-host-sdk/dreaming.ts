@@ -1,16 +1,18 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import {
+  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
-export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "inline";
+export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
@@ -157,10 +159,11 @@ function normalizeTrimmedString(value: unknown): string | undefined {
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num)) {
     return fallback;
   }
@@ -175,10 +178,11 @@ function normalizeOptionalPositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return undefined;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num)) {
     return undefined;
   }
@@ -206,10 +210,11 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 function normalizeScore(value: unknown, fallback: number): number {
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num) || num < 0 || num > 1) {
     return fallback;
   }
@@ -231,7 +236,7 @@ function normalizeStringArray<T extends string>(
   const allowedSet = new Set(allowed);
   const normalized: T[] = [];
   for (const entry of value) {
-    const normalizedEntry = normalizeTrimmedString(entry)?.toLowerCase();
+    const normalizedEntry = normalizeOptionalLowercaseString(entry);
     if (!normalizedEntry || !allowedSet.has(normalizedEntry as T)) {
       continue;
     }
@@ -243,7 +248,7 @@ function normalizeStringArray<T extends string>(
 }
 
 function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "inline" || normalized === "separate" || normalized === "both") {
     return normalized;
   }
@@ -251,7 +256,7 @@ function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
 }
 
 function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "fast" || normalized === "balanced" || normalized === "slow") {
     return normalized;
   }
@@ -259,7 +264,7 @@ function normalizeSpeed(value: unknown): MemoryDreamingSpeed | undefined {
 }
 
 function normalizeThinking(value: unknown): MemoryDreamingThinking | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;
   }
@@ -267,7 +272,7 @@ function normalizeThinking(value: unknown): MemoryDreamingThinking | undefined {
 }
 
 function normalizeBudget(value: unknown): MemoryDreamingBudget | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "cheap" || normalized === "medium" || normalized === "expensive") {
     return normalized;
   }
@@ -302,7 +307,7 @@ function resolveExecutionConfig(
 
 function normalizePathForComparison(input: string): string {
   const normalized = path.resolve(input);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 function formatLocalIsoDay(epochMs: number): string {
@@ -320,7 +325,7 @@ export function resolveMemoryDreamingPluginId(
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
   const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
+  if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
     return configuredSlot;
   }
   return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;

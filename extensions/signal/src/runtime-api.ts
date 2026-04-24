@@ -49,7 +49,4 @@ export { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 export { sendMessageSignal } from "./send.js";
 export { signalMessageActions } from "./message-actions.js";
 export type { ResolvedSignalAccount } from "./accounts.js";
-export type SignalAccountConfig = Omit<
-  Exclude<NonNullable<RuntimeOpenClawConfig["channels"]>["signal"], undefined>,
-  "accounts"
->;
+export type { SignalAccountConfig } from "./account-types.js";

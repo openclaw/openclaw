@@ -1,14 +1,12 @@
 ---
-title: "Memory configuration reference"
 summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+title: "Memory configuration reference"
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to set up the QMD backend
   - You want to tune hybrid search, MMR, or temporal decay
   - You want to enable multimodal memory indexing
 ---
-
-# Memory configuration reference
 
 This page lists every configuration knob for OpenClaw memory search. For
 conceptual overviews, see:
@@ -17,31 +15,44 @@ conceptual overviews, see:
 - [Builtin Engine](/concepts/memory-builtin) -- default SQLite backend
 - [QMD Engine](/concepts/memory-qmd) -- local-first sidecar
 - [Memory Search](/concepts/memory-search) -- search pipeline and tuning
+- [Active Memory](/concepts/active-memory) -- enabling the memory sub-agent for interactive sessions
 
 All memory search settings live under `agents.defaults.memorySearch` in
 `openclaw.json` unless noted otherwise.
+
+If you are looking for the **active memory** feature toggle and sub-agent config,
+that lives under `plugins.entries.active-memory` instead of `memorySearch`.
+
+Active memory uses a two-gate model:
+
+1. the plugin must be enabled and target the current agent id
+2. the request must be an eligible interactive persistent chat session
+
+See [Active Memory](/concepts/active-memory) for the activation model,
+plugin-owned config, transcript persistence, and safe rollout pattern.
 
 ---
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                 |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `openai`, `gemini`, `voyage`, `mistral`, `bedrock`, `ollama`, `local` |
-| `model`    | `string`  | provider default | Embedding model name                                                                        |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                  |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                             |
+| Key        | Type      | Default          | Description                                                                                                   |
+| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
+| `model`    | `string`  | provider default | Embedding model name                                                                                          |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                    |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                               |
 
 ### Auto-detection order
 
 When `provider` is not set, OpenClaw selects the first available:
 
 1. `local` -- if `memorySearch.local.modelPath` is configured and the file exists.
-2. `openai` -- if an OpenAI key can be resolved.
-3. `gemini` -- if a Gemini key can be resolved.
-4. `voyage` -- if a Voyage key can be resolved.
-5. `mistral` -- if a Mistral key can be resolved.
-6. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
+2. `github-copilot` -- if a GitHub Copilot token can be resolved (env var or auth profile).
+3. `openai` -- if an OpenAI key can be resolved.
+4. `gemini` -- if a Gemini key can be resolved.
+5. `voyage` -- if a Voyage key can be resolved.
+6. `mistral` -- if a Mistral key can be resolved.
+7. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
 
 `ollama` is supported but not auto-detected (set it explicitly).
 
@@ -50,14 +61,15 @@ When `provider` is not set, OpenClaw selects the first available:
 Remote embeddings require an API key. Bedrock uses the AWS SDK default
 credential chain instead (instance roles, SSO, access keys).
 
-| Provider | Env var                        | Config key                        |
-| -------- | ------------------------------ | --------------------------------- |
-| OpenAI   | `OPENAI_API_KEY`               | `models.providers.openai.apiKey`  |
-| Gemini   | `GEMINI_API_KEY`               | `models.providers.google.apiKey`  |
-| Voyage   | `VOYAGE_API_KEY`               | `models.providers.voyage.apiKey`  |
-| Mistral  | `MISTRAL_API_KEY`              | `models.providers.mistral.apiKey` |
-| Bedrock  | AWS credential chain           | No API key needed                 |
-| Ollama   | `OLLAMA_API_KEY` (placeholder) | --                                |
+| Provider       | Env var                                            | Config key                        |
+| -------------- | -------------------------------------------------- | --------------------------------- |
+| Bedrock        | AWS credential chain                               | No API key needed                 |
+| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
+| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
+| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                |
+| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
+| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
 
 Codex OAuth covers chat/completions only and does not satisfy embedding
 requests.
@@ -186,13 +198,26 @@ arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
 
 ## Local embedding config
 
-| Key                   | Type     | Default                | Description                     |
-| --------------------- | -------- | ---------------------- | ------------------------------- |
-| `local.modelPath`     | `string` | auto-downloaded        | Path to GGUF model file         |
-| `local.modelCacheDir` | `string` | node-llama-cpp default | Cache dir for downloaded models |
+| Key                   | Type               | Default                | Description                                                                                                                                                                                                                                                                                                          |
+| --------------------- | ------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `local.modelPath`     | `string`           | auto-downloaded        | Path to GGUF model file                                                                                                                                                                                                                                                                                              |
+| `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
+| `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128–512 tokens) while bounding non-weight VRAM. Lower to 1024–2048 on constrained hosts. `"auto"` uses the model's trained maximum — not recommended for 8B+ models (Qwen3-Embedding-8B: 40 960 tokens → ~32 GB VRAM vs ~8.8 GB at 4096). |
 
 Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded).
 Requires native build: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
+
+Use the standalone CLI to verify the same provider path the Gateway uses:
+
+```bash
+openclaw memory status --deep --agent main
+openclaw memory index --force --agent main
+```
+
+If `provider` is `auto`, `local` is selected only when `local.modelPath` points
+to an existing local file. `hf:` and HTTP(S) model references can still be used
+explicitly with `provider: "local"`, but they do not make `auto` select local
+before the model is available on disk.
 
 ---
 
@@ -411,7 +436,7 @@ runtime environment.
 ### Scope
 
 Controls which sessions can receive QMD search results. Same schema as
-[`session.sendPolicy`](/gateway/configuration-reference#session):
+[`session.sendPolicy`](/gateway/config-agents#session):
 
 ```json5
 {
@@ -425,6 +450,9 @@ Controls which sessions can receive QMD search results. Same schema as
   },
 }
 ```
+
+The shipped default allows direct and channel sessions, while still denying
+groups.
 
 Default is DM-only. `match.keyPrefix` matches the normalized session key;
 `match.rawKeyPrefix` matches the raw key including `agent:<id>:`.
@@ -462,7 +490,7 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
 
 ---
 
-## Dreaming (experimental)
+## Dreaming
 
 Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
 not under `agents.defaults.memorySearch`.
@@ -503,3 +531,9 @@ Notes:
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Configuration reference](/gateway/configuration-reference)

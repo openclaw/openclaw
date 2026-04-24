@@ -574,10 +574,7 @@ async function discoverViaAvahi(
     args.push("-d", domain.replace(/\.$/, ""));
   }
   const browse = await run(args, { timeoutMs });
-  return parseAvahiBrowse(browse.stdout).map((beacon) => ({
-    ...beacon,
-    domain,
-  }));
+  return parseAvahiBrowse(browse.stdout).map((beacon) => Object.assign({}, beacon, { domain }));
 }
 
 export async function discoverGatewayBeacons(
@@ -590,7 +587,7 @@ export async function discoverGatewayBeacons(
   const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
   const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
   const domains = (domainsRaw.length > 0 ? domainsRaw : defaultDomains)
-    .map((d) => String(d).trim())
+    .map((d) => d.trim())
     .filter(Boolean)
     .map((d) => (d.endsWith(".") ? d : `${d}.`));
 

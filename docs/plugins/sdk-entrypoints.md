@@ -1,17 +1,40 @@
 ---
-title: "Plugin Entry Points"
-sidebarTitle: "Entry Points"
 summary: "Reference for definePluginEntry, defineChannelPluginEntry, and defineSetupPluginEntry"
+title: "Plugin entry points"
+sidebarTitle: "Entry Points"
 read_when:
   - You need the exact type signature of definePluginEntry or defineChannelPluginEntry
   - You want to understand registration mode (full vs setup vs CLI metadata)
   - You are looking up entry point options
 ---
 
-# Plugin Entry Points
-
 Every plugin exports a default entry object. The SDK provides three helpers for
 creating them.
+
+For installed plugins, `package.json` should point runtime loading at built
+JavaScript when available:
+
+```json
+{
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
+    "setupEntry": "./src/setup-entry.ts",
+    "runtimeSetupEntry": "./dist/setup-entry.js"
+  }
+}
+```
+
+`extensions` and `setupEntry` remain valid source entries for workspace and git
+checkout development. `runtimeExtensions` and `runtimeSetupEntry` are preferred
+when OpenClaw loads an installed package and let npm packages avoid runtime
+TypeScript compilation. If an installed package only declares a TypeScript
+source entry, OpenClaw will use a matching built `dist/*.js` peer when one
+exists, then fall back to the TypeScript source.
+
+All entry paths must stay inside the plugin package directory. Runtime entries
+and inferred built JavaScript peers do not make an escaping `extensions` or
+`setupEntry` source path valid.
 
 <Tip>
   **Looking for a walkthrough?** See [Channel Plugins](/plugins/sdk-channel-plugins)
@@ -144,6 +167,31 @@ families:
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the full
 entry.
+
+Bundled workspace channels that split setup and runtime surfaces can use
+`defineBundledChannelSetupEntry(...)` from
+`openclaw/plugin-sdk/channel-entry-contract` instead. That contract lets the
+setup entry keep setup-safe plugin/secrets exports while still exposing a
+runtime setter:
+
+```typescript
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "myChannelPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setMyChannelRuntime",
+  },
+});
+```
+
+Use that bundled contract only when setup flows truly need a lightweight runtime
+setter before the full channel entry loads.
 
 ## Registration mode
 

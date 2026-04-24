@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -14,18 +14,20 @@ installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  vi.doMock("./models-config.plan.js", () => ({
+    planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
+  }));
+  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+});
+
+beforeEach(() => {
   planOpenClawModelsJsonMock
     .mockReset()
     .mockImplementation(async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
       action: "write",
       contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
     }));
-  vi.doMock("./models-config.plan.js", () => ({
-    planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
-  }));
-  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
 });
 
 describe("models-config write serialization", () => {

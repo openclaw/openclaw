@@ -1,21 +1,19 @@
-import { Type, type TSchema } from "@sinclair/typebox";
+import { Type, type TSchema } from "typebox";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
-  listChannelMessageActions,
+  type ChannelMessageActionDiscoveryInput,
   resolveChannelMessageToolSchemaProperties,
 } from "../../channels/plugins/message-action-discovery.js";
+import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
-import {
-  CHANNEL_MESSAGE_ACTION_NAMES,
-  type ChannelMessageActionName,
-} from "../../channels/plugins/types.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
@@ -24,7 +22,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { listChannelSupportedActions } from "../channel-tools.js";
+import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -56,36 +54,39 @@ function buildRoutingSchema() {
   };
 }
 
-const interactiveOptionSchema = Type.Object({
+const presentationOptionSchema = Type.Object({
   label: Type.String(),
   value: Type.String(),
 });
 
-const interactiveButtonSchema = Type.Object({
+const presentationButtonSchema = Type.Object({
   label: Type.String(),
-  value: Type.String(),
+  value: Type.Optional(Type.String()),
+  url: Type.Optional(Type.String()),
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 
-const interactiveBlockSchema = Type.Object({
-  type: stringEnum(["text", "buttons", "select"]),
+const presentationBlockSchema = Type.Object({
+  type: stringEnum(["text", "context", "divider", "buttons", "select"]),
   text: Type.Optional(Type.String()),
-  buttons: Type.Optional(Type.Array(interactiveButtonSchema)),
+  buttons: Type.Optional(Type.Array(presentationButtonSchema)),
   placeholder: Type.Optional(Type.String()),
-  options: Type.Optional(Type.Array(interactiveOptionSchema)),
+  options: Type.Optional(Type.Array(presentationOptionSchema)),
 });
 
-const interactiveMessageSchema = Type.Object(
+const presentationMessageSchema = Type.Object(
   {
-    blocks: Type.Array(interactiveBlockSchema),
+    title: Type.Optional(Type.String()),
+    tone: Type.Optional(stringEnum(["info", "success", "warning", "danger", "neutral"])),
+    blocks: Type.Array(presentationBlockSchema),
   },
   {
     description:
-      "Shared interactive message payload for buttons and selects. Channels render this into their native components when supported.",
+      "Shared presentation payload for rich text, buttons, selects, and context. Core degrades unsupported blocks to text.",
   },
 );
 
-function buildSendSchema(options: { includeInteractive: boolean }) {
+function buildSendSchema(options: { includePresentation: boolean; includeDeliveryPin: boolean }) {
   const props: Record<string, TSchema> = {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
@@ -132,10 +133,31 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
           "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
       }),
     ),
-    interactive: Type.Optional(interactiveMessageSchema),
   };
-  if (!options.includeInteractive) {
-    delete props.interactive;
+  if (options.includePresentation) {
+    props.presentation = Type.Optional(presentationMessageSchema);
+  }
+  if (options.includeDeliveryPin) {
+    props.delivery = Type.Optional(
+      Type.Object(
+        {
+          pin: Type.Optional(
+            Type.Union([
+              Type.Boolean(),
+              Type.Object({
+                enabled: Type.Boolean(),
+                notify: Type.Optional(Type.Boolean()),
+                required: Type.Optional(Type.Boolean()),
+              }),
+            ]),
+          ),
+        },
+        {
+          description:
+            "Shared delivery preferences. pin requests that the sent message be pinned when the channel supports it.",
+        },
+      ),
+    );
   }
   return props;
 }
@@ -283,6 +305,9 @@ function buildEventSchema() {
     endTime: Type.Optional(Type.String()),
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
+    image: Type.Optional(
+      Type.String({ description: "Cover image URL or local file path for the event." }),
+    ),
     durationMin: Type.Optional(Type.Number()),
     until: Type.Optional(Type.String()),
   };
@@ -352,7 +377,8 @@ function buildChannelManagementSchema() {
 }
 
 function buildMessageToolSchemaProps(options: {
-  includeInteractive: boolean;
+  includePresentation: boolean;
+  includeDeliveryPin: boolean;
   extraProperties?: Record<string, TSchema>;
 }) {
   return {
@@ -376,7 +402,8 @@ function buildMessageToolSchemaProps(options: {
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: {
-    includeInteractive: boolean;
+    includePresentation: boolean;
+    includeDeliveryPin: boolean;
     extraProperties?: Record<string, TSchema>;
   },
 ) {
@@ -388,7 +415,8 @@ function buildMessageToolSchemaFromActions(
 }
 
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
-  includeInteractive: true,
+  includePresentation: true,
+  includeDeliveryPin: true,
 });
 
 type MessageToolOptions = {
@@ -397,6 +425,7 @@ type MessageToolOptions = {
   sessionId?: string;
   config?: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
+  getScopedChannelsCommandSecretTargets?: typeof getScopedChannelsCommandSecretTargets;
   resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
   runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
@@ -408,9 +437,10 @@ type MessageToolOptions = {
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   requesterSenderId?: string;
+  senderIsOwner?: boolean;
 };
 
-function resolveMessageToolSchemaActions(params: {
+type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
   currentChannelId?: string;
@@ -421,117 +451,21 @@ function resolveMessageToolSchemaActions(params: {
   sessionId?: string;
   agentId?: string;
   requesterSenderId?: string;
-}): string[] {
-  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
-  if (currentChannel) {
-    const scopedActions = listChannelSupportedActions({
-      cfg: params.cfg,
-      channel: currentChannel,
-      currentChannelId: params.currentChannelId,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
-      accountId: params.currentAccountId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      agentId: params.agentId,
-      requesterSenderId: params.requesterSenderId,
-    });
-    const allActions = new Set<string>(["send", ...scopedActions]);
-    // Include actions from other configured channels so isolated/cron agents
-    // can invoke cross-channel actions without validation errors.
-    for (const plugin of listChannelPlugins()) {
-      if (plugin.id === currentChannel) {
-        continue;
-      }
-      for (const action of listChannelSupportedActions({
-        cfg: params.cfg,
-        channel: plugin.id,
-        currentChannelId: params.currentChannelId,
-        currentThreadTs: params.currentThreadTs,
-        currentMessageId: params.currentMessageId,
-        accountId: params.currentAccountId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-        requesterSenderId: params.requesterSenderId,
-      })) {
-        allActions.add(action);
-      }
-    }
-    return Array.from(allActions);
-  }
-  const actions = listChannelMessageActions(params.cfg);
-  return actions.length > 0 ? actions : ["send"];
-}
+  senderIsOwner?: boolean;
+};
 
-function resolveIncludeCapability(
-  params: {
-    cfg: OpenClawConfig;
-    currentChannelProvider?: string;
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    currentMessageId?: string | number;
-    currentAccountId?: string;
-    sessionKey?: string;
-    sessionId?: string;
-    agentId?: string;
-    requesterSenderId?: string;
-  },
-  capability: ChannelMessageCapability,
-): boolean {
-  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
-  if (currentChannel) {
-    return channelSupportsMessageCapabilityForChannel(
-      {
-        cfg: params.cfg,
-        channel: currentChannel,
-        currentChannelId: params.currentChannelId,
-        currentThreadTs: params.currentThreadTs,
-        currentMessageId: params.currentMessageId,
-        accountId: params.currentAccountId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-        requesterSenderId: params.requesterSenderId,
-      },
-      capability,
-    );
-  }
-  return channelSupportsMessageCapability(params.cfg, capability);
-}
-
-function resolveIncludeInteractive(params: {
+type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg" | "channel"> & {
   cfg: OpenClawConfig;
-  currentChannelProvider?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  currentAccountId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  requesterSenderId?: string;
-}): boolean {
-  return resolveIncludeCapability(params, "interactive");
-}
+  channel?: string;
+};
 
-function buildMessageToolSchema(params: {
-  cfg: OpenClawConfig;
-  currentChannelProvider?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  currentAccountId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  requesterSenderId?: string;
-}) {
-  const actions = resolveMessageToolSchemaActions(params);
-  const includeInteractive = resolveIncludeInteractive(params);
-  const extraProperties = resolveChannelMessageToolSchemaProperties({
+function buildMessageActionDiscoveryInput(
+  params: MessageToolDiscoveryParams,
+  channel?: string,
+): MessageActionDiscoveryInput {
+  return {
     cfg: params.cfg,
-    channel: normalizeMessageChannel(params.currentChannelProvider),
+    ...(channel ? { channel } : {}),
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
@@ -540,9 +474,74 @@ function buildMessageToolSchema(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
     requesterSenderId: params.requesterSenderId,
-  });
+    senderIsOwner: params.senderIsOwner,
+  };
+}
+
+function resolveMessageToolSchemaActions(params: MessageToolDiscoveryParams): string[] {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel) {
+    const scopedActions = listChannelSupportedActions(
+      buildMessageActionDiscoveryInput(params, currentChannel),
+    );
+    const allActions = new Set<string>(["send", ...scopedActions]);
+    // Include actions from other configured channels so isolated/cron agents
+    // can invoke cross-channel actions without validation errors.
+    for (const plugin of listChannelPlugins()) {
+      if (plugin.id === currentChannel) {
+        continue;
+      }
+      for (const action of listChannelSupportedActions(
+        buildMessageActionDiscoveryInput(params, plugin.id),
+      )) {
+        allActions.add(action);
+      }
+    }
+    return Array.from(allActions);
+  }
+  return listAllMessageToolActions(params);
+}
+
+function listAllMessageToolActions(params: MessageToolDiscoveryParams): ChannelMessageActionName[] {
+  const pluginActions = listAllChannelSupportedActions(buildMessageActionDiscoveryInput(params));
+  return Array.from(new Set<ChannelMessageActionName>(["send", "broadcast", ...pluginActions]));
+}
+
+function resolveIncludeCapability(
+  params: MessageToolDiscoveryParams,
+  capability: ChannelMessageCapability,
+): boolean {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel) {
+    return channelSupportsMessageCapabilityForChannel(
+      buildMessageActionDiscoveryInput(params, currentChannel),
+      capability,
+    );
+  }
+  return channelSupportsMessageCapability(params.cfg, capability);
+}
+
+function resolveIncludePresentation(params: MessageToolDiscoveryParams): boolean {
+  return resolveIncludeCapability(params, "presentation");
+}
+
+function resolveIncludeDeliveryPin(params: MessageToolDiscoveryParams): boolean {
+  return resolveIncludeCapability(params, "delivery-pin");
+}
+
+function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
+  const actions = resolveMessageToolSchemaActions(params);
+  const includePresentation = resolveIncludePresentation(params);
+  const includeDeliveryPin = resolveIncludeDeliveryPin(params);
+  const extraProperties = resolveChannelMessageToolSchemaProperties(
+    buildMessageActionDiscoveryInput(
+      params,
+      normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
+    ),
+  );
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
-    includeInteractive,
+    includePresentation,
+    includeDeliveryPin,
     extraProperties,
   });
 }
@@ -566,25 +565,32 @@ function buildMessageToolDescription(options?: {
   sessionId?: string;
   agentId?: string;
   requesterSenderId?: string;
+  senderIsOwner?: boolean;
 }): string {
   const baseDescription = "Send, delete, and manage messages via channel plugins.";
   const resolvedOptions = options ?? {};
   const currentChannel = normalizeMessageChannel(resolvedOptions.currentChannel);
+  const messageToolDiscoveryParams = resolvedOptions.config
+    ? {
+        cfg: resolvedOptions.config,
+        currentChannelProvider: resolvedOptions.currentChannel,
+        currentChannelId: resolvedOptions.currentChannelId,
+        currentThreadTs: resolvedOptions.currentThreadTs,
+        currentMessageId: resolvedOptions.currentMessageId,
+        currentAccountId: resolvedOptions.currentAccountId,
+        sessionKey: resolvedOptions.sessionKey,
+        sessionId: resolvedOptions.sessionId,
+        agentId: resolvedOptions.agentId,
+        requesterSenderId: resolvedOptions.requesterSenderId,
+        senderIsOwner: resolvedOptions.senderIsOwner,
+      }
+    : undefined;
 
   // If we have a current channel, show its actions and list other configured channels
-  if (currentChannel) {
-    const channelActions = listChannelSupportedActions({
-      cfg: resolvedOptions.config,
-      channel: currentChannel,
-      currentChannelId: resolvedOptions.currentChannelId,
-      currentThreadTs: resolvedOptions.currentThreadTs,
-      currentMessageId: resolvedOptions.currentMessageId,
-      accountId: resolvedOptions.currentAccountId,
-      sessionKey: resolvedOptions.sessionKey,
-      sessionId: resolvedOptions.sessionId,
-      agentId: resolvedOptions.agentId,
-      requesterSenderId: resolvedOptions.requesterSenderId,
-    });
+  if (currentChannel && messageToolDiscoveryParams) {
+    const channelActions = listChannelSupportedActions(
+      buildMessageActionDiscoveryInput(messageToolDiscoveryParams, currentChannel),
+    );
     if (channelActions.length > 0) {
       // Always include "send" as a base action
       const allActions = new Set<ChannelMessageActionName | "send">(["send", ...channelActions]);
@@ -597,18 +603,9 @@ function buildMessageToolDescription(options?: {
         if (plugin.id === currentChannel) {
           continue;
         }
-        const actions = listChannelSupportedActions({
-          cfg: resolvedOptions.config,
-          channel: plugin.id,
-          currentChannelId: resolvedOptions.currentChannelId,
-          currentThreadTs: resolvedOptions.currentThreadTs,
-          currentMessageId: resolvedOptions.currentMessageId,
-          accountId: resolvedOptions.currentAccountId,
-          sessionKey: resolvedOptions.sessionKey,
-          sessionId: resolvedOptions.sessionId,
-          agentId: resolvedOptions.agentId,
-          requesterSenderId: resolvedOptions.requesterSenderId,
-        });
+        const actions = listChannelSupportedActions(
+          buildMessageActionDiscoveryInput(messageToolDiscoveryParams, plugin.id),
+        );
         if (actions.length > 0) {
           const all = new Set<ChannelMessageActionName | "send">(["send", ...actions]);
           otherChannels.push(`${plugin.id} (${Array.from(all).toSorted().join(", ")})`);
@@ -626,8 +623,8 @@ function buildMessageToolDescription(options?: {
   }
 
   // Fallback to generic description with all configured actions
-  if (resolvedOptions.config) {
-    const actions = listChannelMessageActions(resolvedOptions.config);
+  if (messageToolDiscoveryParams) {
+    const actions = listAllMessageToolActions(messageToolDiscoveryParams);
     if (actions.length > 0) {
       return appendMessageToolReadHint(
         `${baseDescription} Supports actions: ${actions.join(", ")}.`,
@@ -653,6 +650,8 @@ function appendMessageToolReadHint(
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const loadConfigForTool = options?.loadConfig ?? loadConfig;
+  const getScopedSecretTargetsForTool =
+    options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
   const resolveSecretRefsForTool =
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
@@ -675,6 +674,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         sessionId: options.sessionId,
         agentId: resolvedAgentId,
         requesterSenderId: options.requesterSenderId,
+        senderIsOwner: options.senderIsOwner,
       })
     : MessageToolSchema;
   const description = buildMessageToolDescription({
@@ -688,6 +688,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     sessionId: options?.sessionId,
     agentId: resolvedAgentId,
     requesterSenderId: options?.requesterSenderId,
+    senderIsOwner: options?.senderIsOwner,
   });
 
   return {
@@ -717,32 +718,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
-      let cfg = options?.config;
-      if (!cfg) {
-        const loadedRaw = loadConfigForTool();
-        const scope = resolveMessageSecretScope({
-          channel: params.channel,
-          target: params.target,
-          targets: params.targets,
-          fallbackChannel: options?.currentChannelProvider,
-          accountId: params.accountId,
-          fallbackAccountId: agentAccountId,
-        });
-        const scopedTargets = getScopedChannelsCommandSecretTargets({
-          config: loadedRaw,
-          channel: scope.channel,
-          accountId: scope.accountId,
-        });
-        cfg = (
-          await resolveSecretRefsForTool({
-            config: loadedRaw,
-            commandName: "tools.message",
-            targetIds: scopedTargets.targetIds,
-            ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
-            mode: "enforce_resolved",
-          })
-        ).resolvedConfig;
-      }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =
@@ -756,6 +731,33 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             "Explicit message target required for this run. Provide target/targets (and channel when needed).",
           );
         }
+      }
+
+      let cfg = options?.config;
+      if (!cfg) {
+        const loadedRaw = loadConfigForTool();
+        const scope = resolveMessageSecretScope({
+          channel: params.channel,
+          target: params.target,
+          targets: params.targets,
+          fallbackChannel: options?.currentChannelProvider,
+          accountId: params.accountId,
+          fallbackAccountId: agentAccountId,
+        });
+        const scopedTargets = getScopedSecretTargetsForTool({
+          config: loadedRaw,
+          channel: scope.channel,
+          accountId: scope.accountId,
+        });
+        cfg = (
+          await resolveSecretRefsForTool({
+            config: loadedRaw,
+            commandName: "tools.message",
+            targetIds: scopedTargets.targetIds,
+            ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+            mode: "enforce_resolved",
+          })
+        ).resolvedConfig;
       }
 
       const accountId = readStringParam(params, "accountId") ?? agentAccountId;
@@ -807,6 +809,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         params,
         defaultAccountId: accountId ?? undefined,
         requesterSenderId: options?.requesterSenderId,
+        senderIsOwner: options?.senderIsOwner,
         gateway,
         toolContext,
         sessionKey: options?.agentSessionKey,

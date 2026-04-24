@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionSendPolicyConfig } from "../../config/types.base.js";
 import type {
   MemoryBackend,
@@ -12,7 +11,13 @@ import type {
   MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
 } from "../../config/types.memory.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CANONICAL_ROOT_MEMORY_FILENAME } from "../../memory/root-memory-files.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 
@@ -85,9 +90,9 @@ const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
-  maxResults: 6,
-  maxSnippetChars: 700,
-  maxInjectedChars: 4_000,
+  maxResults: 4,
+  maxSnippetChars: 450,
+  maxInjectedChars: 2_200,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
 };
 const DEFAULT_QMD_MCPORTER: ResolvedQmdMcporterConfig = {
@@ -103,11 +108,15 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
       action: "allow",
       match: { chatType: "direct" },
     },
+    {
+      action: "allow",
+      match: { chatType: "channel" },
+    },
   ],
 };
 
 function sanitizeName(input: string): string {
-  const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
   const trimmed = lower.replace(/^-+|-+$/g, "");
   return trimmed || "collection";
 }
@@ -264,7 +273,7 @@ function resolveCustomPaths(
   const collections: ResolvedQmdCollection[] = [];
   const seenRoots = new Set<string>();
   rawPaths.forEach((entry, index) => {
-    const trimmedPath = entry?.path?.trim();
+    const trimmedPath = normalizeOptionalString(entry?.path);
     if (!trimmedPath) {
       return;
     }
@@ -274,7 +283,7 @@ function resolveCustomPaths(
     } catch {
       return;
     }
-    const pattern = entry.pattern?.trim() || "**/*.md";
+    const pattern = normalizeOptionalString(entry.pattern) || "**/*.md";
     const dedupeKey = `${resolved}\u0000${pattern}`;
     if (seenRoots.has(dedupeKey)) {
       return;
@@ -327,8 +336,7 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
+    { path: workspaceDir, pattern: CANONICAL_ROOT_MEMORY_FILENAME, base: "memory-root" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
@@ -371,8 +379,9 @@ export function resolveMemoryBackendConfig(params: {
   const mergedExtraCollections = [
     ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
     ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
-  ].filter((value): value is MemoryQmdIndexPath =>
-    Boolean(value && typeof value === "object" && typeof value.path === "string"),
+  ].filter(
+    (value): value is MemoryQmdIndexPath =>
+      value !== null && typeof value === "object" && typeof value.path === "string",
   );
 
   // Combine QMD-specific paths with extraPaths and per-agent cross-agent collections.
@@ -387,7 +396,7 @@ export function resolveMemoryBackendConfig(params: {
     ...resolveCustomPaths(allQmdPaths, workspaceDir, nameSet, normalizedAgentId),
   ];
 
-  const rawCommand = qmdCfg?.command?.trim() || "qmd";
+  const rawCommand = normalizeOptionalString(qmdCfg?.command) || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
   const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {

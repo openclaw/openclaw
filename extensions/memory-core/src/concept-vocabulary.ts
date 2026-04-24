@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export const MAX_CONCEPT_TAGS = 8;
 
@@ -227,7 +228,7 @@ const LANGUAGE_STOP_WORDS = {
 const CONCEPT_STOP_WORDS = new Set(
   Object.values(LANGUAGE_STOP_WORDS)
     .flatMap((words) => words)
-    .map((word) => word.toLowerCase()),
+    .map((word) => normalizeLowercaseStringOrEmpty(word)),
 );
 
 const PROTECTED_GLOSSARY = [
@@ -273,7 +274,7 @@ const PROTECTED_GLOSSARY = [
   "네트워크",
   "게이트웨이",
   "장애대응",
-].map((word) => word.normalize("NFKC").toLowerCase());
+].map((word) => normalizeLowercaseStringOrEmpty(word.normalize("NFKC")));
 
 const COMPOUND_TOKEN_RE = /[\p{L}\p{N}]+(?:[._/-][\p{L}\p{N}]+)+/gu;
 const LETTER_OR_NUMBER_RE = /[\p{L}\p{N}]/u;
@@ -326,11 +327,12 @@ function isKanaOnlyToken(value: string): boolean {
 }
 
 function normalizeConceptToken(rawToken: string): string | null {
-  const normalized = rawToken
-    .normalize("NFKC")
-    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
-    .replaceAll("_", "-")
-    .toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(
+    rawToken
+      .normalize("NFKC")
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+      .replaceAll("_", "-"),
+  );
   if (!normalized || !containsLetterOrNumber(normalized) || normalized.length > 32) {
     return null;
   }
@@ -355,7 +357,7 @@ function normalizeConceptToken(rawToken: string): string | null {
 }
 
 function collectGlossaryMatches(source: string): string[] {
-  const normalizedSource = source.normalize("NFKC").toLowerCase();
+  const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
   const matches: string[] = [];
   for (const entry of PROTECTED_GLOSSARY) {
     if (!normalizedSource.includes(entry)) {

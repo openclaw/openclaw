@@ -3,10 +3,8 @@ summary: "What the OpenClaw system prompt contains and how it is assembled"
 read_when:
   - Editing system prompt text, tools list, or time/heartbeat sections
   - Changing workspace bootstrap or skills injection behavior
-title: "System Prompt"
+title: "System prompt"
 ---
-
-# System Prompt
 
 OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the pi-coding-agent default prompt.
 
@@ -24,11 +22,19 @@ Use provider-owned contributions for model-family-specific tuning. Keep legacy
 `before_prompt_build` prompt mutation for compatibility or truly global prompt
 changes, not normal provider behavior.
 
+The OpenAI GPT-5 family overlay keeps the core execution rule small and adds
+model-specific guidance for persona latching, concise output, tool discipline,
+parallel lookup, deliverable coverage, verification, missing context, and
+terminal-tool hygiene.
+
 ## Structure
 
 The prompt is intentionally compact and uses fixed sections:
 
 - **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance.
+- **Execution Bias**: compact follow-through guidance: act in-turn on
+  actionable requests, continue until done or blocked, recover from weak tool
+  results, check mutable state live, and verify before finalizing.
 - **Safety**: short guardrail reminder to avoid power-seeking behavior or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Self-Update**: how to inspect config safely with
@@ -43,7 +49,7 @@ The prompt is intentionally compact and uses fixed sections:
 - **Sandbox** (when enabled): indicates sandboxed runtime, sandbox paths, and whether elevated exec is available.
 - **Current Date & Time**: user-local time, timezone, and time format.
 - **Reply Tags**: optional reply tag syntax for supported providers.
-- **Heartbeats**: heartbeat prompt and ack behavior.
+- **Heartbeats**: heartbeat prompt and ack behavior, when heartbeats are enabled for the default agent.
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
@@ -101,21 +107,26 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `USER.md`
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
-- `MEMORY.md` when present, otherwise `memory.md` as a lowercase fallback
+- `MEMORY.md` when present
 
-All of these files are **injected into the context window** on every turn, which
-means they consume tokens. Keep them concise — especially `MEMORY.md`, which can
-grow over time and lead to unexpectedly high context usage and more frequent
-compaction.
+All of these files are **injected into the context window** on every turn unless
+a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
+heartbeats are disabled for the default agent or
+`agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
+files concise — especially `MEMORY.md`, which can grow over time and lead to
+unexpectedly high context usage and more frequent compaction.
 
-> **Note:** `memory/*.md` daily files are **not** injected automatically. They
-> are accessed on demand via the `memory_search` and `memory_get` tools, so they
-> do not count against the context window unless the model explicitly reads them.
+> **Note:** `memory/*.md` daily files are **not** part of the normal bootstrap
+> Project Context. On ordinary turns they are accessed on demand via the
+> `memory_search` and `memory_get` tools, so they do not count against the
+> context window unless the model explicitly reads them. Bare `/new` and
+> `/reset` turns are the exception: the runtime can prepend recent daily memory
+> as a one-shot startup-context block for that first turn.
 
 Large files are truncated with a marker. The max per-file size is controlled by
-`agents.defaults.bootstrapMaxChars` (default: 20000). Total injected bootstrap
+`agents.defaults.bootstrapMaxChars` (default: 12000). Total injected bootstrap
 content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
-(default: 150000). Missing files inject a short missing-file marker. When truncation
+(default: 60000). Missing files inject a short missing-file marker. When truncation
 occurs, OpenClaw can inject a warning block in Project Context; control this with
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
 default: `once`).
@@ -172,6 +183,19 @@ and the effective agent skill allowlist when `agents.defaults.skills` or
 
 This keeps the base prompt small while still enabling targeted skill usage.
 
+The skills list budget is owned by the skills subsystem:
+
+- Global default: `skills.limits.maxSkillsPromptChars`
+- Per-agent override: `agents.list[].skillsLimits.maxSkillsPromptChars`
+
+Generic bounded runtime excerpts use a different surface:
+
+- `agents.defaults.contextLimits.*`
+- `agents.list[].contextLimits.*`
+
+That split keeps skills sizing separate from runtime read/injection sizing such
+as `memory_get`, live tool results, and post-compaction AGENTS.md refreshes.
+
 ## Documentation
 
 When available, the system prompt includes a **Documentation** section that points to the
@@ -180,3 +204,9 @@ package docs) and also notes the public mirror, source repo, community Discord, 
 ClawHub ([https://clawhub.ai](https://clawhub.ai)) for skills discovery. The prompt instructs the model to consult local docs first
 for OpenClaw behavior, commands, configuration, or architecture, and to run
 `openclaw status` itself when possible (asking the user only when it lacks access).
+
+## Related
+
+- [Agent runtime](/concepts/agent)
+- [Agent workspace](/concepts/agent-workspace)
+- [Context engine](/concepts/context-engine)

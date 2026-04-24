@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveManifestProviderOnboardAuthFlags } from "../../../plugins/provider-auth-choices.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../onboard-core-auth-flags.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
@@ -15,7 +16,7 @@ export type AuthChoiceInference = {
 };
 
 function hasStringValue(value: unknown): boolean {
-  return typeof value === "string" ? value.trim().length > 0 : Boolean(value);
+  return typeof value === "string" ? Boolean(normalizeOptionalString(value)) : Boolean(value);
 }
 
 // Infer auth choice from explicit provider API key flags.

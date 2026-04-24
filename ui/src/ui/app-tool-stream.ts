@@ -1,4 +1,5 @@
 import { formatUnknownText, truncateText } from "./format.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -53,7 +54,11 @@ function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const providerValue = toTrimmedString(provider);
   if (providerValue) {
     const prefix = `${providerValue}/`;
-    if (modelValue.toLowerCase().startsWith(prefix.toLowerCase())) {
+    if (
+      normalizeLowercaseStringOrEmpty(modelValue).startsWith(
+        normalizeLowercaseStringOrEmpty(prefix),
+      )
+    ) {
       const trimmedModel = modelValue.slice(prefix.length).trim();
       if (trimmedModel) {
         return `${providerValue}/${trimmedModel}`;

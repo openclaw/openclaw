@@ -2,7 +2,7 @@
 summary: "Voice wake and push-to-talk modes plus routing details in the mac app"
 read_when:
   - Working on voice wake or PTT pathways
-title: "Voice Wake (macOS)"
+title: "Voice wake (macOS)"
 ---
 
 # Voice Wake & Push-to-Talk
@@ -65,3 +65,9 @@ Hardening:
 
 - Toggle push-to-talk on, hold Cmd+Fn, speak, release: overlay should show partials then send.
 - While holding, menu-bar ears should stay enlarged (uses `triggerVoiceEars(ttl:nil)`); they drop after release.
+
+## Related
+
+- [Voice wake](/nodes/voicewake)
+- [Voice overlay](/platforms/mac/voice-overlay)
+- [macOS app](/platforms/macos)

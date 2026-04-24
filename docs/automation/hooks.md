@@ -6,9 +6,7 @@ read_when:
 title: "Hooks"
 ---
 
-# Hooks
-
-Hooks are small scripts that run when something happens inside the Gateway. They are automatically discovered from directories and can be inspected with `openclaw hooks`.
+Hooks are small scripts that run when something happens inside the Gateway. They can be discovered from directories and inspected with `openclaw hooks`. The Gateway loads internal hooks only after you enable hooks or configure at least one hook entry, hook pack, legacy handler, or extra hook directory.
 
 There are two kinds of hooks in OpenClaw:
 
@@ -139,6 +137,8 @@ Hooks are discovered from these directories, in order of increasing override pre
 
 Workspace hooks can add new hook names but cannot override bundled, managed, or plugin-provided hooks with the same name.
 
+The Gateway skips internal hook discovery on startup until internal hooks are configured. Enable a bundled or managed hook with `openclaw hooks enable <name>`, install a hook pack, or set `hooks.internal.enabled=true` to opt in. When you enable one named hook, the Gateway loads only that hook's handler; `hooks.internal.enabled=true`, extra hook directories, and legacy handlers opt into broad discovery.
+
 ### Hook packs
 
 Hook packs are npm packages that export hooks via `openclaw.hooks` in `package.json`. Install with:
@@ -164,9 +164,13 @@ Enable any bundled hook:
 openclaw hooks enable <hook-name>
 ```
 
+<a id="session-memory"></a>
+
 ### session-memory details
 
 Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md`. Requires `workspace.dir` to be configured.
+
+<a id="bootstrap-extra-files"></a>
 
 ### bootstrap-extra-files config
 
@@ -187,11 +191,23 @@ Extracts the last 15 user/assistant messages, generates a descriptive filename s
 
 Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
 
+<a id="command-logger"></a>
+
+### command-logger details
+
+Logs every slash command to `~/.openclaw/logs/commands.log`.
+
+<a id="boot-md"></a>
+
+### boot-md details
+
+Runs `BOOT.md` from the active workspace when the gateway starts.
+
 ## Plugin hooks
 
 Plugins can register hooks through the Plugin SDK for deeper integration: intercepting tool calls, modifying prompts, controlling message flow, and more. The Plugin SDK exposes 28 hooks covering model resolution, agent lifecycle, message flow, tool execution, subagent coordination, and gateway lifecycle.
 
-For the complete plugin hook reference including `before_tool_call`, `before_agent_reply`, `before_install`, and all other plugin hooks, see [Plugin Architecture](/plugins/architecture#provider-runtime-hooks).
+For the complete plugin hook reference including `before_tool_call`, `before_agent_reply`, `before_install`, and all other plugin hooks, see [Plugin Architecture](/plugins/architecture-internals#provider-runtime-hooks).
 
 ## Configuration
 
@@ -299,5 +315,5 @@ Check for missing binaries (PATH), environment variables, config values, or OS c
 
 - [CLI Reference: hooks](/cli/hooks)
 - [Webhooks](/automation/cron-jobs#webhooks)
-- [Plugin Architecture](/plugins/architecture#provider-runtime-hooks) — full plugin hook reference
+- [Plugin Architecture](/plugins/architecture-internals#provider-runtime-hooks) — full plugin hook reference
 - [Configuration](/gateway/configuration-reference#hooks)

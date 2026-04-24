@@ -20,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
 import { sendMessage, sendFileUrl } from "./client.js";
@@ -35,6 +34,10 @@ import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surfa
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -227,7 +230,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       config: {
         ...synologyChatConfigAdapter,
       },
-      auth: synologyChatApprovalAuth,
+      approvalCapability: synologyChatApprovalAuth,
       messaging: {
         normalizeTarget: (target: string) => {
           const trimmed = target.trim();

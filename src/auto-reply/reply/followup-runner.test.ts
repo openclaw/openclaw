@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
@@ -10,6 +11,22 @@ const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
+const resolveCommandSecretRefsViaGatewayMock = vi.fn();
+const resolveQueuedReplyExecutionConfigMock = vi.fn();
+let resolveQueuedReplyExecutionConfigActual:
+  | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
+  | undefined;
+let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
+let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
+let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
+let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
+let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
+let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
+let sessionRunAccounting: typeof import("./session-run-accounting.js");
+let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
+let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
+let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -223,50 +240,102 @@ async function persistRunSessionUsageForFollowupTest(
   await saveSessionStore(storePath, store);
 }
 
-vi.mock(
-  "../../agents/model-fallback.js",
-  async () => await import("../../test-utils/model-fallback.mock.js"),
-);
-vi.mock("../../agents/session-write-lock.js", () => ({
-  acquireSessionWriteLock: vi.fn(async () => ({
-    release: async () => {},
-  })),
-  resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
-}));
-vi.mock("../../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn(async () => false),
-  compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
-  isEmbeddedPiRunActive: vi.fn(() => false),
-  isEmbeddedPiRunStreaming: vi.fn(() => false),
-  queueEmbeddedPiMessage: vi.fn(async () => undefined),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-  waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
-}));
-vi.mock("./queue.js", () => ({
-  clearFollowupQueue: clearFollowupQueueForFollowupTest,
-  enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
-  refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
-}));
-vi.mock("./session-run-accounting.js", () => ({
-  persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
-  incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
-}));
-vi.mock("./agent-runner-memory.js", () => ({
-  runPreflightCompactionIfNeeded: (...args: unknown[]) =>
-    runPreflightCompactionIfNeededMock(...args),
-}));
-vi.mock("./route-reply.js", () => ({
-  isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
-  routeReply: (...args: unknown[]) => routeReplyMock(...args),
-}));
-
-const { createFollowupRunner } = await import("./followup-runner.js");
-const { loadSessionStore, saveSessionStore, clearSessionStoreCacheForTest } =
-  await import("../../config/sessions/store.js");
-const { clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js");
-const sessionRunAccounting = await import("./session-run-accounting.js");
-const { createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js");
+async function loadFreshFollowupRunnerModuleForTest() {
+  vi.resetModules();
+  vi.doUnmock("../../config/config.js");
+  vi.doMock(
+    "../../agents/model-fallback.js",
+    async () => await import("../../test-utils/model-fallback.mock.js"),
+  );
+  vi.doMock("../../agents/session-write-lock.js", () => ({
+    acquireSessionWriteLock: vi.fn(async () => ({
+      release: async () => {},
+    })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
+  }));
+  vi.doMock("../../agents/pi-embedded.js", () => ({
+    abortEmbeddedPiRun: vi.fn(async () => false),
+    compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
+    isEmbeddedPiRunActive: vi.fn(() => false),
+    isEmbeddedPiRunStreaming: vi.fn(() => false),
+    queueEmbeddedPiMessage: vi.fn(async () => undefined),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+    waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
+  }));
+  vi.doMock("./queue.js", () => ({
+    clearFollowupQueue: clearFollowupQueueForFollowupTest,
+    enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
+    refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
+  }));
+  vi.doMock("./session-run-accounting.js", () => ({
+    persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
+    incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
+  }));
+  vi.doMock("./agent-runner-memory.js", () => ({
+    runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
+    runPreflightCompactionIfNeeded: (...args: unknown[]) =>
+      runPreflightCompactionIfNeededMock(...args),
+  }));
+  vi.doMock("./route-reply.js", () => ({
+    isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
+    routeReply: (...args: unknown[]) => routeReplyMock(...args),
+  }));
+  vi.doMock("./agent-runner-utils.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
+    resolveQueuedReplyExecutionConfigActual = actual.resolveQueuedReplyExecutionConfig;
+    resolveQueuedReplyExecutionConfigMock.mockImplementation(
+      async (...args: Parameters<typeof actual.resolveQueuedReplyExecutionConfig>) =>
+        await actual.resolveQueuedReplyExecutionConfig(...args),
+    );
+    return {
+      ...actual,
+      resolveQueuedReplyExecutionConfig: (
+        ...args: Parameters<typeof actual.resolveQueuedReplyExecutionConfig>
+      ) => resolveQueuedReplyExecutionConfigMock(...args),
+    };
+  });
+  vi.doMock("../../cli/command-secret-gateway.js", () => ({
+    resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>
+      resolveCommandSecretRefsViaGatewayMock(...args),
+  }));
+  vi.doMock("../../cli/command-secret-targets.js", () => ({
+    getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries."]),
+    getScopedChannelsCommandSecretTargets: ({
+      channel,
+      accountId,
+    }: {
+      channel?: string;
+      accountId?: string;
+    }) => {
+      const normalizedChannel = channel?.trim() ?? "";
+      if (!normalizedChannel) {
+        return { targetIds: new Set<string>() };
+      }
+      const targetIds = new Set<string>([`channels.${normalizedChannel}.token`]);
+      const normalizedAccountId = accountId?.trim() ?? "";
+      if (!normalizedAccountId) {
+        return { targetIds };
+      }
+      return {
+        targetIds,
+        allowedPaths: new Set<string>([
+          `channels.${normalizedChannel}.token`,
+          `channels.${normalizedChannel}.accounts.${normalizedAccountId}.token`,
+        ]),
+      };
+    },
+  }));
+  ({ createFollowupRunner } = await import("./followup-runner.js"));
+  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+    await import("../../config/config.js"));
+  ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
+    await import("../../config/sessions/store.js"));
+  ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
+  sessionRunAccounting = await import("./session-run-accounting.js");
+  ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
+}
 
 const ROUTABLE_TEST_CHANNELS = new Set([
   "telegram",
@@ -278,13 +347,34 @@ const ROUTABLE_TEST_CHANNELS = new Set([
   "feishu",
 ]);
 
-beforeEach(async () => {
+beforeAll(async () => {
+  await loadFreshFollowupRunnerModuleForTest();
+});
+
+beforeEach(() => {
+  clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
+  resolveCommandSecretRefsViaGatewayMock.mockReset();
+  resolveQueuedReplyExecutionConfigMock.mockReset();
+  const resolveQueuedReplyExecutionConfig = resolveQueuedReplyExecutionConfigActual;
+  if (!resolveQueuedReplyExecutionConfig) {
+    throw new Error("resolveQueuedReplyExecutionConfig mock not initialized");
+  }
+  resolveQueuedReplyExecutionConfigMock.mockImplementation(
+    async (...args: Parameters<typeof resolveQueuedReplyExecutionConfig>) =>
+      await resolveQueuedReplyExecutionConfig(...args),
+  );
   runPreflightCompactionIfNeededMock.mockImplementation(
     async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
   );
+  resolveCommandSecretRefsViaGatewayMock.mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+    targetStatesByPath: {},
+    hadUnresolvedTargets: false,
+  }));
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
   isRoutableChannelMock.mockReset();
@@ -296,7 +386,8 @@ beforeEach(async () => {
   FOLLOWUP_TEST_SESSION_STORES.clear();
 });
 
-afterEach(async () => {
+afterEach(() => {
+  clearRuntimeConfigSnapshot?.();
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
@@ -353,6 +444,195 @@ function mockCompactionRun(params: {
 function createAsyncReplySpy() {
   return vi.fn(async () => {});
 }
+
+describe("createFollowupRunner runtime config", () => {
+  it("uses the active runtime snapshot for queued embedded followup runs", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "resolved-runtime-key",
+            models: [],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: sourceConfig,
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          config?: unknown;
+        }
+      | undefined;
+    expect(call?.config).toBe(runtimeConfig);
+  });
+
+  it("resolves queued embedded followups before preflight helpers read config", async () => {
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          whisper: {
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          whisper: {
+            apiKey: "resolved-runtime-key",
+          },
+        },
+      },
+    };
+    resolveCommandSecretRefsViaGatewayMock.mockResolvedValueOnce({
+      resolvedConfig: runtimeConfig,
+      diagnostics: [],
+      targetStatesByPath: { "skills.entries.whisper.apiKey": "resolved_local" },
+      hadUnresolvedTargets: false,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+    const queued = createQueuedRun({
+      run: {
+        config: sourceConfig,
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+
+    await runner(queued);
+
+    expect(queued.run.config).toBe(runtimeConfig);
+    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: runtimeConfig,
+      }),
+    );
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          config?: unknown;
+        }
+      | undefined;
+    expect(call?.config).toBe(runtimeConfig);
+  });
+
+  it("passes queued origin scope into queued execution-config resolution", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const sourceConfig: OpenClawConfig = {};
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingAccountId: "work",
+      run: {
+        config: sourceConfig,
+        provider: "openai",
+        model: "gpt-5.4",
+        messageProvider: "discord",
+        agentAccountId: "bot-account",
+      },
+    });
+
+    await runner(queued);
+
+    expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledWith(sourceConfig, {
+      originatingChannel: "discord",
+      messageProvider: "discord",
+      originatingAccountId: "work",
+      agentAccountId: "bot-account",
+    });
+  });
+
+  it("passes queued images into queued embedded followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const images = [{ type: "image" as const, data: "base64-cat", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+      opts: {
+        images: [{ type: "image", data: "fallback", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+      },
+    });
+
+    await runner(
+      createQueuedRun({
+        images,
+        imageOrder,
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          images?: unknown;
+          imageOrder?: unknown;
+        }
+      | undefined;
+    expect(call?.images).toBe(images);
+    expect(call?.imageOrder).toBe(imageOrder);
+  });
+});
 
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {
@@ -942,6 +1222,63 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     persistSpy.mockRestore();
   });
 
+  it("uses providerUsed for snapshot freshness when agent metadata overrides the run provider", async () => {
+    const storePath = "/tmp/openclaw-followup-usage-provider.json";
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 10, output: 5 },
+          lastCallUsage: { input: 6, output: 3 },
+          model: "claude-opus-4-6",
+          provider: "anthropic",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          run: {
+            provider: "openai",
+            config: {
+              agents: {
+                defaults: {
+                  cliBackends: {
+                    anthropic: { command: "anthropic" },
+                  },
+                },
+              },
+            } as OpenClawConfig,
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(persistSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerUsed: "anthropic",
+        usageIsContextSnapshot: true,
+      }),
+    );
+    persistSpy.mockRestore();
+  });
+
   it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
     routeReplyMock.mockResolvedValueOnce({
       ok: false,
@@ -965,12 +1302,17 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       ok: false,
       error: "outbound adapter unavailable",
     });
+    const queued = baseQueuedRun(" Feishu ");
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },
       queued: {
-        ...baseQueuedRun(" Feishu "),
+        ...queued,
         originatingChannel: "FEISHU",
         originatingTo: "ou_abc123",
+        run: {
+          ...queued.run,
+          agentAccountId: undefined,
+        },
       } as FollowupRun,
     });
 

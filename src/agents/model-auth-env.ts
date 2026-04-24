@@ -1,22 +1,47 @@
-import { getEnvApiKey } from "@mariozechner/pi-ai";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
-import { normalizeProviderIdForAuth } from "./provider-id.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export type EnvApiKeyResult = {
   apiKey: string;
   source: string;
 };
 
+function hasGoogleVertexAdcCredentials(env: NodeJS.ProcessEnv): boolean {
+  const explicitCredentialsPath = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
+  if (explicitCredentialsPath) {
+    return fs.existsSync(explicitCredentialsPath);
+  }
+  const homeDir = normalizeOptionalSecretInput(env.HOME) ?? os.homedir();
+  return fs.existsSync(
+    path.join(homeDir, ".config", "gcloud", "application_default_credentials.json"),
+  );
+}
+
+function resolveGoogleVertexEnvApiKey(env: NodeJS.ProcessEnv): string | undefined {
+  const explicitApiKey = normalizeOptionalSecretInput(env.GOOGLE_CLOUD_API_KEY);
+  if (explicitApiKey) {
+    return explicitApiKey;
+  }
+  const hasProject = Boolean(env.GOOGLE_CLOUD_PROJECT || env.GCLOUD_PROJECT);
+  const hasLocation = Boolean(env.GOOGLE_CLOUD_LOCATION);
+  return hasProject && hasLocation && hasGoogleVertexAdcCredentials(env)
+    ? GCP_VERTEX_CREDENTIALS_MARKER
+    : undefined;
+}
+
 export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
-  const normalized = normalizeProviderIdForAuth(provider);
-  const candidateMap = resolveProviderEnvApiKeyCandidates();
+  const normalized = resolveProviderIdForAuth(provider, { env });
+  const candidateMap = resolveProviderEnvApiKeyCandidates({ env });
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -35,10 +60,11 @@ export function resolveEnvApiKey(
         return resolved;
       }
     }
+    return null;
   }
 
   if (normalized === "google-vertex") {
-    const envKey = getEnvApiKey(normalized);
+    const envKey = resolveGoogleVertexEnvApiKey(env);
     if (!envKey) {
       return null;
     }

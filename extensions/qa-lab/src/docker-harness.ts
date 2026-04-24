@@ -1,7 +1,12 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import {
+  createQaChannelGatewayConfig,
+  QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+} from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
 const QA_LAB_INTERNAL_PORT = 43123;
@@ -257,9 +262,12 @@ export async function writeQaDockerHarnessFiles(params: {
     gatewayPort: 18789,
     gatewayToken,
     providerBaseUrl,
-    qaBusBaseUrl,
     workspaceDir: "/tmp/openclaw/workspace",
     controlUiRoot: "/app/dist/control-ui",
+    transportPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+    transportConfig: createQaChannelGatewayConfig({
+      baseUrl: qaBusBaseUrl,
+    }),
   });
 
   const files = [
@@ -323,6 +331,7 @@ export async function writeQaDockerHarnessFiles(params: {
       path.join(params.outputDir, "state", "seed-workspace", "IDENTITY.md"),
       path.join(params.outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
       path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
+      path.join(params.outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
     ],
   };
 }
@@ -344,7 +353,6 @@ export async function buildQaDockerHarnessImage(
   const runCommand =
     deps?.runCommand ??
     (async (command: string, args: string[], cwd: string) => {
-      const { execFile } = await import("node:child_process");
       return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
         execFile(command, args, { cwd }, (error, stdout, stderr) => {
           if (error) {

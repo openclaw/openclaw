@@ -9,6 +9,7 @@ import {
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
+export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -209,10 +210,10 @@ export class ClawHubRequestError extends Error {
 
 function normalizeBaseUrl(baseUrl?: string): string {
   const envValue =
-    process.env.OPENCLAW_CLAWHUB_URL?.trim() ||
-    process.env.CLAWHUB_URL?.trim() ||
+    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
+    normalizeOptionalString(process.env.CLAWHUB_URL) ||
     DEFAULT_CLAWHUB_URL;
-  const value = (baseUrl?.trim() || envValue).replace(/\/+$/, "");
+  const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
 }
 
@@ -235,14 +236,14 @@ function extractTokenFromClawHubConfig(value: unknown): string | undefined {
 
 function resolveClawHubConfigPaths(): string[] {
   const explicit =
-    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH?.trim() ||
-    process.env.CLAWHUB_CONFIG_PATH?.trim() ||
-    process.env.CLAWDHUB_CONFIG_PATH?.trim(); // legacy misspelling from older clawhub CLI builds; keep for back-compat
+    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_CONFIG_PATH) ||
+    normalizeOptionalString(process.env.CLAWHUB_CONFIG_PATH) ||
+    normalizeOptionalString(process.env.CLAWDHUB_CONFIG_PATH); // legacy misspelling from older clawhub CLI builds; keep for back-compat
   if (explicit) {
     return [explicit];
   }
 
-  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+  const xdgConfigHome = normalizeOptionalString(process.env.XDG_CONFIG_HOME);
   const configHome =
     xdgConfigHome && xdgConfigHome.length > 0 ? xdgConfigHome : path.join(os.homedir(), ".config");
   const xdgPath = path.join(configHome, "clawhub", "config.json");
@@ -259,9 +260,9 @@ function resolveClawHubConfigPaths(): string[] {
 
 export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   const envToken =
-    process.env.OPENCLAW_CLAWHUB_TOKEN?.trim() ||
-    process.env.CLAWHUB_TOKEN?.trim() ||
-    process.env.CLAWHUB_AUTH_TOKEN?.trim();
+    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_TOKEN) ||
+    normalizeOptionalString(process.env.CLAWHUB_TOKEN) ||
+    normalizeOptionalString(process.env.CLAWHUB_AUTH_TOKEN);
   if (envToken) {
     return envToken;
   }
@@ -366,7 +367,7 @@ async function clawhubRequest(
   params: ClawHubRequestParams,
 ): Promise<{ response: Response; url: URL }> {
   const url = buildUrl(params);
-  const token = params.token?.trim() || (await resolveClawHubAuthToken());
+  const token = normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -450,30 +451,7 @@ export function normalizeClawHubSha256Hex(value: string): string | null {
   if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
     return null;
   }
-  return trimmed.toLowerCase();
-}
-
-export function parseClawHubPluginSpec(raw: string): {
-  name: string;
-  version?: string;
-  baseUrl?: string;
-} | null {
-  const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("clawhub:")) {
-    return null;
-  }
-  const spec = trimmed.slice("clawhub:".length).trim();
-  if (!spec) {
-    return null;
-  }
-  const atIndex = spec.lastIndexOf("@");
-  if (atIndex <= 0 || atIndex >= spec.length - 1) {
-    return { name: spec };
-  }
-  return {
-    name: spec.slice(0, atIndex).trim(),
-    version: spec.slice(atIndex + 1).trim() || undefined,
-  };
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 export async function fetchClawHubPackageDetail(params: {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 
 const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn(() => ["claude-cli"]));
@@ -30,6 +30,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+let discoverAuthStorage: typeof import("./pi-model-discovery.js").discoverAuthStorage;
+
 async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-synthetic-auth-"));
   try {
@@ -40,8 +42,11 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
 }
 
 describe("pi model discovery synthetic auth", () => {
+  beforeAll(async () => {
+    ({ discoverAuthStorage } = await import("./pi-model-discovery.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     resolveRuntimeSyntheticAuthProviderRefs.mockClear();
     resolveProviderSyntheticAuthWithPlugin.mockClear();
   });
@@ -60,7 +65,6 @@ describe("pi model discovery synthetic auth", () => {
         agentDir,
       );
 
-      const { discoverAuthStorage } = await import("./pi-model-discovery.js");
       const authStorage = discoverAuthStorage(agentDir);
 
       expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalled();

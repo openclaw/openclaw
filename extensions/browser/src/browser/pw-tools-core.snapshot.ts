@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
@@ -88,7 +89,7 @@ export async function snapshotAiViaPlaywright(opts: {
     timeout: Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000))),
     track: "response",
   });
-  let snapshot = String(result?.full ?? "");
+  let snapshot = result?.full ?? "";
   const maxChars = opts.maxChars;
   const limit =
     typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
@@ -140,7 +141,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   }
 
   if (opts.refsMode === "aria") {
-    if (opts.selector?.trim() || opts.frameSelector?.trim()) {
+    if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
       throw new Error("refs=aria does not support selector/frame snapshots yet.");
     }
     const maybe = page as unknown as WithSnapshotForAI;
@@ -151,7 +152,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       timeout: 5000,
       track: "response",
     });
-    const built = buildRoleSnapshotFromAiSnapshot(String(result?.full ?? ""), opts.options);
+    const built = buildRoleSnapshotFromAiSnapshot(result?.full ?? "", opts.options);
     storeRoleRefsForTarget({
       page,
       cdpUrl: opts.cdpUrl,
@@ -166,8 +167,8 @@ export async function snapshotRoleViaPlaywright(opts: {
     };
   }
 
-  const frameSelector = opts.frameSelector?.trim() || "";
-  const selector = opts.selector?.trim() || "";
+  const frameSelector = normalizeOptionalString(opts.frameSelector) ?? "";
+  const selector = normalizeOptionalString(opts.selector) ?? "";
   const locator = frameSelector
     ? selector
       ? page.frameLocator(frameSelector).locator(selector)
@@ -177,7 +178,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       : page.locator(":root");
 
   const ariaSnapshot = await locator.ariaSnapshot();
-  const built = buildRoleSnapshotFromAriaSnapshot(String(ariaSnapshot ?? ""), opts.options);
+  const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
   storeRoleRefsForTarget({
     page,
     cdpUrl: opts.cdpUrl,
@@ -213,7 +214,7 @@ export async function navigateViaPlaywright(opts: {
     );
   };
 
-  const url = String(opts.url ?? "").trim();
+  const url = normalizeOptionalString(opts.url) ?? "";
   if (!url) {
     throw new Error("url is required");
   }

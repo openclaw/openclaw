@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
@@ -29,6 +29,7 @@ export type BuildPluginApiParams = {
       | "registerSecurityAuditCollector"
       | "registerService"
       | "registerCliBackend"
+      | "registerTextTransforms"
       | "registerConfigMigration"
       | "registerAutoEnableProbe"
       | "registerProvider"
@@ -45,6 +46,11 @@ export type BuildPluginApiParams = {
       | "onConversationBindingResolved"
       | "registerCommand"
       | "registerContextEngine"
+      | "registerCompactionProvider"
+      | "registerAgentHarness"
+      | "registerEmbeddedExtensionFactory"
+      | "registerCodexAppServerExtensionFactory"
+      | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
@@ -69,6 +75,7 @@ const noopRegisterSecurityAuditCollector: OpenClawPluginApi["registerSecurityAud
   () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
 const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
+const noopRegisterTextTransforms: OpenClawPluginApi["registerTextTransforms"] = () => {};
 const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
 const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
@@ -92,6 +99,13 @@ const noopOnConversationBindingResolved: OpenClawPluginApi["onConversationBindin
   () => {};
 const noopRegisterCommand: OpenClawPluginApi["registerCommand"] = () => {};
 const noopRegisterContextEngine: OpenClawPluginApi["registerContextEngine"] = () => {};
+const noopRegisterCompactionProvider: OpenClawPluginApi["registerCompactionProvider"] = () => {};
+const noopRegisterAgentHarness: OpenClawPluginApi["registerAgentHarness"] = () => {};
+const noopRegisterEmbeddedExtensionFactory: OpenClawPluginApi["registerEmbeddedExtensionFactory"] =
+  () => {};
+const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCodexAppServerExtensionFactory"] =
+  () => {};
+const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
@@ -130,6 +144,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerSecurityAuditCollector ?? noopRegisterSecurityAuditCollector,
     registerService: handlers.registerService ?? noopRegisterService,
     registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
+    registerTextTransforms: handlers.registerTextTransforms ?? noopRegisterTextTransforms,
     registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,
     registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
@@ -154,6 +169,15 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.onConversationBindingResolved ?? noopOnConversationBindingResolved,
     registerCommand: handlers.registerCommand ?? noopRegisterCommand,
     registerContextEngine: handlers.registerContextEngine ?? noopRegisterContextEngine,
+    registerCompactionProvider:
+      handlers.registerCompactionProvider ?? noopRegisterCompactionProvider,
+    registerAgentHarness: handlers.registerAgentHarness ?? noopRegisterAgentHarness,
+    registerEmbeddedExtensionFactory:
+      handlers.registerEmbeddedExtensionFactory ?? noopRegisterEmbeddedExtensionFactory,
+    registerCodexAppServerExtensionFactory:
+      handlers.registerCodexAppServerExtensionFactory ?? noopRegisterCodexAppServerExtensionFactory,
+    registerDetachedTaskRuntime:
+      handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
     registerMemoryPromptSection:
       handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,

@@ -1,4 +1,8 @@
-import type { OpenAICompletionsCompat } from "@mariozechner/pi-ai";
+import type {
+  AnthropicMessagesCompat,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+} from "@mariozechner/pi-ai";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
@@ -27,6 +31,22 @@ type SupportedOpenAICompatFields = Pick<
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"
   | "requiresThinkingAsText"
+  | "openRouterRouting"
+  | "vercelGatewayRouting"
+  | "zaiToolStream"
+  | "cacheControlFormat"
+  | "sendSessionAffinityHeaders"
+  | "supportsLongCacheRetention"
+>;
+
+type SupportedOpenAIResponsesCompatFields = Pick<
+  OpenAIResponsesCompat,
+  "sendSessionIdHeader" | "supportsLongCacheRetention"
+>;
+
+type SupportedAnthropicMessagesCompatFields = Pick<
+  AnthropicMessagesCompat,
+  "supportsEagerToolInputStreaming" | "supportsLongCacheRetention"
 >;
 
 type SupportedThinkingFormat =
@@ -34,17 +54,22 @@ type SupportedThinkingFormat =
   | "openrouter"
   | "qwen-chat-template";
 
-export type ModelCompatConfig = SupportedOpenAICompatFields & {
-  thinkingFormat?: SupportedThinkingFormat;
-  supportsTools?: boolean;
-  requiresStringContent?: boolean;
-  toolSchemaProfile?: string;
-  unsupportedToolSchemaKeywords?: string[];
-  nativeWebSearchTool?: boolean;
-  toolCallArgumentsEncoding?: string;
-  requiresMistralToolIds?: boolean;
-  requiresOpenAiAnthropicToolPayload?: boolean;
-};
+export type ModelCompatConfig = SupportedOpenAICompatFields &
+  SupportedOpenAIResponsesCompatFields &
+  SupportedAnthropicMessagesCompatFields & {
+    thinkingFormat?: SupportedThinkingFormat;
+    supportedReasoningEfforts?: string[];
+    visibleReasoningDetailTypes?: string[];
+    supportsTools?: boolean;
+    supportsPromptCacheKey?: boolean;
+    requiresStringContent?: boolean;
+    toolSchemaProfile?: string;
+    unsupportedToolSchemaKeywords?: string[];
+    nativeWebSearchTool?: boolean;
+    toolCallArgumentsEncoding?: string;
+    requiresMistralToolIds?: boolean;
+    requiresOpenAiAnthropicToolPayload?: boolean;
+  };
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
 
@@ -52,6 +77,7 @@ export type ModelDefinitionConfig = {
   id: string;
   name: string;
   api?: ModelApi;
+  baseUrl?: string;
   reasoning: boolean;
   input: Array<"text" | "image">;
   cost: {
@@ -59,6 +85,18 @@ export type ModelDefinitionConfig = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    /** Optional tiered pricing.  When present, cost calculation uses
+     *  per-tier rates instead of the flat rates above.  Prices are
+     *  USD / million tokens; ranges are half-open `[start, end)` on the
+     *  input-token axis. */
+    tieredPricing?: Array<{
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      /** Bounded tier: `[start, end)`. Open-ended top tier: `[start]` (normalized to `[start, Infinity]` at load time). */
+      range: [number, number] | [number];
+    }>;
   };
   contextWindow: number;
   /**
@@ -70,6 +108,7 @@ export type ModelDefinitionConfig = {
   maxTokens: number;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  metadataSource?: "models-add";
 };
 
 export type ModelProviderConfig = {

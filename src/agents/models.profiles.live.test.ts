@@ -1,20 +1,46 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
+import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
-import { isHighSignalLiveModelRef, selectHighSignalLiveItems } from "./live-model-filter.js";
+import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
+import {
+  isHighSignalLiveModelRef,
+  resolveHighSignalLiveModelLimit,
+  selectHighSignalLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
+} from "./live-model-filter.js";
+import {
+  buildLiveModelFileProbeContext,
+  buildLiveModelFileProbeRetryContext,
+  buildLiveModelImageProbeContext,
+  extractAssistantText,
+  fileProbeTextMatches,
+  imageProbeTextMatches,
+  isLiveModelProbeEnabled,
+  LIVE_MODEL_FILE_PROBE_ENV,
+  LIVE_MODEL_FILE_PROBE_TOKEN,
+  LIVE_MODEL_IMAGE_PROBE_ENV,
+  modelSupportsImageInput,
+  shouldSkipLiveModelExtraProbes,
+  shouldSkipLiveModelFileProbe,
+  shouldSkipLiveModelImageProbe,
+} from "./live-model-turn-probes.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
+import {
+  isCloudflareOrHtmlErrorPage,
+  isRateLimitErrorMessage,
+} from "./pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
@@ -26,19 +52,14 @@ const LIVE_SETUP_TIMEOUT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
 );
+const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs();
+const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
+const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
 
 const describeLive = LIVE ? describe : describe.skip;
 
 function parseCsvFilter(raw?: string): Set<string> | null {
-  const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") {
-    return null;
-  }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return ids.length ? new Set(ids) : null;
+  return parseLiveCsvFilter(raw, { lowercase: false });
 }
 
 function parseProviderFilter(raw?: string): Set<string> | null {
@@ -138,35 +159,6 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
   return false;
 }
 
-function isModelNotFoundErrorMessage(raw: string): boolean {
-  const msg = raw.trim();
-  if (!msg) {
-    return false;
-  }
-  if (/\b404\b/.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
-    return true;
-  }
-  if (/not_found_error/i.test(msg)) {
-    return true;
-  }
-  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
-    return true;
-  }
-  if (/does not exist or you do not have access/i.test(msg)) {
-    return true;
-  }
-  if (/deprecated/i.test(msg) && /upgrade to/i.test(msg)) {
-    return true;
-  }
-  if (/stealth model/i.test(msg) && /find it here/i.test(msg)) {
-    return true;
-  }
-  if (/is not a valid model id/i.test(msg)) {
-    return true;
-  }
-  return false;
-}
-
 describe("isModelNotFoundErrorMessage", () => {
   it("matches whitespace-separated not found errors", () => {
     expect(isModelNotFoundErrorMessage("404 model not found")).toBe(true);
@@ -176,6 +168,38 @@ describe("isModelNotFoundErrorMessage", () => {
   it("still matches underscore and hyphen variants", () => {
     expect(isModelNotFoundErrorMessage("404 model not_found")).toBe(true);
     expect(isModelNotFoundErrorMessage("404 model not-found")).toBe(true);
+  });
+
+  it("matches deprecated free model transition messages", () => {
+    expect(
+      isModelNotFoundErrorMessage(
+        "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches OpenRouter no-endpoints wording", () => {
+    expect(
+      isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
+    ).toBe(true);
+  });
+});
+
+describe("isProviderUnavailableErrorMessage", () => {
+  it("matches raw HTML provider error pages from transient upstreams", () => {
+    expect(
+      isProviderUnavailableErrorMessage(
+        "Error: <html><head><title>Service Unavailable</title></head><body>try again</body></html>",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches status-prefixed Cloudflare HTML pages", () => {
+    expect(
+      isProviderUnavailableErrorMessage(
+        "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -188,8 +212,20 @@ function isRefreshTokenReused(raw: string): boolean {
   return /refresh_token_reused/i.test(raw);
 }
 
+function isAccountIdExtractionError(raw: string): boolean {
+  return /failed to extract accountid from token/i.test(raw);
+}
+
 function isInstructionsRequiredError(raw: string): boolean {
   return /instructions are required/i.test(raw);
+}
+
+function isOpenAiCodexHtmlInterruption(raw: string): boolean {
+  const trimmed = raw.trim().replace(/^Error:\s*/i, "");
+  return (
+    /^(?:<!doctype\s+html\b|<html\b)/i.test(trimmed) &&
+    (/<meta\s+name=["']viewport["']/i.test(trimmed) || /<body\b/i.test(trimmed))
+  );
 }
 
 function isModelTimeoutError(raw: string): boolean {
@@ -199,6 +235,8 @@ function isModelTimeoutError(raw: string): boolean {
 function isProviderUnavailableErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return (
+    isRawHtmlProviderErrorPage(raw) ||
+    isCloudflareOrHtmlErrorPage(raw) ||
     msg.includes("no allowed providers are available") ||
     msg.includes("provider unavailable") ||
     msg.includes("upstream provider unavailable") ||
@@ -208,6 +246,14 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("create and start a new dedicated endpoint") ||
     msg.includes("no available capacity was found for the model")
   );
+}
+
+function isRawHtmlProviderErrorPage(raw: string): boolean {
+  const normalized = raw
+    .trim()
+    .replace(/^error:\s*/i, "")
+    .trim();
+  return /^(?:<!doctype\s+html\b|<html\b)/i.test(normalized) && /<\/html>/i.test(normalized);
 }
 
 function isOllamaUnavailableErrorMessage(raw: string): boolean {
@@ -242,6 +288,23 @@ function toInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+
+function resolveLiveModelsJsonTimeoutMs(
+  modelsJsonTimeoutRaw = process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+  setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
+): number {
+  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+}
+
+describe("resolveLiveModelsJsonTimeoutMs", () => {
+  it("defaults models.json preparation to a longer setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+  });
+
+  it("never goes below the shared live setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs("30000", 45_000)).toBe(45_000);
+  });
+});
 
 function resolveTestReasoning(
   model: Model<Api>,
@@ -293,6 +356,15 @@ describe("resolveLiveSystemPrompt", () => {
         provider: "openai",
       } as Model<Api>),
     ).toBeUndefined();
+  });
+
+  it("matches OpenAI Codex HTML interruption pages", () => {
+    expect(
+      isOpenAiCodexHtmlInterruption(
+        'Error: <html><head><meta name="viewport" content="width=device-width" /></head><body>Try again</body></html>',
+      ),
+    ).toBe(true);
+    expect(isOpenAiCodexHtmlInterruption("Error: connection reset")).toBe(false);
   });
 });
 
@@ -378,6 +450,88 @@ async function completeOkWithRetry(params: {
   return await runOnce(256);
 }
 
+async function runExtraTurnProbes(params: {
+  model: Model<Api>;
+  apiKey: string;
+  timeoutMs: number;
+  progressLabel: string;
+}) {
+  if (shouldSkipLiveModelExtraProbes(params.model)) {
+    logProgress(`${params.progressLabel}: extra probes skipped (known empty route)`);
+    return;
+  }
+  const options = {
+    apiKey: params.apiKey,
+    reasoning: resolveTestReasoning(params.model),
+    maxTokens: 128,
+  };
+  if (LIVE_FILE_PROBE_ENABLED && !shouldSkipLiveModelFileProbe(params.model)) {
+    logProgress(`${params.progressLabel}: file-read probe`);
+    const file = await completeSimpleWithTimeout(
+      params.model,
+      buildLiveModelFileProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+      options,
+      params.timeoutMs,
+      `${params.progressLabel}: file-read probe`,
+    );
+    if (file.stopReason === "error") {
+      throw new Error(file.errorMessage || "file-read probe returned error with no message");
+    }
+    let fileText = extractAssistantText(file);
+    if (!fileProbeTextMatches(fileText)) {
+      logProgress(`${params.progressLabel}: file-read probe retry`);
+      const retry = await completeSimpleWithTimeout(
+        params.model,
+        buildLiveModelFileProbeRetryContext({
+          systemPrompt: resolveLiveSystemPrompt(params.model),
+        }),
+        options,
+        params.timeoutMs,
+        `${params.progressLabel}: file-read probe retry`,
+      );
+      if (retry.stopReason === "error") {
+        throw new Error(
+          retry.errorMessage || "file-read probe retry returned error with no message",
+        );
+      }
+      fileText = extractAssistantText(retry);
+    }
+    if (!fileProbeTextMatches(fileText)) {
+      throw new Error(`file-read probe did not return ${LIVE_MODEL_FILE_PROBE_TOKEN}: ${fileText}`);
+    }
+  } else if (LIVE_FILE_PROBE_ENABLED) {
+    logProgress(`${params.progressLabel}: file-read probe skipped (known empty route)`);
+  }
+
+  if (!LIVE_IMAGE_PROBE_ENABLED) {
+    return;
+  }
+  if (!modelSupportsImageInput(params.model)) {
+    logProgress(`${params.progressLabel}: image probe skipped (no image input)`);
+    return;
+  }
+  if (shouldSkipLiveModelImageProbe(params.model)) {
+    logProgress(`${params.progressLabel}: image probe skipped (known empty route)`);
+    return;
+  }
+
+  logProgress(`${params.progressLabel}: image probe`);
+  const image = await completeSimpleWithTimeout(
+    params.model,
+    buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+    options,
+    params.timeoutMs,
+    `${params.progressLabel}: image probe`,
+  );
+  if (image.stopReason === "error") {
+    throw new Error(image.errorMessage || "image probe returned error with no message");
+  }
+  const imageText = extractAssistantText(image);
+  if (!imageProbeTextMatches(imageText)) {
+    throw new Error(`image probe did not return ok: ${imageText}`);
+  }
+}
+
 describeLive("live models (profile keys)", () => {
   it(
     "completes across selected models",
@@ -391,6 +545,7 @@ describeLive("live models (profile keys)", () => {
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(cfg),
         "[live-models] prepare models.json",
+        LIVE_MODELS_JSON_TIMEOUT_MS,
       );
       if (!DIRECT_ENABLED) {
         logProgress(
@@ -419,7 +574,10 @@ describeLive("live models (profile keys)", () => {
       const allowNotFoundSkip = useModern;
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const perModelTimeoutMs = toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, 30_000);
-      const maxModels = toInt(process.env.OPENCLAW_LIVE_MAX_MODELS, 0);
+      const maxModels = resolveHighSignalLiveModelLimit({
+        rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
+        useExplicitModels: useExplicit,
+      });
       const targetMatcher = createLiveTargetMatcher({
         providerFilter: providers,
         modelFilter: filter,
@@ -446,6 +604,17 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
+          if (
+            shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+              provider: model.provider,
+              useExplicitModels: useExplicit,
+              providerFilter: providers,
+              config: cfg,
+              env: process.env,
+            })
+          ) {
+            continue;
+          }
           if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
@@ -511,7 +680,7 @@ describeLive("live models (profile keys)", () => {
             if (
               model.provider === "openai" &&
               model.api === "openai-responses" &&
-              model.id === "gpt-5.4"
+              (model.id === "gpt-5.5" || model.id === "gpt-5.4")
             ) {
               logProgress(`${progressLabel}: tool-only regression`);
               const noopTool = {
@@ -619,6 +788,12 @@ describeLive("live models (profile keys)", () => {
                 .map((b) => b.text.trim())
                 .join(" ");
               expect(secondText.length).toBeGreaterThan(0);
+              await runExtraTurnProbes({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
               logProgress(`${progressLabel}: done`);
               break;
             }
@@ -668,7 +843,9 @@ describeLive("live models (profile keys)", () => {
             if (
               ok.text.length === 0 &&
               allowNotFoundSkip &&
-              (model.provider === "minimax" || model.provider === "zai")
+              (model.provider === "fireworks" ||
+                model.provider === "minimax" ||
+                model.provider === "zai")
             ) {
               skipped.push({
                 model: id,
@@ -690,6 +867,12 @@ describeLive("live models (profile keys)", () => {
               break;
             }
             expect(ok.text.length).toBeGreaterThan(0);
+            await runExtraTurnProbes({
+              model,
+              apiKey,
+              timeoutMs: perModelTimeoutMs,
+              progressLabel,
+            });
             logProgress(`${progressLabel}: done`);
             break;
           } catch (err) {
@@ -763,6 +946,15 @@ describeLive("live models (profile keys)", () => {
             if (
               allowNotFoundSkip &&
               model.provider === "openai-codex" &&
+              isAccountIdExtractionError(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex account id extraction)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
               isChatGPTUsageLimitErrorMessage(message)
             ) {
               skipped.push({ model: id, reason: message });
@@ -778,6 +970,15 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (instructions required)`);
               break;
             }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isOpenAiCodexHtmlInterruption(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex html interruption)`);
+              break;
+            }
             if (allowNotFoundSkip && isModelTimeoutError(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (timeout)`);
@@ -786,6 +987,11 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
+            if (allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (model not found)`);
               break;
             }
             if (allowNotFoundSkip && isAudioOnlyModelErrorMessage(message)) {

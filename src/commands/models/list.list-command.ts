@@ -4,16 +4,18 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
+import { loadConfiguredListModelRegistry, loadListModelRegistry } from "./list.registry-load.js";
 import {
-  appendCatalogSupplementRows,
-  appendConfiguredRows,
-  appendDiscoveredRows,
-  loadListModelRegistry,
-} from "./list.rows.js";
+  appendAllModelRowSources,
+  appendConfiguredModelRowSources,
+  modelRowSourcesRequireRegistry,
+} from "./list.row-sources.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
+
+const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
 export async function modelsListCommand(
   opts: {
@@ -26,34 +28,56 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const { ensureAuthProfileStore, ensureOpenClawModelsJson } = await import("./list.runtime.js");
-  const { sourceConfig, resolvedConfig: cfg } = await loadModelsConfigWithSource({
-    commandName: "models list",
-    runtime,
-  });
-  const authStore = ensureAuthProfileStore();
   const providerFilter = (() => {
     const raw = opts.provider?.trim();
     if (!raw) {
       return undefined;
     }
-    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER);
+    if (/\s/u.test(raw)) {
+      runtime.error(
+        `Invalid provider filter "${raw}". Use a provider id such as "moonshot", not a display label.`,
+      );
+      process.exitCode = 1;
+      return null;
+    }
+    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
   })();
+  if (providerFilter === null) {
+    return;
+  }
+  const { ensureAuthProfileStore, resolveOpenClawAgentDir } = await import("./list.runtime.js");
+  const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
+    commandName: "models list",
+    runtime,
+  });
+  const authStore = ensureAuthProfileStore();
+  const agentDir = resolveOpenClawAgentDir();
 
   let modelRegistry: ModelRegistry | undefined;
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
+  const useProviderCatalogFastPath = Boolean(opts.all && providerFilter === "codex");
+  const { entries } = resolveConfiguredEntries(cfg);
+  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
+  const shouldLoadRegistry = modelRowSourcesRequireRegistry({
+    all: opts.all,
+    useProviderCatalogFastPath,
+  });
   try {
-    // Keep command behavior explicit: sync models.json from the source config
-    // before building the read-only model registry view.
-    await ensureOpenClawModelsJson(sourceConfig ?? cfg);
-    const loaded = await loadListModelRegistry(cfg, { sourceConfig });
-    modelRegistry = loaded.registry;
-    discoveredKeys = loaded.discoveredKeys;
-    availableKeys = loaded.availableKeys;
-    availabilityErrorMessage = loaded.availabilityErrorMessage;
+    if (shouldLoadRegistry) {
+      const loaded = await loadListModelRegistry(cfg, { providerFilter });
+      modelRegistry = loaded.registry;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
+      availabilityErrorMessage = loaded.availabilityErrorMessage;
+    } else if (!opts.all) {
+      const loaded = loadConfiguredListModelRegistry(cfg, entries, { providerFilter });
+      modelRegistry = loaded.registry;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
+    }
   } catch (err) {
     runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
     process.exitCode = 1;
@@ -64,12 +88,11 @@ export async function modelsListCommand(
       `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
     );
   }
-  const { entries } = resolveConfiguredEntries(cfg);
-  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
 
   const rows: ModelRow[] = [];
   const rowContext = {
     cfg,
+    agentDir,
     authStore,
     availableKeys,
     configuredByKey,
@@ -78,23 +101,16 @@ export async function modelsListCommand(
       provider: providerFilter,
       local: opts.local,
     },
+    skipRuntimeModelSuppression: useProviderCatalogFastPath,
   };
 
   if (opts.all) {
-    const seenKeys = appendDiscoveredRows({
+    await appendAllModelRowSources({
       rows,
-      models: modelRegistry?.getAll() ?? [],
       context: rowContext,
+      modelRegistry,
+      useProviderCatalogFastPath,
     });
-
-    if (modelRegistry) {
-      await appendCatalogSupplementRows({
-        rows,
-        modelRegistry,
-        context: rowContext,
-        seenKeys,
-      });
-    }
   } else {
     const registry = modelRegistry;
     if (!registry) {
@@ -102,7 +118,7 @@ export async function modelsListCommand(
       process.exitCode = 1;
       return;
     }
-    appendConfiguredRows({
+    appendConfiguredModelRowSources({
       rows,
       entries,
       modelRegistry: registry,

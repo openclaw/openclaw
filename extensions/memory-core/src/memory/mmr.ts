@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 /**
  * Maximal Marginal Relevance (MMR) re-ranking algorithm.
  *
@@ -44,7 +46,7 @@ const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7
  * produce the spurious bigram "欢你".
  */
 export function tokenize(text: string): Set<string> {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   const ascii = lower.match(/[a-z0-9_]+/g) ?? [];
 
   // Track CJK characters with their original positions

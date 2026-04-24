@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
 
 const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
@@ -127,7 +128,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
 
 describe("resolveGatewayProbeSnapshot", () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
     mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
       url: "ws://127.0.0.1:18789",
@@ -147,8 +147,6 @@ describe("resolveGatewayProbeSnapshot", () => {
   });
 
   it("skips auth resolution and probe for missing remote urls by default", async () => {
-    const { resolveGatewayProbeSnapshot } = await import("./status.scan.shared.js");
-
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
       opts: {},
@@ -185,8 +183,6 @@ describe("resolveGatewayProbeSnapshot", () => {
       presence: [{ host: "box" }],
       configSnapshot: null,
     });
-    const { resolveGatewayProbeSnapshot } = await import("./status.scan.shared.js");
-
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
       opts: {
@@ -232,8 +228,6 @@ describe("resolveGatewayProbeSnapshot", () => {
       presence: null,
       configSnapshot: null,
     });
-    const { resolveGatewayProbeSnapshot } = await import("./status.scan.shared.js");
-
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
       opts: {},

@@ -1,9 +1,11 @@
 import { ChannelType, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
+import { resolveDiscordChannelId } from "../target-parsing.js";
 import { resolveThreadBindingPersonaFromRecord } from "./thread-bindings.persona.js";
 import {
   BINDINGS_BY_THREAD_ID,
@@ -47,6 +49,18 @@ function isThreadChannelType(type: unknown): boolean {
     type === ChannelType.PrivateThread ||
     type === ChannelType.AnnouncementThread
   );
+}
+
+function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
+  const trimmed = normalizeOptionalString(raw) ?? "";
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return resolveDiscordChannelId(trimmed);
+  } catch {
+    return null;
+  }
 }
 
 export function summarizeDiscordError(err: unknown): string {
@@ -123,7 +137,7 @@ export function isDiscordThreadGoneError(err: unknown): boolean {
 }
 
 export async function maybeSendBindingMessage(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   record: ThreadBindingRecord;
   text: string;
   preferWebhook?: boolean;
@@ -177,8 +191,8 @@ export async function createWebhookForChannel(params: {
         name: "OpenClaw Agents",
       },
     })) as { id?: string; token?: string };
-    const webhookId = typeof created?.id === "string" ? created.id.trim() : "";
-    const webhookToken = typeof created?.token === "string" ? created.token.trim() : "";
+    const webhookId = normalizeOptionalString(created?.id) ?? "";
+    const webhookToken = normalizeOptionalString(created?.token) ?? "";
     if (!webhookId || !webhookToken) {
       return {};
     }
@@ -232,9 +246,13 @@ export async function resolveChannelIdForBinding(params: {
   threadId: string;
   channelId?: string;
 }): Promise<string | null> {
-  const explicit = params.channelId?.trim();
+  const explicit = normalizeDiscordBindingChannelId(params.channelId);
   if (explicit) {
     return explicit;
+  }
+  const lookupThreadId = normalizeDiscordBindingChannelId(params.threadId);
+  if (!lookupThreadId) {
+    return null;
   }
   try {
     const rest = createDiscordRestClient(
@@ -244,13 +262,13 @@ export async function resolveChannelIdForBinding(params: {
       },
       params.cfg,
     ).rest;
-    const channel = (await rest.get(Routes.channel(params.threadId))) as {
+    const channel = (await rest.get(Routes.channel(lookupThreadId))) as {
       id?: string;
       type?: number;
       parent_id?: string;
       parentId?: string;
     };
-    const channelId = typeof channel?.id === "string" ? channel.id.trim() : "";
+    const channelId = normalizeOptionalString(channel?.id) ?? "";
     const type = channel?.type;
     const parentId =
       typeof channel?.parent_id === "string"
@@ -266,7 +284,7 @@ export async function resolveChannelIdForBinding(params: {
     return channelId || null;
   } catch (err) {
     logVerbose(
-      `discord thread binding channel resolve failed for ${params.threadId}: ${summarizeDiscordError(err)}`,
+      `discord thread binding channel resolve failed for ${lookupThreadId}: ${summarizeDiscordError(err)}`,
     );
     return null;
   }
@@ -292,7 +310,7 @@ export async function createThreadForBinding(params: {
         token: params.token,
       },
     );
-    const createdId = typeof created?.id === "string" ? created.id.trim() : "";
+    const createdId = normalizeOptionalString(created?.id) ?? "";
     return createdId || null;
   } catch (err) {
     logVerbose(

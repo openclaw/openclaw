@@ -6,8 +6,8 @@ describe("qa runner model catalog", () => {
     expect(
       selectQaRunnerModelOptions([
         {
-          key: "anthropic/claude-sonnet-4-5",
-          name: "Claude Sonnet 4.5",
+          key: "anthropic/claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
           input: "text",
           available: true,
           missing: false,
@@ -27,6 +27,6 @@ describe("qa runner model catalog", () => {
           missing: false,
         },
       ]).map((entry) => entry.key),
-    ).toEqual(["openai/gpt-5.4", "anthropic/claude-sonnet-4-5"]);
+    ).toEqual(["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"]);
   });
 });

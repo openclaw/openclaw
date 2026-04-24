@@ -25,8 +25,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: vi.fn(() => undefined),
   }));
-  vi.doMock("../context-engine/index.js", () => ({
+  vi.doMock("../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../context-engine/registry.js", () => ({
     resolveContextEngine: vi.fn(async () => ({
       dispose: async () => undefined,
     })),
@@ -183,7 +185,9 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
+    idleTimedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
     promptErrorSource: null,
@@ -327,6 +331,7 @@ const writeAuthStore = async (
   agentDir: string,
   opts?: {
     includeAnthropic?: boolean;
+    order?: Record<string, string[]>;
     usageStats?: Record<
       string,
       {
@@ -353,6 +358,7 @@ const writeAuthStore = async (
   };
   const statePayload = {
     version: 1,
+    ...(opts?.order ? { order: opts.order } : {}),
     usageStats:
       opts?.usageStats ??
       ({
@@ -872,6 +878,8 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       decision: "rotate_profile",
       failoverReason: "overloaded",
       profileId: safeProfileId,
+      sourceProvider: "openai",
+      sourceModel: "mock-1",
       providerErrorType: "overloaded_error",
       rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
     });
@@ -1056,6 +1064,39 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     expect(usageStats["openai:p1"]?.lastUsed).not.toBe(1);
     expect(usageStats["openai:p2"]?.lastUsed).toBe(2);
+  });
+
+  it("honors user-pinned profiles even when stored order excludes them", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir, {
+        order: {
+          openai: ["openai:p1"],
+        },
+      });
+      mockSingleSuccessfulAttempt();
+
+      await runEmbeddedPiAgentInline({
+        sessionId: "session:test",
+        sessionKey: "agent:test:user-order-excluded",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p2",
+        authProfileIdSource: "user",
+        timeoutMs: 5_000,
+        runId: "run:user-order-excluded",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.lastUsed).toBe(1);
+      expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+      expect(usageStats["openai:p2"]?.lastUsed).not.toBe(2);
+    });
   });
 
   it("ignores user-locked profile when provider mismatches", async () => {

@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type HeartbeatReasonKind =
   | "retry"
   | "interval"
@@ -9,7 +11,7 @@ export type HeartbeatReasonKind =
   | "other";
 
 function trimReason(reason?: string): string {
-  return typeof reason === "string" ? reason.trim() : "";
+  return normalizeOptionalString(reason) ?? "";
 }
 
 export function normalizeHeartbeatWakeReason(reason?: string): string {

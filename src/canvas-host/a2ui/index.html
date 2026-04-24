@@ -8,7 +8,7 @@
       (() => {
         const normalizeLower = (value) => {
           const trimmed = String(value || "").trim();
-          return trimmed.toLowerCase();
+          return trimmed.toLocaleLowerCase();
         };
         try {
           const params = new URLSearchParams(window.location.search);

@@ -1,4 +1,5 @@
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
@@ -19,6 +20,7 @@ export type PairingLocalityKind =
   | "direct_local"
   | "cli_container_local"
   | "browser_container_local"
+  | "shared_secret_loopback_local"
   | "remote";
 
 export type HandshakeBrowserSecurityContext = {
@@ -41,7 +43,7 @@ function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
     return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
   }
   try {
-    return `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${new URL(trimmedOrigin).origin.toLowerCase()}`;
+    return `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${normalizeLowercaseStringOrEmpty(new URL(trimmedOrigin).origin)}`;
   } catch {
     return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
   }
@@ -77,13 +79,34 @@ export function shouldAllowSilentLocalPairing(params: {
   isWebchat: boolean;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
-  return (
-    params.locality !== "remote" &&
-    (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" ||
-      params.reason === "scope-upgrade" ||
-      params.reason === "role-upgrade")
-  );
+  if (params.locality === "remote") {
+    return false;
+  }
+  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+    return false;
+  }
+  if (
+    params.reason === "not-paired" ||
+    params.reason === "scope-upgrade" ||
+    params.reason === "role-upgrade"
+  ) {
+    return true;
+  }
+  // metadata-upgrade auto-approves only for shared-secret loopback CLI clients.
+  // On those paths the connection has already proved possession of a token or
+  // password over loopback, so allowing the pinned platform/deviceFamily to be
+  // refreshed on reconnect matches the "Reconnects can update access metadata"
+  // comment in message-handler.ts. Browser / Control-UI clients keep the
+  // existing approval-required flow — metadata pinning there is a real
+  // anti-tampering surface.
+  if (
+    params.reason === "metadata-upgrade" &&
+    (params.locality === "cli_container_local" ||
+      params.locality === "shared_secret_loopback_local")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isCliContainerLocalEquivalent(params: {
@@ -101,6 +124,25 @@ function isCliContainerLocalEquivalent(params: {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
     isCliClient &&
+    params.sharedAuthOk &&
+    usesSharedSecretAuth &&
+    !params.hasProxyHeaders &&
+    !params.hasBrowserOriginHeader &&
+    isLoopbackAddress(params.remoteAddress) &&
+    isPrivateOrLoopbackHost(resolveHostName(params.requestHost))
+  );
+}
+
+function isSharedSecretLoopbackLocalEquivalent(params: {
+  requestHost?: string;
+  remoteAddress?: string;
+  hasProxyHeaders: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  return (
     params.sharedAuthOk &&
     usesSharedSecretAuth &&
     !params.hasProxyHeaders &&
@@ -188,6 +230,18 @@ export function resolvePairingLocality(params: {
     })
   ) {
     return "cli_container_local";
+  }
+  if (
+    isSharedSecretLoopbackLocalEquivalent({
+      requestHost: params.requestHost,
+      remoteAddress: params.remoteAddress,
+      hasProxyHeaders: params.hasProxyHeaders,
+      hasBrowserOriginHeader: params.hasBrowserOriginHeader,
+      sharedAuthOk: params.sharedAuthOk,
+      authMethod: params.authMethod,
+    })
+  ) {
+    return "shared_secret_loopback_local";
   }
   return "remote";
 }

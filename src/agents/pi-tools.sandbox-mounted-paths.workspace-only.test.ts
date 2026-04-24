@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
+import { createApplyPatchTool } from "./apply-patch.js";
+import {
+  createSandboxedEditTool,
+  createSandboxedReadTool,
+  createSandboxedWriteTool,
+  wrapToolWorkspaceRootGuardWithOptions,
+} from "./pi-tools.read.js";
 import {
   expectReadWriteEditTools,
   expectReadWriteTools,
@@ -19,36 +25,60 @@ vi.mock("../infra/shell-env.js", async () => {
 type ToolWithExecute = {
   execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => Promise<unknown>;
 };
-type CodingToolsInput = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+type UnsafeMountedSandboxHarness = Parameters<typeof withUnsafeMountedSandboxHarness>[0] extends (
+  harness: infer THarness,
+) => unknown
+  ? THarness
+  : never;
+type UnsafeMountedSandbox = UnsafeMountedSandboxHarness["sandbox"];
 
 const APPLY_PATCH_PAYLOAD = `*** Begin Patch
 *** Add File: /agent/pwned.txt
 +owned-by-apply-patch
 *** End Patch`;
 
-function resolveApplyPatchTool(
-  params: Pick<CodingToolsInput, "sandbox" | "workspaceDir"> & { config: OpenClawConfig },
-): ToolWithExecute {
-  const tools = createOpenClawCodingTools({
-    sandbox: params.sandbox,
-    workspaceDir: params.workspaceDir,
-    config: params.config,
-    modelProvider: "openai",
-    modelId: "gpt-5.4",
-  });
-  const applyPatchTool = tools.find((t) => t.name === "apply_patch") as ToolWithExecute | undefined;
-  if (!applyPatchTool) {
-    throw new Error("apply_patch tool missing");
+function resolveApplyPatchTool(params: {
+  sandbox: UnsafeMountedSandbox;
+  config: OpenClawConfig;
+}): ToolWithExecute {
+  return createApplyPatchTool({
+    cwd: params.sandbox.workspaceDir,
+    sandbox: { root: params.sandbox.workspaceDir, bridge: params.sandbox.fsBridge! },
+    workspaceOnly: params.config.tools?.exec?.applyPatch?.workspaceOnly !== false,
+  }) as ToolWithExecute;
+}
+
+function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspaceOnly?: boolean }) {
+  const tools = [
+    createSandboxedReadTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+    createSandboxedWriteTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+    createSandboxedEditTool({
+      root: params.sandbox.workspaceDir,
+      bridge: params.sandbox.fsBridge!,
+    }),
+  ];
+  if (!params.workspaceOnly) {
+    return tools;
   }
-  return applyPatchTool;
+  return tools.map((tool) =>
+    wrapToolWorkspaceRootGuardWithOptions(tool, params.sandbox.workspaceDir, {
+      containerWorkdir: params.sandbox.containerWorkdir,
+    }),
+  );
 }
 
 describe("tools.fs.workspaceOnly", () => {
   it("defaults to allowing sandbox mounts outside the workspace root", async () => {
-    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
 
-      const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot });
+      const tools = createSandboxFsTools({ sandbox });
       const { readTool, writeTool } = expectReadWriteTools(tools);
 
       const readResult = await readTool?.execute("t1", { path: "/agent/secret.txt" });
@@ -60,11 +90,10 @@ describe("tools.fs.workspaceOnly", () => {
   });
 
   it("rejects sandbox mounts outside the workspace root when enabled", async () => {
-    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
 
-      const cfg = { tools: { fs: { workspaceOnly: true } } } as unknown as OpenClawConfig;
-      const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot, config: cfg });
+      const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
       const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
 
       await expect(readTool?.execute("t1", { path: "/agent/secret.txt" })).rejects.toThrow(
@@ -86,10 +115,9 @@ describe("tools.fs.workspaceOnly", () => {
   });
 
   it("enforces apply_patch workspace-only in sandbox mounts by default", async () => {
-    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
       const applyPatchTool = resolveApplyPatchTool({
         sandbox,
-        workspaceDir: sandboxRoot,
         config: {
           tools: {
             allow: ["read", "write", "exec"],
@@ -108,10 +136,9 @@ describe("tools.fs.workspaceOnly", () => {
   });
 
   it("allows apply_patch outside workspace root when explicitly disabled", async () => {
-    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
+    await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
       const applyPatchTool = resolveApplyPatchTool({
         sandbox,
-        workspaceDir: sandboxRoot,
         config: {
           tools: {
             allow: ["read", "write", "exec"],

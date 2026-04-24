@@ -1,66 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getMediaGenerationRuntimeMocks,
+  resetImageGenerationRuntimeMocks,
+} from "../../test/helpers/media-generation/runtime-module-mocks.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "./runtime.js";
 import type { ImageGenerationProvider } from "./types.js";
 
-const mocks = vi.hoisted(() => {
-  const debug = vi.fn();
-  return {
-    createSubsystemLogger: vi.fn(() => ({ debug })),
-    describeFailoverError: vi.fn(),
-    getImageGenerationProvider: vi.fn<
-      (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined
-    >(() => undefined),
-    getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
-    resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
-    isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
-    listImageGenerationProviders: vi.fn<(config?: OpenClawConfig) => ImageGenerationProvider[]>(
-      () => [],
-    ),
-    parseImageGenerationModelRef: vi.fn<
-      (raw?: string) => { provider: string; model: string } | undefined
-    >((raw?: string) => {
-      const trimmed = raw?.trim();
-      if (!trimmed) {
-        return undefined;
-      }
-      const slash = trimmed.indexOf("/");
-      if (slash <= 0 || slash === trimmed.length - 1) {
-        return undefined;
-      }
-      return {
-        provider: trimmed.slice(0, slash),
-        model: trimmed.slice(slash + 1),
-      };
-    }),
-    resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
-    resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
-    debug,
-  };
-});
+const mocks = getMediaGenerationRuntimeMocks();
 
-vi.mock("../agents/failover-error.js", () => ({
-  describeFailoverError: mocks.describeFailoverError,
-  isFailoverError: mocks.isFailoverError,
-}));
-vi.mock("../config/model-input.js", () => ({
-  resolveAgentModelFallbackValues: mocks.resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue: mocks.resolveAgentModelPrimaryValue,
-}));
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: mocks.createSubsystemLogger,
-}));
-vi.mock("../secrets/provider-env-vars.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../secrets/provider-env-vars.js")>();
-  return {
-    ...actual,
-    getProviderEnvVars: mocks.getProviderEnvVars,
-    resolveProviderAuthEnvVarCandidates: mocks.resolveProviderAuthEnvVarCandidates,
-  };
-});
 vi.mock("./model-ref.js", () => ({
   parseImageGenerationModelRef: mocks.parseImageGenerationModelRef,
 }));
+
 vi.mock("./provider-registry.js", () => ({
   getImageGenerationProvider: mocks.getImageGenerationProvider,
   listImageGenerationProviders: mocks.listImageGenerationProviders,
@@ -68,28 +20,13 @@ vi.mock("./provider-registry.js", () => ({
 
 describe("image-generation runtime", () => {
   beforeEach(() => {
-    mocks.createSubsystemLogger.mockClear();
-    mocks.describeFailoverError.mockReset();
-    mocks.getImageGenerationProvider.mockReset();
-    mocks.getProviderEnvVars.mockReset();
-    mocks.getProviderEnvVars.mockReturnValue([]);
-    mocks.resolveProviderAuthEnvVarCandidates.mockReset();
-    mocks.resolveProviderAuthEnvVarCandidates.mockReturnValue({});
-    mocks.isFailoverError.mockReset();
-    mocks.isFailoverError.mockReturnValue(false);
-    mocks.listImageGenerationProviders.mockReset();
-    mocks.listImageGenerationProviders.mockReturnValue([]);
-    mocks.parseImageGenerationModelRef.mockClear();
-    mocks.resolveAgentModelFallbackValues.mockReset();
-    mocks.resolveAgentModelFallbackValues.mockReturnValue([]);
-    mocks.resolveAgentModelPrimaryValue.mockReset();
-    mocks.resolveAgentModelPrimaryValue.mockReturnValue(undefined);
-    mocks.debug.mockReset();
+    resetImageGenerationRuntimeMocks();
   });
 
   it("generates images through the active image-generation provider", async () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
+    let seenTimeoutMs: number | undefined;
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("image-plugin/img-v1");
     const provider: ImageGenerationProvider = {
       id: "image-plugin",
@@ -97,8 +34,9 @@ describe("image-generation runtime", () => {
         generate: {},
         edit: { enabled: false },
       },
-      async generateImage(req: { authStore?: unknown }) {
+      async generateImage(req: { authStore?: unknown; timeoutMs?: number }) {
         seenAuthStore = req.authStore;
+        seenTimeoutMs = req.timeoutMs;
         return {
           images: [
             {
@@ -124,12 +62,14 @@ describe("image-generation runtime", () => {
       prompt: "draw a cat",
       agentDir: "/tmp/agent",
       authStore,
+      timeoutMs: 12_345,
     });
 
     expect(result.provider).toBe("image-plugin");
     expect(result.model).toBe("img-v1");
     expect(result.attempts).toEqual([]);
     expect(seenAuthStore).toEqual(authStore);
+    expect(seenTimeoutMs).toBe(12_345);
     expect(result.images).toEqual([
       {
         buffer: Buffer.from("png-bytes"),
@@ -212,6 +152,9 @@ describe("image-generation runtime", () => {
         error: "OpenAI API key missing",
       },
     ]);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      "image-generation candidate failed: openai/gpt-image-1: OpenAI API key missing",
+    );
   });
 
   it("drops unsupported provider geometry overrides and reports them", async () => {
@@ -275,6 +218,128 @@ describe("image-generation runtime", () => {
     expect(result.ignoredOverrides).toEqual([
       { key: "aspectRatio", value: "1:1" },
       { key: "resolution", value: "2K" },
+    ]);
+  });
+
+  it("filters image output hints by provider capabilities", async () => {
+    let seenRequest:
+      | {
+          quality?: string;
+          outputFormat?: string;
+          providerOptions?: unknown;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-image-2");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        generate: {
+          supportsSize: true,
+        },
+        edit: {
+          enabled: true,
+          supportsSize: true,
+        },
+        output: {
+          qualities: ["low", "medium", "high", "auto"],
+          formats: ["png", "jpeg", "webp"],
+        },
+      },
+      async generateImage(req) {
+        seenRequest = {
+          quality: req.quality,
+          outputFormat: req.outputFormat,
+          providerOptions: req.providerOptions,
+        };
+        return {
+          images: [{ buffer: Buffer.from("jpeg-bytes"), mimeType: "image/jpeg" }],
+        };
+      },
+    });
+
+    const result = await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "openai/gpt-image-2" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cheap preview",
+      quality: "low",
+      outputFormat: "jpeg",
+      providerOptions: {
+        openai: {
+          background: "opaque",
+          moderation: "low",
+          outputCompression: 60,
+          user: "end-user-42",
+        },
+      },
+    });
+
+    expect(seenRequest).toEqual({
+      quality: "low",
+      outputFormat: "jpeg",
+      providerOptions: {
+        openai: {
+          background: "opaque",
+          moderation: "low",
+          outputCompression: 60,
+          user: "end-user-42",
+        },
+      },
+    });
+    expect(result.ignoredOverrides).toEqual([]);
+  });
+
+  it("drops unsupported image output hints and reports them", async () => {
+    let seenRequest:
+      | {
+          quality?: string;
+          outputFormat?: string;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("vydra/grok-imagine");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "vydra",
+      capabilities: {
+        generate: {},
+        edit: {
+          enabled: false,
+        },
+      },
+      async generateImage(req) {
+        seenRequest = {
+          quality: req.quality,
+          outputFormat: req.outputFormat,
+        };
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        };
+      },
+    });
+
+    const result = await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "vydra/grok-imagine" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      quality: "low",
+      outputFormat: "jpeg",
+    });
+
+    expect(seenRequest).toEqual({
+      quality: undefined,
+      outputFormat: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "quality", value: "low" },
+      { key: "outputFormat", value: "jpeg" },
     ]);
   });
 
@@ -417,13 +482,10 @@ describe("image-generation runtime", () => {
       return [];
     });
 
-    const promise = generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" });
-
-    await expect(promise).rejects.toThrow("No image-generation model configured.");
-    await expect(promise).rejects.toThrow(
-      'Set agents.defaults.imageGenerationModel.primary to a provider/model like "vision-one/paint-v1".',
+    await expect(
+      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
+    ).rejects.toThrow(
+      'No image-generation model configured. Set agents.defaults.imageGenerationModel.primary to a provider/model like "vision-one/paint-v1". If you want a specific provider, also configure that provider\'s auth/API key first (vision-one: VISION_ONE_API_KEY; vision-two: VISION_TWO_API_KEY).',
     );
-    await expect(promise).rejects.toThrow("vision-one: VISION_ONE_API_KEY");
-    await expect(promise).rejects.toThrow("vision-two: VISION_TWO_API_KEY");
   });
 });

@@ -6,53 +6,110 @@ import {
 import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
-  repairOAuthProfileIdMismatch,
+  hasAnyAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
-import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailure,
+  type OAuthRefreshFailureReason,
+} from "../agents/auth-profiles/oauth-refresh-failure.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { note } from "../terminal/note.js";
+import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
+export { maybeRepairLegacyOAuthProfileIds } from "./doctor-auth-legacy-oauth.js";
 
-export async function maybeRepairLegacyOAuthProfileIds(
-  cfg: OpenClawConfig,
-  prompter: DoctorPrompter,
-): Promise<OpenClawConfig> {
-  const store = ensureAuthProfileStore();
-  let nextCfg = cfg;
-  const providers = resolvePluginProviders({
-    config: cfg,
-    env: process.env,
-    mode: "setup",
-  });
-  for (const provider of providers) {
-    for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
-      const repair = repairOAuthProfileIdMismatch({
-        cfg: nextCfg,
-        store,
-        provider: provider.id,
-        legacyProfileId: repairSpec.legacyProfileId,
-      });
-      if (!repair.migrated || repair.changes.length === 0) {
-        continue;
-      }
+const CODEX_PROVIDER_ID = "openai-codex";
+const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
+const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
 
-      note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
-      const apply = await prompter.confirm({
-        message: `Update ${repairSpec.promptLabel ?? provider.label} OAuth profile id in config now?`,
-        initialValue: true,
-      });
-      if (!apply) {
-        continue;
-      }
-      nextCfg = repair.config;
+function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
+  return Object.values(cfg.auth?.profiles ?? {}).some(
+    (profile) => profile.provider === CODEX_PROVIDER_ID && profile.mode === "oauth",
+  );
+}
+
+function hasStoredCodexOAuthProfile(): boolean {
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  return Object.values(store.profiles).some(
+    (profile) => profile.provider === CODEX_PROVIDER_ID && profile.type === "oauth",
+  );
+}
+
+function normalizeCodexOverrideBaseUrl(baseUrl: unknown): string | undefined {
+  if (typeof baseUrl !== "string") {
+    return undefined;
+  }
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
+function isLegacyCodexTransportShape(value: unknown, inheritedBaseUrl?: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const api = typeof value.api === "string" ? value.api : undefined;
+  if (!api || !LEGACY_CODEX_APIS.has(api)) {
+    return false;
+  }
+  const baseUrl = normalizeCodexOverrideBaseUrl(value.baseUrl ?? inheritedBaseUrl);
+  return !baseUrl || baseUrl === OPENAI_BASE_URL;
+}
+
+function hasLegacyCodexTransportOverride(providerOverride: unknown): boolean {
+  if (!isRecord(providerOverride)) {
+    return false;
+  }
+  if (isLegacyCodexTransportShape(providerOverride)) {
+    return true;
+  }
+  const models = providerOverride.models;
+  if (!Array.isArray(models)) {
+    return false;
+  }
+  return models.some((model) => isLegacyCodexTransportShape(model, providerOverride.baseUrl));
+}
+
+function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
+  const lines = [
+    `- models.providers.${CODEX_PROVIDER_ID} contains a legacy transport override while Codex OAuth is configured.`,
+    "- Older OpenAI transport settings can shadow the built-in Codex OAuth provider path.",
+  ];
+  if (isRecord(providerOverride)) {
+    const record = providerOverride;
+    if (typeof record.api === "string") {
+      lines.push(`- models.providers.${CODEX_PROVIDER_ID}.api=${record.api}`);
+    }
+    if (typeof record.baseUrl === "string") {
+      lines.push(`- models.providers.${CODEX_PROVIDER_ID}.baseUrl=${record.baseUrl}`);
     }
   }
-  return nextCfg;
+  lines.push(
+    `- Remove or rewrite the legacy transport override to restore the built-in Codex OAuth provider path after recent fixes.`,
+  );
+  lines.push(
+    "- Custom proxies and header-only overrides can stay; this warning only targets old OpenAI transport settings.",
+  );
+  return lines.join("\n");
+}
+
+export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
+  const providerOverride = cfg.models?.providers?.[CODEX_PROVIDER_ID];
+  if (!providerOverride) {
+    return;
+  }
+  if (!hasLegacyCodexTransportOverride(providerOverride)) {
+    return;
+  }
+  if (!hasConfiguredCodexOAuthProfile(cfg) && !hasStoredCodexOAuthProfile()) {
+    return;
+  }
+  note(buildCodexProviderOverrideWarning(providerOverride), CODEX_OAUTH_WARNING_TITLE);
 }
 
 type AuthIssue = {
@@ -76,6 +133,40 @@ export function resolveUnusableProfileHint(params: {
     }
   }
   return "Wait for cooldown or switch provider.";
+}
+
+function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | null): string {
+  switch (reason) {
+    case "refresh_token_reused":
+      return "refresh_token_reused";
+    case "invalid_grant":
+      return "invalid_grant";
+    case "sign_in_again":
+      return "sign in again";
+    case "invalid_refresh_token":
+      return "invalid refresh token";
+    case "revoked":
+      return "revoked";
+    default:
+      return "refresh failed";
+  }
+}
+
+export function formatOAuthRefreshFailureDoctorLine(params: {
+  profileId: string;
+  provider: string;
+  message: string;
+}): string | null {
+  const classified = classifyOAuthRefreshFailure(params.message);
+  if (!classified) {
+    return null;
+  }
+  const provider = classified.provider ?? params.provider;
+  const command = buildOAuthRefreshFailureLoginCommand(provider);
+  if (classified.reason) {
+    return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;
+  }
+  return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run \`${command}\`.`;
 }
 
 export async function resolveAuthIssueHint(
@@ -117,6 +208,12 @@ export async function noteAuthProfileHealth(params: {
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
 }): Promise<void> {
+  if (
+    Object.keys(params.cfg.auth?.profiles ?? {}).length === 0 &&
+    !hasAnyAuthProfileStoreSource()
+  ) {
+    return;
+  }
   const store = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
@@ -186,7 +283,14 @@ export async function noteAuthProfileHealth(params: {
           profileId: profile.profileId,
         });
       } catch (err) {
-        errors.push(`- ${profile.profileId}: ${formatErrorMessage(err)}`);
+        const message = formatErrorMessage(err);
+        errors.push(
+          formatOAuthRefreshFailureDoctorLine({
+            profileId: profile.profileId,
+            provider: profile.provider,
+            message,
+          }) ?? `- ${profile.profileId}: ${message}`,
+        );
       }
     }
     if (errors.length > 0) {

@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
   - You want guided setup for gateway, workspace, auth, channels, and skills
-title: "onboard"
+title: "Onboard"
 ---
 
 # `openclaw onboard`
@@ -42,6 +42,17 @@ openclaw onboard --non-interactive \
 ```
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
+
+LM Studio also supports a provider-specific key flag in non-interactive mode:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice lmstudio \
+  --custom-base-url "http://localhost:1234/v1" \
+  --custom-model-id "qwen/qwen3.5-9b" \
+  --lmstudio-api-key "$LM_API_TOKEN" \
+  --accept-risk
+```
 
 Non-interactive Ollama:
 
@@ -115,7 +126,7 @@ Interactive onboarding behavior with reference mode:
 
 Non-interactive Z.AI endpoint choices:
 
-Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5`).
+Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5.1`).
 If you specifically want the GLM Coding Plan endpoints, pick `zai-coding-global` or `zai-coding-cn`.
 
 ```bash

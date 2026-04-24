@@ -1,6 +1,9 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 type TelegramMediaMessage = Pick<
   Message,
@@ -89,14 +92,29 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
 
+export function isBinaryContent(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolveTelegramTextContent(text: unknown, caption?: unknown): string {
+  const raw = typeof text === "string" ? text : typeof caption === "string" ? caption : "";
+  return isBinaryContent(raw) ? "" : raw;
+}
+
 export function getTelegramTextParts(
   msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
 ): {
   text: string;
   entities: TelegramTextEntity[];
 } {
-  const text = msg.text ?? msg.caption ?? "";
-  const entities = msg.entities ?? msg.caption_entities ?? [];
+  const text = resolveTelegramTextContent(msg.text, msg.caption);
+  const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
   return { text, entities };
 }
 
@@ -123,8 +141,8 @@ function hasStandaloneTelegramMention(text: string, mention: string): boolean {
 
 export function hasBotMention(msg: Message, botUsername: string) {
   const { text, entities } = getTelegramTextParts(msg);
-  const mention = `@${botUsername}`.toLowerCase();
-  if (hasStandaloneTelegramMention(text.toLowerCase(), mention)) {
+  const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
+  if (hasStandaloneTelegramMention(normalizeLowercaseStringOrEmpty(text), mention)) {
     return true;
   }
   for (const ent of entities) {
@@ -132,7 +150,7 @@ export function hasBotMention(msg: Message, botUsername: string) {
       continue;
     }
     const slice = text.slice(ent.offset, ent.offset + ent.length);
-    if (slice.toLowerCase() === mention) {
+    if (normalizeLowercaseStringOrEmpty(slice) === mention) {
       return true;
     }
   }
