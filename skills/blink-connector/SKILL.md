@@ -1088,24 +1088,30 @@ blink connector exec composio_ashby job.list POST '{"limit":20}'
 
 ### Basecamp
 
-Basecamp 4 is account-scoped — the connect callback captures the user's
-first account id into `metadata.basecamp_account_id`. Read it from
-`blink connector status`, or call
-`https://launchpad.37signals.com/authorization.json` to list all accounts.
+Basecamp 4 is account-scoped, but the executor auto-prepends the user's
+account id from connection metadata (or, for legacy connections, looks it up
+on Composio). You can write paths *without* the leading account id:
 
 ```bash
 # List projects
-blink connector exec composio_basecamp ACCOUNT_ID/projects.json GET
+blink connector exec composio_basecamp projects.json GET
 
 # Get a specific project
-blink connector exec composio_basecamp ACCOUNT_ID/projects/PROJECT_ID.json GET
+blink connector exec composio_basecamp projects/PROJECT_ID.json GET
+
+# Create a project (then later DELETE projects/PROJECT_ID.json to trash it)
+blink connector exec composio_basecamp projects.json POST '{"name":"New Project","description":"Created via API"}'
 
 # List todos in a todo list
-blink connector exec composio_basecamp ACCOUNT_ID/buckets/PROJECT_ID/todolists/TODOLIST_ID/todos.json GET
+blink connector exec composio_basecamp buckets/PROJECT_ID/todolists/TODOLIST_ID/todos.json GET
 
 # Create a message
-blink connector exec composio_basecamp ACCOUNT_ID/buckets/PROJECT_ID/message_boards/BOARD_ID/messages.json POST '{"subject":"Status update","content":"<div>Shipping today.</div>","status":"active"}'
+blink connector exec composio_basecamp buckets/PROJECT_ID/message_boards/BOARD_ID/messages.json POST '{"subject":"Status update","content":"<div>Shipping today.</div>","status":"active"}'
 ```
+
+If you need to override the account (for users who belong to multiple
+Basecamp accounts), you may still pass the numeric account id explicitly as
+the first path segment, e.g. `6199974/projects.json`.
 
 ## Scripting — capture output
 
