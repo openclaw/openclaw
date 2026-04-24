@@ -9,6 +9,8 @@ export const OUTCOME_FALLBACK_RUNTIME_CONTRACT = {
   sessionKey: "agent:main:outcome-contract",
   runId: "run-outcome-contract",
   prompt: "finish the contract turn",
+  reasoningOnlyText: "I need to reason about this before answering.",
+  planningOnlyText: "Inspect state, then decide the next step.",
 } as const;
 
 export function createContractRunResult(

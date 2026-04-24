@@ -112,6 +112,88 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
     expect(result.promptError).toBeNull();
   });
 
+  it("preserves reasoning-only terminal turns for OpenClaw-owned fallback classification", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reasoning-1",
+        delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          items: [{ type: "reasoning", id: "reasoning-1" }],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.promptError).toBeNull();
+    expect(result.messagesSnapshot).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `Codex reasoning:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText}`,
+            },
+          ],
+        }),
+      ]),
+    );
+  });
+
+  it("preserves planning-only terminal turns for OpenClaw-owned fallback classification", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/plan/delta", {
+        itemId: "plan-1",
+        delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          items: [
+            {
+              type: "plan",
+              id: "plan-1",
+              text: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.promptError).toBeNull();
+    expect(result.messagesSnapshot).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `Codex plan:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText}`,
+            },
+          ],
+        }),
+      ]),
+    );
+  });
+
   it("preserves tool side-effect telemetry so fallback can stay disabled", async () => {
     const projector = await createProjector();
 
