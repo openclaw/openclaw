@@ -118,17 +118,20 @@ export function isAudioFileName(fileName?: string | null): boolean {
 /**
  * Determines whether a media payload qualifies as a verified audio source
  * for voice-note delivery.
+ *
+ * Only a caller-classified `kind === "audio"` is accepted. A raw
+ * `contentType` starting with `audio/` is NOT trusted because it can be
+ * derived from an attacker-controlled HTTP `Content-Type` header
+ * (CWE-345: insufficient verification of data authenticity). The
+ * `contentType` field is retained on the parameter shape as a seam for
+ * a future `sniffedMime`-based extension once magic-byte sniffing is
+ * plumbed through `loadWebMedia` / `detectMime` cross-channel.
  */
 export function isVerifiedAudioSource(media: {
   kind?: string | null;
   contentType?: string | null;
 }): boolean {
-  if (media.kind === "audio") {
-    return true;
-  }
-  // Normalize through sanitizeMediaMime before classifying audio content.
-  const sanitized = sanitizeMediaMime(media.contentType);
-  return sanitized?.startsWith("audio/") === true;
+  return media.kind === "audio";
 }
 
 /**

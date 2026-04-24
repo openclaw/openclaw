@@ -171,9 +171,9 @@ describe("isAudioFileName", () => {
 describe("isVerifiedAudioSource", () => {
   it.each([
     { media: { kind: "audio", contentType: null }, expected: true },
-    { media: { kind: "document", contentType: "audio/ogg" }, expected: true },
-    { media: { kind: "document", contentType: "audio/mpeg" }, expected: true },
-    { media: { kind: "document", contentType: "AUDIO/OGG" }, expected: true },
+    { media: { kind: "document", contentType: "audio/ogg" }, expected: false },
+    { media: { kind: "document", contentType: "audio/mpeg" }, expected: false },
+    { media: { kind: "document", contentType: "AUDIO/OGG" }, expected: false },
     { media: { kind: "document", contentType: "audio/ogg\r\nX-Inj: bad" }, expected: false },
     { media: { kind: "document", contentType: "audio/" }, expected: false },
     { media: { kind: "document", contentType: null }, expected: false },
@@ -181,6 +181,14 @@ describe("isVerifiedAudioSource", () => {
     { media: { kind: undefined, contentType: undefined }, expected: false },
   ] as const)("classifies $media as $expected", ({ media, expected }) => {
     expect(isVerifiedAudioSource(media)).toBe(expected);
+  });
+
+  it("rejects spoofed audio Content-Type when kind is not audio (CWE-345)", () => {
+    // An attacker-controlled mediaUrl response could set Content-Type:
+    // audio/ogg while serving non-audio bytes. Only a caller-classified
+    // kind === "audio" is trusted for PTT coercion.
+    expect(isVerifiedAudioSource({ kind: "document", contentType: "audio/ogg" })).toBe(false);
+    expect(isVerifiedAudioSource({ kind: undefined, contentType: "audio/opus" })).toBe(false);
   });
 });
 
