@@ -16,6 +16,13 @@ type AllModelRowSources = {
   useProviderCatalogFastPath: boolean;
 };
 
+export function modelRowSourcesRequireRegistry(params: {
+  all?: boolean;
+  useProviderCatalogFastPath: boolean;
+}): boolean {
+  return !(params.all && params.useProviderCatalogFastPath);
+}
+
 export async function appendAllModelRowSources(params: AllModelRowSources): Promise<void> {
   const seenKeys = appendDiscoveredRows({
     rows: params.rows,
