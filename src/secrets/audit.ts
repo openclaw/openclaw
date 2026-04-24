@@ -286,7 +286,7 @@ function collectAuthStoreSecrets(params: {
   }
   for (const entry of iterateAuthProfileCredentials(parsed.profiles)) {
     if (entry.kind === "api_key" || entry.kind === "token") {
-      const { ref } = resolveSecretInputRef({
+      const { ref, inlineRef } = resolveSecretInputRef({
         value: entry.value,
         refValue: entry.refValue,
         defaults: params.defaults,
@@ -300,7 +300,9 @@ function collectAuthStoreSecrets(params: {
           provider: entry.provider,
         });
         trackAuthProviderState(params.collector, entry.provider, entry.kind);
-        continue;
+        if (inlineRef) {
+          continue;
+        }
       }
       if (isNonEmptyString(entry.value)) {
         addFinding(params.collector, {
