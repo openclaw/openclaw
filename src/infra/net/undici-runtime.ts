@@ -89,15 +89,11 @@ export function createHttp1ProxyAgent(
   timeoutMs?: number,
 ): import("undici").ProxyAgent {
   const { ProxyAgent } = loadUndiciRuntimeDeps();
-  const baseOptions =
+  const normalized =
     typeof options === "string" || options instanceof URL
       ? { uri: options.toString() }
       : { ...options };
-  // Apply HTTP/1.1-only and timeout options on top of the base
-  baseOptions.allowH2 = false as const;
-  if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-    baseOptions.bodyTimeout = timeoutMs;
-    baseOptions.headersTimeout = timeoutMs;
-  }
-  return new ProxyAgent(baseOptions as UndiciProxyAgentOptions);
+  return new ProxyAgent(
+    withHttp1OnlyDispatcherOptions(normalized as object, timeoutMs) as UndiciProxyAgentOptions,
+  );
 }

@@ -121,6 +121,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
     return;
   }
   const timeoutMs = Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
+  _globalUndiciStreamTimeoutMs = timeoutMs;
   const kind = resolveCurrentDispatcherKind();
   if (kind === null) {
     return;
@@ -151,7 +152,6 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
       );
     }
     lastAppliedTimeoutKey = nextKey;
-    _globalUndiciStreamTimeoutMs = timeoutMs;
   } catch {
     // Best-effort hardening only.
   }
