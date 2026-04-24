@@ -92,23 +92,46 @@ export function resolveDiscordDirectoryUserId(params: {
   accountId?: string | null;
   handle: string;
 }): string | undefined {
-  const cache = DIRECTORY_HANDLE_CACHE.get(normalizeAccountCacheKey(params.accountId));
-  if (!cache) {
-    return undefined;
-  }
   const handle = normalizeHandleKey(params.handle);
   if (!handle) {
     return undefined;
   }
-  const direct = cache.get(handle);
-  if (direct) {
-    return direct;
-  }
   const withoutDiscriminator = handle.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
-  if (!withoutDiscriminator || withoutDiscriminator === handle) {
-    return undefined;
+  const altHandle =
+    withoutDiscriminator && withoutDiscriminator !== handle ? withoutDiscriminator : null;
+
+  // First: check the account-specific sub-map.
+  const cache = DIRECTORY_HANDLE_CACHE.get(normalizeAccountCacheKey(params.accountId));
+  if (cache) {
+    const direct = cache.get(handle);
+    if (direct) {
+      return direct;
+    }
+    if (altHandle) {
+      const alt = cache.get(altHandle);
+      if (alt) {
+        return alt;
+      }
+    }
   }
-  return cache.get(withoutDiscriminator);
+
+  // Fallback: check ALL account sub-maps. In a multi-bot gateway where all
+  // bots run in the same process, another account's preflight may have already
+  // cached the target handle. This cross-account fallback enables bot→bot
+  // @mention rewriting even when the sending bot hasn't directly processed a
+  // message from the target user.
+  const ownKey = normalizeAccountCacheKey(params.accountId);
+  for (const [key, subMap] of DIRECTORY_HANDLE_CACHE) {
+    if (key === ownKey) {
+      continue;
+    }
+    const found = subMap.get(handle) ?? (altHandle ? subMap.get(altHandle) : undefined);
+    if (found) {
+      return found;
+    }
+  }
+
+  return undefined;
 }
 
 export function __resetDiscordDirectoryCacheForTest(): void {

@@ -22,6 +22,7 @@ import { getChildLogger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sd
 import { logDebug, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
+import { rememberDiscordDirectoryUser } from "../directory-cache.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
@@ -392,6 +393,64 @@ export async function preflightDiscordMessage(
   const allowBotsSetting = params.discordConfig?.allowBots;
   const allowBotsMode =
     allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
+
+  // Passively populate the directory cache from the message author so that
+  // outbound rewriteDiscordKnownMentions() can resolve @name → <@ID> for
+  // any user (including bots) seen in this channel — enabling bot→bot @mention
+  // chains without prompt-level ID injection.
+  if (author.id && author.username) {
+    rememberDiscordDirectoryUser({
+      accountId: params.accountId,
+      userId: author.id,
+      handles: [
+        author.username,
+        (author as { globalName?: string }).globalName,
+        params.data.member?.nick,
+      ],
+    });
+  }
+  // Also cache from the raw author data (snake_case fields) as a belt-and-suspenders fallback.
+  const rawAuthor = (
+    params.data as { rawAuthor?: { id?: string; username?: string; global_name?: string | null } }
+  ).rawAuthor;
+  if (rawAuthor?.id && rawAuthor.username) {
+    rememberDiscordDirectoryUser({
+      accountId: params.accountId,
+      userId: rawAuthor.id,
+      handles: [rawAuthor.username, rawAuthor.global_name ?? undefined],
+    });
+  }
+  // Also cache any explicitly-mentioned users from the inbound message so that
+  // their handles are resolvable immediately, even before they speak.
+  for (const mentioned of message.mentionedUsers ?? []) {
+    const u = mentioned as { id?: string; username?: string; globalName?: string };
+    if (u.id && u.username) {
+      rememberDiscordDirectoryUser({
+        accountId: params.accountId,
+        userId: u.id,
+        handles: [u.username, u.globalName],
+      });
+    }
+  }
+  const rawMessage = (
+    params.data as {
+      rawMessage?: {
+        mentions?: Array<{ id?: string; username?: string; global_name?: string | null }>;
+      };
+    }
+  ).rawMessage;
+  if (rawMessage?.mentions) {
+    for (const mention of rawMessage.mentions) {
+      if (mention.id && mention.username) {
+        rememberDiscordDirectoryUser({
+          accountId: params.accountId,
+          userId: mention.id,
+          handles: [mention.username, mention.global_name ?? undefined],
+        });
+      }
+    }
+  }
+
   if (params.botUserId && author.id === params.botUserId) {
     // Always ignore own messages to prevent self-reply loops
     return null;

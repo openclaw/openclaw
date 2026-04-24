@@ -132,7 +132,10 @@ describe("resolveDiscordTarget", () => {
       normalized: "user:999",
     });
     expect(resolveDiscordDirectoryUserId({ accountId: "work", handle: "jane" })).toBe("999");
-    expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBeUndefined();
+    // Cross-account fallback: the directory cache now resolves handles across
+    // all account sub-maps so bot→bot @mention rewriting works even when the
+    // sending bot hasn't directly processed a message from the target user.
+    expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBe("999");
   });
 });
 

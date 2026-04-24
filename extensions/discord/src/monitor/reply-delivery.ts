@@ -21,6 +21,7 @@ import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { isLikelyDiscordVideoMedia } from "../media-detection.js";
+import { rewriteDiscordKnownMentions } from "../mentions.js";
 import { createDiscordRetryRunner } from "../retry.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { buildDiscordSendError, sendDiscordText } from "../send.shared.js";
@@ -298,7 +299,7 @@ async function sendDiscordChunkWithFallback(params: {
   if (!params.text.trim()) {
     return;
   }
-  const text = params.text;
+  const text = rewriteDiscordKnownMentions(params.text, { accountId: params.accountId });
   const binding = params.binding;
   if (binding?.webhookId && binding?.webhookToken) {
     try {

@@ -71,15 +71,30 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("inline `@alice` fence ```\n@alice\n``` text <@123456789>");
   });
 
-  it("is account-scoped", () => {
+  it("rewrites mentions after CJK/fullwidth punctuation", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "111222333",
+      handles: ["后端工程师"],
+    });
+    // fullwidth colon ：  (U+FF1A) before @
+    const rewritten = rewriteDiscordKnownMentions("提及：@后端工程师 确认", {
+      accountId: "default",
+    });
+    expect(rewritten).toBe("提及：<@111222333> 确认");
+  });
+
+  it("prefers account-specific cache but falls back to cross-account", () => {
     rememberDiscordDirectoryUser({
       accountId: "ops",
       userId: "999888777",
       handles: ["alice"],
     });
-    const defaultRewrite = rewriteDiscordKnownMentions("@alice", { accountId: "default" });
+    // "ops" resolves from its own cache
     const opsRewrite = rewriteDiscordKnownMentions("@alice", { accountId: "ops" });
-    expect(defaultRewrite).toBe("@alice");
     expect(opsRewrite).toBe("<@999888777>");
+    // "default" also resolves via cross-account fallback (multi-bot gateway)
+    const defaultRewrite = rewriteDiscordKnownMentions("@alice", { accountId: "default" });
+    expect(defaultRewrite).toBe("<@999888777>");
   });
 });

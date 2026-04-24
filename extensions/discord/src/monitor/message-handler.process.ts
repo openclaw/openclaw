@@ -50,6 +50,7 @@ import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
+import { rewriteDiscordKnownMentions } from "../mentions.js";
 import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
@@ -793,7 +794,9 @@ export async function processDiscordMessage(
           const reply = resolveSendableOutboundReplyParts(payload);
           const hasMedia = reply.hasMedia;
           const finalText = payload.text;
-          const previewFinalText = resolvePreviewFinalText(finalText);
+          const previewFinalText = resolvePreviewFinalText(
+            finalText ? rewriteDiscordKnownMentions(finalText, { accountId }) : finalText,
+          );
           const hasExplicitReplyDirective =
             Boolean(payload.replyToTag || payload.replyToCurrent) ||
             (typeof finalText === "string" && /\[\[\s*reply_to(?:_current|\s*:)/i.test(finalText));

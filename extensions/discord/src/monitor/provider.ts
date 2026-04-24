@@ -46,6 +46,7 @@ import {
   summarizeStringEntries,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
+import { rememberDiscordDirectoryUser } from "../directory-cache.js";
 import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
@@ -951,6 +952,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor,
       createAutoPresenceController: createDiscordAutoPresenceController,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
+      restFetch: discordRestFetch !== fetch ? discordRestFetch : undefined,
     });
     lifecycleGateway = gateway;
     gatewaySupervisor = createdGatewaySupervisor;
@@ -998,6 +1000,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     let { botUserId, botUserName } = await fetchDiscordBotIdentity({
       client,
       runtime,
+      applicationId,
       logStartupPhase: (phase, details) =>
         logDiscordStartupPhase({
           runtime,
@@ -1008,6 +1011,20 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           details,
         }),
     });
+
+    // Seed the directory cache with this bot's own identity so that OTHER
+    // bots running in the same gateway process can resolve @mentions targeting
+    // this bot — the cross-account fallback in resolveDiscordDirectoryUserId()
+    // will find the entry even if the sending bot hasn't processed a message
+    // from this bot yet.
+    if (botUserId) {
+      rememberDiscordDirectoryUser({
+        accountId: account.accountId,
+        userId: botUserId,
+        handles: [botUserName].filter(Boolean),
+      });
+    }
+
     let voiceManager: DiscordVoiceManager | null = null;
 
     if (nativeDisabledExplicit) {
