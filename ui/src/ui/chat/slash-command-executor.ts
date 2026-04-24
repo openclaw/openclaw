@@ -4,6 +4,7 @@
  */
 
 import {
+  buildQualifiedChatModelValue,
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
@@ -190,8 +191,12 @@ async function executeModel(
         modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
-      const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models.map((m: ModelCatalogEntry) => m.id);
+      const rawModel = session?.model || sessions?.defaults?.model || "default";
+      const modelProvider = session?.modelProvider ?? null;
+      const model = buildQualifiedChatModelValue(rawModel, modelProvider);
+      const available = models.map((m: ModelCatalogEntry) =>
+        buildQualifiedChatModelValue(m.id, m.provider),
+      );
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(

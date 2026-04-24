@@ -273,4 +273,45 @@ describe("chat session controls", () => {
     expect(rerendered?.value).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
+
+  it("sends provider-qualified model value for non-Anthropic models (#50115)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const nonAnthropicCatalog: ModelCatalogEntry[] = [
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      { id: "grok-4-1-fast", name: "Grok 4.1 Fast", provider: "xai" },
+      { id: "gemma3:1b", name: "gemma3:1b", provider: "ollama" },
+    ];
+    const { state, request } = createChatHeaderState({ models: nonAnthropicCatalog });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toContain("xai/grok-4-1-fast");
+    expect(optionValues).toContain("ollama/gemma3:1b");
+    expect(optionValues).toContain("anthropic/claude-sonnet-4-6");
+
+    modelSelect!.value = "xai/grok-4-1-fast";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "xai/grok-4-1-fast",
+    });
+    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("xai");
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("grok-4-1-fast");
+    vi.unstubAllGlobals();
+  });
 });

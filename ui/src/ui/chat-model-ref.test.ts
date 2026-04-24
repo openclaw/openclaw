@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChatModelOption,
+  buildQualifiedChatModelValue,
   createChatModelOverride,
   formatCatalogChatModelDisplay,
   formatChatModelDisplay,
@@ -14,6 +15,7 @@ import {
   DEEPSEEK_CHAT_MODEL,
   OPENAI_GPT5_MINI_MODEL,
 } from "./chat-model.test-helpers.ts";
+import type { ModelCatalogEntry } from "./types.ts";
 
 const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
   id: "claude-sonnet-4-5",
@@ -238,5 +240,82 @@ describe("chat-model-ref helpers", () => {
     expect(resolvePreferredServerChatModelValue("gpt-5-mini", null, [OPENAI_GPT5_MINI_MODEL])).toBe(
       "openai/gpt-5-mini",
     );
+  });
+
+  describe("buildChatModelOption — non-Anthropic provider prefix", () => {
+    it("preserves provider prefix for non-Anthropic models with provider field", () => {
+      const entry: ModelCatalogEntry = {
+        id: "grok-4-1-fast",
+        name: "Grok 4.1 Fast",
+        provider: "xai",
+      };
+      expect(buildChatModelOption(entry).value).toBe("xai/grok-4-1-fast");
+    });
+
+    it("preserves provider prefix for ollama models with provider field", () => {
+      const entry: ModelCatalogEntry = {
+        id: "gemma3:1b",
+        name: "gemma3:1b",
+        provider: "ollama",
+      };
+      expect(buildChatModelOption(entry).value).toBe("ollama/gemma3:1b");
+    });
+
+    it("keeps slash-qualified id intact when provider field is empty", () => {
+      // Defensive: catalog entry arrived with provider stripped but id
+      // still contains the provider prefix.
+      const entry = {
+        id: "xai/grok-4-1-fast",
+        name: "grok-4-1-fast",
+        provider: "",
+      } as ModelCatalogEntry;
+      expect(buildChatModelOption(entry).value).toBe("xai/grok-4-1-fast");
+    });
+
+    it("handles missing provider with non-qualified id gracefully", () => {
+      const entry = {
+        id: "grok-4-1-fast",
+        name: "grok-4-1-fast",
+        provider: "",
+      } as ModelCatalogEntry;
+      const option = buildChatModelOption(entry);
+      // Without provider info the bare id is the best we can produce.
+      expect(option.value).toBe("grok-4-1-fast");
+      expect(option.label).toBe("grok-4-1-fast");
+    });
+  });
+
+  describe("buildQualifiedChatModelValue edge cases", () => {
+    it("returns provider/model when provider is truthy", () => {
+      expect(buildQualifiedChatModelValue("grok-4-1-fast", "xai")).toBe("xai/grok-4-1-fast");
+    });
+
+    it("returns bare model when provider is empty", () => {
+      expect(buildQualifiedChatModelValue("grok-4-1-fast", "")).toBe("grok-4-1-fast");
+    });
+
+    it("returns bare model when provider is null", () => {
+      expect(buildQualifiedChatModelValue("grok-4-1-fast", null)).toBe("grok-4-1-fast");
+    });
+
+    it("returns bare model when provider is undefined", () => {
+      expect(buildQualifiedChatModelValue("grok-4-1-fast", undefined)).toBe("grok-4-1-fast");
+    });
+
+    it("keeps already-qualified model when provider is given", () => {
+      // OpenRouter-style: id contains vendor prefix, provider is "openrouter"
+      expect(buildQualifiedChatModelValue("anthropic/claude-sonnet-4-5", "openrouter")).toBe(
+        "openrouter/anthropic/claude-sonnet-4-5",
+      );
+    });
+
+    it("does not double-prefix when model id already starts with provider", () => {
+      expect(buildQualifiedChatModelValue("openrouter/hunter-alpha", "openrouter")).toBe(
+        "openrouter/hunter-alpha",
+      );
+      expect(buildQualifiedChatModelValue("nvidia/nemotron-3-nano", "nvidia")).toBe(
+        "nvidia/nemotron-3-nano",
+      );
+    });
   });
 });
