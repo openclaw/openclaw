@@ -94,6 +94,10 @@ describe("group runtime loading", () => {
     expect(allowed).toContain('reply with exactly "NO_REPLY"');
     expect(allowed).toContain('your final answer must still be exactly "NO_REPLY"');
     expect(allowed).toContain("Never say that you are staying quiet");
+    expect(allowed).toContain(
+      "Be extremely selective: reply only when directly addressed or clearly helpful.",
+    );
+    expect(allowed).not.toContain("Otherwise stay silent.");
 
     const disallowed = groups.buildGroupIntro({
       cfg: {} as OpenClawConfig,
