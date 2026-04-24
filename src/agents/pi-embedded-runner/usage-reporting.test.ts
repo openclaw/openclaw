@@ -191,4 +191,49 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
   });
+
+  it("keeps cache snapshot totals from inflating the reported current-turn total", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Tool call 1", "Tool call 2", "Final answer"],
+        lastAssistant: makeAssistantMessage({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: {
+            input: 1,
+            output: 190,
+            cacheRead: 22_595,
+            cacheWrite: 1_086,
+            total: 23_872,
+          } as unknown as AssistantMessage["usage"],
+        }),
+        attemptUsage: {
+          input: 5,
+          output: 570,
+          cacheRead: 61_490,
+          cacheWrite: 4_309,
+          total: 66_374,
+        },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "anthropic-session",
+      sessionKey: "anthropic-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-anthropic-cache-snapshot",
+    });
+
+    expect(result.meta.agentMeta?.usage?.total).toBe(23_872);
+    expect(result.meta.agentMeta?.lastCallUsage).toEqual({
+      input: 1,
+      output: 190,
+      cacheRead: 22_595,
+      cacheWrite: 1_086,
+      total: 23_872,
+    });
+  });
 });
