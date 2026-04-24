@@ -64,6 +64,19 @@ const forwardingCase = {
 };
 
 function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRuntimePlan {
+  const transcriptPolicy = {
+    sanitizeMode: "full",
+    sanitizeToolCallIds: true,
+    preserveNativeAnthropicToolUseIds: false,
+    repairToolUseResultPairing: true,
+    preserveSignatures: false,
+    sanitizeThinkingSignatures: true,
+    dropThinkingBlocks: false,
+    applyGoogleTurnOrdering: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+    allowSyntheticToolResults: false,
+  } satisfies AgentRuntimePlan["transcript"]["policy"];
   const basePlan: AgentRuntimePlan = {
     auth: {
       authProfileProviderForAuth: "anthropic",
@@ -87,31 +100,10 @@ function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRu
       resolveSystemPromptContribution: vi.fn(),
     },
     transcript: {
-      policy: {
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        preserveNativeAnthropicToolUseIds: false,
-        repairToolUseResultPairing: true,
-        preserveSignatures: false,
-        sanitizeThinkingSignatures: true,
-        dropThinkingBlocks: false,
-        applyGoogleTurnOrdering: false,
-        validateGeminiTurns: false,
-        validateAnthropicTurns: false,
-        allowSyntheticToolResults: false,
-      },
-      resolvePolicy: vi.fn((params) => ({
+      policy: transcriptPolicy,
+      resolvePolicy: vi.fn((params): AgentRuntimePlan["transcript"]["policy"] => ({
+        ...transcriptPolicy,
         sanitizeMode: params?.modelApi === "anthropic-messages" ? "full" : "images-only",
-        sanitizeToolCallIds: true,
-        preserveNativeAnthropicToolUseIds: false,
-        repairToolUseResultPairing: true,
-        preserveSignatures: false,
-        sanitizeThinkingSignatures: true,
-        dropThinkingBlocks: false,
-        applyGoogleTurnOrdering: false,
-        validateGeminiTurns: false,
-        validateAnthropicTurns: false,
-        allowSyntheticToolResults: false,
       })),
     },
     transport: {
