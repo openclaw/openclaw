@@ -265,8 +265,8 @@ export async function sendDiscordComponentMessage(
 
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   const channelType = await resolveDiscordChannelType(rest, channelId);
@@ -325,8 +325,8 @@ export async function editDiscordComponentMessage(
 ): Promise<DiscordSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const { body, buildResult } = await buildDiscordComponentPayload({
     spec,

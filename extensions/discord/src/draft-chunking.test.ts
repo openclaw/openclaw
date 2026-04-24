@@ -4,7 +4,7 @@ import { resolveDiscordDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveDiscordDraftStreamingChunking", () => {
   it("returns sane defaults when discord draft chunking is unset", () => {
-    expect(resolveDiscordDraftStreamingChunking(undefined)).toEqual({
+    expect(resolveDiscordDraftStreamingChunking({} as OpenClawConfig)).toEqual({
       minChars: 200,
       maxChars: 800,
       breakPreference: "paragraph",
