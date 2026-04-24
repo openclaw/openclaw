@@ -416,6 +416,32 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("ignores invalid diagnostic event trace parents", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      trace: {
+        traceId: "0".repeat(32),
+        spanId: "not-a-span",
+        traceFlags: "zz",
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { total: 4 },
+      durationMs: 12,
+    });
+
+    const modelUsageCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.usage",
+    );
+    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    expect(modelUsageCall?.[2]).toBeUndefined();
+    await service.stop?.(ctx);
+  });
+
   test("redacts sensitive reason in session.state metric attributes", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });

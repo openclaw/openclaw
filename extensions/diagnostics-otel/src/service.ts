@@ -138,13 +138,14 @@ function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
 }
 
 function contextForTraceContext(traceContext: DiagnosticTraceContext | undefined) {
-  if (!traceContext?.spanId) {
+  const normalized = normalizeTraceContext(traceContext);
+  if (!normalized?.spanId) {
     return undefined;
   }
   return trace.setSpanContext(otelContextApi.active(), {
-    traceId: traceContext.traceId,
-    spanId: traceContext.spanId,
-    traceFlags: traceFlagsToOtel(traceContext.traceFlags),
+    traceId: normalized.traceId,
+    spanId: normalized.spanId,
+    traceFlags: traceFlagsToOtel(normalized.traceFlags),
     isRemote: true,
   });
 }
@@ -153,18 +154,19 @@ function addTraceAttributes(
   attributes: Record<string, string | number | boolean>,
   traceContext: DiagnosticTraceContext | undefined,
 ): void {
-  if (!traceContext) {
+  const normalized = normalizeTraceContext(traceContext);
+  if (!normalized) {
     return;
   }
-  attributes["openclaw.traceId"] = traceContext.traceId;
-  if (traceContext.spanId) {
-    attributes["openclaw.spanId"] = traceContext.spanId;
+  attributes["openclaw.traceId"] = normalized.traceId;
+  if (normalized.spanId) {
+    attributes["openclaw.spanId"] = normalized.spanId;
   }
-  if (traceContext.parentSpanId) {
-    attributes["openclaw.parentSpanId"] = traceContext.parentSpanId;
+  if (normalized.parentSpanId) {
+    attributes["openclaw.parentSpanId"] = normalized.parentSpanId;
   }
-  if (traceContext.traceFlags) {
-    attributes["openclaw.traceFlags"] = traceContext.traceFlags;
+  if (normalized.traceFlags) {
+    attributes["openclaw.traceFlags"] = normalized.traceFlags;
   }
 }
 
