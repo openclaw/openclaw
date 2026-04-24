@@ -4,21 +4,88 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import type {
-  ProviderFollowupFallbackRouteResult,
-  ProviderSystemPromptContributionContext,
-} from "../../plugins/types.js";
-import type { SupportedTransport } from "../pi-embedded-runner/extra-params.js";
-import type { classifyEmbeddedPiRunResultForModelFallback } from "../pi-embedded-runner/result-fallback-classifier.js";
-import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
-import type { TranscriptPolicy } from "../transcript-policy.js";
+import type { FailoverReason } from "../pi-embedded-helpers/types.js";
+import type { PromptMode } from "../system-prompt.types.js";
+
+export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
+
+export type AgentRuntimeSystemPromptSectionId =
+  | "interaction_style"
+  | "tool_call_style"
+  | "execution_bias";
+
+export type AgentRuntimeSystemPromptContribution = {
+  stablePrefix?: string;
+  dynamicSuffix?: string;
+  sectionOverrides?: Partial<Record<AgentRuntimeSystemPromptSectionId, string>>;
+};
+
+export type AgentRuntimeSystemPromptContributionContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  promptMode: PromptMode;
+  runtimeChannel?: string;
+  runtimeCapabilities?: string[];
+  agentId?: string;
+};
+
+export type AgentRuntimeFollowupFallbackRouteResult = {
+  route?: "origin" | "dispatcher" | "drop";
+  reason?: string;
+};
+
+export type AgentRuntimeToolCallIdMode = "strict" | "strict9";
+
+export type AgentRuntimeTranscriptPolicy = {
+  sanitizeMode: "full" | "images-only";
+  sanitizeToolCallIds: boolean;
+  toolCallIdMode?: AgentRuntimeToolCallIdMode;
+  preserveNativeAnthropicToolUseIds: boolean;
+  repairToolUseResultPairing: boolean;
+  preserveSignatures: boolean;
+  sanitizeThoughtSignatures?: {
+    allowBase64Only?: boolean;
+    includeCamelCase?: boolean;
+  };
+  sanitizeThinkingSignatures: boolean;
+  dropThinkingBlocks: boolean;
+  applyGoogleTurnOrdering: boolean;
+  validateGeminiTurns: boolean;
+  validateAnthropicTurns: boolean;
+  allowSyntheticToolResults: boolean;
+};
+
+export type AgentRuntimeOutcomeClassification =
+  | {
+      message: string;
+      reason?: FailoverReason;
+      status?: number;
+      code?: string;
+      rawError?: string;
+    }
+  | {
+      error: unknown;
+    }
+  | null
+  | undefined;
+
+export type AgentRuntimeOutcomeClassifier = (params: {
+  provider: string;
+  model: string;
+  result: unknown;
+  hasDirectlySentBlockReply?: boolean;
+  hasBlockReplyPipelineOutput?: boolean;
+}) => AgentRuntimeOutcomeClassification;
 
 export type AgentRuntimeResolvedRef = {
   provider: string;
   modelId: string;
   modelApi?: string;
   harnessId?: string;
-  transport?: SupportedTransport;
+  transport?: AgentRuntimeTransport;
 };
 
 export type AgentRuntimeAuthPlan = {
@@ -32,8 +99,8 @@ export type AgentRuntimePromptPlan = {
   provider: string;
   modelId: string;
   resolveSystemPromptContribution(
-    context: ProviderSystemPromptContributionContext,
-  ): ProviderSystemPromptContribution | undefined;
+    context: AgentRuntimeSystemPromptContributionContext,
+  ): AgentRuntimeSystemPromptContribution | undefined;
 };
 
 export type AgentRuntimeToolPlan = {
@@ -63,11 +130,11 @@ export type AgentRuntimeDeliveryPlan = {
     originatingTo?: string;
     originRoutable: boolean;
     dispatcherAvailable: boolean;
-  }): ProviderFollowupFallbackRouteResult | undefined;
+  }): AgentRuntimeFollowupFallbackRouteResult | undefined;
 };
 
 export type AgentRuntimeOutcomePlan = {
-  classifyRunResult: typeof classifyEmbeddedPiRunResultForModelFallback;
+  classifyRunResult: AgentRuntimeOutcomeClassifier;
 };
 
 export type AgentRuntimeTransportPlan = {
@@ -78,7 +145,7 @@ export type AgentRuntimeTransportPlan = {
     agentId?: string;
     workspaceDir?: string;
     model?: ProviderRuntimeModel;
-    resolvedTransport?: SupportedTransport;
+    resolvedTransport?: AgentRuntimeTransport;
   }): Record<string, unknown>;
 };
 
@@ -88,12 +155,12 @@ export type AgentRuntimePlan = {
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
   transcript: {
-    policy: TranscriptPolicy;
+    policy: AgentRuntimeTranscriptPolicy;
     resolvePolicy(params?: {
       workspaceDir?: string;
       modelApi?: string;
       model?: ProviderRuntimeModel;
-    }): TranscriptPolicy;
+    }): AgentRuntimeTranscriptPolicy;
   };
   delivery: AgentRuntimeDeliveryPlan;
   outcome: AgentRuntimeOutcomePlan;
@@ -105,7 +172,7 @@ export type AgentRuntimePlan = {
     modelApi?: string;
     harnessId?: string;
     authProfileId?: string;
-    transport?: SupportedTransport;
+    transport?: AgentRuntimeTransport;
   };
 };
 
@@ -133,5 +200,5 @@ export type BuildAgentRuntimePlanParams = {
   agentId?: string;
   thinkingLevel?: ThinkLevel;
   extraParamsOverride?: Record<string, unknown>;
-  resolvedTransport?: SupportedTransport;
+  resolvedTransport?: AgentRuntimeTransport;
 };
