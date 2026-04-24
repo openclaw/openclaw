@@ -604,6 +604,7 @@ export function createBrowserTool(opts?: {
           const fullPage = Boolean(params.fullPage);
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
+          const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const type = params.type === "jpeg" ? "jpeg" : "png";
           const result = proxyRequest
             ? ((await proxyRequest({
@@ -616,6 +617,7 @@ export function createBrowserTool(opts?: {
                   ref,
                   element,
                   type,
+                  labels,
                 },
               })) as Awaited<ReturnType<typeof browserScreenshotAction>>)
             : await browserToolDeps.browserScreenshotAction(baseUrl, {
@@ -624,6 +626,7 @@ export function createBrowserTool(opts?: {
                 ref,
                 element,
                 type,
+                labels,
                 profile,
               });
           return await browserToolDeps.imageResultFromFile({

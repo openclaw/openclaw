@@ -76,7 +76,7 @@ export function createProfileSelectionOps({
       throw new BrowserTargetAmbiguousError();
     }
     if (!chosen) {
-      throw new BrowserTabNotFoundError();
+      throw new BrowserTabNotFoundError(targetId ? { input: targetId } : undefined);
     }
     profileState.lastTargetId = chosen.targetId;
     return chosen;
@@ -89,7 +89,7 @@ export function createProfileSelectionOps({
       if (resolved.reason === "ambiguous") {
         throw new BrowserTargetAmbiguousError();
       }
-      throw new BrowserTabNotFoundError();
+      throw new BrowserTabNotFoundError({ input: targetId });
     }
     return resolved.targetId;
   };

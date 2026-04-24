@@ -271,6 +271,7 @@ export async function browserSnapshot(
     selector?: string;
     frame?: string;
     labels?: boolean;
+    urls?: boolean;
     mode?: "efficient";
     profile?: string;
   },
@@ -308,6 +309,9 @@ export async function browserSnapshot(
   }
   if (opts.labels === true) {
     q.set("labels", "1");
+  }
+  if (opts.urls === true) {
+    q.set("urls", "1");
   }
   if (opts.mode) {
     q.set("mode", opts.mode);

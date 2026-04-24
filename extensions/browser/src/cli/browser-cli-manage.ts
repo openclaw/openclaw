@@ -18,6 +18,12 @@ import {
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
 
+type BrowserDoctorCheck = {
+  name: string;
+  ok: boolean;
+  detail?: string;
+};
+
 function resolveProfileQuery(profile?: string) {
   return profile ? { profile } : undefined;
 }
@@ -110,6 +116,96 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   );
 }
 
+function formatDoctorLine(check: BrowserDoctorCheck): string {
+  return `${check.ok ? "OK" : "FAIL"} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
+}
+
+async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string) {
+  const checks: BrowserDoctorCheck[] = [];
+  let status: BrowserStatus | null = null;
+
+  try {
+    status = await fetchBrowserStatus(parent, profile);
+    checks.push({
+      name: "gateway",
+      ok: true,
+      detail: "browser control endpoint reachable",
+    });
+  } catch (err) {
+    checks.push({
+      name: "gateway",
+      ok: false,
+      detail: String(err),
+    });
+    return { ok: false, checks };
+  }
+
+  checks.push({
+    name: "plugin",
+    ok: status.enabled,
+    detail: status.enabled ? "enabled" : "disabled in config",
+  });
+  checks.push({
+    name: "profile",
+    ok: true,
+    detail: `${status.profile ?? "openclaw"} (${usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")})`,
+  });
+  checks.push({
+    name: "browser",
+    ok: status.running,
+    detail: status.running
+      ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
+      : "not running; run `openclaw browser start`",
+  });
+
+  try {
+    const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
+      parent,
+      { method: "GET", path: "/profiles" },
+      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+    );
+    checks.push({
+      name: "profiles",
+      ok: true,
+      detail: `${profiles.profiles?.length ?? 0} configured`,
+    });
+  } catch (err) {
+    checks.push({
+      name: "profiles",
+      ok: false,
+      detail: String(err),
+    });
+  }
+
+  if (status.running) {
+    try {
+      const result = await callBrowserRequest<{ running: boolean; tabs: BrowserTab[] }>(
+        parent,
+        {
+          method: "GET",
+          path: "/tabs",
+          query: resolveProfileQuery(profile),
+        },
+        { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+      );
+      const tabs = result.tabs ?? [];
+      checks.push({
+        name: "tabs",
+        ok: true,
+        detail: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use target ${tabs[0].suggestedTargetId}` : ""}`,
+      });
+    } catch (err) {
+      checks.push({
+        name: "tabs",
+        ok: false,
+        detail: String(err),
+      });
+    }
+  }
+
+  return { ok: checks.every((check) => check.ok), checks, status };
+}
+
 function usesChromeMcpTransport(params: {
   transport?: BrowserTransport;
   driver?: "openclaw" | "existing-session";
@@ -176,6 +272,24 @@ export function registerBrowserManageCommands(
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),
         );
+      });
+    });
+
+  browser
+    .command("doctor")
+    .description("Check browser plugin readiness")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const profile = parent?.browserProfile;
+      await runBrowserCommand(async () => {
+        const result = await runBrowserDoctor(parent, profile);
+        if (printJsonResult(parent, result)) {
+          return;
+        }
+        defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
+        if (!result.ok) {
+          defaultRuntime.exit(1);
+        }
       });
     });
 
