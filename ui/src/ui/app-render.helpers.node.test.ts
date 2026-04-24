@@ -406,6 +406,37 @@ describe("isCronSessionKey", () => {
 });
 
 describe("resolveSessionOptionGroups", () => {
+  it("hides subagent, acp, and node-backed sessions from the picker by default", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:main:main",
+      sessions: [
+        row({ key: "agent:main:main", label: "main" }),
+        row({ key: "agent:main:subagent:child", label: "child task" }),
+        row({ key: "agent:codex:acp:session-1", label: "codex session" }),
+        row({ key: "agent:main:node-node-2", label: "node event lane" }),
+      ],
+    });
+
+    expect(labels).toContain("main");
+    expect(labels).not.toContain("Subagent: child task");
+    expect(labels).not.toContain("codex session");
+    expect(labels).not.toContain("node event lane");
+  });
+
+  it("keeps the active internal session visible when it is currently selected", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:main:subagent:child",
+      sessions: [
+        row({ key: "agent:main:main", label: "main" }),
+        row({ key: "agent:main:subagent:child", label: "child task" }),
+        row({ key: "agent:codex:acp:session-1", label: "codex session" }),
+      ],
+    });
+
+    expect(labels).toContain("Subagent: child task");
+    expect(labels).not.toContain("codex session");
+  });
+
   it("prefers grouped session labels over display names", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
     const labels = labelsForSessionOptions({

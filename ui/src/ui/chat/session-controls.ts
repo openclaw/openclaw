@@ -431,6 +431,38 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
+function isInternalSessionKey(key: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(key);
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.includes(":subagent:")) {
+    return true;
+  }
+  if (normalized.includes(":acp:")) {
+    return true;
+  }
+  if (!normalized.startsWith("agent:")) {
+    return normalized.startsWith("node-");
+  }
+  const parts = normalized.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return false;
+  }
+  const rest = parts.slice(2).join(":");
+  return rest.startsWith("node-");
+}
+
+function isInternalSessionOption(
+  key: string,
+  row?: SessionsListResult["sessions"][number],
+): boolean {
+  if (isInternalSessionKey(key)) {
+    return true;
+  }
+  return typeof row?.spawnDepth === "number" && row.spawnDepth > 0;
+}
+
 type SessionOptionEntry = {
   key: string;
   label: string;
@@ -500,6 +532,9 @@ export function resolveSessionOptionGroups(
       continue;
     }
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
+      continue;
+    }
+    if (row.key !== sessionKey && isInternalSessionOption(row.key, row)) {
       continue;
     }
     addOption(row.key);
