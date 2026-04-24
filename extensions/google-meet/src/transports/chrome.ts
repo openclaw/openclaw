@@ -292,12 +292,18 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
   const parsed = JSON.parse(raw) as {
     inCall?: boolean;
     micMuted?: boolean;
+    manualActionRequired?: boolean;
+    manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+    manualActionMessage?: string;
     url?: string;
     title?: string;
   };
   return {
     inCall: parsed.inCall,
     micMuted: parsed.micMuted,
+    manualActionRequired: parsed.manualActionRequired,
+    manualActionReason: parsed.manualActionReason,
+    manualActionMessage: parsed.manualActionMessage,
     browserUrl: parsed.url,
     browserTitle: parsed.title,
     status: "browser-control",
@@ -317,17 +323,36 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
   const buttons = [...document.querySelectorAll('button')];
+  const pageText = text(document.body).toLowerCase();
+  const host = location.hostname.toLowerCase();
+  const pageUrl = location.href;
   const join = ${JSON.stringify(params.autoJoin)}
     ? buttons.find((button) => /join now|ask to join/i.test(text(button)) && !button.disabled)
     : null;
   if (join) join.click();
   const mic = buttons.find((button) => /turn off microphone|turn on microphone|microphone/i.test(button.getAttribute('aria-label') || text(button)));
+  const inCall = buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
+  let manualActionReason;
+  let manualActionMessage;
+  if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText))) {
+    manualActionReason = "google-login-required";
+    manualActionMessage = "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.";
+  } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText)) {
+    manualActionReason = "meet-admission-required";
+    manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
+  } else if (!inCall && /allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
+    manualActionReason = "meet-permission-required";
+    manualActionMessage = "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry.";
+  }
   return JSON.stringify({
     clickedJoin: Boolean(join),
-    inCall: buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button))),
+    inCall,
     micMuted: mic ? /turn on microphone/i.test(mic.getAttribute('aria-label') || text(mic)) : undefined,
+    manualActionRequired: Boolean(manualActionReason),
+    manualActionReason,
+    manualActionMessage,
     title: document.title,
-    url: location.href
+    url: pageUrl
   });
 }`;
 }
@@ -424,6 +449,10 @@ async function openMeetWithBrowserProxy(params: {
       browser = {
         ...browser,
         inCall: false,
+        manualActionRequired: true,
+        manualActionReason: "browser-control-unavailable",
+        manualActionMessage:
+          "Open the OpenClaw browser profile, finish Google Meet login, admission, or permission prompts, then retry.",
         notes: [
           `Browser control could not inspect or auto-join Meet: ${
             error instanceof Error ? error.message : String(error)

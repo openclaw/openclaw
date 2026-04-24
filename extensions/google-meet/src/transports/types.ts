@@ -12,9 +12,18 @@ export type GoogleMeetJoinRequest = {
   dtmfSequence?: string;
 };
 
+export type GoogleMeetManualActionReason =
+  | "google-login-required"
+  | "meet-admission-required"
+  | "meet-permission-required"
+  | "browser-control-unavailable";
+
 export type GoogleMeetChromeHealth = {
   inCall?: boolean;
   micMuted?: boolean;
+  manualActionRequired?: boolean;
+  manualActionReason?: GoogleMeetManualActionReason;
+  manualActionMessage?: string;
   providerConnected?: boolean;
   realtimeReady?: boolean;
   lastInputAt?: string;
