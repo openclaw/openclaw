@@ -147,36 +147,9 @@ describe("session cost usage", () => {
     const payload = `${JSON.stringify(assistantEntry)}\n`;
 
     await fs.writeFile(path.join(sessionsDir, "sess-1.jsonl"), payload, "utf-8");
-    const checkpointPath = path.join(
-      sessionsDir,
-      "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-    );
-    await fs.writeFile(checkpointPath, payload, "utf-8");
     await fs.writeFile(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:main": {
-          sessionId: "sess-1",
-          updatedAt: Date.now(),
-          compactionCheckpoints: [
-            {
-              checkpointId: "checkpoint-1",
-              sessionKey: "agent:main:main",
-              sessionId: "sess-1",
-              createdAt: Date.now() - 1,
-              reason: "manual",
-              preCompaction: {
-                sessionId: "sess-1",
-                sessionFile: checkpointPath,
-              },
-              postCompaction: {
-                sessionId: "sess-1",
-                sessionFile: path.join(sessionsDir, "sess-1.jsonl"),
-              },
-            },
-          ],
-        },
-      }),
+      path.join(sessionsDir, "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      payload,
       "utf-8",
     );
 

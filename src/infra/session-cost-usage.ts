@@ -13,10 +13,8 @@ import {
 } from "../config/sessions/artifacts.js";
 import {
   resolveSessionFilePath,
-  resolveStorePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
@@ -78,57 +76,15 @@ const emptyTotals = (): CostUsageTotals => ({
   missingCostEntries: 0,
 });
 
-function canonicalizePathForComparison(filePath: string): string {
-  const resolved = path.resolve(filePath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
+const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
+  /^(.+)\.checkpoint\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jsonl$/i;
 
-function resolvePathWithinSessionsDir(params: {
-  sessionsDir: string;
-  filePath: string;
-}): string | null {
-  const trimmed = params.filePath.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const candidate = path.isAbsolute(trimmed) ? trimmed : path.join(params.sessionsDir, trimmed);
-  const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
-  const resolvedPath = canonicalizePathForComparison(candidate);
-  const relative = path.relative(resolvedSessionsDir, resolvedPath);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return null;
-  }
-  return resolvedPath;
-}
-
-function resolveCompactionCheckpointTranscriptPaths(params: {
-  sessionsDir: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-}): Set<string> {
-  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const checkpoints = new Set<string>();
-  for (const entry of Object.values(store)) {
-    for (const checkpoint of entry.compactionCheckpoints ?? []) {
-      const sessionFile = checkpoint.preCompaction?.sessionFile;
-      if (!sessionFile) {
-        continue;
-      }
-      const resolved = resolvePathWithinSessionsDir({
-        sessionsDir: params.sessionsDir,
-        filePath: sessionFile,
-      });
-      if (resolved) {
-        checkpoints.add(resolved);
-      }
-    }
-  }
-  return checkpoints;
+function isDuplicateCompactionCheckpointFile(
+  fileName: string,
+  sessionFileNames: ReadonlySet<string>,
+): boolean {
+  const match = COMPACTION_CHECKPOINT_TRANSCRIPT_RE.exec(fileName);
+  return Boolean(match?.[1] && sessionFileNames.has(`${match[1]}.jsonl`));
 }
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
@@ -442,20 +398,18 @@ export async function loadCostUsageSummary(params?: {
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-  const checkpointPaths = resolveCompactionCheckpointTranscriptPaths({
-    sessionsDir,
-    config: params?.config,
-    agentId: params?.agentId,
-  });
+  const sessionFileNames = new Set(
+    entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+  );
   const files = (
     await Promise.all(
       entries
         .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
         .map(async (entry) => {
-          const filePath = path.join(sessionsDir, entry.name);
-          if (checkpointPaths.has(canonicalizePathForComparison(filePath))) {
+          if (isDuplicateCompactionCheckpointFile(entry.name, sessionFileNames)) {
             return null;
           }
+          const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
           if (!stats) {
             return null;
@@ -521,15 +475,9 @@ export async function discoverAllSessions(params?: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
-  config?: OpenClawConfig;
 }): Promise<DiscoveredSession[]> {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-  const checkpointPaths = resolveCompactionCheckpointTranscriptPaths({
-    sessionsDir,
-    config: params?.config,
-    agentId: params?.agentId,
-  });
 
   const discovered = new Map<string, DiscoveredSession>();
 
@@ -539,9 +487,6 @@ export async function discoverAllSessions(params?: {
     }
 
     const filePath = path.join(sessionsDir, entry.name);
-    if (checkpointPaths.has(canonicalizePathForComparison(filePath))) {
-      continue;
-    }
     const stats = await fs.promises.stat(filePath).catch(() => null);
     if (!stats) {
       continue;
