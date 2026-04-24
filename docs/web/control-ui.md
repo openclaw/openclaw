@@ -164,7 +164,7 @@ Cron jobs panel notes:
   optimistic user/assistant messages visible if `chat.history` briefly returns
   an older snapshot; the canonical transcript replaces those local messages once
   the Gateway history catches up.
-- Live `chat` events also suppress commentary-phase assistant stream text, so internal progress text does not briefly appear and then disappear after a history reload.
+- Live `chat` events also suppress commentary-phase assistant stream text, including signature-only phase metadata, so internal progress text does not briefly appear and then disappear after a history reload.
 - Session-scoped tool output, including subagent tool results, can update tool cards without flushing the active chat stream unless it belongs to the same run. Unrelated terminal events do not trigger a history reload while another run is actively streaming.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.

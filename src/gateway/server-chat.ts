@@ -9,7 +9,10 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
-import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
+import {
+  normalizeAssistantPhase,
+  resolveAssistantMessagePhase,
+} from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
@@ -93,7 +96,19 @@ function readAssistantEventPhase(data: unknown) {
   if (!data || typeof data !== "object") {
     return undefined;
   }
-  return normalizeAssistantPhase((data as { phase?: unknown }).phase);
+  const record = data as {
+    phase?: unknown;
+    message?: unknown;
+    partial?: unknown;
+    item?: unknown;
+  };
+  return (
+    normalizeAssistantPhase(record.phase) ??
+    resolveAssistantMessagePhase(record.message) ??
+    resolveAssistantMessagePhase(record.partial) ??
+    resolveAssistantMessagePhase(record.item) ??
+    resolveAssistantMessagePhase(record)
+  );
 }
 
 function appendUniqueSuffix(base: string, suffix: string): string {

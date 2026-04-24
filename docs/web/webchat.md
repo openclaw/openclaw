@@ -33,9 +33,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
   leaked ASCII/full-width model control tokens are stripped from visible text,
   and assistant entries whose whole visible text is only the exact silent
   token `NO_REPLY` / `no_reply` are omitted.
-- Live `chat` events also suppress commentary-phase assistant stream text, so
-  internal progress text does not briefly appear and then disappear after a
-  history reload.
+- Live `chat` events also suppress commentary-phase assistant stream text,
+  including signature-only phase metadata, so internal progress text does not
+  briefly appear and then disappear after a history reload.
 - Session-scoped tool output, including subagent tool results, can update tool
   cards without flushing the active chat stream unless it belongs to the same
   run. Unrelated terminal events do not trigger a history reload while another

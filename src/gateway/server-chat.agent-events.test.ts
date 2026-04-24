@@ -260,6 +260,45 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("does not broadcast assistant text when commentary phase only exists in message metadata", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_550,
+    });
+    chatRunState.registry.add("run-commentary-signature", {
+      sessionKey: "session-commentary-signature",
+      clientRunId: "client-commentary-signature",
+    });
+
+    handler({
+      runId: "run-commentary-signature",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "Continue. I will write the provider live socket existence proof.",
+        delta: "Continue. I will write the provider live socket existence proof.",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Continue. I will write the provider live socket existence proof.",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg_commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+        },
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+    nowSpy?.mockRestore();
+  });
+
   it("still broadcasts final_answer assistant text after suppressed commentary", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 1_600,
