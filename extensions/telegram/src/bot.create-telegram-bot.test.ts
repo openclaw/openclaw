@@ -3138,8 +3138,8 @@ describe("createTelegramBot", () => {
         }
       )?.reply_markup?.inline_keyboard?.[0]?.[0],
     ).toEqual({
-      text: "Add model",
-      callback_data: "/models add",
+      text: "openai (1)",
+      callback_data: "mdl_list_openai_1",
     });
   });
 
@@ -3527,8 +3527,8 @@ describe("createTelegramBot", () => {
         }
       )?.reply_markup?.inline_keyboard?.[0]?.[0],
     ).toEqual({
-      text: "Add model",
-      callback_data: "/models add",
+      text: "openai (1)",
+      callback_data: "mdl_list_openai_1",
     });
   });
 
