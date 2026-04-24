@@ -258,18 +258,15 @@ export const zh_TW: TranslationMap = {
       title: "如何連接",
       lead: "OpenClaw Control 會連線到正在執行的閘道。請使用託管 OpenClaw 的那台機器上的閘道 URL 和權杖。",
       beforeStartTitle: "開始之前",
-      beforeStartToken:
-        "通常需要閘道權杖，除非你已明確停用 Control UI 驗證。",
+      beforeStartToken: "通常需要閘道權杖，除非你已明確停用 Control UI 驗證。",
       beforeStartHost:
         "ws://127.0.0.1:18789 只會在主機上運作。若從其他裝置連線，請使用主機 IP、Tailscale URL 或帶權杖的儀表板連結。",
-      beforeStartPassword:
-        "只有在你的閘道已設定密碼時，才需要閘道密碼。",
+      beforeStartPassword: "只有在你的閘道已設定密碼時，才需要閘道密碼。",
       afterConnectTitle: "連線後會發生什麼",
       afterConnectBody:
         "連線後，這個頁面會變成你的即時操作主控台，用來管理工作階段、頻道、日誌、模型、裝置和自動化。",
       authRequiredTitle: "閘道權杖缺失或遭拒",
-      authRequiredBody:
-        "如果你看到未授權錯誤，表示權杖缺失、已過期，或來自另一個閘道實例。",
+      authRequiredBody: "如果你看到未授權錯誤，表示權杖缺失、已過期，或來自另一個閘道實例。",
       step1: "在主機上啟動閘道：",
       step2: "取得帶令牌的儀表板 URL：",
       step3: "將 WebSocket URL 和令牌貼到上方，或直接開啟帶令牌的 URL。",

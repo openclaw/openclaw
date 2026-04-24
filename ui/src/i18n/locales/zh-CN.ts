@@ -258,18 +258,15 @@ export const zh_CN: TranslationMap = {
       title: "如何连接",
       lead: "OpenClaw Control 会连接到正在运行的网关。请使用托管 OpenClaw 的那台机器上的网关 URL 和令牌。",
       beforeStartTitle: "开始之前",
-      beforeStartToken:
-        "通常需要网关令牌，除非你明确关闭了 Control UI 身份验证。",
+      beforeStartToken: "通常需要网关令牌，除非你明确关闭了 Control UI 身份验证。",
       beforeStartHost:
         "ws://127.0.0.1:18789 仅在宿主机上可用。换到其他设备时，请使用宿主机 IP、Tailscale URL 或带令牌的仪表板链接。",
-      beforeStartPassword:
-        "只有在你的网关配置了密码时，才需要网关密码。",
+      beforeStartPassword: "只有在你的网关配置了密码时，才需要网关密码。",
       afterConnectTitle: "连接后会发生什么",
       afterConnectBody:
         "连接成功后，此页面会成为你的实时运维控制台，用于查看会话、通道、日志、模型、设备和自动化。",
       authRequiredTitle: "网关令牌缺失或被拒绝",
-      authRequiredBody:
-        "如果你看到未授权错误，说明令牌缺失、已过期，或来自另一个网关实例。",
+      authRequiredBody: "如果你看到未授权错误，说明令牌缺失、已过期，或来自另一个网关实例。",
       step1: "在主机上启动网关：",
       step2: "获取带令牌的仪表盘 URL：",
       step3: "将 WebSocket URL 和令牌粘贴到上方，或直接打开带令牌的 URL。",

@@ -268,8 +268,7 @@ export const ko: TranslationMap = {
         "Control UI 인증을 명시적으로 비활성화하지 않았다면 일반적으로 게이트웨이 토큰이 필요합니다.",
       beforeStartHost:
         "ws://127.0.0.1:18789 는 호스트 머신에서만 동작합니다. 다른 기기에서는 호스트 IP, Tailscale URL 또는 토큰이 포함된 대시보드 링크를 사용하세요.",
-      beforeStartPassword:
-        "게이트웨이 비밀번호는 게이트웨이가 그렇게 구성된 경우에만 필요합니다.",
+      beforeStartPassword: "게이트웨이 비밀번호는 게이트웨이가 그렇게 구성된 경우에만 필요합니다.",
       afterConnectTitle: "연결 후 진행되는 일",
       afterConnectBody:
         "연결되면 이 페이지는 세션, 채널, 로그, 모델, 기기, 자동화를 위한 실시간 운영 콘솔이 됩니다.",

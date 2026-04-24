@@ -4,8 +4,8 @@
   "locale": "es",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "e5b40f0183b9811c64d7a8f5ddd2b223ec4481a63ff0a61726913f2f52914418",
-  "totalKeys": 748,
-  "translatedKeys": 748,
+  "sourceHash": "540336e0bf6ddda8908141895b0b365a4b91b6c55282e47cab7db8c9763d721b",
+  "totalKeys": 743,
+  "translatedKeys": 743,
   "workflow": 1
 }
