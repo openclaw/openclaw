@@ -126,6 +126,25 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
+  it("treats whitespace --session-id as absent when resolving --agent", async () => {
+    setupMainAndMybotStorePaths();
+    mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:mybot:main");
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {
+        "agent:mybot:main": { sessionId: "existing-session-id", updatedAt: 1 },
+      },
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      sessionId: "   ",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
   it("does not search other agent stores when --agent scopes --session-id", async () => {
     setupMainAndMybotStorePaths();
     mockStoresByPath({
