@@ -5,21 +5,7 @@ openclaw_live_stage_source_tree() {
   local stage_mode="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}"
 
   if [ "$stage_mode" = "symlink" ]; then
-    mkdir -p "$dest_dir"
-    local entry
-    while IFS= read -r -d "" entry; do
-      entry="${entry#./}"
-      case "$entry" in
-        .git | node_modules | dist | .pnpm-store | .tmp | .tmp-precommit-venv | .worktrees | __openclaw_vitest__ | relay.sock)
-          continue
-          ;;
-        *.sock)
-          continue
-          ;;
-      esac
-      ln -s "/src/$entry" "$dest_dir/$entry"
-    done < <(cd /src && find . -mindepth 1 -maxdepth 1 -print0)
-    return 0
+    echo "OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink is disabled; using copy staging." >&2
   fi
 
   set +e
@@ -71,7 +57,7 @@ openclaw_live_stage_node_modules() {
   local target_dir="$dest_dir/node_modules"
 
   mkdir -p "$target_dir"
-  find /app/node_modules -mindepth 1 -maxdepth 1 -exec ln -s {} "$target_dir" \;
+  cp -aRs /app/node_modules/. "$target_dir"
   rm -rf "$target_dir/.vite-temp"
   mkdir -p "$target_dir/.vite-temp"
 }
