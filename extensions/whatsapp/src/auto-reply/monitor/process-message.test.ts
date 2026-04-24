@@ -6,61 +6,112 @@ const { resolvePolicyMock, buildContextMock } = vi.hoisted(() => ({
   buildContextMock: vi.fn(),
 }));
 
-vi.mock("../../inbound-policy.js", () => ({
-  resolveWhatsAppCommandAuthorized: async () => true,
-  resolveWhatsAppInboundPolicy: resolvePolicyMock,
-}));
+vi.mock("../../inbound-policy.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../inbound-policy.js")>();
+  return {
+    ...actual,
+    resolveWhatsAppCommandAuthorized: async () => true,
+    resolveWhatsAppInboundPolicy: resolvePolicyMock,
+  };
+});
 
-vi.mock("./inbound-dispatch.js", () => ({
-  buildWhatsAppInboundContext: buildContextMock,
-  dispatchWhatsAppBufferedReply: async () => ({
-    queuedFinal: false,
-    counts: { tool: 0, block: 0, final: 0 },
-  }),
-  resolveWhatsAppDmRouteTarget: () => null,
-  resolveWhatsAppResponsePrefix: () => undefined,
-  updateWhatsAppMainLastRoute: () => {},
-}));
+vi.mock("./inbound-dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./inbound-dispatch.js")>();
+  return {
+    ...actual,
+    buildWhatsAppInboundContext: buildContextMock,
+    dispatchWhatsAppBufferedReply: async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }),
+    resolveWhatsAppDmRouteTarget: () => null,
+    resolveWhatsAppResponsePrefix: () => undefined,
+    updateWhatsAppMainLastRoute: () => {},
+  };
+});
 
-vi.mock("../../identity.js", () => ({
-  getPrimaryIdentityId: () => null,
-  getSelfIdentity: () => ({ e164: "+15550001111" }),
-  getSenderIdentity: () => ({ name: "Alice", e164: "+15550002222" }),
-}));
+vi.mock("../../identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../identity.js")>();
+  return {
+    ...actual,
+    getPrimaryIdentityId: () => null,
+    getSelfIdentity: () => ({ e164: "+15550001111" }),
+    getSenderIdentity: () => ({ name: "Alice", e164: "+15550002222" }),
+  };
+});
 
-vi.mock("../../reconnect.js", () => ({ newConnectionId: () => "test-conn-id" }));
-vi.mock("../../session.js", () => ({ formatError: (e: unknown) => String(e) }));
-vi.mock("../deliver-reply.js", () => ({ deliverWebReply: async () => {} }));
-vi.mock("../loggers.js", () => ({
-  whatsappInboundLog: { info: () => {}, debug: () => {} },
-}));
-vi.mock("./ack-reaction.js", () => ({ maybeSendAckReaction: async () => {} }));
-vi.mock("./inbound-context.js", () => ({
-  resolveVisibleWhatsAppGroupHistory: () => [],
-  resolveVisibleWhatsAppReplyContext: () => null,
-}));
-vi.mock("./last-route.js", () => ({
-  trackBackgroundTask: () => {},
-  updateLastRouteInBackground: () => {},
-}));
-vi.mock("./message-line.js", () => ({ buildInboundLine: () => "hi" }));
-vi.mock("./runtime-api.js", () => ({
-  buildHistoryContextFromEntries: () => "hi",
-  createChannelReplyPipeline: () => ({ onModelSelected: () => {}, responsePrefix: undefined }),
-  formatInboundEnvelope: () => "hi",
-  logVerbose: () => {},
-  normalizeE164: (v: string) => v,
-  recordSessionMetaFromInbound: async () => {},
-  resolveChannelContextVisibilityMode: () => "off",
-  resolveInboundSessionEnvelopeContext: () => ({
-    storePath: "/tmp",
-    envelopeOptions: {},
-    previousTimestamp: undefined,
-  }),
-  resolvePinnedMainDmOwnerFromAllowlist: () => null,
-  shouldComputeCommandAuthorized: () => false,
-  shouldLogVerbose: () => false,
-}));
+vi.mock("../../reconnect.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../reconnect.js")>();
+  return { ...actual, newConnectionId: () => "test-conn-id" };
+});
+
+vi.mock("../../session.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../session.js")>();
+  return { ...actual, formatError: (e: unknown) => String(e) };
+});
+
+vi.mock("../deliver-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../deliver-reply.js")>();
+  return { ...actual, deliverWebReply: async () => {} };
+});
+
+vi.mock("../loggers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../loggers.js")>();
+  return {
+    ...actual,
+    whatsappInboundLog: { info: () => {}, debug: () => {} },
+  };
+});
+
+vi.mock("./ack-reaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./ack-reaction.js")>();
+  return { ...actual, maybeSendAckReaction: async () => {} };
+});
+
+vi.mock("./inbound-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./inbound-context.js")>();
+  return {
+    ...actual,
+    resolveVisibleWhatsAppGroupHistory: () => [],
+    resolveVisibleWhatsAppReplyContext: () => null,
+  };
+});
+
+vi.mock("./last-route.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./last-route.js")>();
+  return {
+    ...actual,
+    trackBackgroundTask: () => {},
+    updateLastRouteInBackground: () => {},
+  };
+});
+
+vi.mock("./message-line.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./message-line.js")>();
+  return { ...actual, buildInboundLine: () => "hi" };
+});
+
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+  return {
+    ...actual,
+    buildHistoryContextFromEntries: () => "hi",
+    createChannelReplyPipeline: () => ({ onModelSelected: () => {}, responsePrefix: undefined }),
+    formatInboundEnvelope: () => "hi",
+    logVerbose: () => {},
+    normalizeE164: (v: string) => v,
+    recordSessionMetaFromInbound: async () => {},
+    resolveChannelContextVisibilityMode: () => "off",
+    resolveInboundSessionEnvelopeContext: () => ({
+      storePath: "/tmp",
+      envelopeOptions: {},
+      previousTimestamp: undefined,
+    }),
+    resolvePinnedMainDmOwnerFromAllowlist: () => null,
+    shouldComputeCommandAuthorized: () => false,
+    shouldLogVerbose: () => false,
+  };
+});
 
 import { processMessage } from "./process-message.js";
 
