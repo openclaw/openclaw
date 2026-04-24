@@ -104,13 +104,11 @@ export async function modelsListCommand(
       context: rowContext,
     });
 
-    if (providerFilter) {
-      appendConfiguredProviderRows({
-        rows,
-        context: rowContext,
-        seenKeys,
-      });
-    }
+    appendConfiguredProviderRows({
+      rows,
+      context: rowContext,
+      seenKeys,
+    });
 
     if (modelRegistry) {
       await appendCatalogSupplementRows({
