@@ -44,7 +44,7 @@ export {
   readResponseTextLimited,
   trimToUndefined,
   truncateErrorDetail,
-} from "../tts/provider-error-utils.js";
+} from "../agents/provider-http-errors.js";
 export {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
