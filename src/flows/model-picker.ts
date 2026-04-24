@@ -766,12 +766,19 @@ export async function promptDefaultModel(
     env: params.env,
   });
 
+  // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
+  // for providers that set preserveLiteralProviderPrefix, so the user sees the
+  // same ref they'll pick from the catalog rows. Config itself stays canonical.
+  const configuredLabel = literalPrefixProviders.has(normalizeProviderId(resolved.provider))
+    ? `${resolved.provider}/${resolved.model}`
+    : configuredRaw || resolvedKey;
+
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
     options.push({
       value: KEEP_VALUE,
       label: configuredRaw
-        ? `Keep current (${configuredRaw})`
+        ? `Keep current (${configuredLabel})`
         : `Keep current (default: ${resolvedKey})`,
       hint:
         configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
@@ -804,7 +811,7 @@ export async function promptDefaultModel(
   if (configuredKey && !seen.has(configuredKey)) {
     options.push({
       value: configuredKey,
-      label: configuredKey,
+      label: configuredLabel,
       hint: "current (not in catalog)",
     });
   }

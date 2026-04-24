@@ -18,9 +18,11 @@ describe("nvidia onboard", () => {
       "minimaxai/minimax-m2.5",
       "z-ai/glm5",
     ]);
+    // Config stores the canonical form; the picker label shows the literal
+    // form via preserveLiteralProviderPrefix.
     expectProviderOnboardPrimaryModel({
       applyConfig: applyNvidiaConfig,
-      modelRef: "nvidia/nvidia/nemotron-3-super-120b-a12b",
+      modelRef: "nvidia/nemotron-3-super-120b-a12b",
     });
   });
 
