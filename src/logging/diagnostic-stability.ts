@@ -247,6 +247,34 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       record.reason = event.errorCategory;
       break;
+    case "run.started":
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      break;
+    case "run.completed":
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      record.durationMs = event.durationMs;
+      record.outcome = event.outcome;
+      assignReasonCode(record, event.errorCategory);
+      break;
+    case "model.call.started":
+      record.provider = event.provider;
+      record.model = event.model;
+      break;
+    case "model.call.completed":
+      record.provider = event.provider;
+      record.model = event.model;
+      record.durationMs = event.durationMs;
+      break;
+    case "model.call.error":
+      record.provider = event.provider;
+      record.model = event.model;
+      record.durationMs = event.durationMs;
+      record.reason = event.errorCategory;
+      break;
     case "diagnostic.memory.sample":
       record.memory = copyMemory(event.memory);
       break;

@@ -185,6 +185,54 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   errorCode?: string;
 };
 
+type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  channel?: string;
+};
+
+export type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
+  type: "run.started";
+};
+
+export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
+  type: "run.completed";
+  durationMs: number;
+  outcome: "completed" | "aborted" | "error";
+  errorCategory?: string;
+};
+
+type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
+  type: "model.call.started" | "model.call.completed" | "model.call.error";
+  runId: string;
+  callId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  api?: string;
+  transport?: string;
+};
+
+export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.started";
+};
+
+export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.completed";
+  durationMs: number;
+};
+
+export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.error";
+  durationMs: number;
+  errorCategory: string;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
@@ -238,6 +286,11 @@ export type DiagnosticEventPayload =
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
+  | DiagnosticRunStartedEvent
+  | DiagnosticRunCompletedEvent
+  | DiagnosticModelCallStartedEvent
+  | DiagnosticModelCallCompletedEvent
+  | DiagnosticModelCallErrorEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent;
