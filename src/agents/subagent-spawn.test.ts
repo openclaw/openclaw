@@ -1,4 +1,6 @@
+import { promises as fs } from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -184,7 +186,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "inspect the spawn seam",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.5",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -221,7 +223,7 @@ describe("spawnSubagentDirect seam flow", () => {
         },
         task: "inspect the spawn seam",
         cleanup: "keep",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.5",
         workspaceDir: "/tmp/requester-workspace",
         expectsCompletionMessage: true,
         spawnMode: "run",
@@ -271,7 +273,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "inspect unthreaded spawn",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.5",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -311,7 +313,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "verify per-method scope routing",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.5",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -371,6 +373,95 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentCall?.params).toMatchObject({
       thinking: "high",
     });
+  });
+
+  it("returns a shadow-only model-router recommendation without changing the applied model", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: {
+            modelRouter: {
+              mode: "shadow",
+            },
+          },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "fix this TypeScript test failure in the repo",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+      routerRecommendation: {
+        enabled: true,
+        mode: "shadow",
+        taskType: "coding",
+        recommendedModel: "openai-codex/gpt-5.3-codex",
+        routeEffectApplied: false,
+      },
+    });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "openai/gpt-5.5",
+      }),
+    );
+  });
+
+  it("appends shadow model-router telemetry when configured", async () => {
+    const telemetryPath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-router-${Date.now()}-${Math.random()}.jsonl`,
+    );
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: {
+            modelRouter: {
+              mode: "shadow",
+              telemetryPath,
+            },
+          },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "research and compare model routing options",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const raw = await fs.readFile(telemetryPath, "utf8");
+    const event = JSON.parse(raw.trim());
+    expect(event).toMatchObject({
+      component: "openclaw.subagent_spawn",
+      mode: "shadow",
+      taskType: "research",
+      recommendedModel: "openai-codex/gpt-5.1-codex-mini",
+      actualModel: "openai/gpt-5.5",
+      routeEffectApplied: false,
+      status: "accepted",
+    });
+    expect(typeof event.requestId).toBe("string");
+    await fs.rm(telemetryPath, { force: true });
   });
 
   it("does not duplicate long subagent task text in the initial user message (#72019)", async () => {
