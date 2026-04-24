@@ -167,7 +167,8 @@ conversation, and it runs after core approval handling finishes.
 Provider plugins have three layers:
 
 - **Manifest metadata** for cheap pre-runtime lookup: `providerAuthEnvVars`,
-  `providerAuthAliases`, `providerAuthChoices`, and `channelEnvVars`.
+  `setup.providers[].envVars`, `providerAuthAliases`, `providerAuthChoices`,
+  and `channelEnvVars`.
 - **Config-time hooks**: `catalog` (legacy `discovery`) plus
   `applyConfigDefaults`.
 - **Runtime hooks**: 40+ optional hooks covering auth, model resolution,

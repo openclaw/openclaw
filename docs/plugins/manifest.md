@@ -327,6 +327,11 @@ narrows the candidate plugin and setup still needs richer setup-time runtime
 hooks, set `requiresRuntime: true` and keep `setup-api` in place as the
 fallback execution path.
 
+OpenClaw also includes `setup.providers[].envVars` in generic provider auth and
+env-var lookups. Use `providerAuthEnvVars` when you need the broader
+provider-auth metadata surface; use `setup.providers[].envVars` when the env
+vars belong specifically to the setup/onboarding descriptor.
+
 Set `requiresRuntime: false` only when those descriptors are sufficient for the
 setup surface. OpenClaw treats explicit `false` as a descriptor-only contract
 and will not execute `setup-api` for setup lookup. Omitted `requiresRuntime`
