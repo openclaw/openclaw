@@ -1,4 +1,4 @@
-import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import { assertOkOrThrowProviderError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -281,7 +281,7 @@ async function synthesizeGoogleTtsPcm(params: {
   });
 
   try {
-    await assertOkOrThrowHttpError(res, "Google TTS failed");
+    await assertOkOrThrowProviderError(res, "Google TTS failed");
     return extractGoogleSpeechPcm((await res.json()) as GoogleGenerateSpeechResponse);
   } finally {
     await release();

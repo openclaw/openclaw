@@ -494,6 +494,7 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
   resolvedTransport?: SupportedTransport,
+  options?: { preparedExtraParams?: Record<string, unknown> },
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -507,19 +508,21 @@ export function applyExtraParamsToAgent(
           Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
         )
       : undefined;
-  const effectiveExtraParams = resolvePreparedExtraParams({
-    cfg,
-    provider,
-    modelId,
-    extraParamsOverride,
-    thinkingLevel,
-    agentId,
-    agentDir,
-    workspaceDir,
-    resolvedExtraParams,
-    model,
-    resolvedTransport,
-  });
+  const effectiveExtraParams =
+    options?.preparedExtraParams ??
+    resolvePreparedExtraParams({
+      cfg,
+      provider,
+      modelId,
+      extraParamsOverride,
+      thinkingLevel,
+      agentId,
+      agentDir,
+      workspaceDir,
+      resolvedExtraParams,
+      model,
+      resolvedTransport,
+    });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
     cfg,

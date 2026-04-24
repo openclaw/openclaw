@@ -245,7 +245,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "tool.execution.error":
       record.toolName = event.toolName;
       record.durationMs = event.durationMs;
-      record.reason = event.errorCategory;
+      assignReasonCode(record, event.errorCategory);
       break;
     case "run.started":
       record.provider = event.provider;
@@ -273,7 +273,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.provider = event.provider;
       record.model = event.model;
       record.durationMs = event.durationMs;
-      record.reason = event.errorCategory;
+      assignReasonCode(record, event.errorCategory);
       break;
     case "diagnostic.memory.sample":
       record.memory = copyMemory(event.memory);

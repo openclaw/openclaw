@@ -14,6 +14,8 @@ RUN_UPDATE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO:-1}"
 RUN_ROOT_OWNED_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO:-1}"
 RUN_SETUP_ENTRY_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO:-1}"
 RUN_LOAD_FAILURE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO:-1}"
+RUN_DISABLED_CONFIG_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO:-1}"
+CHANNEL_ONLY="${OPENCLAW_BUNDLED_CHANNEL_ONLY:-}"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" bundled-channel-deps "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
@@ -284,10 +286,14 @@ stop_gateway() {
 }
 
 wait_for_gateway_health() {
+  local log_file="${1:-}"
   if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
     return 0
   fi
   echo "gateway process exited after ready marker" >&2
+  if [ -n "$log_file" ]; then
+    cat "$log_file" >&2
+  fi
   return 1
 }
 
@@ -402,14 +408,14 @@ assert_no_install_stage() {
 echo "Starting baseline gateway with OpenAI configured..."
 write_config baseline
 start_gateway "/tmp/openclaw-$CHANNEL-baseline.log" 1
-wait_for_gateway_health
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-baseline.log"
 stop_gateway
 assert_no_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 
 echo "Enabling $CHANNEL by config edit, then restarting gateway..."
 write_config "$CHANNEL"
 start_gateway "/tmp/openclaw-$CHANNEL-first.log"
-wait_for_gateway_health
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-first.log"
 assert_installed_once "/tmp/openclaw-$CHANNEL-first.log" "$CHANNEL" "$DEP_SENTINEL"
 assert_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 assert_no_install_stage "$CHANNEL"
@@ -418,7 +424,7 @@ stop_gateway
 
 echo "Restarting gateway again; $CHANNEL deps must stay installed..."
 start_gateway "/tmp/openclaw-$CHANNEL-second.log"
-wait_for_gateway_health
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-second.log"
 assert_not_installed "/tmp/openclaw-$CHANNEL-second.log" "$CHANNEL"
 assert_no_install_stage "$CHANNEL"
 assert_channel_status "$CHANNEL"
@@ -709,6 +715,102 @@ for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
   fi
 done
 
+echo "Running packaged guided WhatsApp setup; runtime deps should be staged before finalize..."
+OPENCLAW_PACKAGE_ROOT="$root" node --input-type=module - <<'NODE'
+import path from "node:path";
+import { readdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+
+const root = process.env.OPENCLAW_PACKAGE_ROOT;
+if (!root) {
+  throw new Error("missing OPENCLAW_PACKAGE_ROOT");
+}
+const distDir = path.join(root, "dist");
+const onboardChannelFiles = (await readdir(distDir))
+  .filter((entry) => /^onboard-channels-.*\.js$/.test(entry))
+  .sort();
+let setupChannels;
+for (const entry of onboardChannelFiles) {
+  const module = await import(pathToFileURL(path.join(distDir, entry)));
+  if (typeof module.setupChannels === "function") {
+    setupChannels = module.setupChannels;
+    break;
+  }
+}
+if (!setupChannels) {
+  throw new Error(
+    `could not find packaged setupChannels export in ${JSON.stringify(onboardChannelFiles)}`,
+  );
+}
+
+let channelSelectCount = 0;
+const notes = [];
+const prompter = {
+  intro: async () => {},
+  outro: async () => {},
+  note: async (body, title) => {
+    notes.push({ title, body });
+  },
+  confirm: async ({ message, initialValue }) => {
+    if (message === "Link WhatsApp now (QR)?") {
+      return false;
+    }
+    return initialValue ?? true;
+  },
+  select: async ({ message }) => {
+    if (message === "Select a channel") {
+      channelSelectCount += 1;
+      return channelSelectCount === 1 ? "whatsapp" : "__done__";
+    }
+    if (message === "WhatsApp phone setup") {
+      return "separate";
+    }
+    if (message === "WhatsApp DM policy") {
+      return "disabled";
+    }
+    throw new Error(`unexpected select prompt: ${message}`);
+  },
+  multiselect: async ({ message }) => {
+    throw new Error(`unexpected multiselect prompt: ${message}`);
+  },
+  text: async ({ message }) => {
+    throw new Error(`unexpected text prompt: ${message}`);
+  },
+};
+const runtime = {
+  log: (message) => console.log(message),
+  error: (message) => console.error(message),
+};
+
+const result = await setupChannels(
+  { plugins: { enabled: true } },
+  runtime,
+  prompter,
+  {
+    deferStatusUntilSelection: true,
+    skipConfirm: true,
+    skipStatusNote: true,
+    skipDmPolicyPrompt: true,
+    initialSelection: ["whatsapp"],
+  },
+);
+
+if (!result.channels?.whatsapp) {
+  throw new Error(`WhatsApp setup did not write channel config: ${JSON.stringify(result)}`);
+}
+console.log("packaged guided WhatsApp setup completed");
+NODE
+
+if [ -e "$root/dist/extensions/whatsapp/node_modules/@whiskeysockets/baileys/package.json" ]; then
+  echo "expected guided WhatsApp setup deps to be installed externally, not into bundled plugin tree" >&2
+  exit 1
+fi
+if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/@whiskeysockets/baileys/package.json" -type f | grep -q .; then
+  echo "guided WhatsApp setup did not stage @whiskeysockets/baileys before finalize" >&2
+  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+  exit 1
+fi
+
 echo "Configuring setup-entry channels; doctor should now install bundled runtime deps externally..."
 node - <<'NODE'
 const fs = require("node:fs");
@@ -756,6 +858,171 @@ for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
 done
 
 echo "bundled channel setup-entry runtime deps Docker E2E passed"
+EOF
+  then
+    cat "$run_log"
+    rm -f "$run_log"
+    exit 1
+  fi
+
+  cat "$run_log"
+  rm -f "$run_log"
+}
+
+run_disabled_config_scenario() {
+  local run_log
+  run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-disabled-config.XXXXXX")"
+
+  echo "Running bundled channel disabled-config runtime deps Docker E2E..."
+  if ! docker run --rm \
+    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
+    -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+set -euo pipefail
+
+export HOME="$(mktemp -d "/tmp/openclaw-bundled-channel-disabled-config.XXXXXX")"
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+export OPENCLAW_NO_ONBOARD=1
+export OPENCLAW_PLUGIN_STAGE_DIR="$HOME/.openclaw/plugin-runtime-deps"
+mkdir -p "$OPENCLAW_PLUGIN_STAGE_DIR"
+
+package_root() {
+  printf "%s/openclaw" "$(npm root -g)"
+}
+
+assert_dep_absent_everywhere() {
+  local channel="$1"
+  local dep_path="$2"
+  local root="$3"
+  for candidate in \
+    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
+    "$root/dist/extensions/node_modules/$dep_path/package.json" \
+    "$root/node_modules/$dep_path/package.json"; do
+    if [ -f "$candidate" ]; then
+      echo "disabled $channel unexpectedly installed $dep_path at $candidate" >&2
+      exit 1
+    fi
+  done
+
+  if ! node - <<'NODE' "$OPENCLAW_PLUGIN_STAGE_DIR" "$dep_path"
+const fs = require("node:fs");
+const path = require("node:path");
+
+const stageDir = process.argv[2];
+const depName = process.argv[3];
+const manifestName = ".openclaw-runtime-deps.json";
+const matches = [];
+
+function visit(dir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      visit(fullPath);
+      continue;
+    }
+    if (entry.name !== manifestName) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+    } catch {
+      continue;
+    }
+    const specs = Array.isArray(parsed.specs) ? parsed.specs : [];
+    for (const spec of specs) {
+      if (typeof spec === "string" && spec.startsWith(`${depName}@`)) {
+        matches.push(`${fullPath}: ${spec}`);
+      }
+    }
+  }
+}
+
+visit(stageDir);
+if (matches.length > 0) {
+  process.stderr.write(`${matches.join("\n")}\n`);
+  process.exit(1);
+}
+NODE
+  then
+    echo "disabled $channel unexpectedly selected $dep_path for external runtime deps" >&2
+    cat /tmp/openclaw-disabled-config-doctor.log >&2
+    exit 1
+  fi
+}
+
+echo "Installing mounted OpenClaw package..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-disabled-config-install.log 2>&1
+
+root="$(package_root)"
+test -d "$root/dist/extensions/telegram"
+test -d "$root/dist/extensions/discord"
+test -d "$root/dist/extensions/slack"
+rm -rf "$root/dist/extensions/telegram/node_modules"
+rm -rf "$root/dist/extensions/discord/node_modules"
+rm -rf "$root/dist/extensions/slack/node_modules"
+
+node - <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = {
+  plugins: {
+    enabled: true,
+    entries: {
+      discord: { enabled: false },
+    },
+  },
+  channels: {
+    telegram: {
+      enabled: false,
+      botToken: "123456:disabled-config-token",
+      dmPolicy: "disabled",
+      groupPolicy: "disabled",
+    },
+    slack: {
+      enabled: false,
+      botToken: "xoxb-disabled-config-token",
+      appToken: "xapp-disabled-config-token",
+    },
+    discord: {
+      enabled: true,
+      token: "disabled-plugin-entry-token",
+      dmPolicy: "disabled",
+      groupPolicy: "disabled",
+    },
+  },
+};
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+
+if ! openclaw doctor --non-interactive >/tmp/openclaw-disabled-config-doctor.log 2>&1; then
+  echo "doctor failed for disabled-config runtime deps smoke" >&2
+  cat /tmp/openclaw-disabled-config-doctor.log >&2
+  exit 1
+fi
+
+assert_dep_absent_everywhere telegram grammy "$root"
+assert_dep_absent_everywhere slack @slack/web-api "$root"
+assert_dep_absent_everywhere discord discord-api-types "$root"
+
+if grep -Eq "(used by .*\\b(telegram|slack|discord)\\b|\\[plugins\\] (telegram|slack|discord) installed bundled runtime deps:)" /tmp/openclaw-disabled-config-doctor.log; then
+  echo "doctor installed runtime deps for an explicitly disabled channel/plugin" >&2
+  cat /tmp/openclaw-disabled-config-doctor.log >&2
+  exit 1
+fi
+
+echo "bundled channel disabled-config runtime deps Docker E2E passed"
 EOF
   then
     cat "$run_log"
@@ -1270,11 +1537,22 @@ EOF
 }
 
 if [ "$RUN_CHANNEL_SCENARIOS" != "0" ]; then
-  run_channel_scenario telegram grammy
-  run_channel_scenario discord discord-api-types
-  run_channel_scenario slack @slack/web-api
-  run_channel_scenario feishu @larksuiteoapi/node-sdk
-  run_channel_scenario memory-lancedb @lancedb/lancedb
+  IFS=',' read -r -a CHANNEL_SCENARIOS <<<"${OPENCLAW_BUNDLED_CHANNELS:-${CHANNEL_ONLY:-telegram,discord,slack,feishu,memory-lancedb}}"
+  for channel_scenario in "${CHANNEL_SCENARIOS[@]}"; do
+    channel_scenario="${channel_scenario//[[:space:]]/}"
+    [ -n "$channel_scenario" ] || continue
+    case "$channel_scenario" in
+      telegram) run_channel_scenario telegram grammy ;;
+      discord) run_channel_scenario discord discord-api-types ;;
+      slack) run_channel_scenario slack @slack/web-api ;;
+      feishu) run_channel_scenario feishu @larksuiteoapi/node-sdk ;;
+      memory-lancedb) run_channel_scenario memory-lancedb @lancedb/lancedb ;;
+      *)
+        echo "Unsupported OPENCLAW_BUNDLED_CHANNELS entry: $channel_scenario" >&2
+        exit 1
+        ;;
+    esac
+  done
 fi
 if [ "$RUN_UPDATE_SCENARIO" != "0" ]; then
   run_update_scenario
@@ -1284,6 +1562,9 @@ if [ "$RUN_ROOT_OWNED_SCENARIO" != "0" ]; then
 fi
 if [ "$RUN_SETUP_ENTRY_SCENARIO" != "0" ]; then
   run_setup_entry_scenario
+fi
+if [ "$RUN_DISABLED_CONFIG_SCENARIO" != "0" ]; then
+  run_disabled_config_scenario
 fi
 if [ "$RUN_LOAD_FAILURE_SCENARIO" != "0" ]; then
   run_load_failure_scenario

@@ -71,10 +71,14 @@ or fallback behavior without changing runtime loading semantics.
 
 Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
 `setup.cliBackends` to narrow candidate plugins before it falls back to
-`setup-api` for plugins that still need setup-time runtime hooks. If more than
-one discovered plugin claims the same normalized setup provider or CLI backend
-id, setup lookup refuses the ambiguous owner instead of relying on discovery
-order.
+`setup-api` for plugins that still need setup-time runtime hooks. Explicit
+`setup.requiresRuntime: false` is a descriptor-only cutoff; omitted
+`requiresRuntime` keeps the legacy setup-api fallback for compatibility. If more
+than one discovered plugin claims the same normalized setup provider or CLI
+backend id, setup lookup refuses the ambiguous owner instead of relying on
+discovery order. When setup runtime does execute, registry diagnostics report
+drift between `setup.providers` / `setup.cliBackends` and the providers or CLI
+backends registered by setup-api without blocking legacy plugins.
 
 ### What the loader caches
 
@@ -888,10 +892,14 @@ Generated channel catalog entries and provider install catalog entries expose
 normalized install-source facts next to the raw `openclaw.install` block. The
 normalized facts identify whether the npm spec is an exact version or floating
 selector, whether expected integrity metadata is present, and whether a local
-source path is also available. Consumers should treat `installSource` as an
-additive optional field so older hand-built entries and compatibility shims do
-not have to synthesize it. This lets onboarding and diagnostics explain
-source-plane state without importing plugin runtime.
+source path is also available. When the catalog/package identity is known, the
+normalized facts warn if the parsed npm package name drifts from that identity.
+They also warn when `defaultChoice` is invalid or points at a source that is
+not available, and when npm integrity metadata is present without a valid npm
+source. Consumers should treat `installSource` as an additive optional field so
+older hand-built entries and compatibility shims do not have to synthesize it.
+This lets onboarding and diagnostics explain source-plane state without
+importing plugin runtime.
 
 Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for

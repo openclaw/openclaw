@@ -996,6 +996,35 @@ describe("applyAuthChoice", () => {
     }
   });
 
+  it("keeps an existing default model when configure re-applies provider auth", async () => {
+    await setupTempState();
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-openrouter-test");
+    const note = vi.fn();
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn();
+    const existingPrimary = "anthropic/claude-opus-4-6";
+    const prompter = createPrompter({ text, confirm, note });
+
+    const result = await applyAuthChoice({
+      authChoice: "openrouter-api-key",
+      config: { agents: { defaults: { model: { primary: existingPrimary } } } },
+      prompter,
+      runtime: createExitThrowingRuntime(),
+      setDefaultModel: true,
+      preserveExistingDefaultModel: true,
+    });
+
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      existingPrimary,
+    );
+    expect(result.config.agents?.defaults?.models?.["openrouter/auto"]).toEqual({});
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "Kept existing default model anthropic/claude-opus-4-6; openrouter/auto is available.",
+      "Model configured",
+    );
+  });
+
   it("uses explicit env for plugin auth resolution instead of host env", async () => {
     await setupTempState();
     process.env.OPENAI_API_KEY = "sk-openai-host"; // pragma: allowlist secret

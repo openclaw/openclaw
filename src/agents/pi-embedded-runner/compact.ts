@@ -26,7 +26,6 @@ import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   prepareProviderRuntimeAuth,
-  resolveProviderSystemPromptContribution,
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
@@ -76,6 +75,8 @@ import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
+import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
@@ -92,7 +93,6 @@ import {
   resolveSkillsPromptForRun,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import type { CompactEmbeddedPiSessionParams, CompactionMessageMetrics } from "./compact.types.js";
 import {
@@ -138,10 +138,6 @@ import {
   collectRegisteredToolNames,
   toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
-import {
-  logProviderToolSchemaDiagnostics,
-  normalizeProviderToolSchemas,
-} from "./tool-schema-runtime.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
@@ -177,6 +173,7 @@ function prepareCompactionSessionAgent(params: {
   sessionAgentId: string;
   effectiveWorkspace: string;
   agentDir: string;
+  runtimePlan?: AgentRuntimePlan;
 }) {
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
@@ -202,6 +199,12 @@ function prepareCompactionSessionAgent(params: {
       transformSystemPrompt: false,
     }) as never;
   }
+  const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
+    thinkingLevel: params.thinkLevel,
+    agentId: params.sessionAgentId,
+    workspaceDir: params.effectiveWorkspace,
+    model: params.effectiveModel,
+  });
   return applyExtraParamsToAgent(
     params.session.agent as never,
     params.config,
@@ -213,6 +216,8 @@ function prepareCompactionSessionAgent(params: {
     params.effectiveWorkspace,
     params.effectiveModel,
     params.agentDir,
+    undefined,
+    preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : undefined,
   );
 }
 
@@ -501,6 +506,23 @@ export async function compactEmbeddedPiSessionDirect(
       hasRuntimeAuthExchange ? null : apiKeyInfo,
       params.config,
     );
+    const runtimePlan =
+      params.runtimePlan ??
+      buildAgentRuntimePlan({
+        provider,
+        modelId,
+        model: effectiveModel,
+        modelApi: effectiveModel.api,
+        harnessId: params.agentHarnessId,
+        harnessRuntime: params.agentHarnessId,
+        authProfileProvider: authProfileId?.split(":", 1)[0],
+        sessionAuthProfileId: authProfileId,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        agentDir,
+        agentId: effectiveSkillAgentId,
+        thinkingLevel: thinkLevel,
+      });
 
     const runAbortController = new AbortController();
     const toolsRaw = createOpenClawCodingTools({
@@ -535,16 +557,15 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
-    const tools = normalizeProviderToolSchemas({
-      tools: toolsEnabled ? toolsRaw : [],
-      provider,
-      config: params.config,
+    const runtimePlanModelContext = {
       workspaceDir: effectiveWorkspace,
-      env: process.env,
-      modelId,
       modelApi: model.api,
       model,
-    });
+    };
+    const tools = runtimePlan.tools.normalize(
+      toolsEnabled ? toolsRaw : [],
+      runtimePlanModelContext,
+    );
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -590,16 +611,7 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const effectiveTools = [...tools, ...filteredBundledTools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
-    logProviderToolSchemaDiagnostics({
-      tools: effectiveTools,
-      provider,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-      env: process.env,
-      modelId,
-      modelApi: model.api,
-      model,
-    });
+    runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
@@ -704,22 +716,21 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
-    const promptContribution = resolveProviderSystemPromptContribution({
-      provider,
+    const promptContributionContext: Parameters<
+      AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
+    >[0] = {
       config: params.config,
+      agentDir,
       workspaceDir: effectiveWorkspace,
-      context: {
-        config: params.config,
-        agentDir,
-        workspaceDir: effectiveWorkspace,
-        provider,
-        modelId,
-        promptMode,
-        runtimeChannel,
-        runtimeCapabilities,
-        agentId: sessionAgentId,
-      },
-    });
+      provider,
+      modelId,
+      promptMode,
+      runtimeChannel,
+      runtimeCapabilities,
+      agentId: sessionAgentId,
+    };
+    const promptContribution =
+      runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
     const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) => {
       const builtSystemPrompt =
         resolveSystemPromptOverride({
@@ -792,15 +803,7 @@ export async function compactEmbeddedPiSessionDirect(
         warn: (message) => log.warn(message),
       });
       await prewarmSessionFile(params.sessionFile);
-      const transcriptPolicy = resolveTranscriptPolicy({
-        modelApi: model.api,
-        provider,
-        modelId,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        env: process.env,
-        model,
-      });
+      const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
       const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
@@ -917,6 +920,7 @@ export async function compactEmbeddedPiSessionDirect(
             sessionAgentId,
             effectiveWorkspace,
             agentDir,
+            runtimePlan,
           });
 
           const prior = await sanitizeSessionHistory({

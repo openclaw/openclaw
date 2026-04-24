@@ -75,6 +75,19 @@ higher-quality model. You can configure this via `agents.defaults.subagents.mode
 overrides. When a child genuinely needs the requester's current transcript, the agent can request
 `context: "fork"` on that one spawn.
 
+## Context modes
+
+Native sub-agents start isolated unless the caller explicitly asks to fork the
+current transcript.
+
+| Mode       | When to use it                                                                                                                         | Behavior                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                           | Creates a clean child transcript. This is the default and keeps token use lower.  |
+| `fork`     | Work that depends on the current conversation, prior tool results, or nuanced instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts. |
+
+Use `fork` sparingly. It is for context-sensitive delegation, not a replacement
+for writing a clear task prompt.
+
 ## Tool
 
 Use `sessions_spawn`:

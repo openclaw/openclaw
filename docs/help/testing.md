@@ -335,81 +335,100 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
-    <AccordionGroup>
-    <Accordion title="Projects, shards, and scoped lanes"> - Untargeted `pnpm test` runs twelve smaller shard configs (`core-unit-fast`, `core-unit-src`, `core-unit-security`, `core-unit-ui`, `core-unit-support`, `core-support-boundary`, `core-contracts`, `core-bundled`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/extension work starving unrelated suites. - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical. - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax. - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun. - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include one extension validation pass because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field. - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes. - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory. - `auto-reply` has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
-    </Accordion>
 
-      <Accordion title="Embedded runner coverage">
-        - When you change message-tool discovery inputs or compaction runtime
-          context, keep both levels of coverage.
-        - Add focused helper regressions for pure routing and normalization
-          boundaries.
-        - Keep the embedded runner integration suites healthy:
-          `src/agents/pi-embedded-runner/compact.hooks.test.ts`,
-          `src/agents/pi-embedded-runner/run.overflow-compaction.test.ts`, and
-          `src/agents/pi-embedded-runner/run.overflow-compaction.loop.test.ts`.
-        - Those suites verify that scoped ids and compaction behavior still flow
-          through the real `run.ts` / `compact.ts` paths; helper-only tests are
-          not a sufficient substitute for those integration paths.
-      </Accordion>
+<AccordionGroup>
+  <Accordion title="Projects, shards, and scoped lanes">
 
-      <Accordion title="Vitest pool and isolation defaults">
-        - Base Vitest config defaults to `threads`.
-        - The shared Vitest config fixes `isolate: false` and uses the
-          non-isolated runner across the root projects, e2e, and live configs.
-        - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
-          shared non-isolated runner too.
-        - Each `pnpm test` shard inherits the same `threads` + `isolate: false`
-          defaults from the shared Vitest config.
-        - `scripts/run-vitest.mjs` adds `--no-maglev` for Vitest child Node
-          processes by default to reduce V8 compile churn during big local runs.
-          Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` to compare against stock V8
-          behavior.
-      </Accordion>
+    - Untargeted `pnpm test` runs twelve smaller shard configs (`core-unit-fast`, `core-unit-src`, `core-unit-security`, `core-unit-ui`, `core-unit-support`, `core-support-boundary`, `core-contracts`, `core-bundled`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/extension work starving unrelated suites.
+    - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
+    - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
+    - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
+    - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include one extension validation pass because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field.
+    - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
+    - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
+    - `auto-reply` has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
 
-      <Accordion title="Fast local iteration">
-        - `pnpm changed:lanes` shows which architectural lanes a diff triggers.
-        - The pre-commit hook is formatting-only. It restages formatted files and
-          does not run lint, typecheck, or tests.
-        - Run `pnpm check:changed` explicitly before handoff or push when you
-          need the smart local gate. Public Plugin SDK and plugin-contract
-          changes include one extension validation pass.
-        - `pnpm test:changed` routes through scoped lanes when the changed paths
-          map cleanly to a smaller suite.
-        - `pnpm test:max` and `pnpm test:changed:max` keep the same routing
-          behavior, just with a higher worker cap.
-        - Local worker auto-scaling is intentionally conservative and backs off
-          when the host load average is already high, so multiple concurrent
-          Vitest runs do less damage by default.
-        - The base Vitest config marks the projects/config files as
-          `forceRerunTriggers` so changed-mode reruns stay correct when test
-          wiring changes.
-        - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported
-          hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want
-          one explicit cache location for direct profiling.
-      </Accordion>
+  </Accordion>
 
-      <Accordion title="Perf debugging">
-        - `pnpm test:perf:imports` enables Vitest import-duration reporting plus
-          import-breakdown output.
-        - `pnpm test:perf:imports:changed` scopes the same profiling view to
-          files changed since `origin/main`.
-        - When one hot test still spends most of its time in startup imports,
-          keep heavy dependencies behind a narrow local `*.runtime.ts` seam and
-          mock that seam directly instead of deep-importing runtime helpers just
-          to pass them through `vi.mock(...)`.
-        - `pnpm test:perf:changed:bench -- --ref <git-ref>` compares routed
-          `test:changed` against the native root-project path for that committed
-          diff and prints wall time plus macOS max RSS.
-        - `pnpm test:perf:changed:bench -- --worktree` benchmarks the current
-          dirty tree by routing the changed file list through
-          `scripts/test-projects.mjs` and the root Vitest config.
-        - `pnpm test:perf:profile:main` writes a main-thread CPU profile for
-          Vitest/Vite startup and transform overhead.
-        - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for the
-          unit suite with file parallelism disabled.
-      </Accordion>
-    </AccordionGroup>
+  <Accordion title="Embedded runner coverage">
+
+    - When you change message-tool discovery inputs or compaction runtime
+      context, keep both levels of coverage.
+    - Add focused helper regressions for pure routing and normalization
+      boundaries.
+    - Keep the embedded runner integration suites healthy:
+      `src/agents/pi-embedded-runner/compact.hooks.test.ts`,
+      `src/agents/pi-embedded-runner/run.overflow-compaction.test.ts`, and
+      `src/agents/pi-embedded-runner/run.overflow-compaction.loop.test.ts`.
+    - Those suites verify that scoped ids and compaction behavior still flow
+      through the real `run.ts` / `compact.ts` paths; helper-only tests are
+      not a sufficient substitute for those integration paths.
+
+  </Accordion>
+
+  <Accordion title="Vitest pool and isolation defaults">
+
+    - Base Vitest config defaults to `threads`.
+    - The shared Vitest config fixes `isolate: false` and uses the
+      non-isolated runner across the root projects, e2e, and live configs.
+    - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
+      shared non-isolated runner too.
+    - Each `pnpm test` shard inherits the same `threads` + `isolate: false`
+      defaults from the shared Vitest config.
+    - `scripts/run-vitest.mjs` adds `--no-maglev` for Vitest child Node
+      processes by default to reduce V8 compile churn during big local runs.
+      Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` to compare against stock V8
+      behavior.
+
+  </Accordion>
+
+  <Accordion title="Fast local iteration">
+
+    - `pnpm changed:lanes` shows which architectural lanes a diff triggers.
+    - The pre-commit hook is formatting-only. It restages formatted files and
+      does not run lint, typecheck, or tests.
+    - Run `pnpm check:changed` explicitly before handoff or push when you
+      need the smart local gate. Public Plugin SDK and plugin-contract
+      changes include one extension validation pass.
+    - `pnpm test:changed` routes through scoped lanes when the changed paths
+      map cleanly to a smaller suite.
+    - `pnpm test:max` and `pnpm test:changed:max` keep the same routing
+      behavior, just with a higher worker cap.
+    - Local worker auto-scaling is intentionally conservative and backs off
+      when the host load average is already high, so multiple concurrent
+      Vitest runs do less damage by default.
+    - The base Vitest config marks the projects/config files as
+      `forceRerunTriggers` so changed-mode reruns stay correct when test
+      wiring changes.
+    - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported
+      hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want
+      one explicit cache location for direct profiling.
+
+  </Accordion>
+
+  <Accordion title="Perf debugging">
+
+    - `pnpm test:perf:imports` enables Vitest import-duration reporting plus
+      import-breakdown output.
+    - `pnpm test:perf:imports:changed` scopes the same profiling view to
+      files changed since `origin/main`.
+    - When one hot test still spends most of its time in startup imports,
+      keep heavy dependencies behind a narrow local `*.runtime.ts` seam and
+      mock that seam directly instead of deep-importing runtime helpers just
+      to pass them through `vi.mock(...)`.
+    - `pnpm test:perf:changed:bench -- --ref <git-ref>` compares routed
+      `test:changed` against the native root-project path for that committed
+      diff and prints wall time plus macOS max RSS.
+    - `pnpm test:perf:changed:bench -- --worktree` benchmarks the current
+      dirty tree by routing the changed file list through
+      `scripts/test-projects.mjs` and the root Vitest config.
+    - `pnpm test:perf:profile:main` writes a main-thread CPU profile for
+      Vitest/Vite startup and transform overhead.
+    - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for the
+      unit suite with file parallelism disabled.
+
+  </Accordion>
+</AccordionGroup>
 
 ### Stability (gateway)
 
@@ -537,7 +556,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Plugins (install smoke + `/plugin` alias + Claude-bundle restart semantics): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 - Plugin update unchanged smoke: `pnpm test:docker:plugin-update` (script: `scripts/e2e/plugin-update-unchanged-docker.sh`)
 - Config reload metadata smoke: `pnpm test:docker:config-reload` (script: `scripts/e2e/config-reload-source-docker.sh`)
-- Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ=/path/to/openclaw-*.tgz`.
+- Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ=/path/to/openclaw-*.tgz`. The full Docker aggregate pre-packs this tarball once, then shards bundled channel checks into independent lanes; use `OPENCLAW_BUNDLED_CHANNELS=telegram,slack` to narrow the channel matrix when running the bundled lane directly. The lane also verifies that `channels.<id>.enabled=false` and `plugins.entries.<id>.enabled=false` suppress doctor/runtime-dependency repair.
 - Narrow bundled plugin runtime deps while iterating by disabling unrelated scenarios, for example:
   `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 pnpm test:docker:bundled-channel-deps`.
 

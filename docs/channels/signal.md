@@ -6,8 +6,6 @@ read_when:
 title: "Signal"
 ---
 
-# Signal (signal-cli)
-
 Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-RPC + SSE.
 
 ## Prerequisites

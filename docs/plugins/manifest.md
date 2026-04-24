@@ -327,10 +327,21 @@ narrows the candidate plugin and setup still needs richer setup-time runtime
 hooks, set `requiresRuntime: true` and keep `setup-api` in place as the
 fallback execution path.
 
+Set `requiresRuntime: false` only when those descriptors are sufficient for the
+setup surface. OpenClaw treats explicit `false` as a descriptor-only contract
+and will not execute `setup-api` for setup lookup. Omitted `requiresRuntime`
+keeps legacy fallback behavior so existing plugins that added descriptors
+without the flag do not break.
+
 Because setup lookup can execute plugin-owned `setup-api` code, normalized
 `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across
 discovered plugins. Ambiguous ownership fails closed instead of picking a
 winner from discovery order.
+
+When setup runtime does execute, setup registry diagnostics report descriptor
+drift if `setup-api` registers a provider or CLI backend that the manifest
+descriptors do not declare, or if a descriptor has no matching runtime
+registration. These diagnostics are additive and do not reject legacy plugins.
 
 ### setup.providers reference
 
@@ -596,9 +607,12 @@ entries should pair exact specs with `expectedIntegrity` so update flows fail
 closed if the fetched npm artifact no longer matches the pinned release.
 Interactive onboarding still offers trusted registry npm specs, including bare
 package names and dist-tags, for compatibility. Catalog diagnostics can
-distinguish exact, floating, integrity-pinned, and missing-integrity sources.
-When `expectedIntegrity` is present, install/update flows enforce it; when it
-is omitted, the registry resolution is recorded without an integrity pin.
+distinguish exact, floating, integrity-pinned, missing-integrity, package-name
+mismatch, and invalid default-choice sources. They also warn when
+`expectedIntegrity` is present but there is no valid npm source it can pin.
+When `expectedIntegrity` is present,
+install/update flows enforce it; when it is omitted, the registry resolution is
+recorded without an integrity pin.
 
 Channel plugins should provide `openclaw.setupEntry` when status, channel list,
 or SecretRef scans need to identify configured accounts without loading the full
