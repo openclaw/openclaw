@@ -38,7 +38,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
   history reload.
 - Session-scoped tool output, including subagent tool results, can update tool
   cards without flushing the active chat stream unless it belongs to the same
-  run.
+  run. Unrelated terminal events do not trigger a history reload while another
+  run is actively streaming.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
 - Aborted runs can keep partial assistant output visible in the UI.
 - Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.

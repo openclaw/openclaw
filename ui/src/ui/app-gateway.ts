@@ -407,8 +407,13 @@ function handleTerminalChatEvent(
   host: GatewayHost,
   payload: ChatEventPayload | undefined,
   state: ReturnType<typeof handleChatEvent>,
+  activeRunIdBeforeEvent: string | null,
 ): boolean {
   if (state !== "final" && state !== "error" && state !== "aborted") {
+    return false;
+  }
+  const runId = payload?.runId;
+  if (isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)) {
     return false;
   }
   // Check if tool events were seen before resetting (resetToolStream clears toolStreamOrder).
@@ -420,7 +425,6 @@ function handleTerminalChatEvent(
     host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
     payload?.runId,
   );
-  const runId = payload?.runId;
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
@@ -447,6 +451,14 @@ function handleTerminalChatEvent(
   return false;
 }
 
+function isEventForDifferentActiveRun(
+  payload: ChatEventPayload | undefined,
+  activeRunIdBeforeEvent: string | null,
+): boolean {
+  const runId = payload?.runId;
+  return Boolean(activeRunIdBeforeEvent && runId && runId !== activeRunIdBeforeEvent);
+}
+
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
   if (payload?.sessionKey) {
     setLastActiveSessionKey(
@@ -463,8 +475,9 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     sideResultHost.chatSideResultTerminalRuns?.delete(payload.runId);
     return;
   }
+  const activeRunIdBeforeEvent = host.chatRunId;
   const state = handleChatEvent(host as unknown as ChatState, payload);
-  const historyReloaded = handleTerminalChatEvent(host, payload, state);
+  const historyReloaded = handleTerminalChatEvent(host, payload, state, activeRunIdBeforeEvent);
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
   const payloadSessionKey = payload?.sessionKey?.trim();
@@ -479,7 +492,12 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   if (deferredSessionKey && payloadSessionKey && deferredSessionKey === payloadSessionKey) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   }
-  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
+  if (
+    state === "final" &&
+    !historyReloaded &&
+    !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent) &&
+    shouldReloadHistoryForFinalEvent(payload)
+  ) {
     void loadChatHistory(host as unknown as ChatState);
     return;
   }

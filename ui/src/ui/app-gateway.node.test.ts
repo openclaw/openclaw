@@ -112,6 +112,7 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  chatStreamSegments: Array<{ text: string; ts: number }>;
   chatToolMessages: Record<string, unknown>[];
   toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
@@ -875,6 +876,51 @@ describe("connectGateway", () => {
     });
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reload history for unrelated silent finals during an active tool stream", async () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-1";
+    host.chatStream = "I am pinning down the live-integration checklist.";
+    host.chatStreamSegments = [{ text: "Visible progress before tool calls.", ts: 1 }];
+
+    for (let index = 1; index <= 5; index++) {
+      client.emitEvent({
+        event: "agent",
+        payload: {
+          runId: "side-run-1",
+          seq: index,
+          stream: "tool",
+          ts: index,
+          sessionKey: "main",
+          data: {
+            toolCallId: `side-tool-${index}`,
+            name: "exec_command",
+            phase: "result",
+            result: { text: `tool ${index} done` },
+          },
+        },
+      });
+    }
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "side-run-1",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+    await Promise.resolve();
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatRunId).toBe("main-run-1");
+    expect(host.chatStream).toBe("I am pinning down the live-integration checklist.");
+    expect(host.chatStreamSegments).toEqual([
+      { text: "Visible progress before tool calls.", ts: 1 },
+    ]);
+    expect(host.toolStreamOrder).toHaveLength(5);
   });
 });
 
