@@ -1,7 +1,7 @@
 import process from "node:process";
 
 /**
- * Block CLI execution when running as root (uid 0) unless explicitly opted in.
+ * Block CLI execution when running as root (uid 0 or euid 0) unless explicitly opted in.
  *
  * Running as root causes:
  * - Separate state dir (/root/.openclaw/ vs /home/<user>/.openclaw/)
@@ -12,7 +12,9 @@ export function assertNotRoot(env: NodeJS.ProcessEnv = process.env): void {
   if (typeof process.getuid !== "function") {
     return;
   }
-  if (process.getuid() !== 0) {
+  const uid = process.getuid();
+  const euid = typeof process.geteuid === "function" ? process.geteuid() : uid;
+  if (uid !== 0 && euid !== 0) {
     return;
   }
   if (
