@@ -23,6 +23,8 @@
 #include "gateway_rpc.h"
 #include "json_access.h"
 #include "readiness.h"
+#include "runtime_reveal.h"
+#include "section_adw_helpers.h"
 #include "state.h"
 #include "ui_model_utils.h"
 
@@ -173,13 +175,9 @@ static void on_cfg_open_folder(GtkButton *button, gpointer user_data) {
     (void)button;
     (void)user_data;
 
-    GatewayConfig *cfg = gateway_client_get_config();
-    if (cfg && cfg->config_path) {
-        g_autofree gchar *dir = g_path_get_dirname(cfg->config_path);
-        g_autofree gchar *uri = g_filename_to_uri(dir, NULL, NULL);
-        if (uri) {
-            g_app_info_launch_default_for_uri(uri, NULL, NULL);
-        }
+    g_autofree gchar *uri = runtime_reveal_build_config_dir_uri();
+    if (uri) {
+        g_app_info_launch_default_for_uri(uri, NULL, NULL);
     }
 }
 
@@ -281,22 +279,6 @@ static void cfg_set_validation_message(const gchar *message, gboolean valid) {
     gtk_widget_remove_css_class(cfg_validation_label, "success");
     gtk_widget_remove_css_class(cfg_validation_label, "error");
     gtk_widget_add_css_class(cfg_validation_label, valid ? "success" : "error");
-}
-
-static GtkWidget* cfg_setup_fact_row(const gchar *title, GtkWidget **out_value) {
-    GtkWidget *row = adw_action_row_new();
-    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
-
-    GtkWidget *value = gtk_label_new("—");
-    gtk_label_set_selectable(GTK_LABEL(value), TRUE);
-    gtk_label_set_wrap(GTK_LABEL(value), TRUE);
-    gtk_label_set_xalign(GTK_LABEL(value), 1.0);
-    gtk_widget_set_hexpand(value, TRUE);
-    gtk_widget_set_halign(value, GTK_ALIGN_END);
-    adw_action_row_add_suffix(ADW_ACTION_ROW(row), value);
-
-    *out_value = value;
-    return row;
 }
 
 static gboolean cfg_validate_and_track(const gchar *text) {
@@ -858,10 +840,10 @@ static GtkWidget* config_build(void) {
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(setup_group), setup_box);
 
     GtkWidget *facts_group = adw_preferences_group_new();
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), cfg_setup_fact_row("Provider", &cfg_setup_provider_label));
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), cfg_setup_fact_row("Default model", &cfg_setup_default_model_label));
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), cfg_setup_fact_row("Catalog / Selected", &cfg_setup_catalog_label));
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), cfg_setup_fact_row("Agents / Chat", &cfg_setup_readiness_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), section_adw_info_row("Provider", &cfg_setup_provider_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), section_adw_info_row("Default model", &cfg_setup_default_model_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), section_adw_info_row("Catalog / Selected", &cfg_setup_catalog_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(facts_group), section_adw_info_row("Agents / Chat", &cfg_setup_readiness_label));
     gtk_box_append(GTK_BOX(setup_box), facts_group);
 
     cfg_setup_status_label = gtk_label_new("Use this section to complete provider/model setup for chat readiness.");
