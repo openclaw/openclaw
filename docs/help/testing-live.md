@@ -402,11 +402,9 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - Loads missing provider env vars from your login shell (`~/.profile`) before probing
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
-  - Runs the stock image-generation variants through the shared runtime capability:
-    - `google:flash-generate`
-    - `google:pro-generate`
-    - `google:pro-edit`
-    - `openai:default-generate`
+  - Runs each configured provider through the shared image-generation runtime:
+    - `<provider>:generate`
+    - `<provider>:edit` when the provider declares edit support
 - Current bundled providers covered:
   - `fal`
   - `google`
@@ -421,6 +419,23 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit,openrouter:generate,xai:default-generate,xai:default-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+For the shipped CLI path, add an `infer` smoke after the provider/runtime live
+test passes:
+
+```bash
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_INFER_CLI_TEST=1 pnpm test:live -- test/image-generation.infer-cli.live.test.ts
+openclaw infer image providers --json
+openclaw infer image generate \
+  --model google/gemini-3.1-flash-image-preview \
+  --prompt "Minimal flat test image: one blue square on a white background, no text." \
+  --output ./openclaw-infer-image-smoke.png \
+  --json
+```
+
+This covers CLI argument parsing, config/default-agent resolution, bundled
+plugin activation, on-demand bundled runtime-dependency repair, the shared
+image-generation runtime, and the live provider request.
 
 ## Music generation live
 
