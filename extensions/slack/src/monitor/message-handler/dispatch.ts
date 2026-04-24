@@ -681,7 +681,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         draft: draftStream
           ? {
               flush: draftStream.flush,
-              clear: draftStream.clear,
+              clear: async () => {
+                draftStreamClearedByFinalizer = true;
+                await draftStream.clear();
+              },
               discardPending: draftStream.discardPending,
               seal: draftStream.seal,
               id: () => {
@@ -850,6 +853,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let dispatchError: unknown;
   let queuedFinal = false;
   let counts: { final?: number; block?: number } = {};
+  let draftStreamClearedByFinalizer = false;
   try {
     const result = await dispatchInboundMessage({
       ctx: prepared.ctxPayload,
@@ -928,7 +932,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   } catch (err) {
     dispatchError = err;
   } finally {
-    await draftStream?.discardPending();
+    if (observedReplyDelivery && !draftStreamClearedByFinalizer) {
+      await draftStream?.clear();
+    } else {
+      await draftStream?.discardPending();
+    }
     markDispatchIdle();
   }
 
