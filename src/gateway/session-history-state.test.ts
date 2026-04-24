@@ -75,4 +75,36 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.history.messages[0]?.__openclaw?.seq).toBe(2);
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
+
+  test("strips legacy internal envelopes before exposing history", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                "secret runtime context",
+                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                "",
+                "visible ask",
+              ].join("\n"),
+            },
+          ],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    expect(snapshot.history.messages).toHaveLength(1);
+    expect(
+      (
+        snapshot.history.messages[0] as {
+          content?: Array<{ text?: string }>;
+        }
+      ).content?.[0]?.text,
+    ).toBe("visible ask");
+  });
 });

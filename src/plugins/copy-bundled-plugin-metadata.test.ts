@@ -172,9 +172,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(copiedSkillDir, "SKILL.md"))).toBe(true);
     expect(fs.lstatSync(copiedSkillDir).isSymbolicLink()).toBe(false);
     expect(fs.existsSync(path.join(copiedSkillDir, "node_modules"))).toBe(false);
-    expect(fs.existsSync(path.join(bundledPluginDir(repoRoot, "tlon"), "node_modules"))).toBe(
-      false,
-    );
+    expect(fs.existsSync(staleNodeModulesSkillDir)).toBe(false);
     expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
@@ -217,7 +215,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "bundled-skills"))).toBe(
       false,
     );
-    expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
+    expect(fs.existsSync(staleNodeModulesDir)).toBe(true);
   });
 
   it("retries transient skill copy races from concurrent runtime postbuilds", () => {

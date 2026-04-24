@@ -155,6 +155,20 @@ function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>
   return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
 }
 
+function isAriaRefsUnsupportedError(err: unknown): boolean {
+  const msg = String(err).toLowerCase();
+  return msg.includes("refs=aria") && msg.includes("not support");
+}
+
+function withRoleRefsFallback<T extends { refs?: "aria" | "role" }>(
+  snapshotQuery: T,
+): T & { refs: "role" } {
+  return {
+    ...snapshotQuery,
+    refs: "role",
+  };
+}
+
 export async function executeTabsAction(params: {
   baseUrl?: string;
   profile?: string;
@@ -233,17 +247,29 @@ export async function executeSnapshotAction(params: {
     labels,
     mode,
   };
-  const snapshot = proxyRequest
-    ? ((await proxyRequest({
-        method: "GET",
-        path: "/snapshot",
-        profile,
-        query: snapshotQuery,
-      })) as Awaited<ReturnType<typeof browserSnapshot>>)
-    : await browserToolActionDeps.browserSnapshot(baseUrl, {
-        ...snapshotQuery,
-        profile,
-      });
+  let refsFallback: "role" | undefined;
+  const readSnapshot = async (query: typeof snapshotQuery) =>
+    proxyRequest
+      ? ((await proxyRequest({
+          method: "GET",
+          path: "/snapshot",
+          profile,
+          query,
+        })) as Awaited<ReturnType<typeof browserSnapshot>>)
+      : await browserToolActionDeps.browserSnapshot(baseUrl, {
+          ...query,
+          profile,
+        });
+  let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
+  try {
+    snapshot = await readSnapshot(snapshotQuery);
+  } catch (err) {
+    if (refs !== "aria" || !isAriaRefsUnsupportedError(err)) {
+      throw err;
+    }
+    refsFallback = "role";
+    snapshot = await readSnapshot(withRoleRefsFallback(snapshotQuery));
+  }
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
@@ -263,6 +289,7 @@ export async function executeSnapshotAction(params: {
       labelsSkipped: snapshot.labelsSkipped,
       imagePath: snapshot.imagePath,
       imageType: snapshot.imageType,
+      refsFallback,
       externalContent: {
         untrusted: true,
         source: "browser",

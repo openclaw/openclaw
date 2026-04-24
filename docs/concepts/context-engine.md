@@ -77,6 +77,10 @@ four lifecycle points:
 4. **After turn** — called after a run completes. The engine can persist state,
    trigger background compaction, or update indexes.
 
+For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by
+projecting assembled context into Codex developer instructions and the current
+turn prompt. Codex still owns its native thread history and native compactor.
+
 ### Subagent lifecycle (optional)
 
 OpenClaw calls two optional subagent lifecycle hooks:

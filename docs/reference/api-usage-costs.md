@@ -153,7 +153,7 @@ See [Web tools](/tools/web).
 
 - `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webFetch.apiKey`
 
-If Firecrawl isn’t configured, the tool falls back to direct fetch + readability (no paid API).
+If Firecrawl isn’t configured, the tool falls back to direct fetch plus the bundled `web-readability` plugin (no paid API). Disable `plugins.entries.web-readability.enabled` to skip local Readability extraction.
 
 See [Web tools](/tools/web).
 
@@ -195,3 +195,9 @@ Skills can store `apiKey` in `skills.entries.<name>.apiKey`. If a skill uses tha
 APIs, it can incur costs according to the skill’s provider.
 
 See [Skills](/tools/skills).
+
+## Related
+
+- [Token use and costs](/reference/token-use)
+- [Prompt caching](/reference/prompt-caching)
+- [Usage tracking](/concepts/usage-tracking)

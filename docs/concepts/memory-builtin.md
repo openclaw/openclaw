@@ -38,6 +38,25 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
+To force the built-in local embedding provider, point `local.modelPath` at a
+GGUF file:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "local",
+        fallback: "none",
+        local: {
+          modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
+        },
+      },
+    },
+  },
+}
+```
+
 ## Supported embedding providers
 
 | Provider | ID        | Auto-detected | Notes                               |
@@ -88,6 +107,17 @@ automatic user modeling.
 
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
 detected, set one explicitly or add an API key.
+
+**Local provider not detected?** Confirm the local path exists and run:
+
+```bash
+openclaw memory status --deep --agent main
+openclaw memory index --force --agent main
+```
+
+Both standalone CLI commands and the Gateway use the same `local` provider id.
+If the provider is set to `auto`, local embeddings are considered first only
+when `memorySearch.local.modelPath` points to an existing local file.
 
 **Stale results?** Run `openclaw memory index --force` to rebuild. The watcher
 may miss changes in rare edge cases.

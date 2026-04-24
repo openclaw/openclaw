@@ -1,4 +1,8 @@
-import type { OpenAICompletionsCompat } from "@mariozechner/pi-ai";
+import type {
+  AnthropicMessagesCompat,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+} from "@mariozechner/pi-ai";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
@@ -27,26 +31,46 @@ type SupportedOpenAICompatFields = Pick<
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"
   | "requiresThinkingAsText"
+  | "openRouterRouting"
+  | "vercelGatewayRouting"
+  | "zaiToolStream"
+  | "cacheControlFormat"
+  | "sendSessionAffinityHeaders"
+  | "supportsLongCacheRetention"
+>;
+
+type SupportedOpenAIResponsesCompatFields = Pick<
+  OpenAIResponsesCompat,
+  "sendSessionIdHeader" | "supportsLongCacheRetention"
+>;
+
+type SupportedAnthropicMessagesCompatFields = Pick<
+  AnthropicMessagesCompat,
+  "supportsEagerToolInputStreaming" | "supportsLongCacheRetention"
 >;
 
 type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
+  | "deepseek"
   | "openrouter"
   | "qwen-chat-template";
 
-export type ModelCompatConfig = SupportedOpenAICompatFields & {
-  thinkingFormat?: SupportedThinkingFormat;
-  visibleReasoningDetailTypes?: string[];
-  supportsTools?: boolean;
-  supportsPromptCacheKey?: boolean;
-  requiresStringContent?: boolean;
-  toolSchemaProfile?: string;
-  unsupportedToolSchemaKeywords?: string[];
-  nativeWebSearchTool?: boolean;
-  toolCallArgumentsEncoding?: string;
-  requiresMistralToolIds?: boolean;
-  requiresOpenAiAnthropicToolPayload?: boolean;
-};
+export type ModelCompatConfig = SupportedOpenAICompatFields &
+  SupportedOpenAIResponsesCompatFields &
+  SupportedAnthropicMessagesCompatFields & {
+    thinkingFormat?: SupportedThinkingFormat;
+    supportedReasoningEfforts?: string[];
+    visibleReasoningDetailTypes?: string[];
+    supportsTools?: boolean;
+    supportsPromptCacheKey?: boolean;
+    requiresStringContent?: boolean;
+    toolSchemaProfile?: string;
+    unsupportedToolSchemaKeywords?: string[];
+    nativeWebSearchTool?: boolean;
+    toolCallArgumentsEncoding?: string;
+    requiresMistralToolIds?: boolean;
+    requiresOpenAiAnthropicToolPayload?: boolean;
+  };
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
 

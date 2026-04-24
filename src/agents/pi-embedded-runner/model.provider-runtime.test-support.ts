@@ -230,8 +230,29 @@ function buildDynamicModel(
     }
     case "openai-codex": {
       const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
+      if (lower === "gpt-5.5") {
+        return (
+          (params.modelRegistry.find("openai-codex", modelId) as ResolvedModelLike | null) ??
+          cloneTemplate(
+            undefined,
+            modelId,
+            {
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: OPENAI_CODEX_BASE_URL,
+              reasoning: true,
+              input: ["text", "image"],
+              cost: OPENROUTER_FALLBACK_COST,
+              contextWindow: 1_000_000,
+              contextTokens: 272_000,
+              maxTokens: 128_000,
+            },
+            {},
+          )
+        );
+      }
       const template =
-        lower === "gpt-5.5" || lower === "gpt-5.5-pro"
+        lower === "gpt-5.5-pro"
           ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"])
           : lower === "gpt-5.4" || isLegacyGpt54Alias || lower === "gpt-5.4-pro"
             ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
@@ -259,7 +280,7 @@ function buildDynamicModel(
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         maxTokens: DEFAULT_CONTEXT_WINDOW,
       };
-      if (lower === "gpt-5.5" || lower === "gpt-5.5-pro") {
+      if (lower === "gpt-5.5-pro") {
         return cloneTemplate(
           template,
           modelId,
@@ -267,10 +288,7 @@ function buildDynamicModel(
             provider: "openai-codex",
             api: "openai-codex-responses",
             baseUrl: OPENAI_CODEX_BASE_URL,
-            cost:
-              lower === "gpt-5.5-pro"
-                ? { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 }
-                : { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
+            cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1_000_000,
             contextTokens: 272_000,
             maxTokens: 128_000,

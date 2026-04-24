@@ -91,3 +91,8 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
   then connect.
 - The UI language picker is in **Overview -> Gateway Access -> Language**.
   It is part of the access card, not the Appearance section.
+
+## Related
+
+- [Control UI](/web/control-ui)
+- [WebChat](/web/webchat)

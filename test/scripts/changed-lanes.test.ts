@@ -364,7 +364,8 @@ describe("scripts/changed-lanes", () => {
     expect(plan.runFullTests).toBe(false);
   });
 
-  it("sets a fail-fast Vitest watchdog for changed checks", () => {
+  it("sets a ten-minute Vitest watchdog for changed checks", () => {
+    expect(CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("600000");
     expect(createChangedCheckVitestEnv({ PATH: "/usr/bin" })).toMatchObject({
       PATH: "/usr/bin",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,

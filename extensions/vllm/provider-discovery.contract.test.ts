@@ -2,6 +2,28 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
+type DiscoverOpenAICompatibleSelfHostedProviderParams = {
+  buildProvider: (args: { apiKey?: string }) => Promise<Record<string, unknown>>;
+  ctx: {
+    resolveProviderApiKey: () => {
+      apiKey?: string;
+    };
+    resolveProviderAuth: () => {
+      discoveryApiKey?: string;
+    };
+  };
+  providerId: string;
+};
+const discoverOpenAICompatibleSelfHostedProviderMock = vi.hoisted(() =>
+  vi.fn(async (params: DiscoverOpenAICompatibleSelfHostedProviderParams) => ({
+    provider: {
+      ...(await params.buildProvider({
+        apiKey: params.ctx.resolveProviderAuth().discoveryApiKey,
+      })),
+      apiKey: params.ctx.resolveProviderApiKey().apiKey,
+    },
+  })),
+);
 
 vi.mock("./api.js", () => ({
   VLLM_DEFAULT_API_KEY_ENV_VAR: "VLLM_API_KEY",
@@ -9,6 +31,12 @@ vi.mock("./api.js", () => ({
   VLLM_MODEL_PLACEHOLDER: "meta-llama/Meta-Llama-3-8B-Instruct",
   VLLM_PROVIDER_LABEL: "vLLM",
   buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-setup", () => ({
+  discoverOpenAICompatibleSelfHostedProvider: (
+    params: DiscoverOpenAICompatibleSelfHostedProviderParams,
+  ) => discoverOpenAICompatibleSelfHostedProviderMock(params),
 }));
 
 type ProviderDiscoveryRun = (ctx: {
@@ -37,6 +65,7 @@ type RegisteredVllmProvider = {
 describe("vllm provider discovery contract", () => {
   beforeEach(() => {
     buildVllmProviderMock.mockReset();
+    discoverOpenAICompatibleSelfHostedProviderMock.mockClear();
   });
 
   it("keeps self-hosted discovery provider-owned", async () => {
@@ -86,5 +115,11 @@ describe("vllm provider discovery contract", () => {
     expect(buildVllmProviderMock).toHaveBeenCalledWith({
       apiKey: "env-vllm-key",
     });
+    expect(discoverOpenAICompatibleSelfHostedProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "vllm",
+        buildProvider: expect.any(Function),
+      }),
+    );
   });
 });

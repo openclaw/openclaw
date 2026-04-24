@@ -9,7 +9,7 @@ import {
 } from "./media.js";
 import type { FetchLike, SavedMedia } from "./media.runtime.js";
 import * as mediaRuntime from "./media.runtime.js";
-import { logVerbose } from "./media.runtime.js";
+import { logVerbose } from "./thread.runtime.js";
 
 type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -65,6 +65,10 @@ vi.mock("./media.runtime.js", () => ({
   fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
   logVerbose: logVerboseMock,
   saveMediaBuffer: saveMediaBufferMock,
+}));
+
+vi.mock("./thread.runtime.js", () => ({
+  logVerbose: logVerboseMock,
 }));
 
 function withFetchPreconnect(fetchMock: ReturnType<typeof vi.fn<FetchMock>>): typeof fetch {

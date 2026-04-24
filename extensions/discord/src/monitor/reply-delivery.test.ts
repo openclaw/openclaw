@@ -13,6 +13,7 @@ const sendDiscordTextMock = vi.hoisted(() => vi.fn());
 const buildDiscordSendErrorMock = vi.hoisted(() =>
   vi.fn<(err: unknown, ctx?: unknown) => Promise<unknown>>(async (err: unknown) => err),
 );
+const DEFAULT_CFG = {} as OpenClawConfig;
 const retryAsyncMock = vi.hoisted(() =>
   vi.fn(
     async (
@@ -100,6 +101,7 @@ describe("deliverDiscordReply", () => {
     }> = {},
   ) => {
     const threadBindings = createThreadBindingManager({
+      cfg: DEFAULT_CFG,
       accountId: "default",
       persist: false,
       enableSweeper: false,

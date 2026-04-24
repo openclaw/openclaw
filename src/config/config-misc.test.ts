@@ -148,7 +148,7 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
-describe("plugins.entries.*.hooks.allowPromptInjection", () => {
+describe("plugins.entries.*.hooks", () => {
   it("accepts boolean values", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {
@@ -156,6 +156,7 @@ describe("plugins.entries.*.hooks.allowPromptInjection", () => {
           "voice-call": {
             hooks: {
               allowPromptInjection: false,
+              allowConversationAccess: true,
             },
           },
         },
@@ -171,6 +172,23 @@ describe("plugins.entries.*.hooks.allowPromptInjection", () => {
           "voice-call": {
             hooks: {
               allowPromptInjection: "no",
+              allowConversationAccess: true,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-boolean conversation access values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: false,
+              allowConversationAccess: "yes",
             },
           },
         },

@@ -82,6 +82,11 @@ const voiceCallConfigSchema = {
     },
     "realtime.streamPath": { label: "Realtime Stream Path", advanced: true },
     "realtime.instructions": { label: "Realtime Instructions", advanced: true },
+    "realtime.toolPolicy": {
+      label: "Realtime Tool Policy",
+      help: "Controls the shared openclaw_agent_consult tool.",
+      advanced: true,
+    },
     "realtime.providers": { label: "Realtime Provider Config", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
@@ -121,6 +126,11 @@ const VoiceCallToolSchema = Type.Union([
     action: Type.Literal("speak_to_user"),
     callId: Type.String({ description: "Call ID" }),
     message: Type.String({ description: "Message to speak" }),
+  }),
+  Type.Object({
+    action: Type.Literal("send_dtmf"),
+    callId: Type.String({ description: "Call ID" }),
+    digits: Type.String({ description: "DTMF digits to send" }),
   }),
   Type.Object({
     action: Type.Literal("end_call"),
@@ -324,6 +334,29 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "voicecall.dtmf",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const callId = normalizeOptionalString(params?.callId) ?? "";
+          const digits = normalizeOptionalString(params?.digits) ?? "";
+          if (!callId || !digits) {
+            respond(false, { error: "callId and digits required" });
+            return;
+          }
+          const rt = await ensureRuntime();
+          const result = await rt.manager.sendDtmf(callId, digits);
+          if (!result.success) {
+            respond(false, { error: result.error || "dtmf failed" });
+            return;
+          }
+          respond(true, { success: true });
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "voicecall.end",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -450,6 +483,18 @@ export default definePluginEntry({
                 const result = await rt.manager.speak(callId, message);
                 if (!result.success) {
                   throw new Error(result.error || "speak failed");
+                }
+                return json({ success: true });
+              }
+              case "send_dtmf": {
+                const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                const digits = normalizeOptionalString(rawParams.digits) ?? "";
+                if (!callId || !digits) {
+                  throw new Error("callId and digits required");
+                }
+                const result = await rt.manager.sendDtmf(callId, digits);
+                if (!result.success) {
+                  throw new Error(result.error || "dtmf failed");
                 }
                 return json({ success: true });
               }

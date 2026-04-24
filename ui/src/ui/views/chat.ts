@@ -14,10 +14,12 @@ import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
+  resolveAssistantTextAvatar,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
+import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
@@ -65,6 +67,10 @@ export type ChatProps = {
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
+  realtimeTalkActive?: boolean;
+  realtimeTalkStatus?: RealtimeTalkStatus;
+  realtimeTalkDetail?: string | null;
+  realtimeTalkTranscript?: string | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -95,8 +101,10 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
   onSend: () => void;
+  onToggleRealtimeTalk?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueSteer?: (id: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -468,12 +476,8 @@ const WELCOME_SUGGESTIONS = [
 
 function renderWelcomeState(props: ChatProps): TemplateResult {
   const name = props.assistantName || "Assistant";
-  const avatar = resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-    identity: {
-      avatar: props.assistantAvatar ?? undefined,
-      avatarUrl: props.assistantAvatarUrl ?? undefined,
-    },
-  });
+  const avatar = resolveAssistantAvatarUrl(props);
+  const avatarText = avatar ? null : resolveAssistantTextAvatar(props.assistantAvatar);
   const logoUrl = agentLogoUrl(props.basePath ?? "");
 
   return html`
@@ -485,9 +489,13 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
             alt=${name}
             style="width:56px; height:56px; border-radius:50%; object-fit:cover;"
           />`
-        : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
-            <img src=${logoUrl} alt="OpenClaw" />
-          </div>`}
+        : avatarText
+          ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
+              ${avatarText}
+            </div>`
+          : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
+              <img src=${logoUrl} alt="OpenClaw" />
+            </div>`}
       <h2>${name}</h2>
       <div class="agent-chat__badges">
         <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
@@ -511,6 +519,23 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
       </div>
     </div>
   `;
+}
+
+function resolveAssistantAvatarUrl(
+  props: Pick<ChatProps, "assistantAvatar" | "assistantAvatarUrl">,
+): string | null {
+  return resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
+    identity: {
+      avatar: props.assistantAvatar ?? undefined,
+      avatarUrl: props.assistantAvatarUrl ?? undefined,
+    },
+  });
+}
+
+function resolveAssistantDisplayAvatar(
+  props: Pick<ChatProps, "assistantAvatar" | "assistantAvatarUrl">,
+): string | null {
+  return resolveAssistantAvatarUrl(props) ?? resolveAssistantTextAvatar(props.assistantAvatar);
 }
 
 function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
@@ -748,13 +773,7 @@ export function renderChat(props: ChatProps) {
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
-    avatar:
-      resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-        identity: {
-          avatar: props.assistantAvatar ?? undefined,
-          avatarUrl: props.assistantAvatarUrl ?? undefined,
-        },
-      }) ?? null,
+    avatar: resolveAssistantDisplayAvatar(props),
   };
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
@@ -1131,19 +1150,47 @@ export function renderChat(props: ChatProps) {
               <div class="chat-queue__list">
                 ${props.queue.map(
                   (item) => html`
-                    <div class="chat-queue__item">
-                      <div class="chat-queue__text">
-                        ${item.text ||
-                        (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                    <div
+                      class="chat-queue__item ${item.kind === "steered"
+                        ? "chat-queue__item--steered"
+                        : ""}"
+                    >
+                      <div class="chat-queue__main">
+                        ${item.kind === "steered"
+                          ? html`<span class="chat-queue__badge">Steered</span>`
+                          : nothing}
+                        <div class="chat-queue__text">
+                          ${item.text ||
+                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                        </div>
                       </div>
-                      <button
-                        class="btn chat-queue__remove"
-                        type="button"
-                        aria-label="Remove queued message"
-                        @click=${() => props.onQueueRemove(item.id)}
-                      >
-                        ${icons.x}
-                      </button>
+                      <div class="chat-queue__actions">
+                        ${props.canAbort &&
+                        props.onQueueSteer &&
+                        item.kind !== "steered" &&
+                        !item.localCommandName
+                          ? html`
+                              <button
+                                class="btn chat-queue__steer"
+                                type="button"
+                                title="Steer now"
+                                aria-label="Steer queued message"
+                                @click=${() => props.onQueueSteer?.(item.id)}
+                              >
+                                ${icons.cornerDownRight}
+                                <span>Steer</span>
+                              </button>
+                            `
+                          : nothing}
+                        <button
+                          class="btn chat-queue__remove"
+                          type="button"
+                          aria-label="Remove queued message"
+                          @click=${() => props.onQueueRemove(item.id)}
+                        >
+                          ${icons.x}
+                        </button>
+                      </div>
                     </div>
                   `,
                 )}
@@ -1177,6 +1224,19 @@ export function renderChat(props: ChatProps) {
 
         ${vs.sttRecording && vs.sttInterimText
           ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
+          : nothing}
+        ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+          ? html`
+              <div class="agent-chat__stt-interim agent-chat__talk-status">
+                ${props.realtimeTalkDetail ??
+                props.realtimeTalkTranscript ??
+                (props.realtimeTalkStatus === "thinking"
+                  ? "Asking OpenClaw..."
+                  : props.realtimeTalkStatus === "connecting"
+                    ? "Connecting Talk..."
+                    : "Talk live")}
+              </div>
+            `
           : nothing}
 
         <textarea
@@ -1256,6 +1316,21 @@ export function renderChat(props: ChatProps) {
                     ?disabled=${!props.connected}
                   >
                     ${vs.sttRecording ? icons.micOff : icons.mic}
+                  </button>
+                `
+              : nothing}
+            ${props.onToggleRealtimeTalk
+              ? html`
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkActive
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalk}
+                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    ?disabled=${!props.connected}
+                  >
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                   </button>
                 `
               : nothing}

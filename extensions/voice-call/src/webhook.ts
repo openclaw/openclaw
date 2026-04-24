@@ -1,6 +1,7 @@
 import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createWebhookInFlightLimiter,
@@ -18,7 +19,6 @@ import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
-import { resolveConfiguredCapabilityProvider } from "./provider-runtime-resolution.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
@@ -643,7 +643,9 @@ export class VoiceCallWebhookServer {
 
       const realtimeParams = this.getRealtimeTwimlParams(ctx);
       if (realtimeParams) {
-        if (!this.shouldAcceptRealtimeInboundRequest(realtimeParams)) {
+        const direction = realtimeParams.get("Direction");
+        const isInboundRealtimeRequest = !direction || direction === "inbound";
+        if (isInboundRealtimeRequest && !this.shouldAcceptRealtimeInboundRequest(realtimeParams)) {
           console.log("[voice-call] Realtime inbound call rejected before stream setup");
           return buildRealtimeRejectedTwiML();
         }
@@ -718,8 +720,9 @@ export class VoiceCallWebhookServer {
 
     const params = new URLSearchParams(ctx.rawBody);
     const direction = params.get("Direction");
-    const isInbound = !direction || direction === "inbound";
-    if (!isInbound) {
+    const isSupportedDirection =
+      !direction || direction === "inbound" || direction.startsWith("outbound");
+    if (!isSupportedDirection) {
       return null;
     }
 

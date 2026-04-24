@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   __testing as threadBindingsTesting,
@@ -23,6 +24,7 @@ describe("thread binding manager state", () => {
     const viaJiti = await loadThreadBindingsViaAlternateLoader();
 
     createThreadBindingManager({
+      cfg: {} as OpenClawConfig,
       accountId: "work",
       persist: false,
       enableSweeper: false,
