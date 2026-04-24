@@ -28,6 +28,8 @@ class TestSlackStreamNotDeliveredError extends Error {
   }
 }
 let mockedNativeStreaming = false;
+let mockedBlockStreamingEnabled: boolean | undefined = false;
+let capturedReplyOptions: { disableBlockStreaming?: boolean } | undefined;
 let mockedDispatchSequence: Array<{
   kind: "tool" | "block" | "final";
   payload: { text: string; isError?: boolean; mediaUrl?: string; mediaUrls?: string[] };
@@ -129,7 +131,7 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
-  resolveChannelStreamingBlockEnabled: () => false,
+  resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
   resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
   resolveChannelStreamingPreviewToolProgress: () => true,
 }));
@@ -266,6 +268,7 @@ vi.mock("../reply.runtime.js", () => ({
     markDispatchIdle: () => {},
   }),
   dispatchInboundMessage: async (params: {
+    replyOptions?: { disableBlockStreaming?: boolean };
     dispatcher: {
       deliver: (
         payload: { text: string; isError?: boolean; mediaUrl?: string; mediaUrls?: string[] },
@@ -273,6 +276,7 @@ vi.mock("../reply.runtime.js", () => ({
       ) => Promise<void>;
     };
   }) => {
+    capturedReplyOptions = params.replyOptions;
     for (const entry of mockedDispatchSequence) {
       await params.dispatcher.deliver(entry.payload, { kind: entry.kind });
     }
@@ -305,6 +309,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     startSlackStreamMock.mockReset();
     stopSlackStreamMock.mockReset();
     mockedNativeStreaming = false;
+    mockedBlockStreamingEnabled = false;
+    capturedReplyOptions = undefined;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
@@ -331,6 +337,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
       }),
     );
+  });
+
+  it("suppresses block streaming when Slack draft preview streaming is active", async () => {
+    mockedBlockStreamingEnabled = true;
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
   });
 
   it("keeps same-content tool and final payloads distinct after preview fallback", async () => {

@@ -121,6 +121,19 @@ export function shouldInitializeSlackDraftStream(params: {
   return params.previewStreamingEnabled && !params.useStreaming;
 }
 
+export function resolveSlackDisableBlockStreaming(params: {
+  useStreaming: boolean;
+  shouldUseDraftStream: boolean;
+  blockStreamingEnabled: boolean | undefined;
+}): boolean | undefined {
+  if (params.useStreaming || params.shouldUseDraftStream) {
+    return true;
+  }
+  return typeof params.blockStreamingEnabled === "boolean"
+    ? !params.blockStreamingEnabled
+    : undefined;
+}
+
 export function resolveSlackStreamingThreadHint(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
@@ -425,6 +438,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const shouldUseDraftStream = shouldInitializeSlackDraftStream({
     previewStreamingEnabled,
     useStreaming,
+  });
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
+  const disableBlockStreaming = resolveSlackDisableBlockStreaming({
+    useStreaming,
+    shouldUseDraftStream,
+    blockStreamingEnabled,
   });
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
@@ -909,11 +928,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         ...replyOptions,
         skillFilter: prepared.channelConfig?.skills,
         hasRepliedRef,
-        disableBlockStreaming: useStreaming
-          ? true
-          : typeof resolveChannelStreamingBlockEnabled(account.config) === "boolean"
-            ? !resolveChannelStreamingBlockEnabled(account.config)
-            : undefined,
+        disableBlockStreaming,
         onModelSelected,
         suppressDefaultToolProgressMessages: previewToolProgressEnabled ? true : undefined,
         onPartialReply: useStreaming
