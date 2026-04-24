@@ -112,6 +112,8 @@ openclaw googlemeet join https://meet.google.com/new-abcd-xyz --transport chrome
   pinned Chrome node, opens `https://meet.google.com/new`, waits for Google to
   redirect to a real meeting-code URL, then returns that URL. This path requires
   the OpenClaw Chrome profile on the node to already be signed in to Google.
+  Browser automation handles Meet's own first-run microphone prompt; that prompt
+  is not treated as a Google login failure.
 
 The command output includes a `source` field (`api` or `browser`) so agents can
 explain which path was used.
@@ -271,11 +273,17 @@ phrase, and prints session health:
 openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
 ```
 
-If the browser profile is not signed in, Meet is waiting for host admission, or
-Chrome needs microphone/camera permission, the join/test-speech result reports
+During join, OpenClaw browser automation fills the guest name, clicks Join/Ask
+to join, and accepts Meet's first-run "Use microphone" choice when that prompt
+appears. During browser-only meeting creation, it can also continue past the
+same prompt without microphone if Meet does not expose the use-microphone button.
+If the browser profile is not signed in, Meet is waiting for host
+admission, Chrome needs microphone/camera permission, or Meet is stuck on a
+prompt automation could not resolve, the join/test-speech result reports
 `manualActionRequired: true` with `manualActionReason` and
-`manualActionMessage`. Agents should stop retrying the join, report that message
-to the operator, and retry only after the manual browser action is complete.
+`manualActionMessage`. Agents should stop retrying the join, report that exact
+message plus the current `browserUrl`/`browserTitle`, and retry only after the
+manual browser action is complete.
 
 If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one
 connected node advertises both `googlemeet.chrome` and browser control. If
@@ -784,8 +792,16 @@ Common manual actions:
 
 - Sign in to the Chrome profile.
 - Admit the guest from the Meet host account.
-- Grant Chrome microphone/camera permissions.
+- Grant Chrome microphone/camera permissions when Chrome's native permission
+  prompt appears.
 - Close or repair a stuck Meet permission dialog.
+
+Do not report "not signed in" just because Meet shows "Do you want people to
+hear you in the meeting?" That is Meet's audio-choice interstitial; OpenClaw
+clicks **Use microphone** through browser automation when available and keeps
+waiting for the real meeting state. For create-only browser fallback, OpenClaw
+may click **Continue without microphone** because creating the URL does not need
+the realtime audio path.
 
 ### Meeting creation fails
 
@@ -803,6 +819,11 @@ to the pinned Chrome node browser. Confirm:
   `googlemeet.chrome`.
 - For browser fallback: the OpenClaw Chrome profile on that node is signed in
   to Google and can open `https://meet.google.com/new`.
+- For browser fallback: if Meet shows "Do you want people to hear you in the
+  meeting?", leave the tab open. OpenClaw should click **Use microphone** or, for
+  create-only fallback, **Continue without microphone** through browser
+  automation and continue waiting for the generated Meet URL. If it cannot, the
+  error should mention `meet-audio-choice-required`, not `google-login-required`.
 
 ### Agent joins but does not talk
 

@@ -16,6 +16,7 @@ export type GoogleMeetManualActionReason =
   | "google-login-required"
   | "meet-admission-required"
   | "meet-permission-required"
+  | "meet-audio-choice-required"
   | "browser-control-unavailable";
 
 export type GoogleMeetChromeHealth = {

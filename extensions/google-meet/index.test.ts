@@ -23,6 +23,7 @@ import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
 import { startCommandRealtimeAudioBridge } from "./src/realtime.js";
 import { normalizeMeetUrl } from "./src/runtime.js";
 import type { GoogleMeetRuntime } from "./src/runtime.js";
+import { CREATE_MEET_FROM_BROWSER_SCRIPT } from "./src/transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./src/transports/twilio.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
@@ -842,6 +843,62 @@ describe("google-meet plugin", () => {
       }),
     );
   });
+
+  it.each([
+    ["Use microphone", "Accepted Meet microphone prompt with browser automation."],
+    [
+      "Continue without microphone",
+      "Continued through Meet microphone prompt with browser automation.",
+    ],
+  ])(
+    "uses browser automation for Meet's %s choice during browser creation",
+    async (buttonText, note) => {
+      const location = {
+        href: "https://meet.google.com/new",
+        hostname: "meet.google.com",
+      };
+      const button = {
+        disabled: false,
+        innerText: buttonText,
+        textContent: buttonText,
+        getAttribute: (name: string) => (name === "aria-label" ? buttonText : null),
+        click: vi.fn(() => {
+          location.href = "https://meet.google.com/abc-defg-hij";
+        }),
+      };
+      const document = {
+        title: "Meet",
+        body: {
+          innerText: "Do you want people to hear you in the meeting?",
+          textContent: "Do you want people to hear you in the meeting?",
+        },
+        querySelectorAll: (selector: string) => (selector === "button" ? [button] : []),
+      };
+      vi.stubGlobal("document", document);
+      vi.stubGlobal("location", location);
+      vi.useFakeTimers();
+
+      try {
+        const fn = (0, eval)(`(${CREATE_MEET_FROM_BROWSER_SCRIPT})`) as () => Promise<{
+          meetingUri?: string;
+          manualActionReason?: string;
+          notes?: string[];
+          retryAfterMs?: number;
+        }>;
+        const result = await fn();
+
+        expect(result).toMatchObject({
+          retryAfterMs: 1000,
+          notes: [note],
+        });
+        expect(button.click).toHaveBeenCalledTimes(1);
+        expect(result.meetingUri).toBeUndefined();
+        expect(result.manualActionReason).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("launches Chrome after the BlackHole check", async () => {
     const originalPlatform = process.platform;
