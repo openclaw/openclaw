@@ -1,8 +1,13 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { enqueueSystemEvent, parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
+import {
+  isSlackExecApprovalApprover,
+  isSlackExecApprovalAuthorizedSender,
+} from "../../exec-approvals.js";
 import {
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
@@ -762,6 +767,56 @@ async function handleSlackBlockAction(params: {
       respond,
     });
     if (handledBindingApproval) {
+      return;
+    }
+    const execApproval = parseExecApprovalCommandText(pluginInteractionData);
+    if (execApproval) {
+      const isPluginApproval = execApproval.approvalId.startsWith("plugin:");
+      const pluginApprovalAuthorizedSender = isSlackExecApprovalApprover({
+        cfg: params.ctx.cfg,
+        accountId: params.ctx.accountId,
+        senderId: parsed.userId,
+      });
+      const execApprovalAuthorizedSender = isSlackExecApprovalAuthorizedSender({
+        cfg: params.ctx.cfg,
+        accountId: params.ctx.accountId,
+        senderId: parsed.userId,
+      });
+      const authorizedApprovalSender = isPluginApproval
+        ? pluginApprovalAuthorizedSender
+        : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+      if (authorizedApprovalSender) {
+        try {
+          await resolveApprovalOverGateway({
+            cfg: params.ctx.cfg,
+            approvalId: execApproval.approvalId,
+            decision: execApproval.decision,
+            senderId: parsed.userId,
+            allowPluginFallback: pluginApprovalAuthorizedSender,
+            clientDisplayName: `Slack approval (${parsed.userId?.trim() || "unknown"})`,
+          });
+        } catch (resolveErr) {
+          params.ctx.runtime.log?.(
+            `slack:interaction exec approval resolve failed id=${execApproval.approvalId}: ${String(resolveErr)}`,
+          );
+        }
+        try {
+          await updateSlackInteractionMessage({
+            ctx: params.ctx,
+            channelId: parsed.channelId,
+            messageTs: parsed.messageTs,
+            text: parsed.typedBody.message?.text ?? "",
+            blocks: [],
+          });
+        } catch {
+          // Best-effort cleanup only.
+        }
+        return;
+      }
+      params.ctx.runtime.log?.(
+        `slack:interaction drop exec approval user=${parsed.userId} (not authorized)`,
+      );
+      await respondEphemeral(respond, "You are not authorized to approve this request.");
       return;
     }
   } else if (pluginInteractionData) {
