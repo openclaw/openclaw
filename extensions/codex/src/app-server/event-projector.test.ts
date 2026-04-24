@@ -529,8 +529,39 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash: `pnpm test extensions/codex`",
+      text: "🛠️ Bash: `` run tests (in /workspace), `pnpm test extensions/codex` ``",
     });
+  });
+
+  it("redacts secrets in verbose command summaries", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    const text = onToolResult.mock.calls[0]?.[0]?.text;
+    expect(text).toContain("sk-123…ZZZZ");
+    expect(text).not.toContain("sk-1234567890abcdefZZZZ");
   });
 
   it("uses argument details instead of lifecycle status in verbose tool summaries", async () => {
@@ -594,6 +625,76 @@ describe("CodexAppServerEventProjector", () => {
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
     });
+  });
+
+  it("uses a safe markdown fence for verbose tool output", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "line\n```\nMEDIA:/tmp/secret.png" }],
+          success: true,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      text: "📖 Read: `from README.md`\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
+    });
+  });
+
+  it("bounds streamed verbose tool output", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    for (let i = 0; i < 25; i += 1) {
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-1",
+          delta: `line ${i}\n`,
+        }),
+      );
+    }
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "final output should not duplicate streamed output",
+          exitCode: 0,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    expect(onToolResult).toHaveBeenCalledTimes(21);
+    expect(onToolResult.mock.calls[19]?.[0]?.text).toContain("...(truncated)...");
+    expect(JSON.stringify(onToolResult.mock.calls)).not.toContain(
+      "final output should not duplicate",
+    );
   });
 
   it("continues projecting turn completion when an event consumer throws", async () => {
