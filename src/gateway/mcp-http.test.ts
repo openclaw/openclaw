@@ -462,6 +462,51 @@ describe("mcp loopback server", () => {
     expect(payload.result?.content?.[0]?.text).toBe("blocked by hook");
   });
 
+  it("forwards the request abort signal to loopback tool execution", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "hello" } },
+      }),
+    });
+    const payload = (await response.json()) as {
+      result?: { isError?: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.result?.isError).toBe(false);
+    expect(execute).toHaveBeenCalledWith(
+      expect.stringMatching(/^mcp-/),
+      { body: "hello" },
+      expect.any(AbortSignal),
+    );
+  });
+
   it("tracks the active runtime only while the server is running", async () => {
     server = await startMcpLoopbackServer(0);
     const active = getActiveMcpLoopbackRuntime();

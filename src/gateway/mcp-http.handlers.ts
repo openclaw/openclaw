@@ -86,7 +86,7 @@ export async function handleMcpJsonRpc(params: {
             isError: true,
           });
         }
-        const result = await tool.execute(toolCallId, hookResult.params);
+        const result = await tool.execute(toolCallId, hookResult.params, params.signal);
         return jsonRpcResult(id, {
           content: normalizeToolCallContent(result),
           isError: false,

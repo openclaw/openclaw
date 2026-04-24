@@ -62,20 +62,25 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
       controller.abort();
     }
   };
+  const abortIfRequestIncomplete = () => {
+    if (!req.complete) {
+      abort();
+    }
+  };
   const abortIfResponseStillOpen = () => {
     if (!res.writableEnded) {
       abort();
     }
   };
-  req.once("aborted", abort);
+  req.once("close", abortIfRequestIncomplete);
   res.once("close", abortIfResponseStillOpen);
-  if (req.destroyed) {
+  if (req.destroyed && !req.complete) {
     abort();
   }
   return {
     signal: controller.signal,
     cleanup: () => {
-      req.off("aborted", abort);
+      req.off("close", abortIfRequestIncomplete);
       res.off("close", abortIfResponseStillOpen);
     },
   };
