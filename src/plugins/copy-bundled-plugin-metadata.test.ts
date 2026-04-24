@@ -162,7 +162,7 @@ describe("copyBundledPluginMetadata", () => {
     const packageJson = readBundledPackageJson(repoRoot, "telegram");
     expect(packageJson.dependencies).toEqual({ grammy: "1.42.0" });
     expect(packageJson.devDependencies).toBeUndefined();
-    expect(packageJson.optionalDependencies).toBeUndefined();
+    expect(packageJson.optionalDependencies).toEqual({ "@openclaw/native-helper": "workspace:*" });
     expect(packageJson.peerDependencies).toBeUndefined();
     expect(packageJson.peerDependenciesMeta).toBeUndefined();
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
