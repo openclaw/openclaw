@@ -968,6 +968,7 @@ function canaryFailureMessage(params: {
 
 async function runInstalledOpenClawTelegramOnboardingPreflight(params: {
   openClawCommand: string;
+  providerMode: ReturnType<typeof normalizeQaProviderMode>;
   sutToken: string;
 }) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-telegram-"));
@@ -983,6 +984,9 @@ async function runInstalledOpenClawTelegramOnboardingPreflight(params: {
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_GATEWAY_TOKEN: "npm-telegram-live-onboard",
+    ...(params.providerMode === "live-frontier"
+      ? {}
+      : { OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "sk-openclaw-npm-telegram-preflight" }),
   };
   try {
     await execFileAsync(
@@ -1086,6 +1090,7 @@ export async function runTelegramQaLive(params: {
       writeTelegramQaProgress(progressEnabled, "installed package onboarding preflight start");
       await runInstalledOpenClawTelegramOnboardingPreflight({
         openClawCommand: params.sutOpenClawCommand,
+        providerMode,
         sutToken: runtimeEnv.sutToken,
       });
       writeTelegramQaProgress(progressEnabled, "installed package onboarding preflight pass");
