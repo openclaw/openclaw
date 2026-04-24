@@ -21,7 +21,7 @@ export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
   label: string;
   origin: PluginOrigin;
   install: PluginPackageInstall;
-  installSource: PluginInstallSourceInfo;
+  installSource?: PluginInstallSourceInfo;
 };
 
 type ProviderInstallCatalogParams = {

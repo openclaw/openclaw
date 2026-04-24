@@ -884,12 +884,14 @@ Or point `OPENCLAW_PLUGIN_CATALOG_PATHS` (or `OPENCLAW_MPM_CATALOG_PATHS`) at
 one or more JSON files (comma/semicolon/`PATH`-delimited). Each file should
 contain `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`. The parser also accepts `"packages"` or `"plugins"` as legacy aliases for the `"entries"` key.
 
-Channel catalog entries and provider install catalog entries expose normalized
-install-source facts next to the raw `openclaw.install` block. The normalized
-facts identify whether the npm spec is an exact version or floating selector,
-whether expected integrity metadata is present, and whether a local source path
-is also available. This lets onboarding and diagnostics explain source-plane
-state without importing plugin runtime.
+Generated channel catalog entries and provider install catalog entries expose
+normalized install-source facts next to the raw `openclaw.install` block. The
+normalized facts identify whether the npm spec is an exact version or floating
+selector, whether expected integrity metadata is present, and whether a local
+source path is also available. Consumers should treat `installSource` as an
+additive optional field so older hand-built entries and compatibility shims do
+not have to synthesize it. This lets onboarding and diagnostics explain
+source-plane state without importing plugin runtime.
 
 Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for

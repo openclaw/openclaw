@@ -40,7 +40,7 @@ export type ChannelPluginCatalogEntry = {
   install: PluginPackageInstall & {
     npmSpec: string;
   };
-  installSource: PluginInstallSourceInfo;
+  installSource?: PluginInstallSourceInfo;
 };
 
 type CatalogOptions = {
