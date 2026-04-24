@@ -157,6 +157,7 @@ describe("createSlackBoltApp", () => {
       token: "xoxb-test",
       receiver,
       clientOptions,
+      ignoreSelf: false,
     });
   });
 
@@ -185,6 +186,7 @@ describe("createSlackBoltApp", () => {
       token: "xoxb-test",
       receiver,
       clientOptions,
+      ignoreSelf: false,
     });
   });
 });

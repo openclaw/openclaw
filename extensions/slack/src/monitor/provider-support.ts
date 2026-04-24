@@ -144,6 +144,7 @@ export function createSlackBoltApp(params: {
     token: params.botToken,
     receiver,
     clientOptions: params.clientOptions,
+    ignoreSelf: false,
   });
   return { app, receiver };
 }
