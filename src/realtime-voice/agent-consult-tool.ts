@@ -1,8 +1,17 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { RealtimeVoiceTool } from "./provider-types.js";
 
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME = "openclaw_agent_consult";
-export type RealtimeVoiceAgentConsultToolPolicy = "safe-read-only" | "owner" | "none";
+export const REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES = [
+  "safe-read-only",
+  "owner",
+  "none",
+] as const;
+export type RealtimeVoiceAgentConsultToolPolicy =
+  (typeof REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES)[number];
 export type RealtimeVoiceAgentConsultArgs = {
   question: string;
   context?: string;
@@ -37,6 +46,62 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
     required: ["question"],
   },
 };
+
+const SAFE_READ_ONLY_TOOLS = [
+  "read",
+  "web_search",
+  "web_fetch",
+  "x_search",
+  "memory_search",
+  "memory_get",
+] as const;
+
+export function isRealtimeVoiceAgentConsultToolPolicy(
+  value: unknown,
+): value is RealtimeVoiceAgentConsultToolPolicy {
+  return (
+    typeof value === "string" &&
+    REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES.includes(
+      value as RealtimeVoiceAgentConsultToolPolicy,
+    )
+  );
+}
+
+export function resolveRealtimeVoiceAgentConsultToolPolicy(
+  value: unknown,
+  fallback: RealtimeVoiceAgentConsultToolPolicy,
+): RealtimeVoiceAgentConsultToolPolicy {
+  const normalized = normalizeOptionalLowercaseString(value);
+  return isRealtimeVoiceAgentConsultToolPolicy(normalized) ? normalized : fallback;
+}
+
+export function resolveRealtimeVoiceAgentConsultTools(
+  policy: RealtimeVoiceAgentConsultToolPolicy,
+  customTools: RealtimeVoiceTool[] = [],
+): RealtimeVoiceTool[] {
+  const tools = new Map<string, RealtimeVoiceTool>();
+  if (policy !== "none") {
+    tools.set(REALTIME_VOICE_AGENT_CONSULT_TOOL.name, REALTIME_VOICE_AGENT_CONSULT_TOOL);
+  }
+  for (const tool of customTools) {
+    if (!tools.has(tool.name)) {
+      tools.set(tool.name, tool);
+    }
+  }
+  return [...tools.values()];
+}
+
+export function resolveRealtimeVoiceAgentConsultToolsAllow(
+  policy: RealtimeVoiceAgentConsultToolPolicy,
+): string[] | undefined {
+  if (policy === "owner") {
+    return undefined;
+  }
+  if (policy === "safe-read-only") {
+    return [...SAFE_READ_ONLY_TOOLS];
+  }
+  return [];
+}
 
 export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoiceAgentConsultArgs {
   const question = readConsultStringArg(args, "question");
