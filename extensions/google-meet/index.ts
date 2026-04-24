@@ -18,6 +18,7 @@ import {
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
+import { createMeetWithBrowserProxyOnNode } from "./src/transports/chrome.js";
 
 const googleMeetConfigSchema = {
   parse(value: unknown) {
@@ -227,7 +228,45 @@ async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<strin
     expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : config.oauth.expiresAt,
   });
   const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
-  return { token, ...result };
+  return { source: "api" as const, token, ...result };
+}
+
+function hasGoogleMeetOAuth(config: GoogleMeetConfig, raw: Record<string, unknown>): boolean {
+  return Boolean(
+    normalizeOptionalString(raw.accessToken) ??
+    normalizeOptionalString(raw.refreshToken) ??
+    config.oauth.accessToken ??
+    config.oauth.refreshToken,
+  );
+}
+
+async function createMeetFromParams(params: {
+  config: GoogleMeetConfig;
+  runtime: OpenClawPluginApi["runtime"];
+  raw: Record<string, unknown>;
+}) {
+  if (hasGoogleMeetOAuth(params.config, params.raw)) {
+    const { token: _token, ...result } = await createSpaceFromParams(params.config, params.raw);
+    return result;
+  }
+  const browser = await createMeetWithBrowserProxyOnNode({
+    runtime: params.runtime,
+    config: params.config,
+  });
+  return {
+    source: browser.source,
+    meetingUri: browser.meetingUri,
+    space: {
+      name: `browser/${browser.meetingUri.split("/").pop()}`,
+      meetingUri: browser.meetingUri,
+    },
+    browser: {
+      nodeId: browser.nodeId,
+      targetId: browser.targetId,
+      browserUrl: browser.browserUrl,
+      browserTitle: browser.browserTitle,
+    },
+  };
 }
 
 export default definePluginEntry({
@@ -284,8 +323,7 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const raw = asParamRecord(params);
-          const { token: _token, ...result } = await createSpaceFromParams(config, raw);
-          respond(true, result);
+          respond(true, await createMeetFromParams({ config, runtime: api.runtime, raw }));
         } catch (err) {
           sendError(respond, err);
         }
@@ -395,8 +433,7 @@ export default definePluginEntry({
               );
             }
             case "create": {
-              const { token: _token, ...result } = await createSpaceFromParams(config, raw);
-              return json(result);
+              return json(await createMeetFromParams({ config, runtime: api.runtime, raw }));
             }
             case "test_speech": {
               const rt = await ensureRuntime();

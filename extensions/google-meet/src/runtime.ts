@@ -5,7 +5,11 @@ import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { getGoogleMeetSetupStatus } from "./setup.js";
-import { launchChromeMeet, launchChromeMeetOnNode } from "./transports/chrome.js";
+import {
+  createMeetWithBrowserProxyOnNode,
+  launchChromeMeet,
+  launchChromeMeetOnNode,
+} from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
 import type {
   GoogleMeetChromeHealth,
@@ -82,6 +86,13 @@ export class GoogleMeetRuntime {
 
   setupStatus() {
     return getGoogleMeetSetupStatus(this.params.config, { fullConfig: this.params.fullConfig });
+  }
+
+  async createViaBrowser() {
+    return createMeetWithBrowserProxyOnNode({
+      runtime: this.params.runtime,
+      config: this.params.config,
+    });
   }
 
   async join(request: GoogleMeetJoinRequest): Promise<GoogleMeetJoinResult> {

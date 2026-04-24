@@ -777,6 +777,72 @@ describe("google-meet plugin", () => {
     }
   });
 
+  it("creates a Meet through browser fallback when OAuth is not configured", async () => {
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        nodesInvokeHandler: async (params) => {
+          const proxy = params.params as { path?: string; body?: { url?: string } };
+          if (proxy.path === "/tabs/open") {
+            return {
+              payload: {
+                result: {
+                  targetId: "tab-1",
+                  title: "Meet",
+                  url: proxy.body?.url,
+                },
+              },
+            };
+          }
+          if (proxy.path === "/act") {
+            return {
+              payload: {
+                result: {
+                  ok: true,
+                  targetId: "tab-1",
+                  result: {
+                    meetingUri: "https://meet.google.com/browser-made-url",
+                    browserUrl: "https://meet.google.com/browser-made-url",
+                    browserTitle: "Meet",
+                  },
+                },
+              },
+            };
+          }
+          return { payload: { result: { ok: true } } };
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.create") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: {}, respond });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      source: "browser",
+      meetingUri: "https://meet.google.com/browser-made-url",
+      browser: { nodeId: "node-1", targetId: "tab-1" },
+    });
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          path: "/tabs/open",
+          body: { url: "https://meet.google.com/new" },
+        }),
+      }),
+    );
+  });
+
   it("launches Chrome after the BlackHole check", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });

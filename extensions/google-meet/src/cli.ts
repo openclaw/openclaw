@@ -145,6 +145,15 @@ function resolveCreateTokenOptions(
   };
 }
 
+function hasCreateOAuth(config: GoogleMeetConfig, options: CreateOptions): boolean {
+  return Boolean(
+    options.accessToken?.trim() ||
+    options.refreshToken?.trim() ||
+    config.oauth.accessToken ||
+    config.oauth.refreshToken,
+  );
+}
+
 export function registerGoogleMeetCli(params: {
   program: Command;
   config: GoogleMeetConfig;
@@ -226,6 +235,28 @@ export function registerGoogleMeetCli(params: {
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
     .option("--json", "Print JSON output", false)
     .action(async (options: CreateOptions) => {
+      if (!hasCreateOAuth(params.config, options)) {
+        const rt = await params.ensureRuntime();
+        const result = await rt.createViaBrowser();
+        const payload = {
+          source: result.source,
+          meetingUri: result.meetingUri,
+          browser: {
+            nodeId: result.nodeId,
+            targetId: result.targetId,
+            browserUrl: result.browserUrl,
+            browserTitle: result.browserTitle,
+          },
+        };
+        if (options.json) {
+          writeStdoutJson(payload);
+          return;
+        }
+        writeStdoutLine("meeting uri: %s", result.meetingUri);
+        writeStdoutLine("source: browser");
+        writeStdoutLine("node: %s", result.nodeId);
+        return;
+      }
       const token = await resolveGoogleMeetAccessToken(
         resolveCreateTokenOptions(params.config, options),
       );

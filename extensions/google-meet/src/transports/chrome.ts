@@ -231,6 +231,15 @@ type BrowserTab = {
   url?: string;
 };
 
+export type GoogleMeetBrowserCreateResult = {
+  meetingUri: string;
+  nodeId: string;
+  targetId?: string;
+  browserUrl?: string;
+  browserTitle?: string;
+  source: "browser";
+};
+
 function unwrapNodeInvokePayload(raw: unknown): unknown {
   const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   if (typeof record.payloadJSON === "string" && record.payloadJSON.trim()) {
@@ -281,6 +290,110 @@ function asBrowserTabs(result: unknown): BrowserTab[] {
 
 function readBrowserTab(result: unknown): BrowserTab | undefined {
   return result && typeof result === "object" ? (result as BrowserTab) : undefined;
+}
+
+function readBrowserCreateResult(result: unknown): {
+  meetingUri?: string;
+  browserUrl?: string;
+  browserTitle?: string;
+  manualAction?: string;
+} {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  const nested =
+    record.result && typeof record.result === "object"
+      ? (record.result as Record<string, unknown>)
+      : record;
+  return {
+    meetingUri: typeof nested.meetingUri === "string" ? nested.meetingUri : undefined,
+    browserUrl: typeof nested.browserUrl === "string" ? nested.browserUrl : undefined,
+    browserTitle: typeof nested.browserTitle === "string" ? nested.browserTitle : undefined,
+    manualAction: typeof nested.manualAction === "string" ? nested.manualAction : undefined,
+  };
+}
+
+const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
+  const meetUrlPattern = /^https:\\/\\/meet\\.google\\.com\\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const current = () => location.href;
+  if (!current().startsWith("https://meet.google.com/")) {
+    return {
+      manualAction: "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+      browserUrl: current(),
+      browserTitle: document.title,
+    };
+  }
+  for (let i = 0; i < 80; i += 1) {
+    const href = current();
+    if (meetUrlPattern.test(href)) {
+      return { meetingUri: href, browserUrl: href, browserTitle: document.title };
+    }
+    const text = document.body?.innerText ?? "";
+    if (/sign in|use your google account|couldn't create|unable to create/i.test(text)) {
+      return {
+        manualAction: "Sign in to Google in the OpenClaw browser profile or resolve the Meet page prompt, then retry meeting creation.",
+        browserUrl: href,
+        browserTitle: document.title,
+      };
+    }
+    await sleep(500);
+  }
+  return {
+    manualAction: "Google Meet did not return a meeting URL from the browser create flow before timeout.",
+    browserUrl: current(),
+    browserTitle: document.title,
+  };
+}`;
+
+export async function createMeetWithBrowserProxyOnNode(params: {
+  runtime: PluginRuntime;
+  config: GoogleMeetConfig;
+}): Promise<GoogleMeetBrowserCreateResult> {
+  const nodeId = await resolveChromeNode({
+    runtime: params.runtime,
+    requestedNode: params.config.chromeNode.node,
+  });
+  const timeoutMs = Math.max(15_000, params.config.chrome.joinTimeoutMs);
+  const tab = readBrowserTab(
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId,
+      method: "POST",
+      path: "/tabs/open",
+      body: { url: "https://meet.google.com/new" },
+      timeoutMs,
+    }),
+  );
+  const targetId = tab?.targetId;
+  if (!targetId) {
+    throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
+  }
+  const evaluated = await callBrowserProxyOnNode({
+    runtime: params.runtime,
+    nodeId,
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "evaluate",
+      targetId,
+      fn: CREATE_MEET_FROM_BROWSER_SCRIPT,
+    },
+    timeoutMs,
+  });
+  const result = readBrowserCreateResult(evaluated);
+  if (result.meetingUri) {
+    return {
+      source: "browser",
+      nodeId,
+      targetId,
+      meetingUri: result.meetingUri,
+      browserUrl: result.browserUrl,
+      browserTitle: result.browserTitle,
+    };
+  }
+  throw new Error(
+    result.manualAction ??
+      "Browser fallback could not create a Google Meet URL. Sign in to the OpenClaw browser profile, then retry.",
+  );
 }
 
 function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undefined {
