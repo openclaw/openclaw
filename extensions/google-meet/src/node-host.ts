@@ -25,15 +25,6 @@ type NodeBridgeSession = {
   lastOutputBytes: number;
 };
 
-type BrowserStatus = {
-  inCall?: boolean;
-  micMuted?: boolean;
-  browserUrl?: string;
-  browserTitle?: string;
-  status?: string;
-  notes?: string[];
-};
-
 const sessions = new Map<string, NodeBridgeSession>();
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -60,10 +51,6 @@ function readNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function runCommandWithTimeout(argv: string[], timeoutMs: number) {
   const [command, ...args] = argv;
   if (!command) {
@@ -78,164 +65,6 @@ function runCommandWithTimeout(argv: string[], timeoutMs: number) {
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? (result.error ? formatErrorMessage(result.error) : ""),
   };
-}
-
-function runAppleScript(script: string, timeoutMs: number) {
-  return runCommandWithTimeout(["/usr/bin/osascript", "-e", script], timeoutMs);
-}
-
-function normalizeAppleScriptString(value: string): string {
-  return JSON.stringify(value);
-}
-
-function activeMeetTabStatus(timeoutMs: number): BrowserStatus {
-  const script = `
-tell application "Google Chrome"
-  repeat with w in windows
-    repeat with t in tabs of w
-      set tabUrl to URL of t
-      if tabUrl starts with "https://meet.google.com/" then
-        set active tab index of w to index of t
-        set index of w to 1
-        set tabTitle to title of t
-        return tabUrl & linefeed & tabTitle
-      end if
-    end repeat
-  end repeat
-end tell`;
-  const result = runAppleScript(script, timeoutMs);
-  if (result.code !== 0) {
-    return {
-      inCall: false,
-      status: "browser-unavailable",
-      notes: [result.stderr || result.stdout || "Google Chrome tab status unavailable"],
-    };
-  }
-  const [browserUrl = "", browserTitle = ""] = result.stdout.split(/\r?\n/u);
-  const trimmedBrowserTitle = browserTitle.trim();
-  return {
-    inCall: Boolean(browserUrl.trim()) && !trimmedBrowserTitle.endsWith("Meet"),
-    browserUrl: browserUrl.trim() || undefined,
-    browserTitle: trimmedBrowserTitle || undefined,
-    status: "ok",
-  };
-}
-
-function activateExistingMeetTab(url: string, timeoutMs: number): boolean {
-  const script = `
-set targetUrl to ${normalizeAppleScriptString(url)}
-tell application "Google Chrome"
-  repeat with w in windows
-    repeat with t in tabs of w
-      if URL of t is targetUrl then
-        set active tab index of w to index of t
-        set index of w to 1
-        activate
-        return "found"
-      end if
-    end repeat
-  end repeat
-end tell
-return "missing"`;
-  const result = runAppleScript(script, timeoutMs);
-  return result.code === 0 && result.stdout.trim() === "found";
-}
-
-function executeMeetTabScript(url: string, javascript: string, timeoutMs: number) {
-  const script = `
-set targetUrl to ${normalizeAppleScriptString(url)}
-set source to ${normalizeAppleScriptString(javascript)}
-tell application "Google Chrome"
-  repeat with w in windows
-    repeat with t in tabs of w
-      if URL of t starts with targetUrl then
-        set active tab index of w to index of t
-        set index of w to 1
-        return execute t javascript source
-      end if
-    end repeat
-  end repeat
-end tell
-return ""`;
-  return runAppleScript(script, timeoutMs);
-}
-
-function tryAutoJoinMeet(params: {
-  url: string;
-  guestName: string;
-  timeoutMs: number;
-}): BrowserStatus {
-  const js = `
-(() => {
-  const text = (node) => (node?.innerText || node?.textContent || "").trim();
-  const input = [...document.querySelectorAll('input')].find((el) =>
-    /your name/i.test(el.getAttribute('aria-label') || el.placeholder || '')
-  );
-  if (input && !input.value) {
-    input.focus();
-    input.value = ${JSON.stringify(params.guestName)};
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-  const buttons = [...document.querySelectorAll('button')];
-  const join = buttons.find((button) => /join now|ask to join/i.test(text(button)) && !button.disabled);
-  if (join) join.click();
-  const mic = buttons.find((button) => /turn off microphone|turn on microphone|microphone/i.test(button.getAttribute('aria-label') || text(button)));
-  return JSON.stringify({
-    clickedJoin: Boolean(join),
-    inCall: buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button))),
-    micMuted: mic ? /turn on microphone/i.test(mic.getAttribute('aria-label') || text(mic)) : undefined,
-    title: document.title,
-    url: location.href
-  });
-})();`;
-  const result = executeMeetTabScript(params.url, js, Math.min(params.timeoutMs, 5_000));
-  if (result.code !== 0) {
-    return {
-      ...activeMeetTabStatus(Math.min(params.timeoutMs, 2_000)),
-      notes: [
-        "Chrome JavaScript automation is unavailable; enable Chrome > View > Developer > Allow JavaScript from Apple Events for guest auto-join.",
-        result.stderr || result.stdout || "unknown Apple Events failure",
-      ],
-    };
-  }
-  try {
-    const parsed = JSON.parse(result.stdout.trim()) as {
-      inCall?: boolean;
-      micMuted?: boolean;
-      url?: string;
-      title?: string;
-    };
-    return {
-      inCall: parsed.inCall,
-      micMuted: parsed.micMuted,
-      browserUrl: parsed.url,
-      browserTitle: parsed.title,
-      status: "ok",
-    };
-  } catch {
-    return activeMeetTabStatus(Math.min(params.timeoutMs, 2_000));
-  }
-}
-
-async function waitForInCall(params: {
-  url: string;
-  guestName: string;
-  autoJoin: boolean;
-  timeoutMs: number;
-}): Promise<BrowserStatus> {
-  const deadline = Date.now() + Math.max(0, params.timeoutMs);
-  let status: BrowserStatus = activeMeetTabStatus(2_000);
-  while (Date.now() <= deadline) {
-    status = params.autoJoin
-      ? tryAutoJoinMeet({ url: params.url, guestName: params.guestName, timeoutMs: 5_000 })
-      : activeMeetTabStatus(2_000);
-    if (status.inCall === true) {
-      return status;
-    }
-    await sleep(750);
-  }
-  return status;
 }
 
 function assertBlackHoleAvailable(timeoutMs: number) {
@@ -409,44 +238,42 @@ function startChrome(params: Record<string, unknown>) {
     if (browserProfile) {
       argv.push("--args", `--profile-directory=${browserProfile}`);
     }
-    const reused = readBoolean(params.reuseExistingTab, true)
-      ? activateExistingMeetTab(url, Math.min(timeoutMs, 5_000))
-      : false;
-    if (!reused) {
-      argv.push(url);
-      const result = runCommandWithTimeout(argv, timeoutMs);
-      if (result.code !== 0) {
-        if (bridgeId) {
-          const session = sessions.get(bridgeId);
-          if (session) {
-            stopSession(session);
-          }
+    argv.push(url);
+    const result = runCommandWithTimeout(argv, timeoutMs);
+    if (result.code !== 0) {
+      if (bridgeId) {
+        const session = sessions.get(bridgeId);
+        if (session) {
+          stopSession(session);
         }
-        throw new Error(
-          `failed to launch Chrome for Meet: ${result.stderr || result.stdout || result.code}`,
-        );
       }
+      throw new Error(
+        `failed to launch Chrome for Meet: ${result.stderr || result.stdout || result.code}`,
+      );
     }
   }
 
-  const waitForInCallMs = readNumber(params.waitForInCallMs, 20_000);
-  return Promise.resolve(
-    params.launch !== false && waitForInCallMs > 0
-      ? waitForInCall({
-          url,
-          guestName: readString(params.guestName) ?? "OpenClaw Agent",
-          autoJoin: readBoolean(params.autoJoin, true),
-          timeoutMs: waitForInCallMs,
-        })
-      : activeMeetTabStatus(2_000),
-  ).then((browser) => ({ launched: params.launch !== false, bridgeId, audioBridge, browser }));
+  return {
+    launched: params.launch !== false,
+    bridgeId,
+    audioBridge,
+    browser:
+      params.launch !== false
+        ? {
+            status: "chrome-opened",
+            browserUrl: url,
+            notes: [
+              "Browser page control is handled by OpenClaw browser automation when using chrome-node.",
+            ],
+          }
+        : undefined,
+  };
 }
 
 function bridgeStatus(params: Record<string, unknown>) {
   const bridgeId = readString(params.bridgeId);
   const session = bridgeId ? sessions.get(bridgeId) : undefined;
   return {
-    browser: activeMeetTabStatus(2_000),
     bridge: session
       ? {
           bridgeId,
