@@ -1259,6 +1259,70 @@ describe("installPluginFromArchive", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "fails package installs when a non-openclaw node_modules symlink points at the host package root",
+    async () => {
+      const { pluginDir } = setupPluginInstallDirs();
+      vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
+
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "spoofed-node-modules-peer-plugin",
+          version: "1.0.0",
+          openclaw: { extensions: ["index.js"] },
+        }),
+      );
+      fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+      const nodeModulesDir = path.join(pluginDir, "node_modules");
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+      fs.symlinkSync(process.cwd(), path.join(nodeModulesDir, "not-openclaw"), "junction");
+
+      await expect(
+        installSecurityScan.scanPackageInstallSource({
+          extensions: ["index.js"],
+          logger: { warn: vi.fn() },
+          packageDir: pluginDir,
+          pluginId: "spoofed-node-modules-peer-plugin",
+          packageName: "spoofed-node-modules-peer-plugin",
+        }),
+      ).rejects.toThrow("node_modules/not-openclaw");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails package installs when nested node_modules/openclaw points at the host package root",
+    async () => {
+      const { pluginDir } = setupPluginInstallDirs();
+      vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
+
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "nested-openclaw-peer-plugin",
+          version: "1.0.0",
+          openclaw: { extensions: ["index.js"] },
+        }),
+      );
+      fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+      const nestedNodeModulesDir = path.join(pluginDir, "node_modules", "vendor", "node_modules");
+      fs.mkdirSync(nestedNodeModulesDir, { recursive: true });
+      fs.symlinkSync(process.cwd(), path.join(nestedNodeModulesDir, "openclaw"), "junction");
+
+      await expect(
+        installSecurityScan.scanPackageInstallSource({
+          extensions: ["index.js"],
+          logger: { warn: vi.fn() },
+          packageDir: pluginDir,
+          pluginId: "nested-openclaw-peer-plugin",
+          packageName: "nested-openclaw-peer-plugin",
+        }),
+      ).rejects.toThrow(path.join("node_modules", "vendor", "node_modules", "openclaw"));
+    },
+  );
+
   it("does not block package installs for blocked-looking names outside node_modules", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 

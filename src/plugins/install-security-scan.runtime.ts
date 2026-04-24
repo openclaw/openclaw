@@ -176,25 +176,37 @@ function pathContainsNodeModulesSegment(relativePath: string): boolean {
     .includes("node_modules");
 }
 
-function isDirectNodeModulesSymlink(relativePath: string): boolean {
+function isTrustedOpenClawPeerSymlink(relativePath: string): boolean {
   const segments = relativePath.split(/[\\/]+/).map((segment) => segment.trim().toLowerCase());
-  return segments.length >= 2 && segments[0] === "node_modules";
+  return (
+    (segments.length === 2 && segments[0] === "node_modules" && segments[1] === "openclaw") ||
+    (segments.length === 3 &&
+      segments[0] === "node_modules" &&
+      segments[1] === ".bin" &&
+      segments[2] === "openclaw")
+  );
 }
 
-async function isTrustedHostOpenClawPath(resolvedTargetPath: string): Promise<boolean> {
+async function resolveTrustedHostOpenClawRootRealPath(): Promise<string | null> {
   const hostRoot = resolveOpenClawPackageRootSync({
     argv1: process.argv[1],
     moduleUrl: import.meta.url,
     cwd: process.cwd(),
   });
   if (!hostRoot) {
-    return false;
+    return null;
   }
 
-  const hostRootRealPath = await fs.realpath(hostRoot).catch(() => path.resolve(hostRoot));
+  return fs.realpath(hostRoot).catch(() => path.resolve(hostRoot));
+}
+
+function isTrustedHostOpenClawPath(
+  trustedHostOpenClawRootRealPath: string | null,
+  resolvedTargetPath: string,
+): boolean {
   return (
-    path.resolve(hostRootRealPath) === path.resolve(resolvedTargetPath) ||
-    isPathInside(hostRootRealPath, resolvedTargetPath)
+    trustedHostOpenClawRootRealPath !== null &&
+    isPathInside(trustedHostOpenClawRootRealPath, resolvedTargetPath)
   );
 }
 
@@ -202,6 +214,7 @@ async function inspectNodeModulesSymlinkTarget(params: {
   rootRealPath: string;
   symlinkPath: string;
   symlinkRelativePath: string;
+  trustedHostOpenClawRootRealPath: string | null;
 }): Promise<
   Pick<PackageManifestTraversalResult, "blockedDirectoryFinding" | "blockedFileFinding">
 > {
@@ -223,8 +236,8 @@ async function inspectNodeModulesSymlinkTarget(params: {
     // scan the host as plugin payload, but keep vendored or spoofed escaping
     // node_modules symlinks fail-closed.
     if (
-      isDirectNodeModulesSymlink(params.symlinkRelativePath) &&
-      (await isTrustedHostOpenClawPath(resolvedTargetPath))
+      isTrustedOpenClawPeerSymlink(params.symlinkRelativePath) &&
+      isTrustedHostOpenClawPath(params.trustedHostOpenClawRootRealPath, resolvedTargetPath)
     ) {
       return {};
     }
@@ -319,6 +332,7 @@ async function collectPackageManifestPaths(
 ): Promise<PackageManifestTraversalResult> {
   const limits = resolvePackageManifestTraversalLimits();
   const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
+  const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
   const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
   const packageManifestPaths: string[] = [];
   const visitedDirectories = new Set<string>();
@@ -388,6 +402,7 @@ async function collectPackageManifestPaths(
             rootRealPath,
             symlinkPath: nextPath,
             symlinkRelativePath: relativeNextPath,
+            trustedHostOpenClawRootRealPath,
           });
           if (symlinkTargetInspection.blockedDirectoryFinding) {
             firstBlockedDirectoryFinding ??= symlinkTargetInspection.blockedDirectoryFinding;
