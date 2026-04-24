@@ -11,6 +11,8 @@ import {
   type ChromeRealtimeAudioBridgeHandle,
 } from "../realtime.js";
 
+export const GOOGLE_MEET_SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
+
 export function outputMentionsBlackHole2ch(output: string): boolean {
   return /\bBlackHole\s+2ch\b/i.test(output);
 }
@@ -24,7 +26,7 @@ export async function assertBlackHole2chAvailable(params: {
   }
 
   const result = await params.runtime.system.runCommandWithTimeout(
-    ["system_profiler", "SPAudioDataType"],
+    [GOOGLE_MEET_SYSTEM_PROFILER_COMMAND, "SPAudioDataType"],
     { timeoutMs: params.timeoutMs },
   );
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;

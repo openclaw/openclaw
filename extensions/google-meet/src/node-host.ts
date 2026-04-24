@@ -6,7 +6,10 @@ import {
   DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
   DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
 } from "./config.js";
-import { outputMentionsBlackHole2ch } from "./transports/chrome.js";
+import {
+  GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
+  outputMentionsBlackHole2ch,
+} from "./transports/chrome.js";
 
 type NodeBridgeSession = {
   id: string;
@@ -63,7 +66,10 @@ function assertBlackHoleAvailable(timeoutMs: number) {
   if (process.platform !== "darwin") {
     throw new Error("Chrome Meet transport with blackhole-2ch audio is currently macOS-only");
   }
-  const result = runCommandWithTimeout(["system_profiler", "SPAudioDataType"], timeoutMs);
+  const result = runCommandWithTimeout(
+    [GOOGLE_MEET_SYSTEM_PROFILER_COMMAND, "SPAudioDataType"],
+    timeoutMs,
+  );
   const output = `${result.stdout}\n${result.stderr}`;
   if (result.code !== 0 || !outputMentionsBlackHole2ch(output)) {
     throw new Error("BlackHole 2ch audio device not found on the node.");
