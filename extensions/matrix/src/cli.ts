@@ -96,6 +96,17 @@ function resolveMatrixCliAccountId(accountId?: string): string {
   return resolveMatrixAuthContext({ cfg, accountId }).accountId;
 }
 
+function resolveMatrixCliAccountContext(accountId?: string): {
+  accountId: string;
+  cfg: CoreConfig;
+} {
+  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  return {
+    accountId: resolveMatrixAuthContext({ cfg, accountId }).accountId,
+    cfg,
+  };
+}
+
 function formatMatrixCliCommand(command: string, accountId?: string): string {
   const normalizedAccountId = normalizeAccountId(accountId);
   const suffix = normalizedAccountId === "default" ? "" : ` --account ${normalizedAccountId}`;
@@ -925,13 +936,14 @@ export function registerMatrixCli(params: { program: Command }): void {
         includeRecoveryKey?: boolean;
         json?: boolean;
       }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
           run: async () =>
             await getMatrixVerificationStatus({
               accountId,
+              cfg,
               includeRecoveryKey: options.includeRecoveryKey === true,
             }),
           onText: (status, verbose) => {
@@ -952,11 +964,11 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (options: { account?: string; verbose?: boolean; json?: boolean }) => {
-      const accountId = resolveMatrixCliAccountId(options.account);
+      const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
       await runMatrixCliCommand({
         verbose: options.verbose === true,
         json: options.json === true,
-        run: async () => await getMatrixRoomKeyBackupStatus({ accountId }),
+        run: async () => await getMatrixRoomKeyBackupStatus({ accountId, cfg }),
         onText: (status, verbose) => {
           printAccountLabel(accountId);
           printBackupSummary(status);
@@ -979,7 +991,7 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--json", "Output as JSON")
     .action(
       async (options: { account?: string; yes?: boolean; verbose?: boolean; json?: boolean }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
@@ -987,7 +999,7 @@ export function registerMatrixCli(params: { program: Command }): void {
             if (options.yes !== true) {
               throw new Error("Refusing to reset Matrix room-key backup without --yes");
             }
-            return await resetMatrixRoomKeyBackup({ accountId });
+            return await resetMatrixRoomKeyBackup({ accountId, cfg });
           },
           onText: (result, verbose) => {
             printAccountLabel(accountId);
@@ -1025,13 +1037,14 @@ export function registerMatrixCli(params: { program: Command }): void {
         verbose?: boolean;
         json?: boolean;
       }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
           run: async () =>
             await restoreMatrixRoomKeyBackup({
               accountId,
+              cfg,
               recoveryKey: options.recoveryKey,
             }),
           onText: (result, verbose) => {
@@ -1074,13 +1087,14 @@ export function registerMatrixCli(params: { program: Command }): void {
         verbose?: boolean;
         json?: boolean;
       }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
           run: async () =>
             await bootstrapMatrixVerification({
               accountId,
+              cfg,
               recoveryKey: options.recoveryKey,
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
@@ -1129,11 +1143,11 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--json", "Output as JSON")
     .action(
       async (key: string, options: { account?: string; verbose?: boolean; json?: boolean }) => {
-        const accountId = resolveMatrixCliAccountId(options.account);
+        const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
-          run: async () => await verifyMatrixRecoveryKey(key, { accountId }),
+          run: async () => await verifyMatrixRecoveryKey(key, { accountId, cfg }),
           onText: (result, verbose) => {
             printAccountLabel(accountId);
             if (!result.success) {
