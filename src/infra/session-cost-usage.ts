@@ -76,15 +76,34 @@ const emptyTotals = (): CostUsageTotals => ({
   missingCostEntries: 0,
 });
 
-const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
-  /^(.+)\.checkpoint\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jsonl$/i;
+const SESSION_TRANSCRIPT_EXT = ".jsonl";
+const COMPACTION_CHECKPOINT_MARKER = ".checkpoint.";
+const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function getCheckpointBaseTranscriptFileName(fileName: string): string | null {
+  if (!fileName.endsWith(SESSION_TRANSCRIPT_EXT)) {
+    return null;
+  }
+  const markerIndex = fileName.lastIndexOf(COMPACTION_CHECKPOINT_MARKER);
+  if (markerIndex <= 0) {
+    return null;
+  }
+  const checkpointId = fileName.slice(
+    markerIndex + COMPACTION_CHECKPOINT_MARKER.length,
+    -SESSION_TRANSCRIPT_EXT.length,
+  );
+  if (!UUID_LIKE_RE.test(checkpointId)) {
+    return null;
+  }
+  return `${fileName.slice(0, markerIndex)}${SESSION_TRANSCRIPT_EXT}`;
+}
 
 function isDuplicateCompactionCheckpointFile(
   fileName: string,
   sessionFileNames: ReadonlySet<string>,
 ): boolean {
-  const match = COMPACTION_CHECKPOINT_TRANSCRIPT_RE.exec(fileName);
-  return Boolean(match?.[1] && sessionFileNames.has(`${match[1]}.jsonl`));
+  const baseFileName = getCheckpointBaseTranscriptFileName(fileName);
+  return Boolean(baseFileName && sessionFileNames.has(baseFileName));
 }
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
