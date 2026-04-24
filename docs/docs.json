@@ -1368,6 +1368,7 @@
                       "gateway/configuration-reference",
                       "gateway/config-agents",
                       "gateway/config-channels",
+                      "gateway/config-tools",
                       "gateway/configuration-examples",
                       "gateway/authentication",
                       "auth-credential-semantics",
