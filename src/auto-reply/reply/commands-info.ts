@@ -179,8 +179,12 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
             cfg: params.cfg,
           });
           if (mcpRuntime) {
+            // Pass core tool names as reservedToolNames so MCP collision
+            // adjustment matches the actual run path (attempt.ts)
+            const coreToolNames = result.groups.flatMap((g) => g.tools.map((t) => t.id));
             const mcpTools = await materializeBundleMcpToolsForRun({
               runtime: mcpRuntime,
+              reservedToolNames: coreToolNames,
             });
             if (mcpTools.tools.length > 0) {
               // Apply the same policy filtering as the actual run path
