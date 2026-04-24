@@ -47,6 +47,10 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
       normalized.required = [];
       changed = true;
     }
+    if (!("additionalProperties" in normalized)) {
+      normalized.additionalProperties = false;
+      changed = true;
+    }
   }
 
   return changed ? normalized : schema;
