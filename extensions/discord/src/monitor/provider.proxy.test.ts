@@ -138,6 +138,21 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   resolveDebugProxySettings: resolveDebugProxySettingsMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => {
+    const source = (await globalFetchMock(params.url, params.init)) as Response;
+    const body = await source.text();
+    return {
+      response: new Response(body, {
+        status: source.status,
+        statusText: source.statusText,
+        headers: source.headers,
+      }),
+      release: vi.fn(),
+    };
+  }),
+}));
+
 describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
   let waitForDiscordGatewayPluginRegistration: typeof import("./gateway-plugin.js").waitForDiscordGatewayPluginRegistration;
