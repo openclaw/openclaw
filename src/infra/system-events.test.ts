@@ -12,6 +12,7 @@ import {
   peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
+  restoreSystemEventEntries,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
 
@@ -118,6 +119,24 @@ describe("system events (session routing)", () => {
 
     expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
     expect(peekSystemEvents(key)).toEqual(["second"]);
+  });
+
+  it("restores deferred entries without collapsing duplicate text", () => {
+    const key = "agent:main:test-restore-duplicates";
+    enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey: key });
+    enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey: key });
+    enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey: key });
+
+    const inspected = peekSystemEventEntries(key);
+    const deferred = inspected.filter((event) => !event.text.startsWith("exec finished:"));
+
+    consumeSystemEventEntries(key, inspected);
+    restoreSystemEventEntries(key, deferred);
+
+    expect(peekSystemEvents(key)).toEqual([
+      "Reminder: Rotate API keys",
+      "Reminder: Rotate API keys",
+    ]);
   });
 
   it("resolves the newest effective delivery context from queued events", () => {

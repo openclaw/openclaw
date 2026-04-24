@@ -106,8 +106,8 @@ import {
 } from "./outbound/targets.js";
 import {
   consumeSystemEventEntries,
-  enqueueSystemEvent,
   peekSystemEventEntries,
+  restoreSystemEventEntries,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
 
@@ -984,14 +984,7 @@ export async function runHeartbeatOnce(opts: {
       (event) => !isExecCompletionEvent(event.text),
     );
     consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
-    for (const event of deferredEntries) {
-      enqueueSystemEvent(event.text, {
-        sessionKey,
-        contextKey: event.contextKey,
-        deliveryContext: event.deliveryContext,
-        trusted: event.trusted,
-      });
-    }
+    restoreSystemEventEntries(sessionKey, deferredEntries);
   };
 
   const ctx = {

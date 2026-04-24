@@ -408,6 +408,35 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   });
 
+  it("keeps duplicate deferred reminders after an exec-event heartbeat run", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const { cfg, sessionKey } = await createConfig({
+        tmpDir,
+        storePath,
+        target: "none",
+      });
+      const { getReplySpy } = createHeartbeatDeps("Handled internally");
+
+      enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey });
+      enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
+      enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+        "Reminder: Rotate API keys",
+        "Reminder: Rotate API keys",
+      ]);
+    });
+  });
+
   it("classifies hook:wake exec completions as exec-event prompts", async () => {
     const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
       tmpPrefix: "openclaw-hook-exec-",

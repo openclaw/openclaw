@@ -180,6 +180,28 @@ export function consumeSystemEventEntries(
   return removed;
 }
 
+export function restoreSystemEventEntries(
+  sessionKey: string,
+  restoredEntries: readonly SystemEvent[],
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  if (restoredEntries.length === 0) {
+    return [];
+  }
+
+  const entry = getOrCreateSessionQueue(key);
+  const clonedEntries = restoredEntries.map(cloneSystemEvent);
+  entry.queue.push(...clonedEntries);
+  if (entry.queue.length > MAX_EVENTS) {
+    entry.queue.splice(0, entry.queue.length - MAX_EVENTS);
+  }
+
+  const newest = entry.queue[entry.queue.length - 1];
+  entry.lastText = newest?.text ?? null;
+  entry.lastContextKey = newest?.contextKey ?? null;
+  return clonedEntries;
+}
+
 export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }
