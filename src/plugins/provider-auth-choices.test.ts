@@ -270,6 +270,45 @@ describe("provider auth choice manifest helpers", () => {
     ]);
   });
 
+  it("sanitizes setup provider auth descriptors before deriving prompt labels", () => {
+    setManifestPlugins([
+      {
+        id: "evil-provider",
+        origin: "workspace",
+        setup: {
+          providers: [
+            {
+              id: "evil\u001b[31m-provider",
+              authMethods: ["jwt\u001b[2K", "oidc"],
+            },
+          ],
+          requiresRuntime: false,
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      {
+        pluginId: "evil-provider",
+        providerId: "evil-provider",
+        methodId: "jwt",
+        choiceId: "evil-provider-jwt",
+        choiceLabel: "Evil Provider JWT",
+        groupId: "evil-provider",
+        groupLabel: "Evil Provider",
+      },
+      {
+        pluginId: "evil-provider",
+        providerId: "evil-provider",
+        methodId: "oidc",
+        choiceId: "evil-provider-oidc",
+        choiceLabel: "Evil Provider OIDC",
+        groupId: "evil-provider",
+        groupLabel: "Evil Provider",
+      },
+    ]);
+  });
+
   it("uses setup provider auth methods when no setup entry exists", () => {
     setManifestPlugins([
       {
