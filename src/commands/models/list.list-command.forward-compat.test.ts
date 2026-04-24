@@ -468,6 +468,50 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
+    it("falls back to registry-backed rows when the fast-path catalog is empty", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
+      mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [{ ...OPENAI_CODEX_MODEL }],
+        availableKeys: new Set(["openai-codex/gpt-5.4"]),
+        registry: {
+          getAll: () => [{ ...OPENAI_CODEX_MODEL }],
+        },
+      });
+      const runtime = createRuntime();
+
+      await modelsListCommand(
+        { all: true, provider: "openai-codex", json: true },
+        runtime as never,
+      );
+
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: "openai-codex",
+        }),
+      );
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(1, {
+        cfg: mocks.resolvedConfig,
+        agentDir: "/tmp/openclaw-agent",
+        providerFilter: "openai-codex",
+        staticOnly: true,
+      });
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(2, {
+        cfg: mocks.resolvedConfig,
+        agentDir: "/tmp/openclaw-agent",
+        providerFilter: "openai-codex",
+        staticOnly: undefined,
+      });
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.4",
+          available: true,
+        }),
+      ]);
+    });
+
     it("keeps the registry path for provider filters without static catalog coverage", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(false);
