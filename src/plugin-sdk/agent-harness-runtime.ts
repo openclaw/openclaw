@@ -68,6 +68,15 @@ export {
 } from "../agents/harness/prompt-compaction-hook-helpers.js";
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
 export {
+  assembleHarnessContextEngine,
+  bootstrapHarnessContextEngine,
+  buildHarnessContextEngineRuntimeContext,
+  buildHarnessContextEngineRuntimeContextFromUsage,
+  finalizeHarnessContextEngineTurn,
+  isActiveHarnessContextEngine,
+  runHarnessContextEngineMaintenance,
+} from "../agents/harness/context-engine-lifecycle.js";
+export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";

@@ -207,5 +207,4 @@ for the actual runbook.
 
 ## Related
 
-- [Release policy](/reference/release-policy)
 - [Release channels](/install/development-channels)

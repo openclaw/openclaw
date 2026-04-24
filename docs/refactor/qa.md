@@ -538,4 +538,3 @@ This is the smallest path that proves both goals:
 ## Related
 
 - [QA E2E automation](/concepts/qa-e2e-automation)
-- [QA refactor](/refactor/qa-refactor)
