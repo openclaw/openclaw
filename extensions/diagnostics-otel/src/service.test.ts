@@ -123,6 +123,8 @@ const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "1111111111111111";
 const GRANDCHILD_SPAN_ID = "2222222222222222";
 const PROTO_KEY = "__proto__";
+const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 4096;
+const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
 
 function createLogger() {
   return {
@@ -137,10 +139,13 @@ type OtelContextFlags = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  captureContent?: NonNullable<
+    NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
+  >["captureContent"];
 };
 function createOtelContext(
   endpoint: string,
-  { traces = false, metrics = false, logs = false }: OtelContextFlags = {},
+  { traces = false, metrics = false, logs = false, captureContent }: OtelContextFlags = {},
 ): OpenClawPluginServiceContext {
   return {
     config: {
@@ -153,6 +158,7 @@ function createOtelContext(
           traces,
           metrics,
           logs,
+          ...(captureContent !== undefined ? { captureContent } : {}),
         },
       },
     },
@@ -720,6 +726,122 @@ describe("diagnostics-otel service", () => {
     });
     expect(toolSpan?.end).toHaveBeenCalledWith(expect.any(Number));
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    await service.stop?.(ctx);
+  });
+
+  test("does not export model or tool content unless capture is explicitly enabled", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: ["private user prompt"],
+      outputMessages: ["private model reply"],
+      systemPrompt: "private system prompt",
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitDiagnosticEvent({
+      type: "tool.execution.completed",
+      runId: "run-1",
+      toolName: "read",
+      toolCallId: "tool-1",
+      durationMs: 20,
+      toolInput: "private tool input",
+      toolOutput: "private tool output",
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const toolCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.tool.execution",
+    );
+    expect(modelCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.content.input_messages": expect.anything(),
+        "openclaw.content.output_messages": expect.anything(),
+        "openclaw.content.system_prompt": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(toolCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.content.tool_input": expect.anything(),
+        "openclaw.content.tool_output": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("exports bounded redacted content when capture fields are opted in", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: true,
+        toolInputs: true,
+        toolOutputs: true,
+        systemPrompt: true,
+      },
+    });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: ["use key sk-1234567890abcdef1234567890abcdef"], // pragma: allowlist secret
+      outputMessages: ["model reply"],
+      systemPrompt: "system prompt",
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitDiagnosticEvent({
+      type: "tool.execution.completed",
+      runId: "run-1",
+      toolName: "read",
+      toolCallId: "tool-1",
+      durationMs: 20,
+      toolInput: "tool input",
+      toolOutput: "x".repeat(6000),
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const toolCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.tool.execution",
+    );
+    const modelAttrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    const toolAttrs = (toolCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+
+    expect(modelAttrs).toMatchObject({
+      "openclaw.content.output_messages": "model reply",
+      "openclaw.content.system_prompt": "system prompt",
+    });
+    expect(String(modelAttrs?.["openclaw.content.input_messages"])).not.toContain(
+      "sk-1234567890abcdef1234567890abcdef", // pragma: allowlist secret
+    );
+    expect(toolAttrs).toMatchObject({
+      "openclaw.content.tool_input": "tool input",
+    });
+    expect(String(toolAttrs?.["openclaw.content.tool_output"]).length).toBeLessThanOrEqual(
+      MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + OTEL_TRUNCATED_SUFFIX_MAX_CHARS,
+    );
     await service.stop?.(ctx);
   });
 

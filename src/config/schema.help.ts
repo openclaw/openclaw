@@ -548,6 +548,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.otel.captureContent":
+    "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+  "diagnostics.otel.captureContent.enabled":
+    "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+  "diagnostics.otel.captureContent.inputMessages":
+    "Capture model input message text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.outputMessages":
+    "Capture model output message text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.toolInputs":
+    "Capture tool input text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.toolOutputs":
+    "Capture tool output text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.systemPrompt":
+    "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":
