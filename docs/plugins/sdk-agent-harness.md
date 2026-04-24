@@ -172,11 +172,11 @@ model refs remain compatibility aliases for the native harness.
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
-selection. Use `embeddedHarness.runtime: "codex"` with
-the default fail-closed fallback when you need to prove that only the Codex
-app-server path can claim the run. Set `fallback: "pi"` only when you
-intentionally want PI to handle missing harness selection. Codex app-server
-failures already fail directly instead of retrying through PI.
+selection. Use `embeddedHarness.runtime: "codex"` without a `fallback` override
+when you need to prove that only the Codex app-server path can claim the run.
+Explicit plugin runtimes already fail closed by default. Set `fallback: "pi"`
+only when you intentionally want PI to handle missing harness selection. Codex
+app-server failures already fail directly instead of retrying through PI.
 
 ## Disable PI fallback
 

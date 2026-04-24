@@ -72,8 +72,9 @@ OpenClaw chooses an embedded runtime after provider and model resolution:
    runtime id such as `codex`.
 4. In `auto` mode, registered plugin runtimes can claim supported provider/model
    pairs.
-5. If no runtime claims a turn in `auto` mode, OpenClaw can use PI as the
-   compatibility fallback.
+5. If no runtime claims a turn in `auto` mode and `fallback: "pi"` is set
+   (the default), OpenClaw uses PI as the compatibility fallback. Set
+   `fallback: "none"` to make unmatched `auto`-mode selection fail instead.
 
 Explicit plugin runtimes fail closed by default. For example,
 `runtime: "codex"` means Codex or a clear selection error unless you set
