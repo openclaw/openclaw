@@ -169,6 +169,11 @@ Route Meet through that node on the Gateway host:
 
 ```json5
 {
+  gateway: {
+    nodes: {
+      allowCommands: ["googlemeet.chrome"],
+    },
+  },
   plugins: {
     entries: {
       "google-meet": {
@@ -201,7 +206,8 @@ Common failure checks:
 
 - `No connected Google Meet-capable node`: start `openclaw node run` in the VM,
   approve pairing, and make sure `openclaw plugins enable google-meet` was run
-  in the VM.
+  in the VM. Also confirm the Gateway host allows the node command with
+  `gateway.nodes.allowCommands: ["googlemeet.chrome"]`.
 - `BlackHole 2ch audio device not found on the node`: install `blackhole-2ch`
   in the VM and reboot the VM.
 - Chrome opens but cannot join: sign in to Chrome inside the VM and confirm that
