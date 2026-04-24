@@ -14,6 +14,11 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Prevent infinite recursion: pnpm install → prepare → pnpm install → prepare …
+if (process.env.GEMMACLAW_PREPARING === "1") {
+  process.exit(0);
+}
+
 function detectPnpmVersion(rootDir) {
   try {
     // packageManager is like: "pnpm@10.33.0"
@@ -52,7 +57,7 @@ console.log("[prepare] dist/ not found — building from source …");
 
 function run(cmd) {
   console.log(`[prepare] $ ${cmd}`);
-  execSync(cmd, { cwd: ROOT, stdio: "inherit", env: { ...process.env } });
+  execSync(cmd, { cwd: ROOT, stdio: "inherit", env: { ...process.env, GEMMACLAW_PREPARING: "1" } });
 }
 
 const pnpmVersion = detectPnpmVersion(ROOT);
