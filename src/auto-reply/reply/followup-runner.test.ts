@@ -1438,6 +1438,11 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   });
 
+  // Phase 1 contract marker: Codex preserves JSON NO_REPLY envelopes, but
+  // follow-up delivery still only suppresses exact text tokens. Runtime-plan
+  // delivery migration should flip this into an executable green row.
+  it.todo("suppresses JSON NO_REPLY followups without origin or dispatcher delivery");
+
   it("keeps NO_REPLY followups with media deliverable", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
