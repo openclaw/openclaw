@@ -7,6 +7,8 @@ import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+type SpawnFn = typeof import("node:child_process").spawn;
+
 const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logWarnMock: vi.fn(),
   logDebugMock: vi.fn(),
@@ -28,6 +30,9 @@ const { withFileLockMock } = vi.hoisted(() => ({
 const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
+const { spawnMockState } = vi.hoisted(() => ({
+  spawnMockState: { actualSpawn: undefined as SpawnFn | undefined },
+}));
 
 interface MockChild extends EventEmitter {
   stdout: EventEmitter;
@@ -83,6 +88,29 @@ function isMcporterCommand(cmd: unknown): boolean {
   return /(^|[\\/])mcporter(?:\.cmd)?$/i.test(cmd);
 }
 
+function isPinnedFsHelperInvocation(args: unknown): args is string[] {
+  return (
+    Array.isArray(args) &&
+    args[0] === "-c" &&
+    typeof args[1] === "string" &&
+    args[1].includes("root_path = sys.argv[1]") &&
+    args[1].includes("relative_parent = sys.argv[2]")
+  );
+}
+
+function createDefaultSpawnMockImplementation(): SpawnFn {
+  return ((cmd: string, args?: readonly string[], options?: unknown) => {
+    if (isPinnedFsHelperInvocation(args)) {
+      const actualSpawn = spawnMockState.actualSpawn;
+      if (!actualSpawn) {
+        throw new Error("actual spawn missing for pinned filesystem helper");
+      }
+      return actualSpawn(cmd, args, options as Parameters<SpawnFn>[2]);
+    }
+    return createMockChild();
+  }) as SpawnFn;
+}
+
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
   const actual = await vi.importActual<
     typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")
@@ -103,6 +131,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  spawnMockState.actualSpawn = actual.spawn;
   return {
     ...actual,
     spawn: vi.fn(),
@@ -199,7 +228,7 @@ describe("QmdMemoryManager", () => {
 
   beforeEach(async () => {
     spawnMock.mockClear();
-    spawnMock.mockImplementation(() => createMockChild());
+    spawnMock.mockImplementation(createDefaultSpawnMockImplementation());
     watchMock.mockClear();
     withFileLockMock.mockClear();
     logWarnMock.mockClear();
