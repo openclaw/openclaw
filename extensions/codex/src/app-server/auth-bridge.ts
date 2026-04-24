@@ -86,7 +86,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   });
   if (!loginParams) {
     throw new Error(
-      `Codex app-server auth profile "${profileId}" does not contain usable inline credentials.`,
+      `Codex app-server auth profile "${profileId}" does not contain usable credentials.`,
     );
   }
   return loginParams;
@@ -98,11 +98,21 @@ async function resolveLoginParamsForCredential(
   params: { agentDir: string; forceOAuthRefresh: boolean },
 ): Promise<LoginAccountParams | undefined> {
   if (credential.type === "api_key") {
-    const apiKey = credential.key?.trim();
+    const resolved = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
+      profileId,
+      agentDir: params.agentDir,
+    });
+    const apiKey = resolved?.apiKey?.trim();
     return apiKey ? { type: "apiKey", apiKey } : undefined;
   }
   if (credential.type === "token") {
-    const accessToken = credential.token?.trim();
+    const resolved = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
+      profileId,
+      agentDir: params.agentDir,
+    });
+    const accessToken = resolved?.apiKey?.trim();
     return accessToken
       ? buildChatgptAuthTokensParams(profileId, credential, accessToken)
       : undefined;
@@ -152,8 +162,14 @@ function buildChatgptAuthTokensParams(
     type: "chatgptAuthTokens",
     accessToken,
     chatgptAccountId: resolveChatgptAccountId(profileId, credential),
-    chatgptPlanType: null,
+    chatgptPlanType: resolveChatgptPlanType(credential),
   };
+}
+
+function resolveChatgptPlanType(credential: AuthProfileCredential): string | null {
+  const record = credential as Record<string, unknown>;
+  const planType = record.chatgptPlanType ?? record.planType;
+  return typeof planType === "string" && planType.trim() ? planType.trim() : null;
 }
 
 function resolveChatgptAccountId(profileId: string, credential: AuthProfileCredential): string {
