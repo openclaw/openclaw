@@ -799,6 +799,7 @@ async function handleSlackBlockAction(params: {
           params.ctx.runtime.log?.(
             `slack:interaction exec approval resolve failed id=${execApproval.approvalId}: ${String(resolveErr)}`,
           );
+          throw resolveErr;
         }
         try {
           await updateSlackInteractionMessage({
