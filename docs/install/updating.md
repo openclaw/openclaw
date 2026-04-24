@@ -71,6 +71,18 @@ ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
 If `OPENCLAW_PLUGIN_STAGE_DIR` is not set, OpenClaw uses `$STATE_DIRECTORY` when
 systemd provides it, then falls back to `~/.openclaw/plugin-runtime-deps`.
 
+### Bundled plugin runtime dependencies
+
+Packaged installs keep bundled plugin runtime dependencies out of the read-only
+package tree. On startup and during `openclaw doctor --fix`, OpenClaw repairs
+runtime dependencies only for bundled plugins that are active in config, active
+through legacy channel config, or enabled by their bundled manifest default.
+
+Explicit disablement wins. A disabled plugin or channel does not get its
+runtime dependencies repaired just because it exists in the package. External
+plugins and custom load paths still use `openclaw plugins install` or
+`openclaw plugins update`.
+
 ## Auto-updater
 
 The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:

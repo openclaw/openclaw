@@ -461,6 +461,10 @@ Two built-in tools can make persistent control-plane changes:
 The owner-only `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
+Agent-driven `gateway config.apply` and `gateway config.patch` edits are
+fail-closed by default: only a narrow set of prompt, model, and mention-gating
+paths are agent-tunable. New sensitive config trees are therefore protected
+unless they are deliberately added to the allowlist.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
@@ -843,6 +847,10 @@ Plaintext `ws://` is loopback-only by default. For trusted private-network
 paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
 break-glass. This is intentionally process environment only, not an
 `openclaw.json` config key.
+Mobile pairing and Android manual or scanned gateway routes are stricter:
+cleartext is accepted for loopback, but private-LAN, link-local, `.local`, and
+dotless hostnames must use TLS unless you explicitly opt into the trusted
+private-network cleartext path.
 
 Local device pairing:
 
