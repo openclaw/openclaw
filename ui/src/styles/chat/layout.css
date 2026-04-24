@@ -524,6 +524,14 @@
   color: var(--muted);
 }
 
+.agent-chat__stt-interim {
+  padding: 10px 14px 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .agent-chat__toolbar {
   display: flex;
   align-items: center;
