@@ -324,6 +324,7 @@ function installFullProviderRuntimeDepsForTest() {
         transport: "auto",
       };
     },
+    resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => {
       if (params.provider === "openai") {
         return createTestOpenAIProviderWrapper(params, true);
@@ -398,6 +399,7 @@ function installFullProviderRuntimeDepsForTest() {
 function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: () => undefined,
+    resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => params.context.streamFn,
   });
   try {
