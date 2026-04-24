@@ -72,6 +72,7 @@ type NodeListResult = {
     displayName?: string;
     connected?: boolean;
     commands?: string[];
+    caps?: string[];
     remoteIp?: string;
   }>;
 };
@@ -101,16 +102,52 @@ function setup(
             nodeId: "node-1",
             displayName: "parallels-macos",
             connected: true,
-            commands: ["googlemeet.chrome"],
+            caps: ["browser"],
+            commands: ["browser.proxy", "googlemeet.chrome"],
           },
         ],
       },
   );
-  const nodesInvoke = vi.fn(async (params) =>
-    options.nodesInvokeHandler
-      ? options.nodesInvokeHandler(params)
-      : (options.nodesInvokeResult ?? { launched: true }),
-  );
+  const nodesInvoke = vi.fn(async (params) => {
+    if (options.nodesInvokeHandler) {
+      return options.nodesInvokeHandler(params);
+    }
+    if (params.command === "browser.proxy") {
+      const proxy = params.params as { path?: string; body?: { url?: string; targetId?: string } };
+      if (proxy.path === "/tabs") {
+        return { payload: { result: { running: true, tabs: [] } } };
+      }
+      if (proxy.path === "/tabs/open") {
+        return {
+          payload: {
+            result: {
+              targetId: "tab-1",
+              title: "Meet",
+              url: proxy.body?.url ?? "https://meet.google.com/abc-defg-hij",
+            },
+          },
+        };
+      }
+      if (proxy.path === "/act") {
+        return {
+          payload: {
+            result: {
+              ok: true,
+              targetId: proxy.body?.targetId ?? "tab-1",
+              result: JSON.stringify({
+                inCall: true,
+                micMuted: false,
+                title: "Meet call",
+                url: "https://meet.google.com/abc-defg-hij",
+              }),
+            },
+          },
+        };
+      }
+      return { payload: { result: { ok: true } } };
+    }
+    return options.nodesInvokeResult ?? { launched: true };
+  });
   const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
     if (argv[0] === "/usr/sbin/system_profiler") {
       return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
@@ -562,15 +599,22 @@ describe("google-meet plugin", () => {
     expect(nodesInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          path: "/tabs/open",
+          body: { url: "https://meet.google.com/abc-defg-hij" },
+        }),
+      }),
+    );
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "node-1",
         command: "googlemeet.chrome",
         params: expect.objectContaining({
           action: "start",
           url: "https://meet.google.com/abc-defg-hij",
           mode: "transcribe",
-          guestName: "OpenClaw Agent",
-          reuseExistingTab: true,
-          autoJoin: true,
-          waitForInCallMs: 20000,
+          launch: false,
         }),
       }),
     );
@@ -618,7 +662,9 @@ describe("google-meet plugin", () => {
       respond: second,
     });
 
-    expect(nodesInvoke).toHaveBeenCalledTimes(1);
+    expect(
+      nodesInvoke.mock.calls.filter(([call]) => call.command === "googlemeet.chrome"),
+    ).toHaveLength(1);
     expect(second.mock.calls[0]?.[1]).toMatchObject({
       session: {
         chrome: { health: { inCall: true, micMuted: false } },
@@ -696,13 +742,15 @@ describe("google-meet plugin", () => {
               nodeId: "node-1",
               displayName: "parallels-macos",
               connected: true,
-              commands: ["googlemeet.chrome"],
+              caps: ["browser"],
+              commands: ["browser.proxy", "googlemeet.chrome"],
             },
             {
               nodeId: "node-2",
               displayName: "mac-studio-vm",
               connected: true,
-              commands: ["googlemeet.chrome"],
+              caps: ["browser"],
+              commands: ["browser.proxy", "googlemeet.chrome"],
             },
           ],
         },

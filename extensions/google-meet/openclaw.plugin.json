@@ -47,7 +47,7 @@
     },
     "chrome.autoJoin": {
       "label": "Auto Join Guest Screen",
-      "help": "Best-effort guest-name fill and Join Now click when Chrome allows JavaScript from Apple Events."
+      "help": "Best-effort guest-name fill and Join Now click through OpenClaw browser automation."
     },
     "chrome.waitForInCallMs": {
       "label": "Wait For In-Call (ms)",

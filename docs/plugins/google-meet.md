@@ -166,7 +166,8 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-Confirm the Gateway sees the node and that it advertises `googlemeet.chrome`:
+Confirm the Gateway sees the node and that it advertises both `googlemeet.chrome`
+and browser capability/`browser.proxy`:
 
 ```bash
 openclaw nodes status
@@ -178,7 +179,7 @@ Route Meet through that node on the Gateway host:
 {
   gateway: {
     nodes: {
-      allowCommands: ["googlemeet.chrome"],
+      allowCommands: ["googlemeet.chrome", "browser.proxy"],
     },
   },
   plugins: {
@@ -218,21 +219,24 @@ openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
 ```
 
 If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one
-connected node advertises `googlemeet.chrome`. If several capable nodes are
-connected, set `chromeNode.node` to the node id, display name, or remote IP.
+connected node advertises both `googlemeet.chrome` and browser control. If
+several capable nodes are connected, set `chromeNode.node` to the node id,
+display name, or remote IP.
 
 Common failure checks:
 
 - `No connected Google Meet-capable node`: start `openclaw node run` in the VM,
-  approve pairing, and make sure `openclaw plugins enable google-meet` was run
-  in the VM. Also confirm the Gateway host allows the node command with
-  `gateway.nodes.allowCommands: ["googlemeet.chrome"]`.
+  approve pairing, and make sure `openclaw plugins enable google-meet` and
+  `openclaw plugins enable browser` were run in the VM. Also confirm the
+  Gateway host allows both node commands with
+  `gateway.nodes.allowCommands: ["googlemeet.chrome", "browser.proxy"]`.
 - `BlackHole 2ch audio device not found on the node`: install `blackhole-2ch`
   in the VM and reboot the VM.
-- Chrome opens but cannot join: sign in to Chrome inside the VM, or keep
-  `chrome.guestName` set for guest join. Guest auto-join uses Chrome Apple
-  Events; if it reports an automation warning, enable Chrome > View > Developer
-  > Allow JavaScript from Apple Events, then retry.
+- Chrome opens but cannot join: sign in to the browser profile inside the VM, or
+  keep `chrome.guestName` set for guest join. Guest auto-join uses OpenClaw
+  browser automation through the node browser proxy; make sure the node browser
+  config points at the profile you want, for example
+  `browser.defaultProfile: "user"` or a named existing-session profile.
 - Duplicate Meet tabs: leave `chrome.reuseExistingTab: true` enabled. OpenClaw
   activates an existing tab for the same Meet URL before opening a new one.
 - No audio: in Meet, route microphone/speaker through the virtual audio device
@@ -372,6 +376,7 @@ Defaults:
 - `chrome.guestName: "OpenClaw Agent"`: name used on the signed-out Meet guest
   screen
 - `chrome.autoJoin: true`: best-effort guest-name fill and Join Now click
+  through OpenClaw browser automation on `chrome-node`
 - `chrome.reuseExistingTab: true`: activate an existing Meet tab instead of
   opening duplicates
 - `chrome.waitForInCallMs: 20000`: wait for the Meet tab to report in-call
