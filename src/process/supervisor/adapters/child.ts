@@ -73,7 +73,7 @@ export async function createChildAdapter(params: {
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  if (child.stdin) {
+  if (child.stdin && child.stdin.writable) {
     if (params.input !== undefined) {
       child.stdin.write(params.input);
       child.stdin.end();

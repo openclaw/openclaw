@@ -253,6 +253,27 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
+  it("does not throw when stdin exists but is not writable", async () => {
+    const stub = createStubChild(9999);
+    Object.defineProperty(stub.child.stdin!, "writable", { value: false, configurable: true });
+    spawnWithFallbackMock.mockResolvedValue({
+      child: stub.child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["google-gemini-cli"],
+      input: "test input",
+    });
+    expect(adapter).toBeDefined();
+    expect(adapter.stdin).toBeDefined();
+    await new Promise<void>((resolve) => {
+      adapter.stdin!.write("x", (err) => {
+        expect(err).toBeNull();
+        resolve();
+      });
+    });
+  });
+
   it("disables detached mode in service-managed runtime", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 
