@@ -106,7 +106,7 @@ const handler = async (event) => {
 export default handler;
 ```
 
-Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push to send to user), and `context` (event-specific data).
+Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push to send to user), and `context` (event-specific data). Agent and tool plugin hook contexts can also include `trace`, a W3C-compatible diagnostic trace context that plugins may pass into structured logs for OTEL correlation.
 
 ### Event context highlights
 

@@ -137,6 +137,18 @@ function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
   return (parsed & TraceFlags.SAMPLED) !== 0 ? TraceFlags.SAMPLED : TraceFlags.NONE;
 }
 
+function contextForTraceContext(traceContext: DiagnosticTraceContext | undefined) {
+  if (!traceContext?.spanId) {
+    return undefined;
+  }
+  return trace.setSpanContext(otelContextApi.active(), {
+    traceId: traceContext.traceId,
+    spanId: traceContext.spanId,
+    traceFlags: traceFlagsToOtel(traceContext.traceFlags),
+    isRemote: true,
+  });
+}
+
 function addTraceAttributes(
   attributes: Record<string, string | number | boolean>,
   traceContext: DiagnosticTraceContext | undefined,
@@ -448,13 +460,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               attributes: redactOtelAttributes(attributes),
               timestamp: meta?.date ?? new Date(),
             };
-            if (traceContext?.spanId) {
-              logRecord.context = trace.setSpanContext(otelContextApi.active(), {
-                traceId: traceContext.traceId,
-                spanId: traceContext.spanId,
-                traceFlags: traceFlagsToOtel(traceContext.traceFlags),
-                isRemote: true,
-              });
+            const logContext = contextForTraceContext(traceContext);
+            if (logContext) {
+              logRecord.context = logContext;
             }
             otelLogger.emit(logRecord);
           } catch (err) {
@@ -467,13 +475,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         name: string,
         attributes: Record<string, string | number>,
         durationMs?: number,
+        traceContext?: DiagnosticTraceContext,
       ) => {
         const startTime =
           typeof durationMs === "number" ? Date.now() - Math.max(0, durationMs) : undefined;
-        const span = tracer.startSpan(name, {
-          attributes,
-          ...(startTime ? { startTime } : {}),
-        });
+        const parentContext = contextForTraceContext(traceContext);
+        const span = tracer.startSpan(
+          name,
+          {
+            attributes,
+            ...(startTime ? { startTime } : {}),
+          },
+          parentContext,
+        );
         return span;
       };
 
@@ -537,7 +551,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.total": usage.total ?? 0,
         };
 
-        const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
+        const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs, evt.trace);
         span.end();
       };
 
@@ -568,7 +582,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.chatId !== undefined) {
           spanAttrs["openclaw.chatId"] = String(evt.chatId);
         }
-        const span = spanWithDuration("openclaw.webhook.processed", spanAttrs, evt.durationMs);
+        const span = spanWithDuration(
+          "openclaw.webhook.processed",
+          spanAttrs,
+          evt.durationMs,
+          evt.trace,
+        );
         span.end();
       };
 
@@ -591,9 +610,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.chatId !== undefined) {
           spanAttrs["openclaw.chatId"] = String(evt.chatId);
         }
-        const span = tracer.startSpan("openclaw.webhook.error", {
-          attributes: spanAttrs,
-        });
+        const span = tracer.startSpan(
+          "openclaw.webhook.error",
+          {
+            attributes: spanAttrs,
+          },
+          contextForTraceContext(evt.trace),
+        );
         span.setStatus({ code: SpanStatusCode.ERROR, message: redactedError });
         span.end();
       };
@@ -648,7 +671,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.reason) {
           spanAttrs["openclaw.reason"] = redactSensitiveText(evt.reason);
         }
-        const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
+        const span = spanWithDuration(
+          "openclaw.message.processed",
+          spanAttrs,
+          evt.durationMs,
+          evt.trace,
+        );
         if (evt.outcome === "error" && evt.error) {
           span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
         }
@@ -699,7 +727,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         addSessionIdentityAttrs(spanAttrs, evt);
         spanAttrs["openclaw.queueDepth"] = evt.queueDepth ?? 0;
         spanAttrs["openclaw.ageMs"] = evt.ageMs;
-        const span = tracer.startSpan("openclaw.session.stuck", { attributes: spanAttrs });
+        const span = tracer.startSpan(
+          "openclaw.session.stuck",
+          { attributes: spanAttrs },
+          contextForTraceContext(evt.trace),
+        );
         span.setStatus({ code: SpanStatusCode.ERROR, message: "session stuck" });
         span.end();
       };

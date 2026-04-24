@@ -1423,6 +1423,7 @@ export async function runReplyAgent(params: {
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
       emitDiagnosticEvent({
         type: "model.usage",
+        ...(runOutcome.diagnosticTrace ? { trace: runOutcome.diagnosticTrace } : {}),
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,
