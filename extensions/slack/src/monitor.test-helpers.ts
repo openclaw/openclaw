@@ -287,6 +287,9 @@ vi.mock("@slack/bolt", () => {
     command() {
       /* no-op */
     }
+    use() {
+      /* no-op */
+    }
     start = vi.fn().mockResolvedValue(undefined);
     stop = vi.fn().mockResolvedValue(undefined);
   }
