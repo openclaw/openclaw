@@ -9,8 +9,10 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { emitDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
+  createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -225,6 +227,10 @@ import {
   resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
+import {
+  diagnosticErrorCategory,
+  wrapStreamFnWithDiagnosticModelCallEvents,
+} from "./attempt.model-diagnostic-events.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
@@ -477,6 +483,15 @@ export async function runEmbeddedAttempt(
   });
 
   let restoreSkillEnv: (() => void) | undefined;
+  let aborted = Boolean(params.abortSignal?.aborted);
+  let externalAbort = false;
+  let timedOut = false;
+  let idleTimedOut = false;
+  let timedOutDuringCompaction = false;
+  let promptError: unknown = null;
+  let emitDiagnosticRunCompleted:
+    | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
+    | undefined;
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
@@ -516,6 +531,40 @@ export async function runEmbeddedAttempt(
     const contextInjectionMode = resolveContextInjectionMode(params.config);
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
     const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
+    const runTrace = freezeDiagnosticTraceContext(
+      createChildDiagnosticTraceContext(diagnosticTrace),
+    );
+    const diagnosticRunBase = {
+      runId: params.runId,
+      ...(params.sessionKey && { sessionKey: params.sessionKey }),
+      ...(params.sessionId && { sessionId: params.sessionId }),
+      provider: params.provider,
+      model: params.modelId,
+      trigger: params.trigger,
+      ...((params.messageChannel ?? params.messageProvider)
+        ? { channel: params.messageChannel ?? params.messageProvider }
+        : {}),
+      trace: runTrace,
+    };
+    emitDiagnosticEvent({
+      type: "run.started",
+      ...diagnosticRunBase,
+    });
+    const diagnosticRunStartedAt = Date.now();
+    let diagnosticRunCompleted = false;
+    emitDiagnosticRunCompleted = (outcome, err) => {
+      if (diagnosticRunCompleted) {
+        return;
+      }
+      diagnosticRunCompleted = true;
+      emitDiagnosticEvent({
+        type: "run.completed",
+        ...diagnosticRunBase,
+        durationMs: Date.now() - diagnosticRunStartedAt,
+        outcome,
+        ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
+      });
+    };
     const toolsRaw = params.disableTools
       ? []
       : (() => {
@@ -986,12 +1035,6 @@ export async function runEmbeddedAttempt(
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
     let trajectoryEndRecorded = false;
-    let aborted = Boolean(params.abortSignal?.aborted);
-    let externalAbort = false;
-    let timedOut = false;
-    let idleTimedOut = false;
-    let timedOutDuringCompaction = false;
-    let promptError: unknown = null;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1590,6 +1633,21 @@ export async function runEmbeddedAttempt(
           (error) => idleTimeoutTrigger?.(error),
         );
       }
+      let diagnosticModelCallSeq = 0;
+      activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
+        activeSession.agent.streamFn,
+        {
+          runId: params.runId,
+          ...(params.sessionKey && { sessionKey: params.sessionKey }),
+          ...(params.sessionId && { sessionId: params.sessionId }),
+          provider: params.provider,
+          model: params.modelId,
+          api: params.model.api,
+          transport: effectiveAgentTransport,
+          trace: runTrace,
+          nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+        },
+      );
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -2846,20 +2904,40 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
-      await cleanupEmbeddedAttemptResources({
-        removeToolResultContextGuard,
-        flushPendingToolResultsAfterIdle,
-        session,
-        sessionManager,
-        releaseWsSession,
-        allowWsSessionPool:
-          !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
-        sessionId: params.sessionId,
-        bundleLspRuntime,
-        sessionLock,
-      });
+      let cleanupError: unknown;
+      try {
+        await cleanupEmbeddedAttemptResources({
+          removeToolResultContextGuard,
+          flushPendingToolResultsAfterIdle,
+          session,
+          sessionManager,
+          releaseWsSession,
+          allowWsSessionPool:
+            !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
+          sessionId: params.sessionId,
+          bundleLspRuntime,
+          sessionLock,
+        });
+      } catch (err) {
+        cleanupError = err;
+      }
+      emitDiagnosticRunCompleted?.(
+        cleanupError || promptError
+          ? "error"
+          : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
+            ? "aborted"
+            : "completed",
+        cleanupError ?? promptError,
+      );
+      if (cleanupError) {
+        await Promise.reject(cleanupError);
+      }
     }
   } finally {
+    emitDiagnosticRunCompleted?.(
+      aborted ? "aborted" : "error",
+      promptError ?? new Error("run exited before diagnostic completion"),
+    );
     restoreSkillEnv?.();
   }
 }

@@ -815,6 +815,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "tool.execution.started":
             case "tool.execution.completed":
             case "tool.execution.error":
+            case "run.started":
+            case "run.completed":
+            case "model.call.started":
+            case "model.call.completed":
+            case "model.call.error":
             case "diagnostic.memory.sample":
             case "diagnostic.memory.pressure":
             case "payload.large":
