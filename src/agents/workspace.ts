@@ -229,6 +229,71 @@ function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
   }
 }
 
+const BOOTSTRAP_PLACEHOLDER_VALUE_RE =
+  /(?:pick something you like|workspace-relative path|optional|fill this in|learn about the person|what do they care about|your signature|how do you come across|something weirder|ghost in the machine|sharp\? warm\? chaotic\? calm\?)/i;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeBootstrapComparableContent(content: string): string {
+  return stripFrontMatter(content).replace(/\r\n/g, "\n").trim();
+}
+
+function parseMarkdownField(content: string, label: string): string {
+  const match = content.match(
+    new RegExp(`^-\\s*\\*\\*${escapeRegExp(label)}:?\\*\\*[ \t]*([^\\n\\r]+)$`, "im"),
+  );
+  return readStringValue(match?.[1])?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function isMeaningfulBootstrapField(value: string): boolean {
+  const normalized = value.trim();
+  return normalized.length > 0 && !BOOTSTRAP_PLACEHOLDER_VALUE_RE.test(normalized);
+}
+
+async function isWorkspaceBootstrapEstablishedFromFiles(resolvedDir: string): Promise<boolean> {
+  const identityPath = path.join(resolvedDir, DEFAULT_IDENTITY_FILENAME);
+  const userPath = path.join(resolvedDir, DEFAULT_USER_FILENAME);
+  const soulPath = path.join(resolvedDir, DEFAULT_SOUL_FILENAME);
+  const [identityLoaded, userLoaded, soulLoaded, identityTemplate, userTemplate, soulTemplate] =
+    await Promise.all([
+      readWorkspaceFileWithGuards({ filePath: identityPath, workspaceDir: resolvedDir }),
+      readWorkspaceFileWithGuards({ filePath: userPath, workspaceDir: resolvedDir }),
+      readWorkspaceFileWithGuards({ filePath: soulPath, workspaceDir: resolvedDir }),
+      loadTemplate(DEFAULT_IDENTITY_FILENAME),
+      loadTemplate(DEFAULT_USER_FILENAME),
+      loadTemplate(DEFAULT_SOUL_FILENAME),
+    ]);
+
+  if (!identityLoaded.ok || !userLoaded.ok || !soulLoaded.ok) {
+    return false;
+  }
+
+  const identityContent = normalizeBootstrapComparableContent(identityLoaded.content);
+  const userContent = normalizeBootstrapComparableContent(userLoaded.content);
+  const soulContent = normalizeBootstrapComparableContent(soulLoaded.content);
+  if (!identityContent || !userContent || !soulContent) {
+    return false;
+  }
+
+  if (identityContent === normalizeBootstrapComparableContent(identityTemplate)) {
+    return false;
+  }
+  if (userContent === normalizeBootstrapComparableContent(userTemplate)) {
+    return false;
+  }
+  if (soulContent === normalizeBootstrapComparableContent(soulTemplate)) {
+    return false;
+  }
+
+  const identityName = parseMarkdownField(identityLoaded.content, "Name");
+  const userPreferredName =
+    parseMarkdownField(userLoaded.content, "What to call them") ||
+    parseMarkdownField(userLoaded.content, "Name");
+  return isMeaningfulBootstrapField(identityName) && isMeaningfulBootstrapField(userPreferredName);
+}
+
 async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetupState> {
   try {
     const raw = await fs.readFile(statePath, "utf-8");
@@ -253,22 +318,34 @@ async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetu
   }
 }
 
-async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetupState> {
-  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
-  return await readWorkspaceSetupState(statePath);
-}
-
 export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
-  const state = await readWorkspaceSetupStateForDir(dir);
-  return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
+  const resolvedDir = resolveUserPath(dir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
+  const state = await readWorkspaceSetupState(statePath);
+  if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
+    return true;
+  }
+  if (!(await isWorkspaceBootstrapEstablishedFromFiles(resolvedDir))) {
+    return false;
+  }
+  const completedAt = new Date().toISOString();
+  await writeWorkspaceSetupState(statePath, {
+    ...state,
+    bootstrapSeededAt:
+      state.bootstrapSeededAt ??
+      ((await fileExists(path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME)))
+        ? completedAt
+        : undefined),
+    setupCompletedAt: completedAt,
+  });
+  return true;
 }
 
 export async function resolveWorkspaceBootstrapStatus(
   dir: string,
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
-  const state = await readWorkspaceSetupStateForDir(resolvedDir);
-  if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
+  if (await isWorkspaceSetupCompleted(resolvedDir)) {
     return "complete";
   }
   const bootstrapExists = await fileExists(path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME));
@@ -414,6 +491,14 @@ export async function ensureAgentWorkspace(params?: {
   let bootstrapExists = await fileExists(bootstrapPath);
   if (!state.bootstrapSeededAt && bootstrapExists) {
     markState({ bootstrapSeededAt: nowIso() });
+  }
+
+  if (!state.setupCompletedAt && (await isWorkspaceBootstrapEstablishedFromFiles(dir))) {
+    const completedAt = nowIso();
+    markState({
+      bootstrapSeededAt: state.bootstrapSeededAt ?? (bootstrapExists ? completedAt : undefined),
+      setupCompletedAt: completedAt,
+    });
   }
 
   if (!state.setupCompletedAt && state.bootstrapSeededAt && !bootstrapExists) {

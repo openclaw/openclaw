@@ -10,6 +10,7 @@ import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -194,6 +195,38 @@ describe("ensureAgentWorkspace", () => {
 
     await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  });
+
+  it("treats established identity files as complete even if a stale BOOTSTRAP.md still exists", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content:
+        "# IDENTITY.md\n\n- **Name:** Lobster\n- **Creature:** Personal AI operator\n- **Vibe:** Direct\n- **Emoji:** 🦞\n",
+    });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_USER_FILENAME,
+      content:
+        "# USER.md\n\n- **Name:** Alex Lomtatidze\n- **What to call them:** Alex\n- **Timezone:** Europe/London\n",
+    });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_SOUL_FILENAME,
+      content: "# SOUL.md\n\nBe direct. Verify first.\n",
+    });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_BOOTSTRAP_FILENAME,
+      content: "# BOOTSTRAP.md\n\nStale bootstrap placeholder\n",
+    });
+
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
   it("writes the current fenced HEARTBEAT template body into new workspaces", async () => {
