@@ -3,10 +3,8 @@ summary: "Talk mode: continuous speech conversations with ElevenLabs TTS"
 read_when:
   - Implementing Talk mode on macOS/iOS/Android
   - Changing voice/TTS/interrupt behavior
-title: "Talk Mode"
+title: "Talk mode"
 ---
-
-# Talk Mode
 
 Talk mode is a continuous voice conversation loop:
 
@@ -90,3 +88,9 @@ Defaults:
 - `stability` for `eleven_v3` is validated to `0.0`, `0.5`, or `1.0`; other models accept `0..1`.
 - `latency_tier` is validated to `0..4` when set.
 - Android supports `pcm_16000`, `pcm_22050`, `pcm_24000`, and `pcm_44100` output formats for low-latency AudioTrack streaming.
+
+## Related
+
+- [Voice wake](/nodes/voicewake)
+- [Audio and voice notes](/nodes/audio)
+- [Media understanding](/nodes/media-understanding)

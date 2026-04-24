@@ -114,6 +114,21 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes browser extension changes to the browser extension lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "extensions/browser/src/browser/cdp.helpers.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.extension-browser.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/browser/src/browser/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("keeps the broad changed run for shared test helpers", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
@@ -242,6 +257,22 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes auto-reply route source files to route regression tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/auto-reply/reply/dispatch-from-config.ts",
+        "src/auto-reply/reply/effective-reply-route.ts",
+        "src/auto-reply/reply/effective-reply-route.test.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/effective-reply-route.test.ts",
+      ],
+    });
   });
 
   it("routes changed utils and shared files to their light scoped lanes", () => {

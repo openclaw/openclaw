@@ -16,6 +16,7 @@ import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  formatRateLimitOrOverloadedErrorCopy,
   isCompactionFailureError,
   isContextOverflowError,
   isBillingErrorMessage,
@@ -356,7 +357,7 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5` for OAuth, or set `OPENAI_API_KEY`, then try again.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY`, then try again.";
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
@@ -1516,24 +1517,34 @@ export async function runAgentTurnWithFallback(params: {
       // underlying error. FallbackSummaryError messages embed per-attempt
       // reason labels like `(rate_limit)`, so string-matching the summary text
       // would misclassify mixed-cause exhaustion as a pure transient cooldown.
-      const isRateLimit = isFallbackSummaryError(err)
+      const isFallbackSummary = isFallbackSummaryError(err);
+      const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
+        : false;
+      const isRateLimit = isFallbackSummary
+        ? isPureTransientSummary
         : isRateLimitErrorMessage(message);
+      const rateLimitOrOverloadedCopy =
+        !isFallbackSummary || isPureTransientSummary
+          ? formatRateLimitOrOverloadedErrorCopy(message)
+          : undefined;
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
-        : isRateLimit
+        : isRateLimit && !isOverloadedErrorMessage(message)
           ? buildRateLimitCooldownMessage(err)
-          : isContextOverflow
-            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-            : isRoleOrderingError
-              ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-              : shouldSurfaceToControlUi
-                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                : buildExternalRunFailureText(message);
+          : rateLimitOrOverloadedCopy
+            ? rateLimitOrOverloadedCopy
+            : isContextOverflow
+              ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+              : isRoleOrderingError
+                ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+                : shouldSurfaceToControlUi
+                  ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                  : buildExternalRunFailureText(message);
 
       params.replyOperation?.fail("run_failed", err);
       return {
@@ -1590,16 +1601,13 @@ export async function runAgentTurnWithFallback(params: {
           (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
         )?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
-      if (
-        errorCandidate &&
-        (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
-      ) {
-        const isOverloaded = isOverloadedErrorMessage(errorCandidate);
+      const formattedErrorCandidate = errorCandidate
+        ? formatRateLimitOrOverloadedErrorCopy(errorCandidate)
+        : undefined;
+      if (formattedErrorCandidate) {
         runResult.payloads = [
           {
-            text: isOverloaded
-              ? "⚠️ The AI service is temporarily overloaded. Please try again in a moment."
-              : "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
+            text: formattedErrorCandidate,
             isError: true,
           },
         ];

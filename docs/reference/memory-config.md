@@ -1,14 +1,12 @@
 ---
-title: "Memory configuration reference"
 summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+title: "Memory configuration reference"
 read_when:
   - You want to configure memory search providers or embedding models
   - You want to set up the QMD backend
   - You want to tune hybrid search, MMR, or temporal decay
   - You want to enable multimodal memory indexing
 ---
-
-# Memory configuration reference
 
 This page lists every configuration knob for OpenClaw memory search. For
 conceptual overviews, see:
@@ -200,13 +198,26 @@ arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
 
 ## Local embedding config
 
-| Key                   | Type     | Default                | Description                     |
-| --------------------- | -------- | ---------------------- | ------------------------------- |
-| `local.modelPath`     | `string` | auto-downloaded        | Path to GGUF model file         |
-| `local.modelCacheDir` | `string` | node-llama-cpp default | Cache dir for downloaded models |
+| Key                   | Type               | Default                | Description                                                                                                                                                                                                                                                                                                          |
+| --------------------- | ------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `local.modelPath`     | `string`           | auto-downloaded        | Path to GGUF model file                                                                                                                                                                                                                                                                                              |
+| `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
+| `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128–512 tokens) while bounding non-weight VRAM. Lower to 1024–2048 on constrained hosts. `"auto"` uses the model's trained maximum — not recommended for 8B+ models (Qwen3-Embedding-8B: 40 960 tokens → ~32 GB VRAM vs ~8.8 GB at 4096). |
 
 Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded).
 Requires native build: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
+
+Use the standalone CLI to verify the same provider path the Gateway uses:
+
+```bash
+openclaw memory status --deep --agent main
+openclaw memory index --force --agent main
+```
+
+If `provider` is `auto`, `local` is selected only when `local.modelPath` points
+to an existing local file. `hf:` and HTTP(S) model references can still be used
+explicitly with `provider: "local"`, but they do not make `auto` select local
+before the model is available on disk.
 
 ---
 

@@ -1,14 +1,12 @@
 ---
+summary: "Step-by-step guide to building a model provider plugin for OpenClaw"
 title: "Building provider plugins"
 sidebarTitle: "Provider plugins"
-summary: "Step-by-step guide to building a model provider plugin for OpenClaw"
 read_when:
   - You are building a new model provider plugin
   - You want to add an OpenAI-compatible proxy or custom LLM to OpenClaw
   - You need to understand provider auth, catalogs, and runtime hooks
 ---
-
-# Building provider plugins
 
 This guide walks through building a provider plugin that adds a model provider
 (LLM) to OpenClaw. By the end you will have a provider with a model catalog,
@@ -720,3 +718,9 @@ providers:
 - [SDK Runtime](/plugins/sdk-runtime) — `api.runtime` helpers (TTS, search, subagent)
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [Plugin Internals](/plugins/architecture#provider-runtime-hooks) — hook details and bundled examples
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Building channel plugins](/plugins/sdk-channel-plugins)

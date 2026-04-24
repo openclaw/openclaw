@@ -4,10 +4,8 @@ read_when:
   - Extending qa-lab or qa-channel
   - Adding repo-backed QA scenarios
   - Building higher-realism QA automation around the Gateway dashboard
-title: "QA E2E Automation"
+title: "QA E2E automation"
 ---
-
-# QA E2E Automation
 
 The private QA stack is meant to exercise OpenClaw in a more realistic,
 channel-shaped way than a single unit test can.
@@ -209,7 +207,7 @@ refs and write a judged Markdown report:
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.5,thinking=xhigh \
+  --model openai/gpt-5.4,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
   --model anthropic/claude-opus-4-6,thinking=high \
@@ -217,7 +215,7 @@ pnpm openclaw qa character-eval \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
-  --judge-model openai/gpt-5.5,thinking=xhigh,fast \
+  --judge-model openai/gpt-5.4,thinking=xhigh,fast \
   --judge-model anthropic/claude-opus-4-6,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
@@ -229,13 +227,13 @@ scenarios should set the persona through `SOUL.md`, then run ordinary user turns
 such as chat, workspace help, and small file tasks. The candidate model should
 not be told that it is being evaluated. The command preserves each full
 transcript, records basic run stats, then asks the judge models in fast mode with
-`xhigh` reasoning to rank the runs by naturalness, vibe, and humor.
+`xhigh` reasoning where supported to rank the runs by naturalness, vibe, and humor.
 Use `--blind-judge-models` when comparing providers: the judge prompt still gets
 every transcript and run status, but candidate refs are replaced with neutral
 labels such as `candidate-01`; the report maps rankings back to real refs after
 parsing.
-Candidate runs default to `high` thinking, with `xhigh` for OpenAI models that
-support it. Override a specific candidate inline with
+Candidate runs default to `high` thinking, with `medium` for GPT-5.4 and `xhigh`
+for older OpenAI eval refs that support it. Override a specific candidate inline with
 `--model provider/model,thinking=<level>`. `--thinking <level>` still sets a
 global fallback, and the older `--model-thinking <provider/model=level>` form is
 kept for compatibility.
@@ -249,12 +247,12 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
+`openai/gpt-5.4`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
-`openai/gpt-5.5,thinking=xhigh,fast` and
+`openai/gpt-5.4,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-6,thinking=high`.
 
 ## Related docs

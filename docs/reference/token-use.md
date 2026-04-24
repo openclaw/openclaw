@@ -3,7 +3,7 @@ summary: "How OpenClaw builds prompt context and reports token usage + costs"
 read_when:
   - Explaining token usage, costs, or context windows
   - Debugging context growth or compaction behavior
-title: "Token Use and Costs"
+title: "Token use and costs"
 ---
 
 # Token use & costs

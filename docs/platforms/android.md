@@ -4,10 +4,8 @@ read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
   - Verifying chat history parity across clients
-title: "Android App"
+title: "Android app"
 ---
-
-# Android App (Node)
 
 > **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
 

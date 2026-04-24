@@ -3,6 +3,17 @@
   "name": "Codex",
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
+  "contracts": {
+    "mediaUnderstandingProviders": ["codex"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "codex": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "gpt-5.5"
+      }
+    }
+  },
   "providerDiscoveryEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],

@@ -6,8 +6,6 @@ read_when:
 title: "OpenCode"
 ---
 
-# OpenCode
-
 OpenCode exposes two hosted catalogs in OpenClaw:
 
 | Catalog | Prefix            | Runtime provider |
@@ -90,7 +88,7 @@ as one OpenCode setup.
 }
 ```
 
-## Catalogs
+## Built-in catalogs
 
 ### Zen
 
@@ -106,7 +104,7 @@ as one OpenCode setup.
 | Runtime provider | `opencode-go`                                                            |
 | Example models   | `opencode-go/kimi-k2.5`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="API key aliases">

@@ -1517,3 +1517,9 @@ That keeps the rule simple:
 - vendor plugins own vendor implementations
 - feature/channel plugins consume runtime helpers
 - contract tests keep ownership explicit
+
+## Related
+
+- [Building plugins](/plugins/building-plugins)
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Plugin manifest](/plugins/manifest)

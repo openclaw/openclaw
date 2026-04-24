@@ -6,6 +6,11 @@ import bundledConfig from "./vitest/vitest.bundled.config.ts";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
 import baseConfig, { rootVitestProjects } from "./vitest/vitest.config.ts";
+import contractChannelConfigConfig from "./vitest/vitest.contracts-channel-config.config.ts";
+import contractChannelRegistryConfig from "./vitest/vitest.contracts-channel-registry.config.ts";
+import contractChannelSessionConfig from "./vitest/vitest.contracts-channel-session.config.ts";
+import contractChannelSurfaceConfig from "./vitest/vitest.contracts-channel-surface.config.ts";
+import contractPluginConfig from "./vitest/vitest.contracts-plugin.config.ts";
 import {
   createContractsVitestConfig,
   pluginContractPatterns,
@@ -85,6 +90,22 @@ describe("projects vitest config", () => {
     expect(config.test.pool).toBe("forks");
     expect(config.test.isolate).toBe(false);
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+  });
+
+  it("gives contract project configs unique names", () => {
+    expect([
+      contractChannelSurfaceConfig.test?.name,
+      contractChannelConfigConfig.test?.name,
+      contractChannelRegistryConfig.test?.name,
+      contractChannelSessionConfig.test?.name,
+      contractPluginConfig.test?.name,
+    ]).toEqual([
+      "contracts-channel-surface",
+      "contracts-channel-config",
+      "contracts-channel-registry",
+      "contracts-channel-session",
+      "contracts-plugin",
+    ]);
   });
 
   it("narrows the contracts lane to targeted contract files", () => {

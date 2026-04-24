@@ -1130,6 +1130,7 @@
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/codex-harness",
+                  "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
@@ -1147,6 +1148,7 @@
                     "group": "SDK Reference",
                     "pages": [
                       "plugins/sdk-overview",
+                      "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
                       "plugins/sdk-agent-harness",
@@ -1189,6 +1191,7 @@
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec-approvals",
+                  "tools/exec-approvals-advanced",
                   "tools/exec",
                   "tools/image-generation",
                   "tools/llm-task",
@@ -1206,6 +1209,7 @@
                     "group": "Web Browser",
                     "pages": [
                       "tools/browser",
+                      "tools/browser-control",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
@@ -1238,6 +1242,7 @@
                   "tools/agent-send",
                   "tools/subagents",
                   "tools/acp-agents",
+                  "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
                 ]
               }
@@ -1611,6 +1616,7 @@
                   "help/environment",
                   "help/debugging",
                   "help/testing",
+                  "help/testing-live",
                   "help/scripts",
                   "debug/node-issue",
                   "diagnostics/flags"

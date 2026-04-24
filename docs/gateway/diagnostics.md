@@ -1,13 +1,11 @@
 ---
-title: "Diagnostics Export"
 summary: "Create shareable Gateway diagnostics bundles for bug reports"
+title: "Diagnostics export"
 read_when:
   - Preparing a bug report or support request
   - Debugging Gateway crashes, restarts, memory pressure, or oversized payloads
   - Reviewing what diagnostics data is recorded or redacted
 ---
-
-# Diagnostics Export
 
 OpenClaw can create a local diagnostics zip that is safe to attach to bug
 reports. It combines sanitized Gateway status, health, logs, config shape, and

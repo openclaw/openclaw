@@ -1,7 +1,9 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
@@ -53,13 +55,20 @@ export async function runPreparedCliAgent(
 ): Promise<EmbeddedPiRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
-  const historyMessages = loadCliSessionHistoryMessages({
-    sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    config: params.config,
-  });
+  const hookRunner = getGlobalHookRunner();
+  const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
+  const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
+  const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
+  const historyMessages =
+    hasLlmInputHooks || hasAgentEndHooks
+      ? loadCliSessionHistoryMessages({
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        })
+      : [];
   const llmInputEvent = {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -82,9 +91,13 @@ export async function runPreparedCliAgent(
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [
-    ...historyMessages,
-    buildCliHookUserMessage(params.prompt),
-    ...(lastAssistant ? [lastAssistant] : []),
+    ...buildAgentHookConversationMessages({
+      historyMessages,
+      currentTurnMessages: [
+        buildCliHookUserMessage(params.prompt),
+        ...(lastAssistant ? [lastAssistant] : []),
+      ],
+    }),
   ];
 
   const buildFailedAgentEndEvent = (error: string) => ({
@@ -125,18 +138,20 @@ export async function runPreparedCliAgent(
             usage: output.usage,
           })
         : undefined;
-    runAgentHarnessLlmOutputHook({
-      event: {
-        runId: params.runId,
-        sessionId: params.sessionId,
-        provider: params.provider,
-        model: context.modelId,
-        assistantTexts,
-        ...(lastAssistant ? { lastAssistant } : {}),
-        ...(output.usage ? { usage: output.usage } : {}),
-      },
-      ctx: hookContext,
-    });
+    if (assistantText.length > 0 && hasLlmOutputHooks) {
+      runAgentHarnessLlmOutputHook({
+        event: {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: context.modelId,
+          assistantTexts,
+          ...(lastAssistant ? { lastAssistant } : {}),
+          ...(output.usage ? { usage: output.usage } : {}),
+        },
+        ctx: hookContext,
+      });
+    }
     return { output, assistantText, lastAssistant };
   };
 

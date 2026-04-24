@@ -114,6 +114,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   loadConfig?: () => Record<string, unknown>;
   updateSessionStoreMock?: MockFn;
+  forkSessionFromParentMock?: MockFn;
+  resolveContextEngineMock?: MockFn;
+  resolveParentForkMaxTokensMock?: MockFn;
   pruneLegacyStoreKeysMock?: MockFn;
   registerSubagentRunMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
@@ -156,6 +159,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
     buildSubagentSystemPrompt: () => "system-prompt",
+    forkSessionFromParent:
+      params.forkSessionFromParentMock ??
+      (async () => ({ sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" })),
     getGlobalHookRunner: () => params.hookRunner ?? { hasHooks: () => false },
     emitSessionLifecycleEvent: (...args: unknown[]) =>
       params.emitSessionLifecycleEventMock?.(...args),
@@ -167,6 +173,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     AGENT_LANE_SUBAGENT: "subagent",
     loadConfig: () =>
       params.loadConfig?.() ?? createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
+    resolveParentForkMaxTokens: params.resolveParentForkMaxTokensMock ?? (() => 100_000),
     mergeSessionEntry: (
       current: Record<string, unknown> | undefined,
       next: Record<string, unknown>,

@@ -3329,14 +3329,40 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
-  test("webchat clients cannot patch or delete sessions", async () => {
-    await createSessionStoreDir();
+  test("webchat clients cannot patch, delete, compact, or restore sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    const fixture = await createCheckpointFixture(dir);
 
     await writeSessionStore({
       entries: {
         main: {
-          sessionId: "sess-main",
+          sessionId: fixture.sessionId,
+          sessionFile: fixture.sessionFile,
           updatedAt: Date.now(),
+          compactionCheckpoints: [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: fixture.sessionId,
+              createdAt: Date.now(),
+              reason: "manual",
+              tokensBefore: 123,
+              tokensAfter: 45,
+              summary: "checkpoint summary",
+              firstKeptEntryId: fixture.preCompactionLeafId,
+              preCompaction: {
+                sessionId: fixture.preCompactionSession.getSessionId(),
+                sessionFile: fixture.preCompactionSessionFile,
+                leafId: fixture.preCompactionLeafId,
+              },
+              postCompaction: {
+                sessionId: fixture.sessionId,
+                sessionFile: fixture.sessionFile,
+                leafId: fixture.postCompactionLeafId,
+                entryId: fixture.postCompactionLeafId,
+              },
+            },
+          ],
         },
         "discord:group:dev": {
           sessionId: "sess-group",
@@ -3372,6 +3398,20 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(false);
     expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
+
+    const compacted = await rpcReq(ws, "sessions.compact", {
+      key: "main",
+      maxLines: 3,
+    });
+    expect(compacted.ok).toBe(false);
+    expect(compacted.error?.message ?? "").toMatch(/webchat clients cannot compact sessions/i);
+
+    const restored = await rpcReq(ws, "sessions.compaction.restore", {
+      key: "main",
+      checkpointId: "checkpoint-1",
+    });
+    expect(restored.ok).toBe(false);
+    expect(restored.error?.message ?? "").toMatch(/webchat clients cannot restore sessions/i);
 
     ws.close();
   });

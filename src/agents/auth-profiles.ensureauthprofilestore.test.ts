@@ -53,7 +53,6 @@ vi.mock("./cli-credentials.js", () => ({
   },
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: vi.fn(),
-  writeCodexCliCredentials: vi.fn(() => false),
 }));
 
 describe("ensureAuthProfileStore", () => {

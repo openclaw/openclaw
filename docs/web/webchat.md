@@ -5,8 +5,6 @@ read_when:
 title: "WebChat"
 ---
 
-# WebChat (Gateway WebSocket UI)
-
 Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 ## What it is

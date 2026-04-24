@@ -1,14 +1,12 @@
 ---
-title: "Agent Harness Plugins"
-sidebarTitle: "Agent Harness"
 summary: "Experimental SDK surface for plugins that replace the low level embedded agent executor"
+title: "Agent harness plugins"
+sidebarTitle: "Agent Harness"
 read_when:
   - You are changing the embedded agent runtime or harness registry
   - You are registering an agent harness from a bundled or trusted plugin
   - You need to understand how the Codex plugin relates to model providers
 ---
-
-# Agent Harness Plugins
 
 An **agent harness** is the low level executor for one prepared OpenClaw agent
 turn. It is not a model provider, not a channel, and not a tool registry.
@@ -108,6 +106,10 @@ Legacy sessions created before harness pins are treated as PI-pinned once they
 have transcript history. Use a new/reset session when changing between PI and a
 native plugin harness. `/status` shows non-default harness ids such as `codex`
 next to `Fast`; PI stays hidden because it is the default compatibility path.
+If the selected harness is surprising, enable `agents/harness` debug logging and
+inspect the gateway's structured `agent harness selected` record. It includes
+the selected harness id, selection reason, runtime/fallback policy, and, in
+`auto` mode, each plugin candidate's support result.
 
 The bundled Codex plugin registers `codex` as its harness id. Core treats that
 as an ordinary plugin harness id; Codex-specific aliases belong in the plugin
@@ -122,19 +124,18 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 The bundled Codex plugin follows this pattern:
 
 - provider id: `codex`
-- user model refs: `codex/gpt-5.5`, `codex/gpt-5.2`, or another model returned
-  by the Codex app server
+- user model refs: `openai/gpt-5.5` plus `embeddedHarness.runtime: "codex"`;
+  legacy `codex/gpt-*` refs remain accepted for compatibility
 - harness id: `codex`
 - auth: synthetic provider availability, because the Codex harness owns the
   native Codex login/session
 - app-server request: OpenClaw sends the bare model id to Codex and lets the
   harness talk to the native app-server protocol
 
-The Codex plugin is additive. Plain `openai/gpt-*` refs remain OpenAI provider
-refs and continue to use the normal OpenClaw provider path. Select `codex/gpt-*`
-when you want Codex-managed auth, Codex model discovery, native threads, and
-Codex app-server execution. `/model` can switch among the Codex models returned
-by the Codex app server without requiring OpenAI provider credentials.
+The Codex plugin is additive. Plain `openai/gpt-*` refs continue to use the
+normal OpenClaw provider path unless you force the Codex harness with
+`embeddedHarness.runtime: "codex"`. Older `codex/gpt-*` refs still select the
+Codex provider and harness for compatibility.
 
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
@@ -156,13 +157,10 @@ into the OpenClaw transcript.
 
 The bundled `codex` harness is the native Codex mode for embedded OpenClaw
 agent turns. Enable the bundled `codex` plugin first, and include `codex` in
-`plugins.allow` if your config uses a restrictive allowlist. It is different
-from `openai-codex/*`:
-
-- `openai-codex/*` uses ChatGPT/Codex OAuth through the normal OpenClaw provider
-  path.
-- `codex/*` uses the bundled Codex provider and routes the turn through Codex
-  app-server.
+`plugins.allow` if your config uses a restrictive allowlist. Native app-server
+configs should use `openai/gpt-*` with `embeddedHarness.runtime: "codex"`.
+Use `openai-codex/*` for Codex OAuth through PI instead. Legacy `codex/*`
+model refs remain compatibility aliases for the native harness.
 
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
@@ -189,7 +187,7 @@ For Codex-only embedded runs:
 {
   "agents": {
     "defaults": {
-      "model": "codex/gpt-5.5",
+      "model": "openai/gpt-5.5",
       "embeddedHarness": {
         "runtime": "codex",
         "fallback": "none"
@@ -230,7 +228,7 @@ Per-agent overrides use the same shape:
     "list": [
       {
         "id": "codex-only",
-        "model": "codex/gpt-5.5",
+        "model": "openai/gpt-5.5",
         "embeddedHarness": {
           "runtime": "codex",
           "fallback": "none"

@@ -99,6 +99,7 @@ type MockOpenAiRequestSnapshot = {
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
   plannedToolName?: string;
+  plannedToolArgs?: Record<string, unknown>;
 };
 
 // Anthropic /v1/messages request/response shapes the mock actually needs.
@@ -150,6 +151,10 @@ const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
   "The previous attempt did not produce a user-visible answer.";
+const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
+  /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
+const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
+const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -577,6 +582,7 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   }
   const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
   const mode = extractBareToolArg(text, "mode")?.toLowerCase();
+  const context = extractBareToolArg(text, "context")?.toLowerCase();
   const runTimeoutSecondsRaw = extractBareToolArg(text, "runTimeoutSeconds");
   const runTimeoutSeconds =
     runTimeoutSecondsRaw && /^\d+$/.test(runTimeoutSecondsRaw)
@@ -587,6 +593,7 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
     ...(label ? { label } : {}),
     ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
     ...(mode === "session" || mode === "run" ? { mode } : {}),
+    ...(context === "fork" || context === "isolated" ? { context } : {}),
     ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
   };
 }
@@ -724,6 +731,16 @@ function buildAssistantText(
   if (/(image generation check|capability flip image check)/i.test(prompt) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
   }
+  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
+    return [
+      "Animated GIF QA checklist ready.",
+      "- Confirm true animation, not a static preview.",
+      "- Verify dimensions and product UI fit.",
+      "- Record attribution and license.",
+      "- Keep a local copy before using the asset.",
+      "- Re-open the copied file for final verification.",
+    ].join("\n");
+  }
   if (/roundtrip image inspection check/i.test(prompt) && imageInputCount > 0) {
     return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
   }
@@ -745,10 +762,26 @@ function buildAssistantText(
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
+  if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
+    return "FORKED-CONTEXT-ALPHA";
+  }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
   if (scenarioState.subagentFanoutPhase === 2 && prompt) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
+  }
+  if (
+    /forked subagent context qa check/i.test(prompt) &&
+    /FORKED-CONTEXT-ALPHA/i.test(allInputText)
+  ) {
+    return [
+      "Worked",
+      "- FORKED-CONTEXT-ALPHA",
+      "Evidence",
+      "- The forked child recovered the visible code from requester transcript context.",
+      "Blocked",
+      "- None.",
+    ].join("\n");
   }
   if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
     const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
@@ -789,6 +822,79 @@ function buildToolCallEvents(prompt: string): StreamEvent[] {
   return buildToolCallEventsWithArgs("read", { path: targetPath });
 }
 
+function buildReleaseAuditJson() {
+  return `${JSON.stringify(
+    {
+      verified: true,
+      findings: [
+        {
+          id: "REL-GATEWAY-417",
+          source: "src/gateway/reconnect.ts",
+          status: "retry jitter verified, resume token fallback still needs manual spot check",
+        },
+        {
+          id: "REL-CHANNEL-238",
+          source: "src/channels/delivery.ts",
+          status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+        },
+        {
+          id: "REL-CRON-904",
+          source: "src/scheduling/cron.ts",
+          status: "single-run lock verified for restart wakeups",
+        },
+        {
+          id: "REL-MEMORY-552",
+          source: "src/memory/recall.ts",
+          status:
+            "fallback summary survives empty memory search; ranking sample needs second reviewer",
+        },
+        {
+          id: "REL-PLUGIN-319",
+          source: "src/plugins/runtime.ts",
+          status: "bundled runtime manifest loads cleanly after restart",
+        },
+        {
+          id: "REL-INSTALL-846",
+          source: "install/update.ts",
+          status: "update smoke passed from previous stable tag",
+        },
+        {
+          id: "REL-DOCS-611",
+          source: "docs/operator-notes.md",
+          status:
+            "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+        },
+        {
+          id: "REL-UI-BLOCKED",
+          source: "ui/control-panel.ts",
+          status: "blocked: source file was referenced by checklist but missing from the fixture",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+function buildReleaseHandoffMarkdown() {
+  return [
+    "# Release Handoff",
+    "",
+    "Ready:",
+    "- REL-GATEWAY-417: gateway reconnect handling checked in `src/gateway/reconnect.ts`.",
+    "- REL-CRON-904: cron duplicate prevention checked in `src/scheduling/cron.ts`.",
+    "- REL-PLUGIN-319: plugin runtime loading checked in `src/plugins/runtime.ts`.",
+    "- REL-INSTALL-846: installer update path checked in `install/update.ts`.",
+    "",
+    "Follow-up:",
+    "- REL-CHANNEL-238: channel delivery ordering needs maintainer handoff.",
+    "- REL-MEMORY-552: memory recall fallback ranking sample needs a second reviewer.",
+    "- REL-DOCS-611: docs update status needs channel ordering and UI notes.",
+    "- `ui/control-panel.ts` is blocked/not found in the fixture.",
+    "",
+  ].join("\n");
+}
+
 function extractPlannedToolName(events: StreamEvent[]) {
   for (const event of events) {
     if (event.type !== "response.output_item.done") {
@@ -797,6 +903,25 @@ function extractPlannedToolName(events: StreamEvent[]) {
     const item = event.item as { type?: unknown; name?: unknown };
     if (item.type === "function_call" && typeof item.name === "string") {
       return item.name;
+    }
+  }
+  return undefined;
+}
+
+function extractPlannedToolArgs(events: StreamEvent[]) {
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as { type?: unknown; arguments?: unknown };
+    if (item.type !== "function_call" || typeof item.arguments !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(item.arguments);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+    } catch {
+      return undefined;
     }
   }
   return undefined;
@@ -1090,6 +1215,63 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
+    return buildAssistantEvents(
+      JSON.stringify({
+        action: "create",
+        skillName: "animated-gif-workflow",
+        title: "Animated GIF Workflow",
+        reason: "Transcript captured a reusable animated media QA checklist.",
+        description: "Reusable workflow notes for animated GIF QA tasks.",
+        body: [
+          "- Confirm the asset has true animation, not a static preview.",
+          "- Check dimensions against the target product UI slot.",
+          "- Record attribution and license before using the file.",
+          "- Keep a local copy under the workspace before integration.",
+          "- Re-open the local copy for final verification.",
+        ].join("\n"),
+      }),
+    );
+  }
+  if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("write", {
+      path: "animated-gif-qa-checklist.md",
+      content: [
+        "# Animated GIF QA Checklist",
+        "",
+        "- Confirm true animation.",
+        "- Verify dimensions.",
+        "- Record attribution.",
+        "- Keep a local copy.",
+        "- Perform final verification.",
+      ].join("\n"),
+    });
+  }
+  if (QA_RELEASE_AUDIT_PROMPT_RE.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "audit-fixture/README.md" });
+    }
+    if (/Release readiness task|current checklist/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("read", {
+        path: "audit-fixture/docs/current-readiness-checklist.md",
+      });
+    }
+    if (/Current release readiness requires checking eight areas/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "audit-fixture/release-audit.json",
+        content: buildReleaseAuditJson(),
+      });
+    }
+    if (/release-audit\.json/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "audit-fixture/release-handoff.md",
+        content: buildReleaseHandoffMarkdown(),
+      });
+    }
+    if (/release-handoff\.md/i.test(toolOutput)) {
+      return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
+    }
+  }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -1276,6 +1458,14 @@ async function buildResponsesPayload(
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   if (canCallSessionsSpawn && explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
+  }
+  if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("sessions_spawn", {
+      task: "Report the visible code from the requester transcript.",
+      label: "qa-fork-context",
+      mode: "run",
+      context: "fork",
+    });
   }
   if (/tool continuity check/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -1814,6 +2004,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         providerVariant: resolveProviderVariant(resolvedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
+        plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {
@@ -1869,6 +2060,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         providerVariant: resolveProviderVariant(normalizedModel),
         imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
+        plannedToolArgs: extractPlannedToolArgs(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {
