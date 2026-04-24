@@ -183,28 +183,7 @@ export async function handleAssistantFailover(params: {
 
   if (decision.action === "fallback_model") {
     await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
-    const message =
-      (params.lastAssistant
-        ? formatAssistantErrorText(params.lastAssistant, {
-            cfg: params.config,
-            sessionKey: params.sessionKey,
-            provider: params.activeErrorContext.provider,
-            model: params.activeErrorContext.model,
-          })
-        : undefined) ||
-      params.lastAssistant?.errorMessage?.trim() ||
-      (params.timedOut
-        ? "LLM request timed out."
-        : params.rateLimitFailure
-          ? "LLM request rate limited."
-          : params.billingFailure
-            ? formatBillingErrorMessage(
-                params.activeErrorContext.provider,
-                params.activeErrorContext.model,
-              )
-            : params.authFailure
-              ? "LLM request unauthorized."
-              : "LLM request failed.");
+    const message = resolveAssistantFailoverErrorMessage(params);
     const status =
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
     params.logAssistantFailoverDecision("fallback_model", { status });
@@ -227,10 +206,101 @@ export async function handleAssistantFailover(params: {
       return sameModelIdleTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");
+    // External aborts exit the run without synthesizing a provider error
+    // payload; partial attempt output carries the turn. Any other
+    // surface_error represents a concrete provider failure that
+    // continue_normal would silently drop before buildEmbeddedRunPayloads
+    // sees it (openclaw#70124: billing errors reached the gateway but
+    // never the webchat). Throw a FailoverError so the client surface
+    // can render it the same way it renders fallback_model failures.
+    if (!params.externalAbort) {
+      const message = resolveAssistantFailoverErrorMessage(params);
+      const reason = resolveSurfaceErrorReason(decision.reason, params);
+      const status =
+        resolveFailoverStatus(reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
+      return {
+        action: "throw",
+        overloadProfileRotations,
+        error: new FailoverError(message, {
+          reason,
+          provider: params.activeErrorContext.provider,
+          model: params.activeErrorContext.model,
+          profileId: params.lastProfileId,
+          status,
+        }),
+      };
+    }
   }
 
   return {
     action: "continue_normal",
     overloadProfileRotations,
   };
+}
+
+function resolveAssistantFailoverErrorMessage(params: {
+  lastAssistant: AssistantMessage | undefined;
+  config: OpenClawConfig | undefined;
+  sessionKey?: string;
+  activeErrorContext: { provider: string; model: string };
+  timedOut: boolean;
+  rateLimitFailure: boolean;
+  billingFailure: boolean;
+  authFailure: boolean;
+}): string {
+  return (
+    (params.lastAssistant
+      ? formatAssistantErrorText(params.lastAssistant, {
+          cfg: params.config,
+          sessionKey: params.sessionKey,
+          provider: params.activeErrorContext.provider,
+          model: params.activeErrorContext.model,
+        })
+      : undefined) ||
+    params.lastAssistant?.errorMessage?.trim() ||
+    (params.timedOut
+      ? "LLM request timed out."
+      : params.rateLimitFailure
+        ? "LLM request rate limited."
+        : params.billingFailure
+          ? formatBillingErrorMessage(
+              params.activeErrorContext.provider,
+              params.activeErrorContext.model,
+            )
+          : params.authFailure
+            ? "LLM request unauthorized."
+            : "LLM request failed.")
+  );
+}
+
+// surface_error decisions can arrive with `reason: null` when
+// shouldRotateAssistant fired on `failoverFailure` or `timedOut` without
+// a classified upstream reason. FailoverError requires a concrete
+// reason, so map null onto the most specific failure the run observed,
+// falling back to "unknown" when no signal is set.
+function resolveSurfaceErrorReason(
+  declared: FailoverReason | null,
+  params: {
+    timedOut: boolean;
+    billingFailure: boolean;
+    authFailure: boolean;
+    rateLimitFailure: boolean;
+  },
+): FailoverReason {
+  if (declared) {
+    return declared;
+  }
+  if (params.timedOut) {
+    return "timeout";
+  }
+  if (params.billingFailure) {
+    return "billing";
+  }
+  if (params.authFailure) {
+    return "auth";
+  }
+  if (params.rateLimitFailure) {
+    return "rate_limit";
+  }
+  return "unknown";
 }
