@@ -4,6 +4,25 @@ import {
 } from "../shared/net/redact-sensitive-url.js";
 import { isMcpConfigRecord, toMcpStringRecord } from "./mcp-config-shared.js";
 
+/** Expand `${ENV_VAR}` references in a string using `process.env`. */
+function expandEnvVars(value: string): string {
+  return value.replace(/\$\{([^}]+)\}/g, (_match, name: string) => {
+    const envValue = process.env[name.trim()];
+    return envValue ?? _match; // leave unresolved refs as-is
+  });
+}
+
+/** Expand env vars in all values of a string record. */
+function expandEnvVarsInRecord(
+  record: Record<string, string>,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(record)) {
+    result[key] = expandEnvVars(value);
+  }
+  return result;
+}
+
 export type HttpMcpTransportType = "sse" | "streamable-http";
 
 export type HttpMcpServerLaunchConfig = {
@@ -30,7 +49,7 @@ export function resolveHttpMcpServerLaunchConfig(
   if (typeof raw.url !== "string" || raw.url.trim().length === 0) {
     return { ok: false, reason: "its url is missing" };
   }
-  const url = raw.url.trim();
+  const url = expandEnvVars(raw.url.trim());
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -52,9 +71,14 @@ export function resolveHttpMcpServerLaunchConfig(
     if (!isMcpConfigRecord(raw.headers)) {
       options?.onMalformedHeaders?.(raw.headers);
     } else {
-      headers = toMcpStringRecord(raw.headers, {
-        onDroppedEntry: options?.onDroppedHeader,
-      });
+      headers = expandEnvVarsInRecord(
+        toMcpStringRecord(raw.headers, {
+          onDroppedEntry: options?.onDroppedHeader,
+        }) ?? {},
+      );
+      if (Object.keys(headers).length === 0) {
+        headers = undefined;
+      }
     }
   }
 
