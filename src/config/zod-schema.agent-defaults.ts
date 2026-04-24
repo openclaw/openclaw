@@ -46,6 +46,7 @@ export const AgentDefaultsSchema = z
     videoGenerationModel: AgentModelSchema.optional(),
     musicGenerationModel: AgentModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
+    reminderGuard: z.boolean().optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),

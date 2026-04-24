@@ -9,6 +9,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
+  resolveAgentReminderGuardEnabled,
   resolveAgentSkillsFilter,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
@@ -643,5 +644,52 @@ describe("resolveAgentSkillsFilter", () => {
     };
 
     expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual([]);
+  });
+});
+
+describe("resolveAgentReminderGuardEnabled", () => {
+  it("defaults to true when no config is set", () => {
+    expect(resolveAgentReminderGuardEnabled(undefined, undefined)).toBe(true);
+    expect(resolveAgentReminderGuardEnabled({}, "main")).toBe(true);
+    const cfg: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
+    expect(resolveAgentReminderGuardEnabled(cfg, "main")).toBe(true);
+  });
+
+  it("honors the global default when per-agent value is missing", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { reminderGuard: false },
+        list: [{ id: "main" }],
+      },
+    };
+    expect(resolveAgentReminderGuardEnabled(cfg, "main")).toBe(false);
+  });
+
+  it("prefers the per-agent override over the global default", () => {
+    const enabledPerAgent: OpenClawConfig = {
+      agents: {
+        defaults: { reminderGuard: false },
+        list: [{ id: "main", reminderGuard: true }],
+      },
+    };
+    expect(resolveAgentReminderGuardEnabled(enabledPerAgent, "main")).toBe(true);
+
+    const disabledPerAgent: OpenClawConfig = {
+      agents: {
+        defaults: { reminderGuard: true },
+        list: [{ id: "main", reminderGuard: false }],
+      },
+    };
+    expect(resolveAgentReminderGuardEnabled(disabledPerAgent, "main")).toBe(false);
+  });
+
+  it("falls back to the global default when the agent is not listed", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { reminderGuard: false },
+        list: [{ id: "other" }],
+      },
+    };
+    expect(resolveAgentReminderGuardEnabled(cfg, "main")).toBe(false);
   });
 });

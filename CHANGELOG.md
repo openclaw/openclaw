@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Auto-reply/reminder guard: add `agents.defaults.reminderGuard` and per-agent `reminderGuard` so agents that schedule via an external system (for example a plugin-registered tool with its own store) can suppress the false-positive "did not schedule a reminder" note. Fixes #70666.
 - Plugin SDK/tool-result transforms: restrict harness tool-result middleware to bundled plugins, fail closed on middleware errors, validate rewritten result shapes, preserve Pi per-call ids, and keep Codex media trust checks anchored to raw tool provenance. Thanks @vincentkoc.
 - Plugins/Google Chat: log webhook auth rejection reasons only after all candidates fail, and warn when add-on `appPrincipal` values do not match configuration. Fixes #71078. (#71145) Thanks @luyao618.
 - Models/configure: preserve the existing default model when provider auth is re-run from configure while keeping explicit default-setting commands authoritative. Fixes #70696. (#70793) Thanks @Sathvik-1007.

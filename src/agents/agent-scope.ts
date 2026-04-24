@@ -83,6 +83,15 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+export function resolveAgentReminderGuardEnabled(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): boolean {
+  const defaultValue = cfg?.agents?.defaults?.reminderGuard;
+  const resolved = cfg && agentId ? resolveAgentConfig(cfg, agentId)?.reminderGuard : undefined;
+  return (resolved ?? defaultValue) !== false;
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
