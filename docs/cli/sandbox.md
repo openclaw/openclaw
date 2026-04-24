@@ -188,13 +188,9 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
 }
 ```
 
-## See Also
-
-- [Sandbox Documentation](/gateway/sandboxing)
-- [Agent Configuration](/concepts/agent-workspace)
-- [Doctor Command](/gateway/doctor) - Check sandbox setup
-
 ## Related
 
 - [CLI reference](/cli)
 - [Sandboxing](/gateway/sandboxing)
+- [Agent workspace](/concepts/agent-workspace)
+- [Doctor](/gateway/doctor) — checks sandbox setup
