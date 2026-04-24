@@ -225,7 +225,7 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
       ) {
         providerChanged = true;
         const safeProviderId = sanitizeForLog(providerId);
-        const safeModelId = sanitizeForLog(String(model.id));
+        const safeModelId = sanitizeForLog(model.id);
         changes.push(
           `Marked models.providers.${safeProviderId}.models.${safeModelId} as /models add metadata so official OpenAI Codex metadata can override it.`,
         );

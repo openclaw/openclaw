@@ -729,16 +729,23 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
-    const tools = normalizeProviderToolSchemas({
-      tools: toolsEnabled ? toolsRaw : [],
-      provider: params.provider,
-      config: params.config,
+    const runtimePlanModelContext = {
       workspaceDir: effectiveWorkspace,
-      env: process.env,
-      modelId: params.modelId,
       modelApi: params.model.api,
       model: params.model,
-    });
+    };
+    const tools =
+      params.runtimePlan?.tools.normalize(toolsEnabled ? toolsRaw : [], runtimePlanModelContext) ??
+      normalizeProviderToolSchemas({
+        tools: toolsEnabled ? toolsRaw : [],
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        model: params.model,
+      });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpSessionRuntime = toolsEnabled
       ? await getOrCreateSessionMcpRuntime({
@@ -794,16 +801,20 @@ export async function runEmbeddedAttempt(
       tools: effectiveTools,
       clientTools,
     });
-    logProviderToolSchemaDiagnostics({
-      tools: effectiveTools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-      env: process.env,
-      modelId: params.modelId,
-      modelApi: params.model.api,
-      model: params.model,
-    });
+    if (params.runtimePlan) {
+      params.runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
+    } else {
+      logProviderToolSchemaDiagnostics({
+        tools: effectiveTools,
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        model: params.model,
+      });
+    }
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -929,22 +940,25 @@ export async function runEmbeddedAttempt(
           defaultAgentId,
         })
       : undefined;
-    const promptContribution = resolveProviderSystemPromptContribution({
-      provider: params.provider,
+    const promptContributionContext = {
       config: params.config,
+      agentDir: params.agentDir,
       workspaceDir: effectiveWorkspace,
-      context: {
-        config: params.config,
-        agentDir: params.agentDir,
-        workspaceDir: effectiveWorkspace,
+      provider: params.provider,
+      modelId: params.modelId,
+      promptMode: effectivePromptMode,
+      runtimeChannel,
+      runtimeCapabilities,
+      agentId: sessionAgentId,
+    };
+    const promptContribution =
+      params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
+      resolveProviderSystemPromptContribution({
         provider: params.provider,
-        modelId: params.modelId,
-        promptMode: effectivePromptMode,
-        runtimeChannel,
-        runtimeCapabilities,
-        agentId: sessionAgentId,
-      },
-    });
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        context: promptContributionContext,
+      });
 
     const builtAppendPrompt =
       resolveSystemPromptOverride({
@@ -1045,15 +1059,17 @@ export async function runEmbeddedAttempt(
         .then(() => true)
         .catch(() => false);
 
-      const transcriptPolicy = resolveTranscriptPolicy({
-        modelApi: params.model?.api,
-        provider: params.provider,
-        modelId: params.modelId,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        env: process.env,
-        model: params.model,
-      });
+      const transcriptPolicy =
+        params.runtimePlan?.transcript.resolvePolicy(runtimePlanModelContext) ??
+        resolveTranscriptPolicy({
+          modelApi: params.model?.api,
+          provider: params.provider,
+          modelId: params.modelId,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+          env: process.env,
+          model: params.model,
+        });
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
@@ -1414,24 +1430,37 @@ export async function runEmbeddedAttempt(
         });
       }
 
+      const resolvedTransport = resolveExplicitSettingsTransport({
+        settingsManager,
+        sessionTransport: activeSession.agent.transport,
+      });
+      const streamExtraParamsOverride = {
+        ...params.streamParams,
+        fastMode: params.fastMode,
+      };
+      const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
+        extraParamsOverride: streamExtraParamsOverride,
+        thinkingLevel: params.thinkLevel,
+        agentId: sessionAgentId,
+        workspaceDir: effectiveWorkspace,
+        model: params.model,
+        resolvedTransport,
+      });
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
         params.provider,
         params.modelId,
-        {
-          ...params.streamParams,
-          fastMode: params.fastMode,
-        },
+        streamExtraParamsOverride,
         params.thinkLevel,
         sessionAgentId,
         effectiveWorkspace,
         params.model,
         agentDir,
-        resolveExplicitSettingsTransport({
-          settingsManager,
-          sessionTransport: activeSession.agent.transport,
-        }),
+        resolvedTransport,
+        preparedRuntimeExtraParams
+          ? { preparedExtraParams: preparedRuntimeExtraParams }
+          : undefined,
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
@@ -2762,7 +2791,12 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               provider: params.provider,
               model: params.modelId,
-              resolvedRef: `${params.provider}/${params.modelId}`,
+              resolvedRef:
+                params.runtimePlan?.observability.resolvedRef ??
+                `${params.provider}/${params.modelId}`,
+              ...(params.runtimePlan?.observability.harnessId
+                ? { harnessId: params.runtimePlan.observability.harnessId }
+                : {}),
               assistantTexts,
               lastAssistant,
               usage: attemptUsage,
