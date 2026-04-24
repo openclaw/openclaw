@@ -9,10 +9,21 @@ import {
   type TelegramMediaRef,
 } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
-import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+
+type TelegramMessageDispatchModule = Pick<
+  typeof import("./bot-message-dispatch.js"),
+  "dispatchTelegramMessage"
+>;
+
+let telegramMessageDispatchPromise: Promise<TelegramMessageDispatchModule> | undefined;
+
+async function loadTelegramMessageDispatch(): Promise<TelegramMessageDispatchModule> {
+  telegramMessageDispatchPromise ??= import("./bot-message-dispatch.js");
+  return await telegramMessageDispatchPromise;
+}
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -108,6 +119,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       );
     }
     try {
+      const { dispatchTelegramMessage } = await loadTelegramMessageDispatch();
       await dispatchTelegramMessage({
         context,
         bot,
