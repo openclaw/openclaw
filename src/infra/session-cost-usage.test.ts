@@ -18,6 +18,12 @@ describe("session cost usage", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, fn);
   const makeSessionCostRoot = async (prefix: string): Promise<string> =>
     await suiteRootTracker.make(prefix);
+  const transcriptText = (sessionId: string, entry: unknown): string =>
+    [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify(entry),
+      "",
+    ].join("\n");
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -144,12 +150,15 @@ describe("session cost usage", () => {
         },
       },
     };
-    const payload = `${JSON.stringify(assistantEntry)}\n`;
 
-    await fs.writeFile(path.join(sessionsDir, "sess-1.jsonl"), payload, "utf-8");
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", assistantEntry),
+      "utf-8",
+    );
     await fs.writeFile(
       path.join(sessionsDir, "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
-      payload,
+      transcriptText("sess-1", assistantEntry),
       "utf-8",
     );
 
@@ -192,6 +201,48 @@ describe("session cost usage", () => {
       const summary = await loadCostUsageSummary({ days: 30 });
       expect(summary.totals.totalTokens).toBe(30);
       expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
+    });
+  });
+
+  it("counts checkpoint-shaped explicit session ids when the base session exists", async () => {
+    const root = await makeSessionCostRoot("cost-checkpoint-shaped-id-with-base");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 10,
+          output: 20,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 30,
+          cost: { total: 0.03 },
+        },
+      },
+    };
+    const checkpointShapedSessionId = "sess.checkpoint.11111111-1111-4111-8111-111111111111";
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess.jsonl"),
+      transcriptText("sess", entry),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, `${checkpointShapedSessionId}.jsonl`),
+      transcriptText(checkpointShapedSessionId, entry),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.totals.totalTokens).toBe(60);
+      expect(summary.totals.totalCost).toBeCloseTo(0.06, 5);
     });
   });
 

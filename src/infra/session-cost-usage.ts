@@ -80,7 +80,14 @@ const SESSION_TRANSCRIPT_EXT = ".jsonl";
 const COMPACTION_CHECKPOINT_MARKER = ".checkpoint.";
 const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function getCheckpointBaseTranscriptFileName(fileName: string): string | null {
+type CompactionCheckpointTranscriptName = {
+  baseFileName: string;
+  baseSessionId: string;
+};
+
+function parseCompactionCheckpointTranscriptFileName(
+  fileName: string,
+): CompactionCheckpointTranscriptName | null {
   if (!fileName.endsWith(SESSION_TRANSCRIPT_EXT)) {
     return null;
   }
@@ -95,15 +102,38 @@ function getCheckpointBaseTranscriptFileName(fileName: string): string | null {
   if (!UUID_LIKE_RE.test(checkpointId)) {
     return null;
   }
-  return `${fileName.slice(0, markerIndex)}${SESSION_TRANSCRIPT_EXT}`;
+  const baseSessionId = fileName.slice(0, markerIndex);
+  return {
+    baseFileName: `${baseSessionId}${SESSION_TRANSCRIPT_EXT}`,
+    baseSessionId,
+  };
 }
 
-function isDuplicateCompactionCheckpointFile(
+async function readTranscriptHeaderSessionId(filePath: string): Promise<string | null> {
+  try {
+    for await (const parsed of readJsonlRecords(filePath)) {
+      if (parsed.type !== "session") {
+        return null;
+      }
+      return normalizeOptionalString(parsed.id) ?? null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function isDuplicateCompactionCheckpointFile(
+  filePath: string,
   fileName: string,
   sessionFileNames: ReadonlySet<string>,
-): boolean {
-  const baseFileName = getCheckpointBaseTranscriptFileName(fileName);
-  return Boolean(baseFileName && sessionFileNames.has(baseFileName));
+): Promise<boolean> {
+  const checkpointName = parseCompactionCheckpointTranscriptFileName(fileName);
+  if (!checkpointName || !sessionFileNames.has(checkpointName.baseFileName)) {
+    return false;
+  }
+  const headerSessionId = await readTranscriptHeaderSessionId(filePath);
+  return headerSessionId === checkpointName.baseSessionId;
 }
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
@@ -425,9 +455,6 @@ export async function loadCostUsageSummary(params?: {
       entries
         .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
         .map(async (entry) => {
-          if (isDuplicateCompactionCheckpointFile(entry.name, sessionFileNames)) {
-            return null;
-          }
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
           if (!stats) {
@@ -435,6 +462,9 @@ export async function loadCostUsageSummary(params?: {
           }
           // Include file if it was modified after our start time
           if (stats.mtimeMs < sinceTime) {
+            return null;
+          }
+          if (await isDuplicateCompactionCheckpointFile(filePath, entry.name, sessionFileNames)) {
             return null;
           }
           return filePath;
