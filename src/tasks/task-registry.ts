@@ -1452,6 +1452,13 @@ export function createTaskRecord(params: {
     ownerKey,
     scopeKind,
   });
+  // Callers such as the cron runner capture `startedAt = Date.now()` just before
+  // creating the task record, so the `now` read above can land 1-4ms later when
+  // the wall clock ticks between the two reads. Anchor `createdAt` to the earlier
+  // caller-supplied `startedAt` in that case so audits do not flag the 1ms skew
+  // as `inconsistent_timestamps` for every successful cron run.
+  const createdAt =
+    typeof params.startedAt === "number" && params.startedAt < now ? params.startedAt : now;
   const lastEventAt = params.lastEventAt ?? params.startedAt ?? now;
   const record: TaskRecord = {
     taskId,
@@ -1471,7 +1478,7 @@ export function createTaskRecord(params: {
     status,
     deliveryStatus,
     notifyPolicy,
-    createdAt: now,
+    createdAt,
     startedAt: params.startedAt,
     lastEventAt,
     cleanupAfter: params.cleanupAfter,

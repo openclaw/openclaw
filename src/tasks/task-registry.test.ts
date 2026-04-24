@@ -16,6 +16,7 @@ import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import { listTaskAuditFindings } from "./task-registry.audit.js";
 import {
   cancelTaskById,
   createTaskRecord,
@@ -279,6 +280,41 @@ describe("task-registry", () => {
         status: "succeeded",
         endedAt: 250,
       });
+    });
+  });
+
+  it("anchors createdAt to caller-supplied startedAt when the wall clock ticks between reads", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const startedAt = 1_800_000_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(startedAt + 1);
+      try {
+        const task = createTaskRecord({
+          runtime: "cron",
+          ownerKey: "",
+          scopeKind: "system",
+          childSessionKey: "agent:main:cron:nightly",
+          runId: "run-cron-race",
+          task: "nightly trading cycle",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt,
+          lastEventAt: startedAt,
+        });
+
+        expect(task.createdAt).toBe(startedAt);
+        expect(task.startedAt).toBe(startedAt);
+        const findings = listTaskAuditFindings({
+          tasks: [task],
+          now: startedAt + 1,
+        });
+        expect(findings.filter((f) => f.code === "inconsistent_timestamps")).toEqual([]);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 
