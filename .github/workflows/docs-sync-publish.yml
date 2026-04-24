@@ -22,10 +22,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
         with:
           node-version: "22.18.0"
+          install-bun: "false"
 
       - name: Clone publish repo
         env:
@@ -52,9 +53,6 @@ jobs:
             --target "$GITHUB_WORKSPACE/publish" \
             --source-repo "$GITHUB_REPOSITORY" \
             --source-sha "$GITHUB_SHA"
-
-      - name: Install docs MDX checker dependency
-        run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1
 
       - name: Check publish docs MDX
         run: node "$GITHUB_WORKSPACE/publish/.openclaw-sync/check-docs-mdx.mjs" "$GITHUB_WORKSPACE/publish/docs"

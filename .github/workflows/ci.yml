@@ -392,6 +392,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # setup-uv v8.1.0; uv 0.11.7
+        with:
+          version: "0.11.7"
+
       - name: Restore pre-commit cache
         uses: actions/cache@v5
         with:
@@ -401,7 +406,10 @@ jobs:
             pre-commit-security-fast-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install pre-commit
-        run: python -m pip install --disable-pip-version-check pre-commit==4.2.0
+        run: |
+          uv venv "$RUNNER_TEMP/pre-commit-venv" --python python
+          uv pip install --project "$GITHUB_WORKSPACE" --python "$RUNNER_TEMP/pre-commit-venv/bin/python" pre-commit==4.2.0
+          echo "$RUNNER_TEMP/pre-commit-venv/bin" >> "$GITHUB_PATH"
 
       - name: Detect committed private keys
         run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
@@ -1838,10 +1846,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # setup-uv v8.1.0; uv 0.11.7
+        with:
+          version: "0.11.7"
+
       - name: Install Python tooling
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest ruff pyyaml
+          uv venv "$RUNNER_TEMP/skills-python-venv" --python python
+          uv pip install --project "$GITHUB_WORKSPACE" --python "$RUNNER_TEMP/skills-python-venv/bin/python" pytest ruff pyyaml
+          echo "$RUNNER_TEMP/skills-python-venv/bin" >> "$GITHUB_PATH"
 
       - name: Lint Python skill scripts
         run: python -m ruff check skills

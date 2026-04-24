@@ -113,9 +113,8 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  PNPM_VERSION: "10.33.0"
   OPENCLAW_REPOSITORY: openclaw/openclaw
-  TSX_VERSION: "4.21.0"
 
 jobs:
   prepare:
@@ -280,15 +279,23 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: source/pnpm-lock.yaml
+          cache-dependency-path: |
+            source/pnpm-lock.yaml
+            workflow/pnpm-lock.yaml
+
+      - name: Install workflow dependencies
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
       - name: Build candidate artifact once
         env:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
         run: |
-          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
+          pnpm --dir workflow exec tsx "$GITHUB_WORKSPACE/workflow/scripts/openclaw-cross-os-release-checks.ts" \
             --prepare-only \
-            --source-dir source \
+            --source-dir "$GITHUB_WORKSPACE/source" \
             --output-dir "${OUTPUT_DIR}"
 
       - name: Resolve baseline package spec
@@ -370,7 +377,7 @@ jobs:
           VAR_WINDOWS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER }}
           VAR_MACOS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER }}
         run: |
-          MATRIX_JSON="$(pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
+          MATRIX_JSON="$(pnpm --dir workflow exec tsx "$GITHUB_WORKSPACE/workflow/scripts/openclaw-cross-os-release-checks.ts" \
             --resolve-matrix \
             --ref "${INPUT_REF}" \
             --mode "${INPUT_MODE}" \
@@ -407,6 +414,12 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install workflow dependencies
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
       - name: Download candidate artifact
         uses: actions/download-artifact@v8
@@ -448,7 +461,7 @@ jobs:
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
+          pnpm --dir workflow exec tsx "$GITHUB_WORKSPACE/workflow/scripts/openclaw-cross-os-release-checks.ts" \
             --candidate-tgz "${CANDIDATE_TGZ}" \
             --candidate-version "${CANDIDATE_VERSION}" \
             --source-sha "${SOURCE_SHA}" \

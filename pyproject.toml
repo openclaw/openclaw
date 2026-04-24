@@ -8,3 +8,11 @@ select = ["E9", "F63", "F7", "F82", "I"]
 [tool.pytest.ini_options]
 testpaths = ["skills"]
 python_files = ["test_*.py"]
+
+[tool.uv]
+exclude-newer = "7 days"
+index-strategy = "first-index"
+
+[tool.uv.pip]
+exclude-newer = "7 days"
+index-strategy = "first-index"

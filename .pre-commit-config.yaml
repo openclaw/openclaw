@@ -7,7 +7,7 @@
 repos:
   # Basic file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
     hooks:
       - id: trailing-whitespace
         exclude: '^(docs/|dist/|vendor/|.*\.snap$)'
@@ -23,7 +23,7 @@ repos:
 
   # Secret detection (same as CI)
   - repo: https://github.com/Yelp/detect-secrets
-    rev: v1.5.0
+    rev: 01886c8a910c64595c47f186ca1ffc0b77fa5458 # v1.5.0
     hooks:
       - id: detect-secrets
         args:
@@ -75,7 +75,7 @@ repos:
           - 'sparkle:edSignature="[A-Za-z0-9+/=]+"'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
-    rev: v0.11.0
+    rev: 99470f5e12208ff0fb17ab81c3c494f7620a1d8d # v0.11.0
     hooks:
       - id: shellcheck
         args: [--severity=error] # Only fail on errors, not warnings/info
@@ -84,13 +84,13 @@ repos:
 
   # GitHub Actions linting
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.10
+    rev: 0933c147c9d6587653d45fdcb4c497c57a65f9af # v1.7.10
     hooks:
       - id: actionlint
 
   # GitHub Actions security audit
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.22.0
+    rev: b546b77c44c466a54a42af5499dcc0dcc1a3193f # v1.22.0
     hooks:
       - id: zizmor
         args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
@@ -98,7 +98,7 @@ repos:
 
   # Python checks for skills scripts
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.1
+    rev: 3b4bc031619cde2e0a9f3c4441ac7cc8227245a4 # v0.14.1
     hooks:
       - id: ruff
         files: "^skills/.*\\.py$"
