@@ -2,7 +2,6 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  CODEX_REASONING_EFFORT_CASES,
   GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS,
   NON_OPENAI_GPT5_TRANSPORT_CASE,
   OPENAI_GPT5_TRANSPORT_DEFAULT_CASES,
@@ -15,6 +14,7 @@ import {
   resolveExtraParams,
   resolvePreparedExtraParams,
 } from "./pi-embedded-runner/extra-params.js";
+import { createOpenAIThinkingLevelWrapper } from "./pi-embedded-runner/openai-stream-wrappers.js";
 import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
 
 afterEach(() => {
@@ -95,6 +95,52 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
     expect(payload.parallel_tool_calls).toBe(true);
   });
 
+  it("propagates OpenAI GPT-5 default transport options through stream options", () => {
+    const { agent, calls } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4");
+
+    void agent.streamFn?.(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as Model<"openai-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        transport: "auto",
+        openaiWsWarmup: false,
+      }),
+    ]);
+  });
+
+  it("maps OpenAI GPT-5 thinking level into Responses reasoning effort payloads", () => {
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: () => undefined,
+      resolveProviderExtraParamsForTransport: () => undefined,
+      wrapProviderStreamFn: (params) =>
+        createOpenAIThinkingLevelWrapper(params.context.streamFn, params.context.thinkingLevel),
+    });
+
+    const payload = runPayloadMutation({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as Model<"openai-codex-responses">,
+      payload: { reasoning: { effort: "none", summary: "auto" } },
+    });
+
+    expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
+  });
+
   it("composes provider preparation before transport patch resolution", () => {
     const resolveProviderExtraParamsForTransport = vi.fn(() => ({
       patch: {
@@ -116,8 +162,7 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
       cfg: undefined,
       provider: "openai",
       modelId: "gpt-5.4",
-      thinkingLevel: CODEX_REASONING_EFFORT_CASES.find((row) => row.thinkLevel === "high")
-        ?.thinkLevel,
+      thinkingLevel: "high",
       model: {
         api: "openai-responses",
         provider: "openai",
@@ -148,15 +193,36 @@ function runPayloadMutation(params: {
   applyProvider: string;
   applyModelId: string;
   model: Model<"openai-codex-responses"> | Model<"openai-responses">;
+  thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
+  payload?: Record<string, unknown>;
 }): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
+  const payload: Record<string, unknown> = params.payload ?? {};
   const baseStreamFn: StreamFn = (model, _context, options) => {
     options?.onPayload?.(payload, model);
     return {} as ReturnType<StreamFn>;
   };
   const agent = { streamFn: baseStreamFn };
-  applyExtraParamsToAgent(agent, undefined, params.applyProvider, params.applyModelId);
+  applyExtraParamsToAgent(
+    agent,
+    undefined,
+    params.applyProvider,
+    params.applyModelId,
+    undefined,
+    params.thinkingLevel,
+  );
   const context: Context = { messages: [] };
   void agent.streamFn?.(params.model, context, {} as SimpleStreamOptions);
   return payload;
+}
+
+function createOptionsCaptureAgent() {
+  const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
+    return {} as ReturnType<StreamFn>;
+  };
+  return {
+    calls,
+    agent: { streamFn: baseStreamFn },
+  };
 }
