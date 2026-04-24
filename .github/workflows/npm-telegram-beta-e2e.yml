@@ -49,12 +49,12 @@ jobs:
           fi
 
   approve_release_manager:
-    name: Approve release manager run
+    name: Approve npm Telegram beta E2E
     needs: validate_dispatch_ref
     runs-on: ubuntu-latest
     environment: npm-release
     steps:
-      - name: Approve npm Telegram beta E2E
+      - name: Record approval
         env:
           PACKAGE_SPEC: ${{ inputs.package_spec }}
         run: echo "Approved npm Telegram beta E2E for ${PACKAGE_SPEC}"
