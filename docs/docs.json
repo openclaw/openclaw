@@ -61,6 +61,10 @@
       "destination": "/providers/qwen"
     },
     {
+      "source": "/providers/qwen_modelstudio",
+      "destination": "/providers/qwen"
+    },
+    {
       "source": "/platforms/oracle",
       "destination": "/install/oracle"
     },
@@ -1348,23 +1352,38 @@
               {
                 "group": "macOS companion app",
                 "pages": [
-                  "platforms/mac/dev-setup",
-                  "platforms/mac/menu-bar",
-                  "platforms/mac/voicewake",
-                  "platforms/mac/voice-overlay",
-                  "platforms/mac/webchat",
-                  "platforms/mac/canvas",
-                  "platforms/mac/child-process",
-                  "platforms/mac/health",
-                  "platforms/mac/icon",
-                  "platforms/mac/logging",
-                  "platforms/mac/permissions",
-                  "platforms/mac/remote",
-                  "platforms/mac/signing",
-                  "platforms/mac/bundled-gateway",
-                  "platforms/mac/xpc",
-                  "platforms/mac/skills",
-                  "platforms/mac/peekaboo"
+                  {
+                    "group": "Setup",
+                    "pages": [
+                      "platforms/mac/dev-setup",
+                      "platforms/mac/menu-bar",
+                      "platforms/mac/icon",
+                      "platforms/mac/permissions",
+                      "platforms/mac/signing"
+                    ]
+                  },
+                  {
+                    "group": "Runtime",
+                    "pages": [
+                      "platforms/mac/bundled-gateway",
+                      "platforms/mac/child-process",
+                      "platforms/mac/health",
+                      "platforms/mac/logging",
+                      "platforms/mac/remote",
+                      "platforms/mac/xpc"
+                    ]
+                  },
+                  {
+                    "group": "Features",
+                    "pages": [
+                      "platforms/mac/voicewake",
+                      "platforms/mac/voice-overlay",
+                      "platforms/mac/webchat",
+                      "platforms/mac/canvas",
+                      "platforms/mac/skills",
+                      "platforms/mac/peekaboo"
+                    ]
+                  }
                 ]
               }
             ]
