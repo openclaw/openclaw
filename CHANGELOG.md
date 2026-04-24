@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Voice-call/Telnyx: preserve inbound/outbound callback metadata and read transcription text from Telnyx's current `transcription_data` payload.
+- Codex harness: send verbose tool progress to chat channels for native app-server runs, matching the Pi harness `/verbose on` and `/verbose full` behavior.
 - Codex harness: route native `request_user_input` prompts back to the originating chat, preserve queued follow-up answers, and honor newer app-server command approval amendment decisions.
 - Codex status: report Codex CLI OAuth as `oauth (codex-cli)` for native `codex/*` sessions instead of showing unknown auth. Fixes #70688. Thanks @jb510.
 - Codex harness/context-engine: redact context-engine assembly failures before logging, so fallback warnings do not serialize raw error objects. (#70809) Thanks @jalehman.
