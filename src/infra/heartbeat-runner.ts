@@ -667,9 +667,6 @@ function resolveHeartbeatRunPrompt(params: {
   heartbeatFileContent?: string;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
-  const pendingEvents = params.preflight.shouldInspectPendingEvents
-    ? pendingEventEntries.map((event) => event.text)
-    : [];
   const cronEvents = pendingEventEntries
     .filter(
       (event) =>
@@ -677,7 +674,12 @@ function resolveHeartbeatRunPrompt(params: {
         isCronSystemEvent(event.text),
     )
     .map((event) => event.text);
-  const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
+  const execEvents = params.preflight.shouldInspectPendingEvents
+    ? pendingEventEntries
+        .filter((event) => event.trusted !== false && isExecCompletionEvent(event.text))
+        .map((event) => event.text)
+    : [];
+  const hasExecCompletion = execEvents.length > 0;
   const hasCronEvents = cronEvents.length > 0;
 
   // If tasks are defined, build a batched prompt with due tasks
@@ -716,7 +718,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
 
   // Fallback to original behavior
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt(execEvents, { deliverToUser: params.canRelayToUser })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
