@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
@@ -441,16 +445,15 @@ async function loadReferenceAssets(params: {
 
   for (const rawInput of params.inputs) {
     const trimmed = rawInput.trim();
-    const inputRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    const inputRaw = normalizeMediaReferenceSource(
+      trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
+    );
     if (!inputRaw) {
       throw new ToolInputError(`${params.expectedKind} required (empty string in array)`);
     }
-    const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(inputRaw);
-    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(inputRaw);
-    const isFileUrl = /^file:/i.test(inputRaw);
-    const isHttpUrl = /^https?:\/\//i.test(inputRaw);
-    const isDataUrl = /^data:/i.test(inputRaw);
-    if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
+    const refInfo = classifyMediaReferenceSource(inputRaw);
+    const { isDataUrl, isHttpUrl } = refInfo;
+    if (refInfo.hasUnsupportedScheme) {
       throw new ToolInputError(
         `Unsupported ${params.expectedKind} reference: ${rawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
       );

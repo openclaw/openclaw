@@ -685,6 +685,23 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("accepts managed inbound reference images for edit mode", async () => {
+    stubEditedImageFlow({ width: 1024, height: 1024 });
+    const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
+      workspaceDir: process.cwd(),
+    });
+
+    await tool.execute("call-edit-managed", {
+      prompt: "Use this reference.",
+      image: "media://inbound/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      "media://inbound/reference.png",
+      expect.any(Object),
+    );
+  });
+
   it("ignores non-finite mediaMaxMb when loading reference images", async () => {
     stubImageGenerationProviders();
     stubEditedImageFlow({ width: 3200, height: 1800 });

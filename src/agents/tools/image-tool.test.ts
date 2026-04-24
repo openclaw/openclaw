@@ -1383,6 +1383,68 @@ describe("image tool MiniMax VLM routing", () => {
   });
 });
 
+describe("image tool managed inbound media", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
+  });
+
+  async function withManagedInboundPng(
+    run: (params: { stateDir: string; mediaId: string; mediaPath: string }) => Promise<void>,
+  ) {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-managed-inbound-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "claim-check-test.png";
+    const mediaPath = path.join(inboundDir, mediaId);
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(mediaPath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      await run({ stateDir, mediaId, mediaPath });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  }
+
+  it("resolves media://inbound refs", async () => {
+    await withManagedInboundPng(async ({ mediaId }) => {
+      installImageUnderstandingProviderStubs();
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expectImageToolExecOk(tool, `media://inbound/${mediaId}`);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("allows managed inbound absolute paths when workspaceOnly is enabled", async () => {
+    await withManagedInboundPng(async ({ mediaPath }) => {
+      installImageUnderstandingProviderStubs();
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expectImageToolExecOk(tool, mediaPath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+});
+
 describe("image tool response validation", () => {
   function createAssistantMessage(
     overrides: Partial<{
