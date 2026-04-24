@@ -53,7 +53,7 @@ Live tests are split into two layers so we can isolate failures:
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-6,..."` (comma allowlist)
   - Modern/all sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
   - Exhaustive sweeps use `OPENCLAW_LIVE_TEST_TIMEOUT_MS` for the whole direct-model test timeout. Default: 60 minutes.
-  - Set `OPENCLAW_LIVE_MODEL_CONCURRENCY=10` to run direct-model probes in parallel. Default: 1.
+  - Set `OPENCLAW_LIVE_MODEL_CONCURRENCY=20` to run direct-model probes in parallel. Default: 1.
 - How to select providers:
   - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
 - Where keys come from:
