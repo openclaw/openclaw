@@ -103,7 +103,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
-  it("applies media filter after text filter", async () => {
+  it("drops duplicate caption text after matching media is stripped", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [{ text: "hello world!", mediaUrl: "file:///tmp/photo.jpg" }],
@@ -111,8 +111,22 @@ describe("buildReplyPayloads media filter integration", () => {
       messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
     });
 
-    // Text filter removes the payload entirely (text matched), so nothing remains.
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps captioned media when only the caption matches a messaging tool send", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello world!", mediaUrl: "file:///tmp/photo.jpg" }],
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentMediaUrls: ["file:///tmp/other.jpg"],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "hello world!",
+      mediaUrl: "file:///tmp/photo.jpg",
+    });
   });
 
   it("does not dedupe text for cross-target messaging sends", async () => {
@@ -301,6 +315,25 @@ describe("buildReplyPayloads media filter integration", () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [{ text: "response" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("deduplicates final payloads against directly sent block keys when streaming is enabled without a pipeline", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    directlySentBlockKeys.add(
+      createBlockReplyContentKey({ text: "response", replyToId: "post-1" }),
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
       blockReplyPipeline: null,
       directlySentBlockKeys,
       replyToMode: "off",

@@ -199,32 +199,36 @@ export async function buildReplyPayloads(params: {
         normalizeMediaPaths: params.normalizeMediaPaths,
       })
     : (params.messagingToolSentMediaUrls ?? []);
-  const dedupedPayloads = dedupeMessagingToolPayloads
-    ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
-        payloads: silentFilteredPayloads,
-        sentTexts: messagingToolSentTexts,
-      })
-    : silentFilteredPayloads;
   const mediaFilteredPayloads = dedupeMessagingToolPayloads
     ? (
         dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
       ).filterMessagingToolMediaDuplicates({
-        payloads: dedupedPayloads,
+        payloads: silentFilteredPayloads,
         sentMediaUrls: messagingToolSentMediaUrls,
       })
-    : dedupedPayloads;
+    : silentFilteredPayloads;
+  const dedupedPayloads = dedupeMessagingToolPayloads
+    ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
+        payloads: mediaFilteredPayloads,
+        sentTexts: messagingToolSentTexts,
+      })
+    : mediaFilteredPayloads;
+  const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
+    Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
-    ? mediaFilteredPayloads.filter((payload) => payload.isError)
+    ? dedupedPayloads.filter((payload) => payload.isError)
     : params.blockStreamingEnabled
-      ? mediaFilteredPayloads.filter(
-          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+      ? dedupedPayloads.filter(
+          (payload) =>
+            !params.blockReplyPipeline?.hasSentPayload(payload) &&
+            !isDirectlySentBlockPayload(payload),
         )
       : params.directlySentBlockKeys?.size
-        ? mediaFilteredPayloads.filter(
+        ? dedupedPayloads.filter(
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
           )
-        : mediaFilteredPayloads;
+        : dedupedPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
   return {

@@ -196,7 +196,7 @@ describe("runReplyAgent media path normalization", () => {
     );
   });
 
-  it("shares one media cache between direct block media and final payload filtering", async () => {
+  it("shares one media cache between block accumulation and final payload delivery", async () => {
     let stagedIndex = 0;
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => {
       stagedIndex += 1;
@@ -233,18 +233,16 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result).toBeUndefined();
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith({
-      text: undefined,
+    expect(result).toMatchObject({
+      text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
-      replyToCurrent: undefined,
       replyToId: "msg-1",
       replyToTag: false,
       audioAsVoice: false,
     });
+    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not create a second media context inside runAgentTurnWithFallback when onBlockReply is provided", async () => {
