@@ -5,6 +5,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import {
@@ -128,12 +129,16 @@ describe("gateway aux handlers", () => {
     // Assertion is order-independent: plan.restartChannels iterates in Set
     // insertion order, which in turn depends on diff/plugin iteration order
     // that is not a stable contract of this handler.
-    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted()).toEqual(["slack", "zalo"]);
-    expect(startChannel.mock.calls.map(([ch]) => ch).toSorted()).toEqual(["slack", "zalo"]);
+    expect(
+      stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["slack", "zalo"]);
+    expect(
+      startChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["slack", "zalo"]);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
-  it("serializes concurrent secrets.reload calls so channels are not restarted twice", async () => {
+  it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
     const initialActive = createSnapshot(
       asConfig({
         channels: {
@@ -144,16 +149,6 @@ describe("gateway aux handlers", () => {
     activateSecretsRuntimeSnapshot(initialActive);
 
     const preparedFirst = createSnapshot(
-      asConfig({
-        channels: {
-          slack: { signingSecret: "new-slack-secret" },
-        },
-      }),
-    );
-    // The second activation has no further changes — a concurrent caller
-    // that raced past activation without serialization would still see the
-    // pre-first-activation snapshot and trigger another restart.
-    const preparedSecond = createSnapshot(
       asConfig({
         channels: {
           slack: { signingSecret: "new-slack-secret" },
@@ -172,12 +167,6 @@ describe("gateway aux handlers", () => {
         activateSecretsRuntimeSnapshot(preparedFirst);
         activationOrder.push("first-end");
         return preparedFirst;
-      })
-      .mockImplementationOnce(async () => {
-        activationOrder.push("second-start");
-        activateSecretsRuntimeSnapshot(preparedSecond);
-        activationOrder.push("second-end");
-        return preparedSecond;
       });
     const stopChannel = vi.fn().mockResolvedValue(undefined);
     const startChannel = vi.fn().mockResolvedValue(undefined);
@@ -202,11 +191,12 @@ describe("gateway aux handlers", () => {
     expect(activationOrder).toEqual([
       "first-start",
       "first-end",
-      "second-start",
-      "second-end",
     ]);
+    expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
     expect(stopChannel.mock.calls).toEqual([["slack"]]);
     expect(startChannel.mock.calls).toEqual([["slack"]]);
+    expect(respond).toHaveBeenNthCalledWith(1, true, { ok: true, warningCount: 0 });
+    expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
   });
 
   it("isolates per-channel restart failures, then surfaces an error so partial rotation is visible", async () => {
@@ -255,8 +245,12 @@ describe("gateway aux handlers", () => {
 
     // Both channels were attempted even though slack's startChannel threw,
     // so zalo still got its rotation applied.
-    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted()).toEqual(["slack", "zalo"]);
-    expect(startChannel.mock.calls.map(([ch]) => ch).toSorted()).toEqual(["slack", "zalo"]);
+    expect(
+      stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["slack", "zalo"]);
+    expect(
+      startChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["slack", "zalo"]);
     expect(
       logChannelsInfo.mock.calls.some(([msg]) =>
         String(msg).startsWith("failed to restart slack channel after secrets reload"),
@@ -268,7 +262,71 @@ describe("gateway aux handlers", () => {
     const [okFlag, successPayload, errorPayload] = respond.mock.calls[0];
     expect(okFlag).toBe(false);
     expect(successPayload).toBeUndefined();
-    expect(String(errorPayload?.message ?? "")).toContain("slack");
+    expect(String(errorPayload?.message ?? "")).toBe("secrets.reload failed");
+    expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(
+      asConfig({
+        channels: {
+          slack: { signingSecret: "old-slack-secret" },
+          zalo: { webhookSecret: "old-zalo-secret" },
+        },
+      }),
+    );
+  });
+
+  it("fails reload when channel restarts are required but skip flags block them", async () => {
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    activateSecretsRuntimeSnapshot(
+      createSnapshot(
+        asConfig({
+          channels: {
+            slack: { signingSecret: "old-slack-secret" },
+          },
+        }),
+      ),
+    );
+    const activateRuntimeSecrets = vi.fn().mockResolvedValue(
+      createSnapshot(
+        asConfig({
+          channels: {
+            slack: { signingSecret: "new-slack-secret" },
+          },
+        }),
+      ),
+    );
+    const stopChannel = vi.fn().mockResolvedValue(undefined);
+    const startChannel = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn();
+
+    const { extraHandlers } = createGatewayAuxHandlers({
+      log: {},
+      activateRuntimeSecrets,
+      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      clients: [],
+      startChannel,
+      stopChannel,
+      logChannels: { info: vi.fn() },
+    });
+
+    await invokeSecretsReload({ handlers: extraHandlers, respond });
+
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(startChannel).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "secrets.reload failed",
+      }),
+    );
+    expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(
+      asConfig({
+        channels: {
+          slack: { signingSecret: "old-slack-secret" },
+        },
+      }),
+    );
   });
 
   it("does not restart channels when resolved secrets do not change channel config", async () => {

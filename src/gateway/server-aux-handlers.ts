@@ -6,7 +6,10 @@ import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
-import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
@@ -29,6 +32,10 @@ type GatewayAuxHandlerLogger = {
   warn?: (message: string) => void;
   error?: (message: string) => void;
   debug?: (message: string) => void;
+};
+
+type ReloadSecretsResult = {
+  warningCount: number;
 };
 
 export function createGatewayAuxHandlers(params: {
@@ -56,65 +63,72 @@ export function createGatewayAuxHandlers(params: {
   // so concurrent callers cannot overlap the stop/start loop and so the
   // "before" snapshot used for the reload-plan diff is always the snapshot
   // replaced by this call's activation, not one captured by a prior caller.
-  let reloadTail: Promise<void> = Promise.resolve();
-  const runExclusiveReload = <T>(fn: () => Promise<T>): Promise<T> => {
-    const run = reloadTail.then(fn, fn);
-    reloadTail = run.then(
-      () => undefined,
-      () => undefined,
-    );
+  let reloadInFlight: Promise<ReloadSecretsResult> | null = null;
+  const runExclusiveReload = (fn: () => Promise<ReloadSecretsResult>): Promise<ReloadSecretsResult> => {
+    if (reloadInFlight) {
+      return reloadInFlight;
+    }
+    const run = (async () => {
+      try {
+        return await fn();
+      } finally {
+        reloadInFlight = null;
+      }
+    })();
+    reloadInFlight = run;
     return run;
   };
   const secretsHandlers = createSecretsHandlers({
     reloadSecrets: () =>
       runExclusiveReload(async () => {
-        const active = getActiveSecretsRuntimeSnapshot();
-        if (!active) {
+        const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+        if (!previousSnapshot) {
           throw new Error("Secrets runtime snapshot is not active.");
         }
         const previousSharedGatewaySessionGeneration =
           params.sharedGatewaySessionGenerationState.current;
-        const prepared = await params.activateRuntimeSecrets(active.sourceConfig, {
-          reason: "reload",
-          activate: true,
-        });
-        const nextSharedGatewaySessionGeneration =
-          params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-        const plan = buildGatewayReloadPlan(diffConfigPaths(active.config, prepared.config));
-        setCurrentSharedGatewaySessionGeneration(
-          params.sharedGatewaySessionGenerationState,
-          nextSharedGatewaySessionGeneration,
-        );
-        if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
-          disconnectStaleSharedGatewayAuthClients({
-            clients: params.clients,
-            expectedGeneration: nextSharedGatewaySessionGeneration,
+        let nextSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
+        let sharedGatewaySessionGenerationChanged = false;
+        try {
+          const prepared = await params.activateRuntimeSecrets(previousSnapshot.sourceConfig, {
+            reason: "reload",
+            activate: true,
           });
-        }
-        if (plan.restartChannels.size > 0) {
-          if (
-            isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-            isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
-          ) {
-            params.logChannels.info(
-              "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
-            );
-          } else {
-            // Isolate per-channel failures so one channel's stop/start error
-            // does not leave later channels unrestarted, but collect them and
-            // surface an error after the loop so the caller knows rotation
-            // was partial and can retry or alert instead of treating a
-            // swallowed failure as a successful rotation.
+          nextSharedGatewaySessionGeneration =
+            params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+          const plan = buildGatewayReloadPlan(
+            diffConfigPaths(previousSnapshot.config, prepared.config),
+          );
+          setCurrentSharedGatewaySessionGeneration(
+            params.sharedGatewaySessionGenerationState,
+            nextSharedGatewaySessionGeneration,
+          );
+          sharedGatewaySessionGenerationChanged =
+            previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration;
+          if (sharedGatewaySessionGenerationChanged) {
+            disconnectStaleSharedGatewayAuthClients({
+              clients: params.clients,
+              expectedGeneration: nextSharedGatewaySessionGeneration,
+            });
+          }
+          if (plan.restartChannels.size > 0) {
+            const restartChannels = [...plan.restartChannels];
+            if (
+              isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+              isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+            ) {
+              throw new Error(
+                `secrets.reload requires restarting channels: ${restartChannels.join(", ")}`,
+              );
+            }
             const restartFailures: ChannelKind[] = [];
-            for (const channel of plan.restartChannels) {
+            for (const channel of restartChannels) {
               params.logChannels.info(`restarting ${channel} channel after secrets reload`);
               try {
                 await params.stopChannel(channel);
                 await params.startChannel(channel);
-              } catch (err) {
-                params.logChannels.info(
-                  `failed to restart ${channel} channel after secrets reload: ${String(err)}`,
-                );
+              } catch {
+                params.logChannels.info(`failed to restart ${channel} channel after secrets reload`);
                 restartFailures.push(channel);
               }
             }
@@ -124,9 +138,20 @@ export function createGatewayAuxHandlers(params: {
               );
             }
           }
+          return { warningCount: prepared.warnings.length };
+        } catch (err) {
+          activateSecretsRuntimeSnapshot(previousSnapshot);
+          params.sharedGatewaySessionGenerationState.current = previousSharedGatewaySessionGeneration;
+          if (sharedGatewaySessionGenerationChanged) {
+            disconnectStaleSharedGatewayAuthClients({
+              clients: params.clients,
+              expectedGeneration: previousSharedGatewaySessionGeneration,
+            });
+          }
+          throw err;
         }
-        return { warningCount: prepared.warnings.length };
       }),
+    log: params.log,
     resolveSecrets: async ({ commandName, targetIds }) => {
       const { assignments, diagnostics, inactiveRefPaths } =
         resolveCommandSecretsFromActiveRuntimeSnapshot({
