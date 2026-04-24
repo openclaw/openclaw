@@ -3311,6 +3311,7 @@ describe("openai transport stream", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
       maxTokens: 32_000,
+      baseUrl: "https://api.example.com/v1",
     } satisfies Model<"openai-responses">;
 
     const output: Parameters<typeof __testing.processResponsesStream>[1] = {
