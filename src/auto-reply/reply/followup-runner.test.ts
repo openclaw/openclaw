@@ -1413,54 +1413,38 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
   it("suppresses exact NO_REPLY followups without origin or dispatcher delivery", async () => {
     const typing = createMockTypingController();
-    const onBlockReply = createAsyncReplySpy();
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  ` }],
       meta: {},
     });
     const runner = createFollowupRunner({
-      opts: { onBlockReply },
       typing,
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-6",
     });
 
-    await runner(
-      createQueuedRun({
-        originatingChannel: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.originChannel,
-        originatingTo: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.originTo,
-      }),
-    );
+    await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
     expect(typing.markRunComplete).toHaveBeenCalled();
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   });
 
   it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
     const typing = createMockTypingController();
-    const onBlockReply = createAsyncReplySpy();
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.jsonSilentText }],
       meta: {},
     });
     const runner = createFollowupRunner({
-      opts: { onBlockReply },
       typing,
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-6",
     });
 
-    await runner(
-      createQueuedRun({
-        originatingChannel: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.originChannel,
-        originatingTo: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.originTo,
-      }),
-    );
+    await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
     expect(typing.markRunComplete).toHaveBeenCalled();
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   });

@@ -75,6 +75,14 @@ export type AgentRuntimePlan = {
   };
 };
 
+export type BuildAgentRuntimeDeliveryPlanParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  agentDir?: string;
+  provider: string;
+  modelId: string;
+};
+
 export type BuildAgentRuntimePlanParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -85,6 +93,7 @@ export type BuildAgentRuntimePlanParams = {
   modelApi?: string | null;
   harnessId?: string;
   harnessRuntime?: string;
+  allowHarnessAuthProfileForwarding?: boolean;
   authProfileProvider?: string;
   sessionAuthProfileId?: string;
   agentId?: string;

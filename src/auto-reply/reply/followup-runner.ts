@@ -11,7 +11,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import { buildAgentRuntimePlan } from "../../agents/runtime-plan/build.js";
+import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -83,13 +83,22 @@ export function createFollowupRunner(params: {
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
-    const deliveryPlan = buildAgentRuntimePlan({
+    const deliveryPlan = buildAgentRuntimeDeliveryPlan({
       provider: resolvedRun.provider,
       modelId: resolvedRun.modelId,
       config: runtimeConfig,
       workspaceDir: queued.run.workspaceDir,
       agentDir: queued.run.agentDir,
-    }).delivery;
+    });
+
+    const sendablePayloads = payloads.filter(
+      (payload): payload is ReplyPayload =>
+        hasOutboundReplyContent(payload) && !deliveryPlan.isSilentPayload(payload),
+    );
+
+    if (sendablePayloads.length === 0) {
+      return;
+    }
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       defaultRuntime.error?.(
@@ -100,13 +109,7 @@ export function createFollowupRunner(params: {
 
     let crossChannelRouteFailureNeedsNotice = false;
     let routedAnyCrossChannelPayloadToOrigin = false;
-    for (const payload of payloads) {
-      if (!payload || !hasOutboundReplyContent(payload)) {
-        continue;
-      }
-      if (deliveryPlan.isSilentPayload(payload)) {
-        continue;
-      }
+    for (const payload of sendablePayloads) {
       const providerRoute = deliveryPlan.resolveFollowupRoute({
         payload,
         originatingChannel,

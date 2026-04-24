@@ -14,7 +14,12 @@ import {
 } from "../pi-embedded-runner/tool-schema-runtime.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
-import type { AgentRuntimePlan, BuildAgentRuntimePlanParams } from "./types.js";
+import type {
+  AgentRuntimeDeliveryPlan,
+  AgentRuntimePlan,
+  BuildAgentRuntimeDeliveryPlanParams,
+  BuildAgentRuntimePlanParams,
+} from "./types.js";
 
 function formatResolvedRef(params: {
   provider: string;
@@ -30,6 +35,35 @@ function hasMedia(payload: { mediaUrl?: string; mediaUrls?: string[] }): boolean
   return resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+export function buildAgentRuntimeDeliveryPlan(
+  params: BuildAgentRuntimeDeliveryPlanParams,
+): AgentRuntimeDeliveryPlan {
+  return {
+    isSilentPayload(payload): boolean {
+      return isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) && !hasMedia(payload);
+    },
+    resolveFollowupRoute(routeParams) {
+      return resolveProviderFollowupFallbackRoute({
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        context: {
+          config: params.config,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          provider: params.provider,
+          modelId: params.modelId,
+          payload: routeParams.payload,
+          originatingChannel: routeParams.originatingChannel,
+          originatingTo: routeParams.originatingTo,
+          originRoutable: routeParams.originRoutable,
+          dispatcherAvailable: routeParams.dispatcherAvailable,
+        },
+      });
+    },
+  };
+}
+
 export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
@@ -41,6 +75,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     workspaceDir: params.workspaceDir,
     harnessId: params.harnessId,
     harnessRuntime: params.harnessRuntime,
+    allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
   });
   const resolvedRef = {
     provider: params.provider,
@@ -91,30 +126,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
         model: params.model,
       }),
     },
-    delivery: {
-      isSilentPayload(payload): boolean {
-        return isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) && !hasMedia(payload);
-      },
-      resolveFollowupRoute(routeParams) {
-        return resolveProviderFollowupFallbackRoute({
-          provider: params.provider,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          context: {
-            config: params.config,
-            agentDir: params.agentDir,
-            workspaceDir: params.workspaceDir,
-            provider: params.provider,
-            modelId: params.modelId,
-            payload: routeParams.payload,
-            originatingChannel: routeParams.originatingChannel,
-            originatingTo: routeParams.originatingTo,
-            originRoutable: routeParams.originRoutable,
-            dispatcherAvailable: routeParams.dispatcherAvailable,
-          },
-        });
-      },
-    },
+    delivery: buildAgentRuntimeDeliveryPlan(params),
     outcome: {
       classifyRunResult: classifyEmbeddedPiRunResultForModelFallback,
     },
