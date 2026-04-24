@@ -277,6 +277,7 @@ function runShellCommand({ command, env, label, logFile, timeoutMs }) {
   return new Promise((resolve) => {
     const child = spawn("bash", ["-lc", command], {
       cwd: ROOT_DIR,
+      detached: process.platform !== "win32",
       env,
       stdio: logFile ? ["ignore", "pipe", "pipe"] : "inherit",
     });
@@ -290,8 +291,8 @@ function runShellCommand({ command, env, label, logFile, timeoutMs }) {
             if (stream) {
               stream.write(`\n==> [${label}] timeout after ${timeoutMs}ms; sending SIGTERM\n`);
             }
-            child.kill("SIGTERM");
-            killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+            terminateChild(child, "SIGTERM");
+            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
             killTimer.unref?.();
           }, timeoutMs)
         : undefined;
@@ -582,9 +583,21 @@ async function printFailureSummary(failures, tailLines) {
 }
 
 const activeChildren = new Set();
+function terminateChild(child, signal) {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to killing the direct child below.
+    }
+  }
+  child.kill(signal);
+}
+
 function terminateActiveChildren(signal) {
   for (const child of activeChildren) {
-    child.kill(signal);
+    terminateChild(child, signal);
   }
 }
 
