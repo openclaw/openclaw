@@ -67,11 +67,13 @@ afterEach(() => {
 
 describe("gateway aux handlers", () => {
   it("restarts only channels whose resolved secret-backed config changed on secrets.reload", async () => {
-    const buildReloadPlan = vi.fn().mockReturnValue(
-      createReloadPlan({
+    const buildReloadPlanCalls: string[][] = [];
+    const buildReloadPlan = (changedPaths: string[]) => {
+      buildReloadPlanCalls.push([...changedPaths]);
+      return createReloadPlan({
         restartChannels: new Set(["slack", "zalo"]),
-      }),
-    );
+      });
+    };
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -115,9 +117,8 @@ describe("gateway aux handlers", () => {
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
     expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
-    expect(buildReloadPlan).toHaveBeenCalledWith([
-      "channels.slack.signingSecret",
-      "channels.zalo.webhookSecret",
+    expect(buildReloadPlanCalls).toEqual([
+      ["channels.slack.signingSecret", "channels.zalo.webhookSecret"],
     ]);
     expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b))).toEqual(
       ["slack", "zalo"],
@@ -129,11 +130,10 @@ describe("gateway aux handlers", () => {
   });
 
   it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
-    const buildReloadPlan = vi.fn().mockReturnValue(
+    const buildReloadPlan = () =>
       createReloadPlan({
         restartChannels: new Set(["slack"]),
-      }),
-    );
+      });
     const initialActive = createSnapshot(
       asConfig({
         channels: {
@@ -191,11 +191,10 @@ describe("gateway aux handlers", () => {
   });
 
   it("rolls back stopped channels when a later restart fails", async () => {
-    const buildReloadPlan = vi.fn().mockReturnValue(
+    const buildReloadPlan = () =>
       createReloadPlan({
         restartChannels: new Set(["slack", "zalo"]),
-      }),
-    );
+      });
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -276,11 +275,10 @@ describe("gateway aux handlers", () => {
   });
 
   it("fails reload when channel restarts are required but skip flags block them", async () => {
-    const buildReloadPlan = vi.fn().mockReturnValue(
+    const buildReloadPlan = () =>
       createReloadPlan({
         restartChannels: new Set(["slack"]),
-      }),
-    );
+      });
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     activateSecretsRuntimeSnapshot(
       createSnapshot(
@@ -338,7 +336,11 @@ describe("gateway aux handlers", () => {
   });
 
   it("does not restart channels when resolved secrets do not change channel config", async () => {
-    const buildReloadPlan = vi.fn().mockReturnValue(createReloadPlan());
+    const buildReloadPlanCalls: string[][] = [];
+    const buildReloadPlan = (changedPaths: string[]) => {
+      buildReloadPlanCalls.push([...changedPaths]);
+      return createReloadPlan();
+    };
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -381,7 +383,7 @@ describe("gateway aux handlers", () => {
 
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
-    expect(buildReloadPlan).toHaveBeenCalledWith(["gateway.auth.token"]);
+    expect(buildReloadPlanCalls).toEqual([["gateway.auth.token"]]);
     expect(stopChannel).not.toHaveBeenCalled();
     expect(startChannel).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
