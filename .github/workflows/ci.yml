@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -215,26 +215,7 @@ jobs:
                 requires_dist: shard.requiresDist,
               }))
             : [];
-          const blacksmith4vcpuCoreShardNames = new Set([
-            "agentic-agents",
-            "agentic-plugin-sdk",
-            "agentic-plugins",
-            "core-runtime-infra",
-            "core-runtime-media-ui",
-          ]);
-          const resolveCoreShardRunner = (shardName) => {
-            if (!isCanonicalRepository) return "ubuntu-24.04";
-            if (blacksmith4vcpuCoreShardNames.has(shardName)) {
-              return "blacksmith-4vcpu-ubuntu-2404";
-            }
-            return "ubuntu-24.04";
-          };
-          const nodeTestNonDistShards = nodeTestShards
-            .filter((shard) => !shard.requires_dist)
-            .map((shard) => ({
-              ...shard,
-              runner: resolveCoreShardRunner(shard.shard_name),
-            }));
+          const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
 
           const manifest = {
@@ -1137,7 +1118,10 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && matrix.runner || 'ubuntu-24.04' }}
+    # Keep core shards on GitHub-hosted runners. The Blacksmith pool is already
+    # occupied by build and extension shards; queueing these shards there hides
+    # actual test-speed improvements behind runner wait time.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1522,7 +1506,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && matrix.runner || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1530,19 +1514,14 @@ jobs:
         include:
           - check_name: check-additional-boundaries
             group: boundaries
-            runner: ubuntu-24.04
           - check_name: check-additional-extension-channels
             group: extension-channels
-            runner: ubuntu-24.04
           - check_name: check-additional-extension-bundled
             group: extension-bundled
-            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
-            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
-            runner: ubuntu-24.04
     steps:
       - name: Checkout
         shell: bash
