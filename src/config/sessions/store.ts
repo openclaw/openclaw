@@ -63,10 +63,26 @@ let sessionArchiveRuntimePromise: Promise<
   typeof import("../../gateway/session-archive.runtime.js")
 > | null = null;
 let sessionWriteLockAcquirerForTests: typeof acquireSessionWriteLock | null = null;
+const ORPHAN_PRUNE_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const lastOrphanPruneAtByStorePath = new Map<string, number>();
 
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
+}
+
+function shouldRunOrphanPrune(storePath: string, nowMs = Date.now()): boolean {
+  const key = path.resolve(storePath);
+  const previous = lastOrphanPruneAtByStorePath.get(key);
+  if (previous != null && nowMs - previous < ORPHAN_PRUNE_MIN_INTERVAL_MS) {
+    return false;
+  }
+  lastOrphanPruneAtByStorePath.set(key, nowMs);
+  return true;
+}
+
+export function clearSessionStoreMaintenanceStateForTest(): void {
+  lastOrphanPruneAtByStorePath.clear();
 }
 
 function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
@@ -294,12 +310,14 @@ async function saveSessionStoreUnlocked(
         },
         preserveKeys: preserveSessionKeys,
       });
-      const orphaned = await pruneOrphanedEntries(store, storePath, {
-        onPruned: ({ entry }) => {
-          rememberRemovedSessionFile(removedSessionFiles, entry);
-        },
-        preserveKeys: preserveSessionKeys,
-      });
+      const orphaned = shouldRunOrphanPrune(storePath)
+        ? await pruneOrphanedEntries(store, storePath, {
+            onPruned: ({ entry }) => {
+              rememberRemovedSessionFile(removedSessionFiles, entry);
+            },
+            preserveKeys: preserveSessionKeys,
+          })
+        : 0;
       const capped = capEntryCount(store, maintenance.maxEntries, {
         onCapped: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);

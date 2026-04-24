@@ -12,7 +12,12 @@ vi.mock("../config.js", async () => ({
 }));
 
 import { loadConfig } from "../config.js";
-import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
+import {
+  clearSessionStoreCacheForTest,
+  clearSessionStoreMaintenanceStateForTest,
+  loadSessionStore,
+  saveSessionStore,
+} from "./store.js";
 
 let mockLoadConfig: ReturnType<typeof vi.fn>;
 
@@ -98,6 +103,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   afterEach(() => {
     mockLoadConfig.mockReset();
     clearSessionStoreCacheForTest();
+    clearSessionStoreMaintenanceStateForTest();
     if (savedCacheTtl === undefined) {
       delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     } else {
@@ -117,6 +123,38 @@ describe("Integration: saveSessionStore with pruning", () => {
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded.stale).toBeUndefined();
     expect(loaded.fresh).toBeDefined();
+  });
+
+  it("throttles orphan pruning across repeated saves for the same store", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+    const now = Date.now();
+
+    await saveSessionStore(
+      storePath,
+      {
+        first: {
+          sessionId: crypto.randomUUID(),
+          sessionFile: "first-missing.jsonl",
+          updatedAt: now - 10 * 60 * 1000,
+        },
+      },
+      { maintenanceOverride: ENFORCED_MAINTENANCE_OVERRIDE },
+    );
+    expect(loadSessionStore(storePath, { skipCache: true }).first).toBeUndefined();
+
+    await saveSessionStore(
+      storePath,
+      {
+        second: {
+          sessionId: crypto.randomUUID(),
+          sessionFile: "second-missing.jsonl",
+          updatedAt: now - 10 * 60 * 1000,
+        },
+      },
+      { maintenanceOverride: ENFORCED_MAINTENANCE_OVERRIDE },
+    );
+
+    expect(loadSessionStore(storePath, { skipCache: true }).second).toBeDefined();
   });
 
   it("archives transcript files for stale sessions pruned on write", async () => {
