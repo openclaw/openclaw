@@ -4,7 +4,18 @@
 
 import type { ChannelId } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  findBlockquoteAt,
+  parseBlockquoteSpans,
+  reapplyBlockquotePrefix,
+} from "../markdown/blockquotes.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
+import {
+  buildInlineClose,
+  buildInlineReopen,
+  scanUnmatchedInlineMarkers,
+} from "../markdown/inline-formatting.js";
+import { findTableSpanAt, isSafeTableBreak, parseTableSpans } from "../markdown/table-spans.js";
 import { resolveChannelStreamingChunkMode } from "../plugin-sdk/channel-streaming.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -326,14 +337,32 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
   const chunks: string[] = [];
   const spans = parseFenceSpans(text);
+  const tableSpans = parseTableSpans(text, spans);
+  const blockquoteSpans = parseBlockquoteSpans(text);
   let start = 0;
   let reopenFence: ReturnType<typeof findFenceSpanAt> | undefined;
+  let reopenBlockquote: ReturnType<typeof findBlockquoteAt> | undefined;
+  let reopenInline: string | undefined;
+  let reopenTableHeader: string | undefined;
 
   while (start < text.length) {
-    const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
-    const contentLimit = Math.max(1, limit - reopenPrefix.length);
+    const reopenPrefix = reopenFence
+      ? `${reopenFence.openLine}\n`
+      : reopenTableHeader
+        ? reopenTableHeader
+        : "";
+    const inlineReopenPrefix = reopenInline ?? "";
+    const fullReopenPrefix = `${reopenPrefix}${inlineReopenPrefix}`;
+    const contentLimit = Math.max(1, limit - fullReopenPrefix.length);
     if (text.length - start <= contentLimit) {
-      const finalChunk = `${reopenPrefix}${text.slice(start)}`;
+      let finalContent = text.slice(start);
+      if (reopenBlockquote) {
+        const bqEnd = Math.min(reopenBlockquote.end - start, finalContent.length);
+        finalContent =
+          reapplyBlockquotePrefix(finalContent.slice(0, bqEnd), reopenBlockquote.prefix) +
+          finalContent.slice(bqEnd);
+      }
+      const finalChunk = `${fullReopenPrefix}${finalContent}`;
       if (finalChunk.length > 0) {
         chunks.push(finalChunk);
       }
@@ -341,7 +370,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     }
 
     const windowEnd = Math.min(text.length, start + contentLimit);
-    const softBreak = pickSafeBreakIndex(text, start, windowEnd, spans);
+    const softBreak = pickSafeBreakIndex(text, start, windowEnd, spans, tableSpans);
     let breakIdx = softBreak > start ? softBreak : windowEnd;
 
     const initialFence = isSafeFenceBreak(spans, breakIdx)
@@ -394,22 +423,78 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
         fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
     }
 
+    // Check if we're breaking inside a table
+    const tableAtBreak = findTableSpanAt(tableSpans, breakIdx);
+    if (tableAtBreak) {
+      // Try to break before the table so it stays atomic.
+      // If the table starts too close to `start`, fall through and let
+      // the continuation-header logic (below) handle the split.
+      const beforeTable = text.lastIndexOf("\n", tableAtBreak.start);
+      if (beforeTable > start) {
+        breakIdx = beforeTable;
+      }
+      // If table fits as atomic unit, push breakIdx past it
+      // Otherwise the header will be repeated in continuation (handled below)
+    }
+
     const rawContent = text.slice(start, breakIdx);
     if (!rawContent) {
       break;
     }
 
-    let rawChunk = `${reopenPrefix}${rawContent}`;
+    let contentForChunk = rawContent;
+    if (reopenBlockquote) {
+      // Only apply the prefix up to the end of the blockquote span.
+      // Lines after the span end are plain prose and must not be quoted.
+      const bqEnd = Math.min(reopenBlockquote.end - start, rawContent.length);
+      const insideQuote = rawContent.slice(0, bqEnd);
+      const afterQuote = rawContent.slice(bqEnd);
+      contentForChunk = reapplyBlockquotePrefix(insideQuote, reopenBlockquote.prefix) + afterQuote;
+    }
+
+    // Detect unmatched inline markers in this chunk (only when not inside a fence)
+    let inlineClose = "";
+    let inlineReopenNext = "";
+    if (!fenceToSplit) {
+      const chunkForInlineScan = `${fullReopenPrefix}${contentForChunk}`;
+      const inlineSpans = parseFenceSpans(chunkForInlineScan);
+      const inlineState = scanUnmatchedInlineMarkers(chunkForInlineScan, inlineSpans);
+      inlineClose = buildInlineClose(inlineState);
+      inlineReopenNext = buildInlineReopen(inlineState);
+    }
+
+    let rawChunk = `${fullReopenPrefix}${contentForChunk}`;
     const brokeOnSeparator = breakIdx < text.length && /\s/.test(text[breakIdx]);
     let nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
+
+    // Detect blockquote context at break point
+    const bqAtBreak = findBlockquoteAt(blockquoteSpans, breakIdx);
 
     if (fenceToSplit) {
       const closeLine = `${fenceToSplit.indent}${fenceToSplit.marker}`;
       rawChunk = rawChunk.endsWith("\n") ? `${rawChunk}${closeLine}` : `${rawChunk}\n${closeLine}`;
       reopenFence = fenceToSplit;
+      reopenBlockquote = undefined;
     } else {
       nextStart = skipLeadingNewlines(text, nextStart);
       reopenFence = undefined;
+      reopenBlockquote = bqAtBreak;
+    }
+
+    // Append inline close markers if needed (only outside fences)
+    if (!fenceToSplit && inlineClose) {
+      rawChunk += inlineClose;
+      reopenInline = inlineReopenNext;
+    } else {
+      reopenInline = undefined;
+    }
+
+    // Handle table header repetition for continuation
+    const tableForContinuation = findTableSpanAt(tableSpans, nextStart);
+    if (tableForContinuation && nextStart > tableForContinuation.start) {
+      reopenTableHeader = `${tableForContinuation.headerLine}\n${tableForContinuation.separatorLine}\n`;
+    } else {
+      reopenTableHeader = undefined;
     }
 
     chunks.push(rawChunk);
@@ -431,9 +516,14 @@ function pickSafeBreakIndex(
   start: number,
   end: number,
   spans: ReturnType<typeof parseFenceSpans>,
+  tableSpans?: ReturnType<typeof parseTableSpans>,
 ): number {
-  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(text, start, end, (index) =>
-    isSafeFenceBreak(spans, index),
+  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(
+    text,
+    start,
+    end,
+    (index) =>
+      isSafeFenceBreak(spans, index) && (!tableSpans || isSafeTableBreak(tableSpans, index)),
   );
 
   if (lastNewline > start) {
