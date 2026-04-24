@@ -1,5 +1,5 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../../src/test-utils/fetch-mock.js";
 import { createXSearchTool } from "./x-search.js";
 
 function installXSearchFetch(payload?: Record<string, unknown>) {
