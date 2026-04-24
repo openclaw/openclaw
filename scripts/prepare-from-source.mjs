@@ -70,8 +70,18 @@ let pnpmRunner;
 if (hasCmd("pnpm")) {
   pnpmRunner = "pnpm";
 } else if (hasCmd("corepack")) {
-  console.log("[prepare] pnpm not found, using corepack pnpm…");
-  pnpmRunner = "corepack pnpm";
+  // Enable corepack so pnpm shims land on PATH. Build scripts like
+  // tsdown-build.mjs resolve pnpm via resolvePnpmRunner() which expects
+  // a bare `pnpm` command. corepack enable creates the shim in the same
+  // directory as node/npm, which is already on PATH.
+  console.log("[prepare] pnpm not found, enabling via corepack…");
+  try {
+    run("corepack enable");
+    pnpmRunner = "pnpm";
+  } catch {
+    // corepack enable failed (permissions?), use corepack pnpm directly.
+    pnpmRunner = "corepack pnpm";
+  }
 } else {
   // No corepack (Node < 22 or stripped). Fall back to global npm install.
   try {
