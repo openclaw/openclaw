@@ -558,7 +558,7 @@ Example:
 
 Primary reference:
 
-- [Configuration reference - WhatsApp](/gateway/configuration-reference#whatsapp)
+- [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)
 
 High-signal WhatsApp fields:
 

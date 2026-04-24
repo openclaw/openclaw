@@ -165,7 +165,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
     For groups, use `groupPolicy` + `groupAllowFrom` or channel-specific allowlists.
 
-    See the [full reference](/gateway/configuration-reference#dm-and-group-access) for per-channel details.
+    See the [full reference](/gateway/config-channels#dm-and-group-access) for per-channel details.
 
   </Accordion>
 
@@ -194,7 +194,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
-    - See [full reference](/gateway/configuration-reference#group-chat-mention-gating) for per-channel overrides and self-chat mode.
+    - See [full reference](/gateway/config-channels#group-chat-mention-gating) for per-channel overrides and self-chat mode.
 
   </Accordion>
 
