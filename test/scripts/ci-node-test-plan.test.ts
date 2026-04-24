@@ -155,6 +155,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
       runner: "blacksmith-4vcpu-ubuntu-2404",
       requiresDist: false,
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(commandsShard).toEqual({
       checkName: "checks-node-agentic-commands",
