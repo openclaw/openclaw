@@ -6,6 +6,7 @@ export type PluginInstallSourceWarning =
   | "invalid-npm-spec"
   | "invalid-default-choice"
   | "default-choice-missing-source"
+  | "npm-integrity-without-source"
   | "npm-spec-floating"
   | "npm-spec-missing-integrity";
 
@@ -56,6 +57,7 @@ export function describePluginInstallSource(
   const npmSpec = normalizeOptionalString(install.npmSpec);
   const localPath = normalizeOptionalString(install.localPath);
   const defaultChoice = resolveDefaultChoice(install.defaultChoice);
+  const expectedIntegrity = normalizeOptionalString(install.expectedIntegrity);
   const warnings: PluginInstallSourceWarning[] = [];
   let npm: PluginInstallNpmSourceInfo | undefined;
 
@@ -67,7 +69,6 @@ export function describePluginInstallSource(
     const parsed = parseRegistryNpmSpec(npmSpec);
     if (parsed) {
       const exactVersion = parsed.selectorKind === "exact-version";
-      const expectedIntegrity = normalizeOptionalString(install.expectedIntegrity);
       const hasIntegrity = Boolean(expectedIntegrity);
       if (!exactVersion) {
         warnings.push("npm-spec-floating");
@@ -93,6 +94,9 @@ export function describePluginInstallSource(
   }
   if (defaultChoice === "local" && !localPath) {
     warnings.push("default-choice-missing-source");
+  }
+  if (expectedIntegrity && !npm) {
+    warnings.push("npm-integrity-without-source");
   }
 
   return {
