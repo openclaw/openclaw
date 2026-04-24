@@ -122,6 +122,7 @@ const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "1111111111111111";
 const GRANDCHILD_SPAN_ID = "2222222222222222";
+const PROTO_KEY = "__proto__";
 
 function createLogger() {
   return {
@@ -449,14 +450,19 @@ describe("diagnostics-otel service", () => {
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
     await service.start(ctx);
 
+    const attributes = Object.create(null) as Record<string, string>;
+    attributes.good = "y".repeat(6000);
+    attributes["bad key"] = "drop-me";
+    attributes[PROTO_KEY] = "pollute";
+    attributes["constructor"] = "pollute";
+    attributes["prototype"] = "pollute";
+    attributes["sk-1234567890abcdef1234567890abcdef"] = "secret-key"; // pragma: allowlist secret
+
     emitDiagnosticEvent({
       type: "log.record",
       level: "INFO",
       message: "x".repeat(6000),
-      attributes: {
-        good: "y".repeat(6000),
-        "bad key": "drop-me",
-      },
+      attributes,
       code: {
         filepath: "/Users/alice/openclaw/src/private.ts",
         line: 42,
@@ -474,6 +480,15 @@ describe("diagnostics-otel service", () => {
       "code.function": "handler",
     });
     expect(String(emitCall?.attributes?.["openclaw.good"]).length).toBeLessThanOrEqual(4200);
+    expect(Object.hasOwn(emitCall?.attributes ?? {}, `openclaw.${PROTO_KEY}`)).toBe(false);
+    expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.constructor")).toBe(false);
+    expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.prototype")).toBe(false);
+    expect(
+      Object.hasOwn(
+        emitCall?.attributes ?? {},
+        "openclaw.sk-1234567890abcdef1234567890abcdef", // pragma: allowlist secret
+      ),
+    ).toBe(false);
     expect(emitCall?.attributes).toEqual(
       expect.not.objectContaining({
         "openclaw.bad key": expect.anything(),

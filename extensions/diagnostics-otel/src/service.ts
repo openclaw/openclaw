@@ -21,10 +21,11 @@ import type {
   OpenClawPluginService,
 } from "../api.js";
 import {
+  isBlockedObjectKey,
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
-  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
   redactSensitiveText,
 } from "../api.js";
 
@@ -126,6 +127,12 @@ function assignOtelLogAttribute(
   if (Object.keys(attributes).length >= MAX_OTEL_LOG_ATTRIBUTE_COUNT) {
     return;
   }
+  if (isBlockedObjectKey(key)) {
+    return;
+  }
+  if (redactSensitiveText(key) !== key) {
+    return;
+  }
   if (!OTEL_LOG_ATTRIBUTE_KEY_RE.test(key)) {
     return;
   }
@@ -165,6 +172,34 @@ function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefin
     ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
     ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
   };
+}
+
+function assignOtelLogEventAttributes(
+  attributes: Record<string, string | number | boolean>,
+  eventAttributes: Record<string, string | number | boolean> | undefined,
+): void {
+  if (!eventAttributes) {
+    return;
+  }
+  for (const rawKey in eventAttributes) {
+    if (Object.keys(attributes).length >= MAX_OTEL_LOG_ATTRIBUTE_COUNT) {
+      break;
+    }
+    if (!Object.hasOwn(eventAttributes, rawKey)) {
+      continue;
+    }
+    const key = rawKey.trim();
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    if (redactSensitiveText(key) !== key) {
+      continue;
+    }
+    if (!OTEL_LOG_RAW_ATTRIBUTE_KEY_RE.test(key)) {
+      continue;
+    }
+    assignOtelLogAttribute(attributes, `openclaw.${key}`, eventAttributes[rawKey]);
+  }
 }
 
 function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
@@ -431,7 +466,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           try {
             const logLevelName = evt.level || "INFO";
             const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
-            const attributes: Record<string, string | number | boolean> = {};
+            const attributes = Object.create(null) as Record<string, string | number | boolean>;
             assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
             if (evt.loggerName) {
               assignOtelLogAttribute(attributes, "openclaw.logger", evt.loggerName);
@@ -443,15 +478,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
                 evt.loggerParents.join("."),
               );
             }
-            if (evt.attributes) {
-              for (const [rawKey, value] of Object.entries(evt.attributes)) {
-                const key = rawKey.trim();
-                if (!OTEL_LOG_RAW_ATTRIBUTE_KEY_RE.test(key)) {
-                  continue;
-                }
-                assignOtelLogAttribute(attributes, `openclaw.${key}`, value);
-              }
-            }
+            assignOtelLogEventAttributes(attributes, evt.attributes);
             if (evt.code?.line) {
               assignOtelLogAttribute(attributes, "code.lineno", evt.code.line);
             }
@@ -930,7 +957,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
-      unsubscribe = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
+      unsubscribe = onInternalDiagnosticEvent((evt: DiagnosticEventPayload) => {
         try {
           switch (evt.type) {
             case "model.usage":

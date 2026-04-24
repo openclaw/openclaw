@@ -439,12 +439,23 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   dispatchDiagnosticEvent(state, enriched);
 }
 
-export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+export function onInternalDiagnosticEvent(
+  listener: (evt: DiagnosticEventPayload) => void,
+): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
   return () => {
     state.listeners.delete(listener);
   };
+}
+
+export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+  return onInternalDiagnosticEvent((event) => {
+    if (event.type === "log.record") {
+      return;
+    }
+    listener(event);
+  });
 }
 
 export function resetDiagnosticEventsForTest(): void {

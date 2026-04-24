@@ -9,6 +9,7 @@ import {
   isValidDiagnosticTraceId,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   POSIX_OPENCLAW_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
@@ -84,6 +85,8 @@ const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS = 2 * 1024;
 const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 
+type DiagnosticLogAttributes = Record<string, string | number | boolean>;
+
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
     if (!externalTransports.has(transport)) {
@@ -117,14 +120,21 @@ function normalizeDiagnosticLogName(value: string | undefined): string | undefin
 }
 
 function assignDiagnosticLogAttribute(
-  attributes: Record<string, string | number | boolean>,
+  attributes: DiagnosticLogAttributes,
+  state: { count: number },
   key: string,
   value: unknown,
 ): void {
-  if (Object.keys(attributes).length >= MAX_DIAGNOSTIC_LOG_ATTRIBUTE_COUNT) {
+  if (state.count >= MAX_DIAGNOSTIC_LOG_ATTRIBUTE_COUNT) {
     return;
   }
   const normalizedKey = key.trim();
+  if (isBlockedObjectKey(normalizedKey)) {
+    return;
+  }
+  if (redactSensitiveText(normalizedKey) !== normalizedKey) {
+    return;
+  }
   if (!DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE.test(normalizedKey)) {
     return;
   }
@@ -133,14 +143,36 @@ function assignDiagnosticLogAttribute(
       value,
       MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS,
     );
+    state.count += 1;
     return;
   }
   if (typeof value === "number" && Number.isFinite(value)) {
     attributes[normalizedKey] = value;
+    state.count += 1;
     return;
   }
   if (typeof value === "boolean") {
     attributes[normalizedKey] = value;
+    state.count += 1;
+  }
+}
+
+function addDiagnosticLogAttributesFrom(
+  attributes: DiagnosticLogAttributes,
+  state: { count: number },
+  source: Record<string, unknown> | undefined,
+): void {
+  if (!source) {
+    return;
+  }
+  for (const key in source) {
+    if (state.count >= MAX_DIAGNOSTIC_LOG_ATTRIBUTE_COUNT) {
+      break;
+    }
+    if (!Object.hasOwn(source, key) || key === "trace") {
+      continue;
+    }
+    assignDiagnosticLogAttribute(attributes, state, key, source[key]);
   }
 }
 
@@ -245,12 +277,9 @@ function buildDiagnosticLogRecord(logObj: LogTransportRecord) {
 
   const trace = findLogTraceContext(bindings, numericArgs);
   const structuredArg = numericArgs[0];
-  if (isPlainLogRecordObject(structuredArg)) {
+  const structuredBindings = isPlainLogRecordObject(structuredArg) ? structuredArg : undefined;
+  if (structuredBindings) {
     numericArgs.shift();
-    bindings = {
-      ...bindings,
-      ...structuredArg,
-    };
   }
 
   let message = "";
@@ -270,15 +299,10 @@ function buildDiagnosticLogRecord(logObj: LogTransportRecord) {
     message = "log";
   }
 
-  const attributes: Record<string, string | number | boolean> = {};
-  if (bindings) {
-    for (const [key, value] of Object.entries(bindings)) {
-      if (key === "trace") {
-        continue;
-      }
-      assignDiagnosticLogAttribute(attributes, key, value);
-    }
-  }
+  const attributes: DiagnosticLogAttributes = Object.create(null) as DiagnosticLogAttributes;
+  const attributeState = { count: 0 };
+  addDiagnosticLogAttributesFrom(attributes, attributeState, bindings);
+  addDiagnosticLogAttributesFrom(attributes, attributeState, structuredBindings);
 
   const code: DiagnosticLogCode = {};
   if (meta?.path?.fileLine) {
