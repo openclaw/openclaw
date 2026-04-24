@@ -38,6 +38,7 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  pruneOrphanedEntries,
   pruneStaleEntries,
   rotateSessionFile,
   type ResolvedSessionMaintenanceConfig,
@@ -124,6 +125,7 @@ export type SessionMaintenanceApplyReport = {
 export {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  pruneOrphanedEntries,
   pruneStaleEntries,
   resolveMaintenanceConfig,
   rotateSessionFile,
@@ -292,6 +294,12 @@ async function saveSessionStoreUnlocked(
         },
         preserveKeys: preserveSessionKeys,
       });
+      const orphaned = await pruneOrphanedEntries(store, storePath, {
+        onPruned: ({ entry }) => {
+          rememberRemovedSessionFile(removedSessionFiles, entry);
+        },
+        preserveKeys: preserveSessionKeys,
+      });
       const capped = capEntryCount(store, maintenance.maxEntries, {
         onCapped: ({ entry }) => {
           rememberRemovedSessionFile(removedSessionFiles, entry);
@@ -347,7 +355,7 @@ async function saveSessionStoreUnlocked(
         mode: maintenance.mode,
         beforeCount,
         afterCount: Object.keys(store).length,
-        pruned,
+        pruned: pruned + orphaned,
         capped,
         diskBudget,
       });

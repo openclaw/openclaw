@@ -5,6 +5,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
@@ -177,6 +178,92 @@ export function pruneStaleEntries(
   }
   if (pruned > 0 && opts.log !== false) {
     log.info("pruned stale session entries", { pruned, maxAgeMs });
+  }
+  return pruned;
+}
+
+const ORPHAN_ENTRY_GRACE_MS = 5 * 60 * 1000;
+
+async function canAccessSessionFile(filePath: string): Promise<boolean | null> {
+  try {
+    await fs.promises.access(filePath);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    return null;
+  }
+}
+
+function listSessionFileCandidates(params: { storePath: string; entry: SessionEntry }): string[] {
+  const storeDir = path.dirname(path.resolve(params.storePath));
+  const candidates = new Set<string>();
+  const sessionFile = params.entry.sessionFile?.trim();
+  if (sessionFile) {
+    candidates.add(path.resolve(storeDir, sessionFile));
+  }
+  candidates.add(
+    resolveSessionFilePath(params.entry.sessionId, params.entry, {
+      sessionsDir: storeDir,
+    }),
+  );
+  candidates.add(
+    resolveSessionFilePath(params.entry.sessionId, undefined, {
+      sessionsDir: storeDir,
+    }),
+  );
+  return [...candidates];
+}
+
+/**
+ * Remove store entries whose transcript file is gone on disk.
+ * A short grace period avoids racing first-write flows that create the index
+ * entry before the transcript appears.
+ */
+export async function pruneOrphanedEntries(
+  store: Record<string, SessionEntry>,
+  storePath: string,
+  opts: {
+    log?: boolean;
+    nowMs?: number;
+    onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
+  } = {},
+): Promise<number> {
+  const nowMs = opts.nowMs ?? Date.now();
+  const cutoffMs = nowMs - ORPHAN_ENTRY_GRACE_MS;
+  let pruned = 0;
+
+  for (const [key, entry] of Object.entries(store)) {
+    if (opts.preserveKeys?.has(key)) {
+      continue;
+    }
+    if (!entry?.sessionFile || !entry.sessionId || (entry.updatedAt ?? 0) >= cutoffMs) {
+      continue;
+    }
+    let hasAccessibleFile = false;
+    let sawIndeterminateAccess = false;
+    for (const candidate of listSessionFileCandidates({ storePath, entry })) {
+      const accessible = await canAccessSessionFile(candidate);
+      if (accessible === true) {
+        hasAccessibleFile = true;
+        break;
+      }
+      if (accessible === null) {
+        sawIndeterminateAccess = true;
+      }
+    }
+    if (hasAccessibleFile || sawIndeterminateAccess) {
+      continue;
+    }
+    opts.onPruned?.({ key, entry });
+    delete store[key];
+    pruned++;
+  }
+  if (pruned > 0 && opts.log !== false) {
+    log.info("pruned orphaned session entries", { pruned });
   }
   return pruned;
 }

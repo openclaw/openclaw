@@ -7,6 +7,7 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  pruneOrphanedEntries,
   pruneStaleEntries,
   rotateSessionFile,
 } from "./store.js";
@@ -73,6 +74,59 @@ describe("capEntryCount", () => {
     expect(store.mid).toBeDefined();
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
+  });
+});
+
+describe("pruneOrphanedEntries", () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = await fixtureSuite.createCaseDir("orphan");
+  });
+
+  it("removes entries whose sessionFile no longer exists on disk", async () => {
+    const storePath = path.join(testDir, "sessions.json");
+    const existingFile = "existing-session.jsonl";
+    const now = Date.now();
+    await fs.writeFile(path.join(testDir, existingFile), "[]", "utf8");
+    const store = makeStore([
+      ["has-file", { ...makeEntry(now - 10 * 60 * 1000), sessionFile: existingFile }],
+      ["missing-file", { ...makeEntry(now - 10 * 60 * 1000), sessionFile: "gone.jsonl" }],
+      ["no-session-file", makeEntry(now - 10 * 60 * 1000)],
+    ]);
+
+    const pruned = await pruneOrphanedEntries(store, storePath, { nowMs: now });
+
+    expect(pruned).toBe(1);
+    expect(store["has-file"]).toBeDefined();
+    expect(store["missing-file"]).toBeUndefined();
+    expect(store["no-session-file"]).toBeDefined();
+  });
+
+  it("keeps recent entries to avoid racing transcript creation", async () => {
+    const storePath = path.join(testDir, "sessions.json");
+    const now = Date.now();
+    const store = makeStore([
+      ["recent", { ...makeEntry(now - 60 * 1000), sessionFile: "not-yet-created.jsonl" }],
+    ]);
+
+    const pruned = await pruneOrphanedEntries(store, storePath, { nowMs: now });
+
+    expect(pruned).toBe(0);
+    expect(store.recent).toBeDefined();
+  });
+
+  it("keeps entries whose fallback sessionId transcript exists", async () => {
+    const storePath = path.join(testDir, "sessions.json");
+    const now = Date.now();
+    const entry = { ...makeEntry(now - 10 * 60 * 1000), sessionFile: "stale-name.jsonl" };
+    await fs.writeFile(path.join(testDir, `${entry.sessionId}.jsonl`), "[]", "utf8");
+    const store = makeStore([["fallback-file", entry]]);
+
+    const pruned = await pruneOrphanedEntries(store, storePath, { nowMs: now });
+
+    expect(pruned).toBe(0);
+    expect(store["fallback-file"]).toBeDefined();
   });
 });
 
