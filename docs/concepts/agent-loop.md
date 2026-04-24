@@ -95,6 +95,7 @@ These run inside the agent loop or gateway pipeline:
 - **`before_agent_start`**: legacy compatibility hook that may run in either phase; prefer the explicit hooks above.
 - **`before_agent_reply`**: runs after inline actions and before the LLM call, letting a plugin claim the turn and return a synthetic reply or silence the turn entirely.
 - **`agent_end`**: inspect the final message list and run metadata after completion.
+- **`llm_input` / `llm_output`**: observe the model input and output shape that the active OpenClaw harness can report.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
 - **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
@@ -117,6 +118,9 @@ See [Plugin hooks](/plugins/architecture-internals#provider-runtime-hooks) for t
 Harnesses may adapt these hooks differently. The Codex app-server harness keeps
 OpenClaw plugin hooks as the compatibility contract for documented mirrored
 surfaces, while Codex native hooks remain a separate lower-level Codex mechanism.
+Codex native `PreModelRequest` and `PostModelResponse` hooks, when available,
+are Codex command hooks and do not replace OpenClaw plugin `llm_input` or
+`llm_output`.
 
 ## Streaming + partial replies
 

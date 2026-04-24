@@ -530,11 +530,17 @@ thread unless Codex exposes that operation through app-server or native hook
 callbacks.
 
 When newer Codex app-server builds expose native compaction and model lifecycle
-hook events, OpenClaw should version-gate that protocol support and map the
-events into the existing OpenClaw hook contract where the semantics are honest.
-Until then, OpenClaw's `before_compaction`, `after_compaction`, `llm_input`, and
-`llm_output` events are adapter-level observations, not byte-for-byte captures
-of Codex's internal request or compaction payloads.
+hook events, OpenClaw version-gates that protocol support and maps events into
+the existing OpenClaw hook contract where the semantics are honest. The
+OpenClaw `before_compaction`, `after_compaction`, `llm_input`, and `llm_output`
+events remain adapter-level observations, not byte-for-byte captures of Codex's
+internal request or compaction payloads.
+
+Codex native `PreModelRequest` and `PostModelResponse` hooks are lower-level
+Codex command hooks. They run inside Codex around native model requests, using
+Codex hook configuration. OpenClaw's plugin `llm_input` and `llm_output` hooks
+remain OpenClaw adapter events for plugin compatibility, and OpenClaw does not
+double-fire them just because native Codex model lifecycle hooks are available.
 
 Codex native `hook/started` and `hook/completed` app-server notifications are
 projected as `codex_app_server.hook` agent events for trajectory and debugging.
