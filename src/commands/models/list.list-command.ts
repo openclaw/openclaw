@@ -4,13 +4,12 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
+import { loadConfiguredListModelRegistry, loadListModelRegistry } from "./list.registry-load.js";
 import {
-  appendCatalogSupplementRows,
-  appendConfiguredRows,
-  appendDiscoveredRows,
-  appendProviderCatalogRows,
-  loadListModelRegistry,
-} from "./list.rows.js";
+  appendAllModelRowSources,
+  appendConfiguredModelRowSources,
+  modelRowSourcesRequireRegistry,
+} from "./list.row-sources.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
@@ -47,9 +46,8 @@ export async function modelsListCommand(
   if (providerFilter === null) {
     return;
   }
-  const { ensureAuthProfileStore, ensureOpenClawModelsJson, resolveOpenClawAgentDir } =
-    await import("./list.runtime.js");
-  const { sourceConfig, resolvedConfig: cfg } = await loadModelsConfigWithSource({
+  const { ensureAuthProfileStore, resolveOpenClawAgentDir } = await import("./list.runtime.js");
+  const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
     commandName: "models list",
     runtime,
   });
@@ -61,16 +59,24 @@ export async function modelsListCommand(
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   const useProviderCatalogFastPath = Boolean(opts.all && providerFilter === "codex");
+  const { entries } = resolveConfiguredEntries(cfg);
+  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
+  const shouldLoadRegistry = modelRowSourcesRequireRegistry({
+    all: opts.all,
+    useProviderCatalogFastPath,
+  });
   try {
-    // Keep command behavior explicit: sync models.json from the source config
-    // before building the read-only model registry view.
-    if (!useProviderCatalogFastPath) {
-      await ensureOpenClawModelsJson(sourceConfig ?? cfg);
-      const loaded = await loadListModelRegistry(cfg, { sourceConfig, providerFilter });
+    if (shouldLoadRegistry) {
+      const loaded = await loadListModelRegistry(cfg, { providerFilter });
       modelRegistry = loaded.registry;
       discoveredKeys = loaded.discoveredKeys;
       availableKeys = loaded.availableKeys;
       availabilityErrorMessage = loaded.availabilityErrorMessage;
+    } else if (!opts.all) {
+      const loaded = loadConfiguredListModelRegistry(cfg, entries, { providerFilter });
+      modelRegistry = loaded.registry;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
     }
   } catch (err) {
     runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
@@ -82,8 +88,6 @@ export async function modelsListCommand(
       `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
     );
   }
-  const { entries } = resolveConfiguredEntries(cfg);
-  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
 
   const rows: ModelRow[] = [];
   const rowContext = {
@@ -101,26 +105,12 @@ export async function modelsListCommand(
   };
 
   if (opts.all) {
-    const seenKeys = appendDiscoveredRows({
+    await appendAllModelRowSources({
       rows,
-      models: modelRegistry?.getAll() ?? [],
       context: rowContext,
+      modelRegistry,
+      useProviderCatalogFastPath,
     });
-
-    if (modelRegistry) {
-      await appendCatalogSupplementRows({
-        rows,
-        modelRegistry,
-        context: rowContext,
-        seenKeys,
-      });
-    } else if (useProviderCatalogFastPath) {
-      await appendProviderCatalogRows({
-        rows,
-        context: rowContext,
-        seenKeys,
-      });
-    }
   } else {
     const registry = modelRegistry;
     if (!registry) {
@@ -128,7 +118,7 @@ export async function modelsListCommand(
       process.exitCode = 1;
       return;
     }
-    appendConfiguredRows({
+    appendConfiguredModelRowSources({
       rows,
       entries,
       modelRegistry: registry,

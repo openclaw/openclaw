@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { App } from "@slack/bolt";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   registerSessionBindingAdapter,
@@ -9,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -403,6 +403,22 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
+  });
+
+  it("classifies MPIM group DMs as group chat context", async () => {
+    const prepared = await prepareMessageWith(
+      createReplyToAllSlackCtx(),
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.isRoomish).toBe(true);
+    expect(prepared!.ctxPayload.ChatType).toBe("group");
+    expect(prepared!.ctxPayload.From).toBe("slack:group:G123");
   });
 
   it("respects replyToModeByChatType.direct override for DMs", async () => {

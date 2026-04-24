@@ -6,8 +6,6 @@ read_when:
 title: "Setup"
 ---
 
-# Setup
-
 <Note>
 If you are setting up for the first time, start with [Getting Started](/start/getting-started).
 For onboarding details, see [Onboarding (CLI)](/start/wizard).
@@ -15,9 +13,11 @@ For onboarding details, see [Onboarding (CLI)](/start/wizard).
 
 ## TL;DR
 
-- **Tailoring lives outside the repo:** `~/.openclaw/workspace` (workspace) + `~/.openclaw/openclaw.json` (config).
-- **Stable workflow:** install the macOS app; let it run the bundled Gateway.
-- **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
+Pick a setup workflow based on how often you want updates and whether you want to run the Gateway yourself:
+
+- **Tailoring lives outside the repo:** keep your config and workspace in `~/.openclaw/openclaw.json` and `~/.openclaw/workspace/` so repo updates don't touch them.
+- **Stable workflow (recommended for most):** install the macOS app and let it run the bundled Gateway.
+- **Bleeding edge workflow (dev):** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
 
 ## Prereqs (from source)
 

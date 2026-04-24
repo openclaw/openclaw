@@ -5,13 +5,16 @@ import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
 import { appendLiveLaneIssue } from "./live-lane-helpers.js";
 
-async function stopQaLiveLaneResources(resources: {
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
-  mock: { baseUrl: string; stop(): Promise<void> } | null;
-}) {
+async function stopQaLiveLaneResources(
+  resources: {
+    gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+    mock: { baseUrl: string; stop(): Promise<void> } | null;
+  },
+  opts?: { keepTemp?: boolean; preserveToDir?: string },
+) {
   const errors: string[] = [];
   try {
-    await resources.gateway.stop();
+    await resources.gateway.stop(opts);
   } catch (error) {
     appendLiveLaneIssue(errors, "gateway stop failed", error);
   }
@@ -66,8 +69,8 @@ export async function startQaLiveLaneGateway(params: {
     return {
       gateway,
       mock,
-      async stop() {
-        await stopQaLiveLaneResources({ gateway, mock });
+      async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
+        await stopQaLiveLaneResources({ gateway, mock }, opts);
       },
     };
   } catch (error) {

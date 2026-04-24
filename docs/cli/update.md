@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw update` (safe-ish source update + gateway 
 read_when:
   - You want to update a source checkout safely
   - You need to understand `--update` shorthand behavior
-title: "update"
+title: "Update"
 ---
 
 # `openclaw update`
@@ -120,7 +120,7 @@ If pnpm bootstrap still fails, the updater now stops early with a package-manage
 
 `openclaw --update` rewrites to `openclaw update` (useful for shells and launcher scripts).
 
-## See also
+## Related
 
 - `openclaw doctor` (offers to run update first on git checkouts)
 - [Development channels](/install/development-channels)

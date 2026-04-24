@@ -3,10 +3,8 @@ summary: "Rich output shortcode protocol for embeds, media, audio hints, and rep
 read_when:
   - Changing assistant output rendering in the Control UI
   - Debugging `[embed ...]`, `MEDIA:`, reply, or audio presentation directives
-title: "Rich Output Protocol"
+title: "Rich output protocol"
 ---
-
-# Rich Output Protocol
 
 Assistant output can carry a small set of delivery/render directives:
 
@@ -56,3 +54,8 @@ The normalized/stored assistant content block is a structured `canvas` item:
 ```
 
 Stored/rendered rich blocks use this `canvas` shape directly. `present_view` is not recognized.
+
+## Related
+
+- [RPC adapters](/reference/rpc)
+- [Typebox](/concepts/typebox)

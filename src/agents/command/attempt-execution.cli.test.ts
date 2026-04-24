@@ -439,6 +439,55 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
+  it("pins sessions with history to the configured Codex harness instead of PI", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "codex-history-session",
+      updatedAt: Date.now(),
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "codex",
+      modelOverride: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            embeddedHarness: { runtime: "codex", fallback: "none" },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-codex-no-pi-pin",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "codex",
+      sessionHasHistory: true,
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "codex",
+      }),
+    );
+  });
+
   it("leaves a fresh unpinned session on config-selected harness resolution", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "fresh-session",

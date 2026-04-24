@@ -7,6 +7,7 @@ import {
   buildProviderRequestDispatcherPolicy,
   normalizeBaseUrl,
   resolveProviderRequestPolicyConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
@@ -17,6 +18,7 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
+export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
@@ -417,6 +419,36 @@ export async function postJsonRequest(params: {
       method: "POST",
       headers: params.headers,
       body: JSON.stringify(params.body),
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    resolveGuardedPostRequestOptions(params),
+  );
+}
+
+export async function postMultipartRequest(params: {
+  url: string;
+  headers: Headers;
+  body: BodyInit;
+  timeoutMs?: number;
+  fetchFn: typeof fetch;
+  pinDns?: boolean;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
+  /**
+   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   */
+  mode?: GuardedFetchMode;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: params.body,
     },
     params.timeoutMs,
     params.fetchFn,

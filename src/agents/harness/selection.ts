@@ -28,6 +28,31 @@ type AgentHarnessPolicy = {
   fallback: EmbeddedAgentHarnessFallback;
 };
 
+type AgentHarnessSelectionCandidate = {
+  id: string;
+  label: string;
+  pluginId?: string;
+  supported?: boolean;
+  priority?: number;
+  reason?: string;
+};
+
+type AgentHarnessSelectionDecision = {
+  harness: AgentHarness;
+  policy: AgentHarnessPolicy;
+  selectedHarnessId: string;
+  selectedReason:
+    | "pinned"
+    | "forced_pi"
+    | "forced_plugin"
+    | "forced_plugin_fallback_to_pi"
+    // Auto mode chose a registered plugin harness that supports the provider/model.
+    | "auto_plugin"
+    // Auto mode found no supporting plugin harness, so PI handled the run.
+    | "auto_pi_fallback";
+  candidates: AgentHarnessSelectionCandidate[];
+};
+
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
 }
@@ -51,20 +76,41 @@ export function selectAgentHarness(params: {
   sessionKey?: string;
   agentHarnessId?: string;
 }): AgentHarness {
-  const policy =
-    resolvePinnedAgentHarnessPolicy(params.agentHarnessId) ?? resolveAgentHarnessPolicy(params);
+  return selectAgentHarnessDecision(params).harness;
+}
+
+function selectAgentHarnessDecision(params: {
+  provider: string;
+  modelId?: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  agentHarnessId?: string;
+}): AgentHarnessSelectionDecision {
+  const pinnedPolicy = resolvePinnedAgentHarnessPolicy(params.agentHarnessId);
+  const policy = pinnedPolicy ?? resolveAgentHarnessPolicy(params);
   // PI is intentionally not part of the plugin candidate list. It is the legacy
   // fallback path, so `fallback: "none"` can prove that only plugin harnesses run.
   const pluginHarnesses = listPluginAgentHarnesses();
   const piHarness = createPiAgentHarness();
   const runtime = policy.runtime;
   if (runtime === "pi") {
-    return piHarness;
+    return buildSelectionDecision({
+      harness: piHarness,
+      policy,
+      selectedReason: pinnedPolicy ? "pinned" : "forced_pi",
+      candidates: listHarnessCandidates(pluginHarnesses),
+    });
   }
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
-      return forced;
+      return buildSelectionDecision({
+        harness: forced,
+        policy,
+        selectedReason: pinnedPolicy ? "pinned" : "forced_plugin",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
     }
     if (policy.fallback === "none") {
       throw new Error(
@@ -74,18 +120,23 @@ export function selectAgentHarness(params: {
     log.warn("requested agent harness is not registered; falling back to embedded PI backend", {
       requestedRuntime: runtime,
     });
-    return piHarness;
+    return buildSelectionDecision({
+      harness: piHarness,
+      policy,
+      selectedReason: "forced_plugin_fallback_to_pi",
+      candidates: listHarnessCandidates(pluginHarnesses),
+    });
   }
 
-  const supported = pluginHarnesses
-    .map((harness) => ({
-      harness,
-      support: harness.supports({
-        provider: params.provider,
-        modelId: params.modelId,
-        requestedRuntime: runtime,
-      }),
-    }))
+  const candidates = pluginHarnesses.map((harness) => ({
+    harness,
+    support: harness.supports({
+      provider: params.provider,
+      modelId: params.modelId,
+      requestedRuntime: runtime,
+    }),
+  }));
+  const supported = candidates
     .filter(
       (
         entry,
@@ -98,26 +149,43 @@ export function selectAgentHarness(params: {
 
   const selected = supported[0]?.harness;
   if (selected) {
-    return selected;
+    return buildSelectionDecision({
+      harness: selected,
+      policy,
+      selectedReason: "auto_plugin",
+      candidates: candidates.map(toSelectionCandidate),
+    });
   }
   if (policy.fallback === "none") {
     throw new Error(
       `No registered agent harness supports ${formatProviderModel(params)} and PI fallback is disabled.`,
     );
   }
-  return piHarness;
+  return buildSelectionDecision({
+    harness: piHarness,
+    policy,
+    selectedReason: "auto_pi_fallback",
+    candidates: candidates.map(toSelectionCandidate),
+  });
 }
 
 export async function runAgentHarnessAttemptWithFallback(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const harness = selectAgentHarness({
+  const selection = selectAgentHarnessDecision({
     provider: params.provider,
     modelId: params.modelId,
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     agentHarnessId: params.agentHarnessId,
+  });
+  const harness = selection.harness;
+  logAgentHarnessSelection(selection, {
+    provider: params.provider,
+    modelId: params.modelId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
   if (harness.id === "pi") {
     const result = await harness.runAttempt(params);
@@ -136,6 +204,63 @@ export async function runAgentHarnessAttemptWithFallback(
     });
     throw error;
   }
+}
+
+function listHarnessCandidates(harnesses: AgentHarness[]): AgentHarnessSelectionCandidate[] {
+  return harnesses.map((harness) => ({
+    id: harness.id,
+    label: harness.label,
+    pluginId: harness.pluginId,
+  }));
+}
+
+function toSelectionCandidate(entry: {
+  harness: AgentHarness;
+  support: AgentHarnessSupport;
+}): AgentHarnessSelectionCandidate {
+  return {
+    id: entry.harness.id,
+    label: entry.harness.label,
+    pluginId: entry.harness.pluginId,
+    supported: entry.support.supported,
+    priority: entry.support.supported ? entry.support.priority : undefined,
+    reason: entry.support.reason,
+  };
+}
+
+function buildSelectionDecision(params: {
+  harness: AgentHarness;
+  policy: AgentHarnessPolicy;
+  selectedReason: AgentHarnessSelectionDecision["selectedReason"];
+  candidates: AgentHarnessSelectionCandidate[];
+}): AgentHarnessSelectionDecision {
+  return {
+    harness: params.harness,
+    policy: params.policy,
+    selectedHarnessId: params.harness.id,
+    selectedReason: params.selectedReason,
+    candidates: params.candidates,
+  };
+}
+
+function logAgentHarnessSelection(
+  selection: AgentHarnessSelectionDecision,
+  params: { provider: string; modelId?: string; sessionKey?: string; agentId?: string },
+) {
+  if (!log.isEnabled("debug")) {
+    return;
+  }
+  log.debug("agent harness selected", {
+    provider: params.provider,
+    modelId: params.modelId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    selectedHarnessId: selection.selectedHarnessId,
+    selectedReason: selection.selectedReason,
+    runtime: selection.policy.runtime,
+    fallback: selection.policy.fallback,
+    candidates: selection.candidates,
+  });
 }
 
 function resolvePinnedAgentHarnessPolicy(

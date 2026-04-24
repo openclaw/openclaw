@@ -79,6 +79,46 @@ describe("Codex app-server approval bridge", () => {
     );
   });
 
+  it("describes command approvals from parsed command actions when available", async () => {
+    const params = createParams();
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "plugin:approval-actions",
+      decision: "allow-once",
+    });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-actions",
+        command: "bash -lc 'pnpm test extensions/codex'",
+        commandActions: [{ command: "pnpm test extensions/codex" }],
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    expect(requestPayload).toEqual(
+      expect.objectContaining({
+        description: expect.stringContaining("Command: pnpm test extensions/codex"),
+      }),
+    );
+    expect(requestPayload).toEqual(
+      expect.objectContaining({
+        description: expect.not.stringContaining("bash -lc"),
+      }),
+    );
+    expect(params.onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "approval",
+        data: expect.objectContaining({ command: "pnpm test extensions/codex" }),
+      }),
+    );
+  });
+
   it("fails closed when no approval route is available", async () => {
     const params = createParams();
     mockCallGatewayTool.mockResolvedValueOnce({
@@ -265,6 +305,57 @@ describe("Codex app-server approval bridge", () => {
       ),
     ).toEqual({
       decision: "accept",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        {
+          availableDecisions: [
+            "accept",
+            {
+              acceptWithExecpolicyAmendment: {
+                execpolicy_amendment: {
+                  permissions: [{ permission: "allow", command: ["pnpm", "test"] }],
+                },
+              },
+            },
+          ],
+        },
+        "approved-session",
+      ),
+    ).toEqual({
+      decision: {
+        acceptWithExecpolicyAmendment: {
+          execpolicy_amendment: {
+            permissions: [{ permission: "allow", command: ["pnpm", "test"] }],
+          },
+        },
+      },
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        {
+          availableDecisions: [
+            {
+              applyNetworkPolicyAmendment: {
+                network_policy_amendment: {
+                  domain: "registry.npmjs.org",
+                },
+              },
+            },
+          ],
+        },
+        "approved-session",
+      ),
+    ).toEqual({
+      decision: {
+        applyNetworkPolicyAmendment: {
+          network_policy_amendment: {
+            domain: "registry.npmjs.org",
+          },
+        },
+      },
     });
     expect(buildApprovalResponse("item/fileChange/requestApproval", undefined, "denied")).toEqual({
       decision: "decline",

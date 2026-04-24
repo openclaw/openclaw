@@ -26,7 +26,7 @@ function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: unknown;
 }) {
   return resolveProviderRequestPolicyConfig({
     provider: readStringValue(model.provider),

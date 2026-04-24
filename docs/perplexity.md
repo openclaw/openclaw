@@ -3,7 +3,7 @@ summary: "Perplexity Search API and Sonar/OpenRouter compatibility for web_searc
 read_when:
   - You want to use Perplexity Search for web search
   - You need PERPLEXITY_API_KEY or OPENROUTER_API_KEY setup
-title: "Perplexity Search (legacy path)"
+title: "Perplexity search (legacy path)"
 ---
 
 # Perplexity Search API
@@ -179,3 +179,8 @@ await web_search({
 
 See [Web tools](/tools/web) for the full web_search configuration.
 See [Perplexity Search API docs](https://docs.perplexity.ai/docs/search/quickstart) for more details.
+
+## Related
+
+- [Perplexity search](/tools/perplexity-search)
+- [Web search](/tools/web)

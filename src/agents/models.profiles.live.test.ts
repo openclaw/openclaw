@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
@@ -52,6 +53,11 @@ const LIVE_SETUP_TIMEOUT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
 );
+const LIVE_TEST_TIMEOUT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_TEST_TIMEOUT_MS, 60 * 60 * 1000),
+);
+const LIVE_MODEL_CONCURRENCY = Math.max(1, toInt(process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY, 1));
 const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs();
 const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
 const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
@@ -314,9 +320,6 @@ function resolveTestReasoning(
   }
   const id = model.id.toLowerCase();
   if (id.includes("deep-research")) {
-    return "medium";
-  }
-  if (id === "gpt-5.4-pro") {
     return "medium";
   }
   if (model.provider === "openrouter" && id.startsWith("qwq")) {
@@ -657,11 +660,11 @@ describeLive("live models (profile keys)", () => {
       }
       logProgress(`[live-models] running ${selectedCandidates.length} models`);
       logProgress(
-        `[live-models] heartbeat=${formatElapsedSeconds(LIVE_HEARTBEAT_MS)} timeout=${formatElapsedSeconds(perModelTimeoutMs)}`,
+        `[live-models] heartbeat=${formatElapsedSeconds(LIVE_HEARTBEAT_MS)} timeout=${formatElapsedSeconds(perModelTimeoutMs)} concurrency=${LIVE_MODEL_CONCURRENCY}`,
       );
       const total = selectedCandidates.length;
 
-      for (const [index, entry] of selectedCandidates.entries()) {
+      const tasks = selectedCandidates.map((entry, index) => async () => {
         const { model, apiKeyInfo } = entry;
         const id = `${model.provider}/${model.id}`;
         const progressLabel = `[live-models] ${index + 1}/${total} ${id}`;
@@ -680,7 +683,7 @@ describeLive("live models (profile keys)", () => {
             if (
               model.provider === "openai" &&
               model.api === "openai-responses" &&
-              (model.id === "gpt-5.5" || model.id === "gpt-5.4")
+              model.id === "gpt-5.2"
             ) {
               logProgress(`${progressLabel}: tool-only regression`);
               const noopTool = {
@@ -1023,7 +1026,12 @@ describeLive("live models (profile keys)", () => {
             break;
           }
         }
-      }
+      });
+
+      await runTasksWithConcurrency({
+        tasks,
+        limit: LIVE_MODEL_CONCURRENCY,
+      });
 
       if (failures.length > 0) {
         const preview = formatFailurePreview(failures, 20);
@@ -1034,6 +1042,6 @@ describeLive("live models (profile keys)", () => {
 
       void skipped;
     },
-    15 * 60 * 1000,
+    LIVE_TEST_TIMEOUT_MS,
   );
 });

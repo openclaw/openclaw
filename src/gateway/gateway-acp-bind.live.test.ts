@@ -37,6 +37,7 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.5";
+const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.5";
 type LiveAcpAgent = "claude" | "codex" | "gemini";
 
 function createSlackCurrentConversationBindingRegistry() {
@@ -133,6 +134,28 @@ async function getFreeGatewayPort(): Promise<number> {
 
 function logLiveStep(message: string): void {
   console.info(`[live-acp-bind] ${message}`);
+}
+
+function normalizeOpenAiModelRef(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return DEFAULT_LIVE_PARENT_MODEL;
+  }
+  return trimmed.includes("/") ? trimmed : `openai/${trimmed}`;
+}
+
+function resolveLiveParentModel(): string {
+  return normalizeOpenAiModelRef(
+    process.env.OPENCLAW_LIVE_ACP_BIND_PARENT_MODEL?.trim() ||
+      process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() ||
+      DEFAULT_LIVE_PARENT_MODEL,
+  );
+}
+
+function resolveModelObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 async function prepareCodexHomeForLiveBindTest(): Promise<void> {
@@ -449,6 +472,7 @@ describeLive("gateway live (ACP bind)", () => {
       const tempConfigPath = path.join(tempRoot, "openclaw.json");
       const port = await getFreeGatewayPort();
       const token = `test-${randomUUID()}`;
+      const parentModel = resolveLiveParentModel();
       const originalSessionKey = "main";
       const slackUserId = `U${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
       const conversationId = `user:${slackUserId}`;
@@ -480,6 +504,20 @@ describeLive("gateway live (ACP bind)", () => {
           : {};
       const nextCfg = {
         ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            model: {
+              ...resolveModelObject(cfg.agents?.defaults?.model),
+              primary: parentModel,
+            },
+            models: {
+              ...cfg.agents?.defaults?.models,
+              [parentModel]: cfg.agents?.defaults?.models?.[parentModel] ?? {},
+            },
+          },
+        },
         gateway: {
           ...cfg.gateway,
           mode: "local",
@@ -534,6 +572,7 @@ describeLive("gateway live (ACP bind)", () => {
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+      logLiveStep(`using parent live model ${parentModel}`);
       clearConfigCache();
       clearRuntimeConfigSnapshot();
       clearPluginLoaderCache();

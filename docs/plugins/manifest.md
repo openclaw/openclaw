@@ -6,8 +6,6 @@ read_when:
 title: "Plugin manifest"
 ---
 
-# Plugin manifest (openclaw.plugin.json)
-
 This page is for the **native OpenClaw plugin manifest** only.
 
 For compatible bundle layouts, see [Plugin bundles](/plugins/bundles).
@@ -372,6 +370,7 @@ read without importing the plugin runtime.
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
+    "memoryEmbeddingProviders": ["local"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["qwen"],
@@ -391,6 +390,7 @@ Each list is optional:
 | `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                             |
 | `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.             |
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                     |
+| `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                   |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                   |
 | `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                   |
@@ -402,6 +402,12 @@ Provider plugins that implement `resolveExternalAuthProfiles` should declare
 `contracts.externalAuthProviders`. Plugins without the declaration still run
 through a deprecated compatibility fallback, but that fallback is slower and
 will be removed after the migration window.
+
+Bundled memory embedding providers should declare
+`contracts.memoryEmbeddingProviders` for every adapter id they expose, including
+built-in adapters such as `local`. Standalone CLI paths use this manifest
+contract to load only the owning plugin before the full Gateway runtime has
+registered providers.
 
 ## mediaUnderstandingProviderMetadata reference
 
@@ -677,7 +683,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Env-var metadata (`providerAuthEnvVars`, `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
-- For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture#provider-runtime-hooks).
+- For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).
 - If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).
 
 ## Related

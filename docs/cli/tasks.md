@@ -6,8 +6,6 @@ read_when:
 title: "`openclaw tasks`"
 ---
 
-# `openclaw tasks`
-
 Inspect durable background tasks and Task Flow state. With no subcommand,
 `openclaw tasks` is equivalent to `openclaw tasks list`.
 
@@ -96,3 +94,8 @@ openclaw tasks flow cancel <lookup>
 ```
 
 Inspects or cancels durable Task Flow state under the task ledger.
+
+## Related
+
+- [CLI reference](/cli)
+- [Background tasks](/automation/tasks)

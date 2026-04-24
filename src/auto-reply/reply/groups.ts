@@ -244,6 +244,10 @@ export function buildGroupIntro(params: {
     activation === "always"
       ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`
       : undefined;
+  const toolSilenceLine =
+    activation === "always"
+      ? `If you only react or otherwise handle the message without a text reply, your final answer must still be exactly "${params.silentToken}". Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.`
+      : undefined;
   const cautionLine =
     activation === "always"
       ? "Be extremely selective: reply only when directly addressed or clearly helpful. Otherwise stay silent."
@@ -252,7 +256,7 @@ export function buildGroupIntro(params: {
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";
   const styleLine =
     "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
-  return [activationLine, silenceLine, cautionLine, lurkLine, styleLine]
+  return [activationLine, silenceLine, toolSilenceLine, cautionLine, lurkLine, styleLine]
     .filter(Boolean)
     .join(" ")
     .concat(" Address the specific sender noted in the message context.");

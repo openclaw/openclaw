@@ -1,12 +1,10 @@
 ---
-title: "QMD Memory Engine"
 summary: "Local-first search sidecar with BM25, vectors, reranking, and query expansion"
+title: "QMD memory engine"
 read_when:
   - You want to set up QMD as your memory backend
   - You want advanced memory features like reranking or extra indexed paths
 ---
-
-# QMD Memory Engine
 
 [QMD](https://github.com/tobi/qmd) is a local-first search sidecar that runs
 alongside OpenClaw. It combines BM25, vector search, and reranking in a single
@@ -45,6 +43,9 @@ OpenClaw creates a self-contained QMD home under
 automatically -- collections, updates, and embedding runs are handled for you.
 It prefers current QMD collection and MCP query shapes, but still falls back to
 legacy `--mask` collection flags and older MCP tool names when needed.
+Boot-time reconciliation also recreates stale managed collections back to their
+canonical patterns when an older QMD collection with the same name is still
+present.
 
 ## How the sidecar works
 
@@ -168,6 +169,11 @@ Set to `120000` for slower hardware.
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
 allows direct and channel sessions.
 
+**Root memory search suddenly got too broad?** Restart the gateway or wait for
+the next startup reconciliation. OpenClaw recreates stale managed collections
+back to canonical `MEMORY.md` and `memory/` patterns when it detects a same-name
+conflict.
+
 **Workspace-visible temp repos causing `ENAMETOOLONG` or broken indexing?**
 QMD traversal currently follows the underlying QMD scanner behavior rather than
 OpenClaw's builtin symlink rules. Keep temporary monorepo checkouts under
@@ -179,3 +185,9 @@ cycle-safe traversal or explicit exclusion controls.
 For the full config surface (`memory.qmd.*`), search modes, update intervals,
 scope rules, and all other knobs, see the
 [Memory configuration reference](/reference/memory-config).
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Honcho memory](/concepts/memory-honcho)

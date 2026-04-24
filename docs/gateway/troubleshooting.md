@@ -57,7 +57,7 @@ Related:
 
 - [/providers/anthropic](/providers/anthropic)
 - [/reference/token-use](/reference/token-use)
-- [/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic](/help/faq#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
+- [/help/faq-first-run#why-am-i-seeing-http-429-ratelimiterror-from-anthropic](/help/faq-first-run#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
 
 ## Local OpenAI-compatible backend passes direct probes but agent runs fail
 
@@ -564,3 +564,9 @@ Related:
 - [/gateway/pairing](/gateway/pairing)
 - [/gateway/authentication](/gateway/authentication)
 - [/gateway/background-process](/gateway/background-process)
+
+## Related
+
+- [Gateway runbook](/gateway)
+- [Doctor](/gateway/doctor)
+- [FAQ](/help/faq)

@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw plugins` (list, install, marketplace, unin
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to debug plugin load failures
-title: "plugins"
+title: "Plugins"
 ---
 
 # `openclaw plugins`
@@ -327,3 +327,9 @@ Marketplace list accepts a local marketplace path, a `marketplace.json` path, a
 GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json`
 prints the resolved source label plus the parsed marketplace manifest and
 plugin entries.
+
+## Related
+
+- [CLI reference](/cli)
+- [Building plugins](/plugins/building-plugins)
+- [Community plugins](/plugins/community)

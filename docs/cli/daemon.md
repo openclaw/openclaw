@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw daemon` (legacy alias for gateway service 
 read_when:
   - You still use `openclaw daemon ...` in scripts
   - You need service lifecycle commands (install/start/stop/restart/status)
-title: "daemon"
+title: "Daemon"
 ---
 
 # `openclaw daemon`
@@ -55,3 +55,8 @@ Notes:
 ## Prefer
 
 Use [`openclaw gateway`](/cli/gateway) for current docs and examples.
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway runbook](/gateway)

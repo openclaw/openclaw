@@ -349,6 +349,16 @@ assert_no_dep_sentinel() {
   fi
 }
 
+assert_no_install_stage() {
+  local channel="$1"
+  local stage="$package_root/dist/extensions/$channel/.openclaw-install-stage"
+  if [ -e "$stage" ]; then
+    echo "install stage should be cleaned after activation for $channel" >&2
+    find "$stage" -maxdepth 4 -type f | sort | head -80 >&2 || true
+    exit 1
+  fi
+}
+
 echo "Starting baseline gateway with OpenAI configured..."
 write_config baseline
 start_gateway "/tmp/openclaw-$CHANNEL-baseline.log"
@@ -362,6 +372,7 @@ start_gateway "/tmp/openclaw-$CHANNEL-first.log"
 wait_for_gateway_health
 assert_installed_once "/tmp/openclaw-$CHANNEL-first.log" "$CHANNEL" "$DEP_SENTINEL"
 assert_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
+assert_no_install_stage "$CHANNEL"
 assert_channel_status "$CHANNEL"
 stop_gateway
 
@@ -369,6 +380,7 @@ echo "Restarting gateway again; $CHANNEL deps must stay installed..."
 start_gateway "/tmp/openclaw-$CHANNEL-second.log"
 wait_for_gateway_health
 assert_not_installed "/tmp/openclaw-$CHANNEL-second.log" "$CHANNEL"
+assert_no_install_stage "$CHANNEL"
 assert_channel_status "$CHANNEL"
 stop_gateway
 
@@ -484,7 +496,8 @@ start_gateway() {
     OPENCLAW_NO_ONBOARD=1 \
     OPENCLAW_PLUGIN_STAGE_DIR="$OPENCLAW_PLUGIN_STAGE_DIR" \
     npm_config_cache=/tmp/openclaw-root-owned-npm-cache \
-    openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+    bash -c 'openclaw gateway --port "$1" --bind loopback --allow-unconfigured >"$2" 2>&1' \
+    bash "$PORT" "$log_file" &
   gateway_pid="$!"
 
   for _ in $(seq 1 240); do
@@ -504,44 +517,20 @@ start_gateway() {
   exit 1
 }
 
-wait_for_gateway_health() {
-  for _ in $(seq 1 120); do
-    if runuser -u appuser -- env HOME=/home/appuser openclaw gateway health --url "ws://127.0.0.1:$PORT" --token "$TOKEN" --json >/dev/null 2>&1; then
+wait_for_slack_provider_start() {
+  for _ in $(seq 1 180); do
+    if grep -Eq "\\[slack\\] \\[default\\] starting provider|An API error occurred: invalid_auth" /tmp/openclaw-root-owned-gateway.log; then
       return 0
     fi
-    sleep 0.25
+    sleep 1
   done
-  echo "timed out waiting for gateway health" >&2
-  return 1
-}
-
-assert_channel_status() {
-  local out="/tmp/openclaw-root-owned-channel-status.json"
-  runuser -u appuser -- env HOME=/home/appuser openclaw gateway call channels.status \
-    --url "ws://127.0.0.1:$PORT" \
-    --token "$TOKEN" \
-    --timeout 30000 \
-    --json \
-    --params '{"probe":false}' >"$out"
-  if ! node - <<'NODE' "$out" "$CHANNEL"
-const fs = require("node:fs");
-const raw = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const payload = raw.result ?? raw.data ?? raw;
-const channel = process.argv[3];
-if (!payload.channels || !payload.channels[channel]) {
-  throw new Error(`missing channels.${channel}\n${JSON.stringify(raw, null, 2).slice(0, 4000)}`);
-}
-console.log(`${channel} channel plugin visible`);
-NODE
-  then
-    cat /tmp/openclaw-root-owned-gateway.log >&2
-    exit 1
-  fi
+  echo "timed out waiting for slack provider startup" >&2
+  cat /tmp/openclaw-root-owned-gateway.log >&2
+  exit 1
 }
 
 start_gateway /tmp/openclaw-root-owned-gateway.log
-wait_for_gateway_health
-assert_channel_status
+wait_for_slack_provider_start
 
 if [ -e "$root/dist/extensions/$CHANNEL/node_modules/$DEP_SENTINEL/package.json" ]; then
   echo "root-owned package tree was mutated" >&2
@@ -551,6 +540,22 @@ fi
 if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$DEP_SENTINEL/package.json" -type f | grep -q .; then
   echo "missing external staged dependency sentinel for $DEP_SENTINEL" >&2
   find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -120 >&2 || true
+  cat /tmp/openclaw-root-owned-gateway.log >&2
+  exit 1
+fi
+if [ -e "$root/dist/extensions/node_modules/openclaw/package.json" ]; then
+  echo "root-owned package tree was mutated with SDK alias" >&2
+  find "$root/dist/extensions/node_modules/openclaw" -maxdepth 4 -type f | sort | head -80 >&2 || true
+  exit 1
+fi
+if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/dist/extensions/node_modules/openclaw/package.json" -type f | grep -q .; then
+  echo "missing external staged openclaw/plugin-sdk alias" >&2
+  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -120 >&2 || true
+  cat /tmp/openclaw-root-owned-gateway.log >&2
+  exit 1
+fi
+if grep -Eq "failed to install bundled runtime deps|Cannot find package 'openclaw'|Cannot find module 'openclaw/plugin-sdk'" /tmp/openclaw-root-owned-gateway.log; then
+  echo "root-owned gateway hit bundled runtime dependency errors" >&2
   cat /tmp/openclaw-root-owned-gateway.log >&2
   exit 1
 fi
@@ -961,6 +966,7 @@ command -v openclaw >/dev/null
 baseline_root="$(package_root)"
 test -d "$baseline_root/dist/extensions/telegram"
 test -d "$baseline_root/dist/extensions/feishu"
+test -d "$baseline_root/dist/extensions/acpx"
 
 echo "Replicating configured Telegram missing-runtime state..."
 write_config telegram
@@ -1024,6 +1030,14 @@ run_update_and_capture memory-lancedb /tmp/openclaw-update-memory-lancedb.json
 cat /tmp/openclaw-update-memory-lancedb.json
 assert_update_ok /tmp/openclaw-update-memory-lancedb.json "$candidate_version"
 assert_dep_available memory-lancedb @lancedb/lancedb
+
+echo "Removing ACPX runtime package and rerunning same-version update path..."
+remove_runtime_dep acpx acpx
+assert_no_dep_available acpx acpx
+run_update_and_capture acpx /tmp/openclaw-update-acpx.json
+cat /tmp/openclaw-update-acpx.json
+assert_update_ok /tmp/openclaw-update-acpx.json "$candidate_version"
+assert_dep_available acpx acpx
 
 echo "bundled channel runtime deps Docker update E2E passed"
 EOF

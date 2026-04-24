@@ -1,13 +1,13 @@
 ---
 summary: "Multi-agent routing: isolated agents, channel accounts, and bindings"
-title: Multi-Agent Routing
+title: Multi-agent routing
 read_when: "You want multiple isolated agents (workspaces + auth) in one gateway process."
 status: active
 ---
 
-# Multi-Agent Routing
+Run multiple _isolated_ agents — each with its own workspace, state directory (`agentDir`), and session history — plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound messages are routed to the right agent through bindings.
 
-Goal: multiple _isolated_ agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
+An **agent** here is the full per-persona scope: workspace files, auth profiles, model registry, and session store. `agentDir` is the on-disk state directory that holds this per-agent config at `~/.openclaw/agents/<agentId>/`. A **binding** maps a channel account (e.g. a Slack workspace or a WhatsApp number) to one of those agents.
 
 ## What is "one agent"?
 

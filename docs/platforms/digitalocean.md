@@ -3,7 +3,7 @@ summary: "OpenClaw on DigitalOcean (simple paid VPS option)"
 read_when:
   - Setting up OpenClaw on DigitalOcean
   - Looking for cheap VPS hosting for OpenClaw
-title: "DigitalOcean (Platform)"
+title: "DigitalOcean (platform)"
 ---
 
 # OpenClaw on DigitalOcean
@@ -258,7 +258,7 @@ free -h
 
 ---
 
-## See Also
+## Related
 
 - [Hetzner guide](/install/hetzner) — cheaper, more powerful
 - [Docker install](/install/docker) — containerized setup

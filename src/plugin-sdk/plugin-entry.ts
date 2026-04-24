@@ -70,6 +70,7 @@ import type {
   ProviderWrapStreamFnContext,
   SpeechProviderPlugin,
   PluginCommandContext,
+  PluginCommandResult,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
@@ -85,6 +86,7 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginCommandContext,
+  PluginCommandResult,
   OpenClawPluginConfigSchema,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
@@ -143,6 +145,17 @@ export type {
   OpenClawPluginDefinition,
   PluginLogger,
 };
+export type {
+  PluginConversationBinding,
+  PluginConversationBindingResolvedEvent,
+  PluginConversationBindingRequestParams,
+  PluginConversationBindingRequestResult,
+} from "../plugins/conversation-binding.types.js";
+export type {
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
+} from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { OpenClawConfig };
 
