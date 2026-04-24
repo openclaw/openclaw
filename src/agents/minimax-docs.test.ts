@@ -18,16 +18,14 @@ describe("MiniMax docs sync", () => {
     expect(testingLiveDoc).toContain(MINIMAX_DEFAULT_MODEL_REF);
   });
 
-  it("keeps the FAQ troubleshooting model ids aligned", () => {
-    expect(faqDoc).toContain(`Unknown model: ${MINIMAX_DEFAULT_MODEL_REF}`);
-    for (const modelRef of MINIMAX_TEXT_MODEL_REFS.slice(3)) {
-      expect(faqDoc).toContain(modelRef);
-    }
+  it("keeps the FAQ pointed at canonical MiniMax troubleshooting", () => {
+    expect(faqDoc).toContain("[MiniMax](/providers/minimax)");
   });
 
   it("keeps the provider doc aligned with shared MiniMax ids", () => {
     expect(minimaxDoc).toContain(MINIMAX_DEFAULT_MODEL_ID);
     expect(minimaxDoc).toContain(MINIMAX_DEFAULT_MODEL_REF);
+    expect(minimaxDoc).toContain(`Unknown model: ${MINIMAX_DEFAULT_MODEL_REF}`);
     for (const modelRef of MINIMAX_TEXT_MODEL_REFS.slice(3)) {
       expect(minimaxDoc).toContain(modelRef);
     }
