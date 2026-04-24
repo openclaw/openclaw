@@ -214,6 +214,12 @@ phrase, and prints session health:
 openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
 ```
 
+If the browser profile is not signed in, Meet is waiting for host admission, or
+Chrome needs microphone/camera permission, the join/test-speech result reports
+`manualActionRequired: true` with `manualActionReason` and
+`manualActionMessage`. Agents should stop retrying the join, report that message
+to the operator, and retry only after the manual browser action is complete.
+
 If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one
 connected node advertises both `googlemeet.chrome` and browser control. If
 several capable nodes are connected, set `chromeNode.node` to the node id,
@@ -460,6 +466,9 @@ report it. Use `action: "leave"` to mark a session ended.
 
 - `inCall`: Chrome appears to be inside the Meet call
 - `micMuted`: best-effort Meet microphone state
+- `manualActionRequired` / `manualActionReason` / `manualActionMessage`: the
+  browser profile needs manual login, Meet host admission, permissions, or
+  browser-control repair before speech can work
 - `providerConnected` / `realtimeReady`: realtime voice bridge state
 - `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
 
