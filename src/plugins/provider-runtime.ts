@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   __testing as providerHookRuntimeTesting,
   clearProviderRuntimeHookCache,
@@ -20,7 +21,6 @@ import {
   resolveProviderRuntimePlugin,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
-import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
@@ -139,6 +139,7 @@ export function resolveProviderSystemPromptContribution(params: {
   return mergeProviderSystemPromptContributions(
     resolveGpt5SystemPromptContribution({
       config: params.context.config ?? params.config,
+      providerId: params.context.provider ?? params.provider,
       modelId: params.context.modelId,
     }),
     resolveProviderRuntimePlugin(params)?.resolveSystemPromptContribution?.(params.context) ??
@@ -762,7 +763,9 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveSyntheticAuthContext;
 }) {
-  const runtimeResolved = resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context);
+  const runtimeResolved = resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(
+    params.context,
+  );
   if (runtimeResolved) {
     return runtimeResolved;
   }
@@ -770,7 +773,9 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  }).find((provider) => provider.id === params.provider)?.resolveSyntheticAuth?.(params.context);
+  })
+    .find((provider) => provider.id === params.provider)
+    ?.resolveSyntheticAuth?.(params.context);
 }
 
 export function resolveExternalAuthProfilesWithPlugins(params: {

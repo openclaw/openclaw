@@ -24,6 +24,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
     response: await globalThis.fetch(url, init),
     release: vi.fn(async () => {}),
   }),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
 describe("openai tts", () => {

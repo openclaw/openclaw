@@ -58,6 +58,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -756,7 +757,14 @@ async function agentCommandInternal(
         const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        if (!profile || profile.provider !== providerForAuthProfileValidation) {
+        const profileAuthProvider = profile
+          ? resolveProviderIdForAuth(profile.provider, { config: cfg, workspaceDir })
+          : undefined;
+        const validationAuthProvider = resolveProviderIdForAuth(providerForAuthProfileValidation, {
+          config: cfg,
+          workspaceDir,
+        });
+        if (!profile || profileAuthProvider !== validationAuthProvider) {
           if (sessionStore && sessionKey) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,

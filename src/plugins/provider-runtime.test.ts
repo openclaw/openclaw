@@ -567,6 +567,71 @@ describe("provider-runtime", () => {
     expect(contribution?.sectionOverrides).toEqual({});
   });
 
+  it("ignores OpenAI plugin personality fallback for non-OpenAI GPT-5 providers", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openrouter",
+      config: {
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
+          },
+        },
+      },
+      context: {
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides?.interaction_style).toContain(
+      "This is a live chat, not a memo.",
+    );
+  });
+
+  it("keeps OpenAI plugin personality fallback for OpenAI-family GPT-5 providers", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openai-codex",
+      config: {
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
+          },
+        },
+      },
+      context: {
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides).toEqual({});
+  });
+
+  it("keeps OpenAI plugin personality fallback for Azure OpenAI GPT-5 providers", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "azure-openai-responses",
+      config: {
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
+          },
+        },
+      },
+      context: {
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides).toEqual({});
+  });
+
   it("does not apply the shared GPT-5 prompt overlay to non-GPT-5 models", () => {
     expect(
       resolveProviderSystemPromptContribution({

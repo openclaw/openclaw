@@ -49,6 +49,8 @@ describe("pi model discovery synthetic auth", () => {
   beforeEach(() => {
     resolveRuntimeSyntheticAuthProviderRefs.mockClear();
     resolveProviderSyntheticAuthWithPlugin.mockClear();
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
   });
 
   afterEach(() => {
