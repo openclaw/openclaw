@@ -2884,7 +2884,7 @@ Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
 
 ## Identity
 
-See `agents.list` identity fields under [Agent defaults](#agent-defaults).
+See `agents.list` identity fields under [Agent defaults](/gateway/config-agents#agent-defaults).
 
 ---
 
