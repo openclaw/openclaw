@@ -45,10 +45,25 @@ describe("diagnostic-trace-context", () => {
 
   it("rejects malformed traceparent values", () => {
     expect(parseDiagnosticTraceparent(undefined)).toBeUndefined();
+    expect(parseDiagnosticTraceparent(`00-${TRACE_ID}-${SPAN_ID}-01-extra`)).toBeUndefined();
     expect(parseDiagnosticTraceparent(`ff-${TRACE_ID}-${SPAN_ID}-01`)).toBeUndefined();
     expect(parseDiagnosticTraceparent(`00-${"0".repeat(32)}-${SPAN_ID}-01`)).toBeUndefined();
     expect(parseDiagnosticTraceparent(`00-${TRACE_ID}-${"0".repeat(16)}-01`)).toBeUndefined();
     expect(parseDiagnosticTraceparent(`00-${TRACE_ID}-${SPAN_ID}-xyz`)).toBeUndefined();
+  });
+
+  it("rejects oversized traceparent values before parsing", () => {
+    expect(
+      parseDiagnosticTraceparent(`00-${TRACE_ID}-${SPAN_ID}-01-${"a".repeat(128)}`),
+    ).toBeUndefined();
+  });
+
+  it("continues future-version traceparents from the first four fields", () => {
+    expect(parseDiagnosticTraceparent(`01-${TRACE_ID}-${SPAN_ID}-01-extra`)).toEqual({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+      traceFlags: "01",
+    });
   });
 
   it("creates a normalized context from explicit fields or traceparent", () => {
@@ -69,6 +84,14 @@ describe("diagnostic-trace-context", () => {
       spanId: SPAN_ID,
       traceFlags: "01",
     });
+  });
+
+  it("generates valid non-zero ids for fallback contexts", () => {
+    const context = createDiagnosticTraceContext();
+
+    expect(isValidDiagnosticTraceId(context.traceId)).toBe(true);
+    expect(isValidDiagnosticSpanId(context.spanId)).toBe(true);
+    expect(formatDiagnosticTraceparent(context)).toBeDefined();
   });
 
   it("creates child contexts without retaining parent references or self-parenting", () => {
