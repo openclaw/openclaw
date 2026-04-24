@@ -31,6 +31,20 @@ function writeBundledChannelPlugin(root: string, id: string, dependencies: Recor
   });
 }
 
+function writeDefaultEnabledBundledChannelPlugin(
+  root: string,
+  id: string,
+  dependencies: Record<string, string>,
+) {
+  writeBundledChannelPlugin(root, id, dependencies);
+  writeJson(path.join(root, "dist", "extensions", id, "openclaw.plugin.json"), {
+    id,
+    channels: [id],
+    enabledByDefault: true,
+    configSchema: { type: "object" },
+  });
+}
+
 function createInstalledRuntimeDeps(): InstalledRuntimeDeps {
   return [];
 }
@@ -153,7 +167,7 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(result.conflicts).toEqual([]);
   });
 
-  it("can include disabled but configured bundled channel deps for doctor recovery", () => {
+  it("does not include explicitly disabled but configured bundled channel deps", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeBundledChannelPlugin(root, "telegram", { "telegram-only": "1.0.0" });
@@ -169,9 +183,74 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     });
 
+    expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("includes configured bundled channel deps for doctor recovery when not explicitly disabled", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { "telegram-only": "1.0.0" });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      includeConfiguredChannels: true,
+      config: {
+        plugins: { enabled: true },
+        channels: {
+          telegram: { botToken: "123:abc" },
+        },
+      },
+    });
+
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
       "telegram-only@1.0.0",
     ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("does not include configured bundled channel deps when the plugin entry is disabled", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { "telegram-only": "1.0.0" });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      includeConfiguredChannels: true,
+      config: {
+        plugins: {
+          enabled: true,
+          entries: {
+            telegram: { enabled: false },
+          },
+        },
+        channels: {
+          telegram: { botToken: "123:abc" },
+        },
+      },
+    });
+
+    expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("lets channel disablement suppress default-enabled bundled channel deps", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeDefaultEnabledBundledChannelPlugin(root, "demo", { "demo-only": "1.0.0" });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot: root,
+      includeConfiguredChannels: true,
+      config: {
+        plugins: { enabled: true },
+        channels: {
+          demo: { enabled: false },
+        },
+      },
+    });
+
+    expect(result.missing).toEqual([]);
     expect(result.conflicts).toEqual([]);
   });
 
@@ -324,7 +403,7 @@ describe("doctor bundled plugin runtime deps", () => {
       {
         installRoot: root,
         missingSpecs: ["grammy@1.37.0"],
-        installSpecs: ["@slack/web-api@7.15.1", "grammy@1.37.0"],
+        installSpecs: ["grammy@1.37.0"],
       },
     ]);
   });

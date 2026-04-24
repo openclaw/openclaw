@@ -1718,7 +1718,12 @@ describe("openai transport stream", () => {
           {
             name: "read",
             description: "Read file",
-            parameters: { type: "object", properties: {} },
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: { path: { type: "string" } },
+              required: [],
+            },
           },
         ],
       } as never,

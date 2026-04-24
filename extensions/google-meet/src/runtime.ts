@@ -5,9 +5,14 @@ import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { getGoogleMeetSetupStatus } from "./setup.js";
-import { launchChromeMeet, launchChromeMeetOnNode } from "./transports/chrome.js";
+import {
+  createMeetWithBrowserProxyOnNode,
+  launchChromeMeet,
+  launchChromeMeetOnNode,
+} from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
 import type {
+  GoogleMeetChromeHealth,
   GoogleMeetJoinRequest,
   GoogleMeetJoinResult,
   GoogleMeetSession,
@@ -50,6 +55,7 @@ export class GoogleMeetRuntime {
   readonly #sessions = new Map<string, GoogleMeetSession>();
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
+  readonly #sessionHealth = new Map<string, () => GoogleMeetChromeHealth>();
 
   constructor(
     private readonly params: {
@@ -61,6 +67,7 @@ export class GoogleMeetRuntime {
   ) {}
 
   list(): GoogleMeetSession[] {
+    this.#refreshHealth();
     return [...this.#sessions.values()].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
@@ -69,6 +76,7 @@ export class GoogleMeetRuntime {
     session?: GoogleMeetSession;
     sessions?: GoogleMeetSession[];
   } {
+    this.#refreshHealth(sessionId);
     if (!sessionId) {
       return { found: true, sessions: this.list() };
     }
@@ -77,13 +85,38 @@ export class GoogleMeetRuntime {
   }
 
   setupStatus() {
-    return getGoogleMeetSetupStatus(this.params.config);
+    return getGoogleMeetSetupStatus(this.params.config, { fullConfig: this.params.fullConfig });
+  }
+
+  async createViaBrowser() {
+    return createMeetWithBrowserProxyOnNode({
+      runtime: this.params.runtime,
+      config: this.params.config,
+    });
   }
 
   async join(request: GoogleMeetJoinRequest): Promise<GoogleMeetJoinResult> {
     const url = normalizeMeetUrl(request.url);
     const transport = resolveTransport(request.transport, this.params.config);
     const mode = resolveMode(request.mode, this.params.config);
+    const reusable = this.list().find(
+      (session) =>
+        session.state === "active" &&
+        session.url === url &&
+        session.transport === transport &&
+        session.mode === mode,
+    );
+    if (reusable) {
+      reusable.notes = [
+        ...reusable.notes.filter((note) => note !== "Reused existing active Meet session."),
+        "Reused existing active Meet session.",
+      ];
+      reusable.updatedAt = nowIso();
+      if (request.message || this.params.config.realtime.introMessage) {
+        this.speak(reusable.id, request.message);
+      }
+      return { session: reusable };
+    }
     const createdAt = nowIso();
 
     const session: GoogleMeetSession = {
@@ -146,6 +179,7 @@ export class GoogleMeetRuntime {
                     : undefined,
               }
             : undefined,
+          health: "browser" in result ? result.browser : undefined,
         };
         if (
           result.audioBridge?.type === "command-pair" ||
@@ -153,6 +187,7 @@ export class GoogleMeetRuntime {
         ) {
           this.#sessionStops.set(session.id, result.audioBridge.stop);
           this.#sessionSpeakers.set(session.id, result.audioBridge.speak);
+          this.#sessionHealth.set(session.id, result.audioBridge.getHealth);
         }
         session.notes.push(
           result.audioBridge
@@ -206,6 +241,9 @@ export class GoogleMeetRuntime {
     }
 
     this.#sessions.set(session.id, session);
+    if (mode === "realtime" && this.params.config.realtime.introMessage) {
+      this.speak(session.id, request.message);
+    }
     return { session };
   }
 
@@ -218,6 +256,7 @@ export class GoogleMeetRuntime {
     if (stop) {
       this.#sessionStops.delete(sessionId);
       this.#sessionSpeakers.delete(sessionId);
+      this.#sessionHealth.delete(sessionId);
       await stop();
     }
     session.state = "ended";
@@ -239,6 +278,49 @@ export class GoogleMeetRuntime {
     }
     speak(instructions || this.params.config.realtime.introMessage);
     session.updatedAt = nowIso();
+    this.#refreshHealth(sessionId);
     return { found: true, spoken: true, session };
+  }
+
+  async testSpeech(request: GoogleMeetJoinRequest): Promise<{
+    createdSession: boolean;
+    inCall?: boolean;
+    manualActionRequired?: boolean;
+    manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+    manualActionMessage?: string;
+    spoken: boolean;
+    session: GoogleMeetSession;
+  }> {
+    const before = new Set(this.list().map((session) => session.id));
+    const result = await this.join(request);
+    const spoken = this.speak(
+      result.session.id,
+      request.message ?? "Say exactly: Google Meet speech test complete.",
+    ).spoken;
+    const health = result.session.chrome?.health;
+    return {
+      createdSession: !before.has(result.session.id),
+      inCall: health?.inCall,
+      manualActionRequired: health?.manualActionRequired,
+      manualActionReason: health?.manualActionReason,
+      manualActionMessage: health?.manualActionMessage,
+      spoken,
+      session: result.session,
+    };
+  }
+
+  #refreshHealth(sessionId?: string) {
+    const ids = sessionId ? [sessionId] : [...this.#sessionHealth.keys()];
+    for (const id of ids) {
+      const session = this.#sessions.get(id);
+      const getHealth = this.#sessionHealth.get(id);
+      if (!session?.chrome || !getHealth) {
+        continue;
+      }
+      session.chrome.health = {
+        ...session.chrome.health,
+        ...getHealth(),
+      };
+    }
   }
 }

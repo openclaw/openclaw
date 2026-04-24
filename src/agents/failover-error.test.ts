@@ -73,8 +73,105 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 410 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 499 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
-    expect(resolveFailoverReasonFromError({ status: 422 })).toBe("format");
+    // 400/422 with no body returns null — avoids triggering a compaction loop
+    // when the provider returns an empty or wrapper-only 400/422 (e.g.
+    // transient proxy issue).
+    expect(resolveFailoverReasonFromError({ status: 400 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 422 })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "400 status code (no body)",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "HTTP 422: No body",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "HTTP 422: No response body",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "Error: HTTP 422: No response body",
+      }),
+    ).toBeNull();
+    expect(resolveFailoverReasonFromError({ message: "400 status code (no body)" })).toBeNull();
+    expect(resolveFailoverReasonFromError({ message: "HTTP 422: No body" })).toBeNull();
+    expect(resolveFailoverReasonFromError({ message: "HTTP 422: No response body" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "outer wrapper",
+        cause: {
+          status: 422,
+          message: "HTTP 422: No response body",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "check open ai req parameter error",
+        cause: {
+          status: 422,
+          message: "HTTP 422: No response body",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "check open ai req parameter error",
+        cause: new Error("No response body"),
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "Unprocessable Entity",
+        error: {
+          message: "HTTP 422: No response body",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "Unprocessable Entity",
+        cause: {
+          message: "Unprocessable Entity",
+          error: {
+            message: "HTTP 422: No response body",
+          },
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        error: {
+          message: "missing required property",
+        },
+        cause: {},
+      }),
+    ).toBe("format");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        error: {
+          message: "missing required property",
+        },
+        cause: {
+          message: "HTTP 422: No response body",
+        },
+      }),
+    ).toBe("format");
     // Transient server errors (500/502/503/504) should trigger failover as timeout.
     expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
@@ -85,6 +182,14 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
+  });
+
+  it("stops on cyclic cause chains", () => {
+    const first: { cause?: unknown } = {};
+    const second: { cause?: unknown } = { cause: first };
+    first.cause = second;
+
+    expect(resolveFailoverReasonFromError(first)).toBeNull();
   });
 
   it("treats session-specific HTTP 410s differently from generic 410s", () => {

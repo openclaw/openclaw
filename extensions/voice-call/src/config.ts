@@ -1,6 +1,13 @@
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES,
+  type RealtimeVoiceAgentConsultToolPolicy,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { z } from "openclaw/plugin-sdk/zod";
 import { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
+import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
+
+export { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
 // Phone Number Validation
@@ -205,6 +212,9 @@ export type VoiceCallRealtimeProvidersConfig = z.infer<
   typeof VoiceCallRealtimeProvidersConfigSchema
 >;
 
+export const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
+export type VoiceCallRealtimeToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
+
 export const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -221,14 +231,22 @@ export const VoiceCallRealtimeConfigSchema = z
     /** Optional override for the local WebSocket route path. */
     streamPath: z.string().min(1).optional(),
     /** System instructions passed to the realtime provider. */
-    instructions: z.string().optional(),
+    instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
+    /** Tool policy for the shared OpenClaw agent consult tool. */
+    toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
   })
   .strict()
-  .default({ enabled: false, tools: [], providers: {} });
+  .default({
+    enabled: false,
+    instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
+    toolPolicy: "safe-read-only",
+    tools: [],
+    providers: {},
+  });
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
 
 // -----------------------------------------------------------------------------

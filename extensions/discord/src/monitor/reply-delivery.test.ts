@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -100,6 +101,7 @@ describe("deliverDiscordReply", () => {
     }> = {},
   ) => {
     const threadBindings = createThreadBindingManager({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       persist: false,
       enableSweeper: false,

@@ -26,9 +26,9 @@ import {
   isTransientHttpError,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -569,6 +569,7 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
+  transcriptCommandBody?: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   replyThreading?: TemplateContext["ReplyThreading"];
@@ -885,11 +886,12 @@ export async function runAgentTurnWithFallback(params: {
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
+      const outcomePlan = buildAgentRuntimeOutcomePlan();
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
         classifyResult: async ({ result, provider, model }) => {
-          const classification = classifyEmbeddedPiRunResultForModelFallback({
+          const classification = outcomePlan.classifyRunResult({
             result,
             provider,
             model,
@@ -964,6 +966,7 @@ export async function runAgentTurnWithFallback(params: {
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
                   prompt: params.commandBody,
+                  transcriptPrompt: params.transcriptCommandBody,
                   provider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
@@ -1086,6 +1089,7 @@ export async function runAgentTurnWithFallback(params: {
                 ...runBaseParams,
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
+                transcriptPrompt: params.transcriptCommandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(

@@ -7,7 +7,7 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
 } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
-import { listChromeMcpTabs, openChromeMcpTab } from "./chrome-mcp.js";
+import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import {
   assertBrowserNavigationAllowed,
@@ -74,6 +74,7 @@ export function createProfileTabOps({
 
   const listTabs = async (): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
+      const { listChromeMcpTabs } = await getChromeMcpModule();
       return await listChromeMcpTabs(profile.name, profile.userDataDir);
     }
 
@@ -155,6 +156,7 @@ export function createProfileTabOps({
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+      const { openChromeMcpTab } = await getChromeMcpModule();
       const page = await openChromeMcpTab(profile.name, url, profile.userDataDir);
       const profileState = getProfileState();
       profileState.lastTargetId = page.targetId;

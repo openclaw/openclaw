@@ -2,7 +2,11 @@ import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
 import type { Command } from "commander";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
-import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./meet.js";
+import {
+  buildGoogleMeetPreflightReport,
+  createGoogleMeetSpace,
+  fetchGoogleMeetSpace,
+} from "./meet.js";
 import {
   buildGoogleMeetAuthUrl,
   createGoogleMeetOAuthState,
@@ -16,6 +20,7 @@ import type { GoogleMeetRuntime } from "./runtime.js";
 type JoinOptions = {
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
+  message?: string;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
@@ -31,6 +36,19 @@ type OAuthLoginOptions = {
 
 type ResolveSpaceOptions = {
   meeting?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  expiresAt?: string;
+  json?: boolean;
+};
+
+type SetupOptions = {
+  json?: boolean;
+};
+
+type CreateOptions = {
   accessToken?: string;
   refreshToken?: string;
   clientId?: string;
@@ -70,6 +88,13 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   return parsed;
 }
 
+function writeSetupStatus(status: ReturnType<GoogleMeetRuntime["setupStatus"]>): void {
+  writeStdoutLine("Google Meet setup: %s", status.ok ? "OK" : "needs attention");
+  for (const check of status.checks) {
+    writeStdoutLine("[%s] %s: %s", check.ok ? "ok" : "fail", check.id, check.message);
+  }
+}
+
 function resolveMeetingInput(config: GoogleMeetConfig, value?: string): string {
   const meeting = value?.trim() || config.defaults.meeting;
   if (!meeting) {
@@ -99,6 +124,34 @@ function resolveTokenOptions(
     accessToken: options.accessToken?.trim() || config.oauth.accessToken,
     expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
   };
+}
+
+function resolveCreateTokenOptions(
+  config: GoogleMeetConfig,
+  options: CreateOptions,
+): {
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+  accessToken?: string;
+  expiresAt?: number;
+} {
+  return {
+    clientId: options.clientId?.trim() || config.oauth.clientId,
+    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
+    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
+    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
+    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
+  };
+}
+
+function hasCreateOAuth(config: GoogleMeetConfig, options: CreateOptions): boolean {
+  return Boolean(
+    options.accessToken?.trim() ||
+    options.refreshToken?.trim() ||
+    config.oauth.accessToken ||
+    config.oauth.refreshToken,
+  );
 }
 
 export function registerGoogleMeetCli(params: {
@@ -173,10 +226,68 @@ export function registerGoogleMeetCli(params: {
     });
 
   root
+    .command("create")
+    .description("Create a new Google Meet space and print its meeting URL")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--json", "Print JSON output", false)
+    .action(async (options: CreateOptions) => {
+      if (!hasCreateOAuth(params.config, options)) {
+        const rt = await params.ensureRuntime();
+        const result = await rt.createViaBrowser();
+        const payload = {
+          source: result.source,
+          meetingUri: result.meetingUri,
+          browser: {
+            nodeId: result.nodeId,
+            targetId: result.targetId,
+            browserUrl: result.browserUrl,
+            browserTitle: result.browserTitle,
+          },
+        };
+        if (options.json) {
+          writeStdoutJson(payload);
+          return;
+        }
+        writeStdoutLine("meeting uri: %s", result.meetingUri);
+        writeStdoutLine("source: browser");
+        writeStdoutLine("node: %s", result.nodeId);
+        return;
+      }
+      const token = await resolveGoogleMeetAccessToken(
+        resolveCreateTokenOptions(params.config, options),
+      );
+      const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
+      if (options.json) {
+        writeStdoutJson({
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
+      writeStdoutLine("meeting uri: %s", result.meetingUri);
+      writeStdoutLine("space: %s", result.space.name);
+      if (result.space.meetingCode) {
+        writeStdoutLine("meeting code: %s", result.space.meetingCode);
+      }
+      writeStdoutLine(
+        "token source: %s",
+        token.refreshed ? "refresh-token" : "cached-access-token",
+      );
+    });
+
+  root
     .command("join")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
     .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
-    .option("--mode <mode>", "Mode: realtime or transcribe")
+    .option(
+      "--mode <mode>",
+      "Mode: realtime for live talk-back, transcribe to join without the realtime voice bridge",
+    )
+    .option("--message <text>", "Realtime speech to trigger after join")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
@@ -186,11 +297,37 @@ export function registerGoogleMeetCli(params: {
         url: resolveMeetingInput(params.config, url),
         transport: options.transport,
         mode: options.mode,
+        message: options.message,
         dialInNumber: options.dialInNumber,
         pin: options.pin,
         dtmfSequence: options.dtmfSequence,
       });
       writeStdoutJson(result.session);
+    });
+
+  root
+    .command("test-speech")
+    .argument("[url]", "Explicit https://meet.google.com/... URL")
+    .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
+    .option(
+      "--mode <mode>",
+      "Mode: realtime for live talk-back, transcribe to join without the realtime voice bridge",
+    )
+    .option(
+      "--message <text>",
+      "Realtime speech to trigger",
+      "Say exactly: Google Meet speech test complete.",
+    )
+    .action(async (url: string | undefined, options: JoinOptions) => {
+      const rt = await params.ensureRuntime();
+      writeStdoutJson(
+        await rt.testSpeech({
+          url: resolveMeetingInput(params.config, url),
+          transport: options.transport,
+          mode: options.mode,
+          message: options.message,
+        }),
+      );
     });
 
   root
@@ -288,9 +425,15 @@ export function registerGoogleMeetCli(params: {
   root
     .command("setup")
     .description("Show Google Meet transport setup status")
-    .action(async () => {
+    .option("--json", "Print JSON output", false)
+    .action(async (options: SetupOptions) => {
       const rt = await params.ensureRuntime();
-      writeStdoutJson(rt.setupStatus());
+      const status = rt.setupStatus();
+      if (options.json) {
+        writeStdoutJson(status);
+        return;
+      }
+      writeSetupStatus(status);
     });
 
   root

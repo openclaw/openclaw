@@ -44,6 +44,21 @@ image endpoints remain blocked by default.
 
 The agent calls `image_generate` automatically. No tool allow-listing needed — it's enabled by default when a provider is available.
 
+## Common routes
+
+| Goal                                                 | Model ref                                          | Auth                                 |
+| ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------ |
+| OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                     |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI Codex OAuth                   |
+| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                 |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+
+The same `image_generate` tool handles text-to-image and reference-image
+editing. Use `image` for one reference or `images` for multiple references.
+Provider-supported output hints such as `quality`, `outputFormat`, and
+OpenAI-specific `background` are forwarded when available and reported as
+ignored when a provider does not support them.
+
 ## Supported providers
 
 | Provider   | Default model                           | Edit support                       | Auth                                                  |

@@ -31,12 +31,26 @@ export type { AgentApprovalEventData } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
 export type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareContext,
+  AgentToolResultMiddlewareEvent,
+  AgentToolResultMiddlewareHarness,
+  AgentToolResultMiddlewareOptions,
+  AgentToolResultMiddlewareResult,
+  OpenClawAgentToolResult,
+} from "../plugins/agent-tool-result-middleware-types.js";
+export type {
   CodexAppServerExtensionContext,
   CodexAppServerExtensionFactory,
   CodexAppServerExtensionRuntime,
   CodexAppServerToolResultEvent,
   CodexAppServerToolResultHandlerResult,
 } from "../plugins/codex-app-server-extension-types.js";
+export type {
+  NativeHookRelayEvent,
+  NativeHookRelayProvider,
+  NativeHookRelayRegistrationHandle,
+} from "../agents/harness/native-hook-relay.js";
 
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
@@ -79,6 +93,7 @@ export {
   runAgentHarnessBeforeCompactionHook,
 } from "../agents/harness/prompt-compaction-hook-helpers.js";
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
+export { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 export {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -97,6 +112,10 @@ export {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "../agents/harness/lifecycle-hook-helpers.js";
+export {
+  buildNativeHookRelayCommand,
+  registerNativeHookRelay,
+} from "../agents/harness/native-hook-relay.js";
 
 /**
  * Derive the same compact user-facing tool detail that Pi uses for progress logs.
