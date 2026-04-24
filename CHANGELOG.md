@@ -224,6 +224,7 @@ Docs: https://docs.openclaw.ai
 - Agents/CLI: keep `--agent` plus `--session-id` lookup scoped to the requested agent store, so explicit agent resumes cannot select another agent's session. (#70985) Thanks @frankekn.
 - Plugins/Comfy: read workflow and cloud auth configuration from `plugins.entries.comfy.config` while preserving legacy Comfy config fallback, so image, video, and music workflows pass config validation. Fixes #61915. (#63058) Thanks @547895019.
 - Gateway/secrets: restart secret-backed channels such as Slack and Zalo during `secrets.reload` so rotated webhook secrets take effect immediately, with the reload serialized and per-channel restart errors isolated. (#70720) Thanks @drobison00.
+- WhatsApp: respect the `[[audio_as_voice]]` directive in outbound delivery. Replies carrying `audioAsVoice` with a verified audio source now reach WhatsApp as PTT voice notes instead of document attachments. Adds channel-agnostic MIME/filename sanitization helpers to `openclaw/plugin-sdk/media-runtime`. Fixes #66053. Thanks @masatohoshino.
 
 ## 2026.4.22
 

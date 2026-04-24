@@ -184,23 +184,25 @@ export function sanitizeMediaMime(
   return base;
 }
 
-// Unicode bidirectional and invisible format characters that can be used for
-// filename UI spoofing (RTLO trick and similar).
-const BIDI_AND_INVISIBLE_CHARS = /[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/g;
+// Unicode format/invisible characters that can be used for filename UI spoofing.
+// Covers General Category Cf: bidi marks (RTLO/LRM/etc.), zero-width
+// joiners/spaces, BOM, and Soft Hyphen (U+00AD is itself Cf).
+const INVISIBLE_FORMAT_CHARS = /\p{Cf}/gu;
 
 /**
  * Sanitizes an outbound document filename for safe use in downstream payloads.
- * Strips ASCII control characters and Unicode bidirectional/invisible format
- * characters, replaces path separators and quotes, caps length at 128 chars,
- * and falls back to "file" when empty.
+ * Strips ASCII control characters and Unicode format characters (General
+ * Category Cf: bidi marks, zero-width joiners/spaces, BOM, Soft Hyphen);
+ * replaces path separators and quotes; caps length at 128 chars; falls back
+ * to "file" when empty.
  *
- * The bidi-stripping prevents UI spoofing via right-to-left override (RTLO,
- * U+202E) and related directional formatting characters.
+ * Mitigates filename UI spoofing (CWE-451) via RTLO, ZWSP, BOM, and related
+ * invisible-character injection.
  * Linear time complexity: the loop bounds itself by min(input length, 128)
  * to avoid O(n^2) build cost on attacker-controlled large filenames.
  */
 export function sanitizeFileName(input: string | null | undefined): string {
-  const trimmed = (input ?? "").trim().replace(BIDI_AND_INVISIBLE_CHARS, "");
+  const trimmed = (input ?? "").trim().replace(INVISIBLE_FORMAT_CHARS, "");
   if (!trimmed) {
     return "file";
   }

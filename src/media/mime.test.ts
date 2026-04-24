@@ -250,6 +250,22 @@ describe("sanitizeFileName", () => {
     expect(result).toBe("a".repeat(128));
     expect(result.length).toBe(128);
   });
+
+  it("strips zero-width space (U+200B) from filename", () => {
+    expect(sanitizeFileName("invoice\u200B.pdf.exe")).toBe("invoice.pdf.exe");
+  });
+
+  it("strips zero-width joiner (U+200D) from filename", () => {
+    expect(sanitizeFileName("a\u200Db\u200Dc.txt")).toBe("abc.txt");
+  });
+
+  it("strips byte order mark (U+FEFF) from filename", () => {
+    expect(sanitizeFileName("\uFEFFreport.pdf")).toBe("report.pdf");
+  });
+
+  it("strips soft hyphen (U+00AD) from filename", () => {
+    expect(sanitizeFileName("doc\u00AD.pdf")).toBe("doc.pdf");
+  });
 });
 
 describe("normalizeMimeType", () => {
