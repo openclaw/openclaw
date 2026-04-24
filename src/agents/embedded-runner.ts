@@ -8,10 +8,10 @@ export {
   resolveEmbeddedSessionLane,
   runEmbeddedAgent,
   waitForEmbeddedAgentRunEnd,
-} from "./embedded-agent.js";
+} from "./pi-embedded-runner.js";
 export type {
   EmbeddedAgentCompactResult,
   EmbeddedAgentMeta,
   EmbeddedAgentRunMeta,
   EmbeddedAgentRunResult,
-} from "./embedded-agent.js";
+} from "./pi-embedded-runner.js";
