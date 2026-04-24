@@ -9,6 +9,7 @@ import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
+import type { ToolHandlerContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -23,7 +24,10 @@ function createContractTool(name: string, execute: AgentTool["execute"]): AgentT
   } as AgentTool;
 }
 
-function createToolHandlerCtx() {
+type ToolExecutionStartEvent = Parameters<typeof handleToolExecutionStart>[1];
+type ToolExecutionEndEvent = Parameters<typeof handleToolExecutionEnd>[1];
+
+function createToolHandlerCtx(): ToolHandlerContext {
   return {
     params: {
       runId: "run-contract",
@@ -44,6 +48,34 @@ function createToolHandlerCtx() {
     emitToolOutput: vi.fn(),
     trimMessagingToolSent: vi.fn(),
   };
+}
+
+function toolExecutionStartEvent(params: {
+  toolName: string;
+  toolCallId: string;
+  args: unknown;
+}): ToolExecutionStartEvent {
+  return {
+    type: "tool_execution_start",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    args: params.args,
+  } as ToolExecutionStartEvent;
+}
+
+function toolExecutionEndEvent(params: {
+  toolName: string;
+  toolCallId: string;
+  isError: boolean;
+  result: unknown;
+}): ToolExecutionEndEvent {
+  return {
+    type: "tool_execution_end",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    isError: params.isError,
+    result: params.result,
+  } as ToolExecutionEndEvent;
 }
 
 describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
@@ -71,24 +103,22 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     const originalParams = { command: "pwd" };
 
     await handleToolExecutionStart(
-      ctx as never,
-      {
-        type: "tool_execution_start",
+      ctx,
+      toolExecutionStartEvent({
         toolName: "exec",
         toolCallId,
         args: originalParams,
-      } as never,
+      }),
     );
     const result = await definition.execute(toolCallId, originalParams, undefined, undefined, {});
     await handleToolExecutionEnd(
-      ctx as never,
-      {
-        type: "tool_execution_end",
+      ctx,
+      toolExecutionEndEvent({
         toolName: "exec",
         toolCallId,
         isError: false,
         result,
-      } as never,
+      }),
     );
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
@@ -138,13 +168,12 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     const originalParams = { command: "false" };
 
     await handleToolExecutionStart(
-      ctx as never,
-      {
-        type: "tool_execution_start",
+      ctx,
+      toolExecutionStartEvent({
         toolName: "exec",
         toolCallId,
         args: originalParams,
-      } as never,
+      }),
     );
     const result = await definition.execute(toolCallId, originalParams, undefined, undefined, {});
     expect(result).toEqual(
@@ -156,14 +185,13 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
       }),
     );
     await handleToolExecutionEnd(
-      ctx as never,
-      {
-        type: "tool_execution_end",
+      ctx,
+      toolExecutionEndEvent({
         toolName: "exec",
         toolCallId,
         isError: true,
         result,
-      } as never,
+      }),
     );
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
@@ -208,13 +236,12 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     };
 
     await handleToolExecutionStart(
-      ctx as never,
-      {
-        type: "tool_execution_start",
+      ctx,
+      toolExecutionStartEvent({
         toolName: "message",
         toolCallId,
         args: originalParams,
-      } as never,
+      }),
     );
     const result = await definition.execute(toolCallId, originalParams, undefined, undefined, {});
     expect(result).toEqual(
@@ -226,14 +253,13 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
       }),
     );
     await handleToolExecutionEnd(
-      ctx as never,
-      {
-        type: "tool_execution_end",
+      ctx,
+      toolExecutionEndEvent({
         toolName: "message",
         toolCallId,
         isError: true,
         result,
-      } as never,
+      }),
     );
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
