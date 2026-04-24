@@ -16,6 +16,7 @@ RUN_SETUP_ENTRY_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO:-1}"
 RUN_LOAD_FAILURE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO:-1}"
 RUN_DISABLED_CONFIG_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO:-1}"
 CHANNEL_ONLY="${OPENCLAW_BUNDLED_CHANNEL_ONLY:-}"
+DOCKER_RUN_TIMEOUT="${OPENCLAW_BUNDLED_CHANNEL_DOCKER_RUN_TIMEOUT:-900s}"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" bundled-channel-deps "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
@@ -60,7 +61,7 @@ run_channel_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-deps-$channel.XXXXXX")"
 
   echo "Running bundled $channel runtime deps Docker E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_CHANNEL_UNDER_TEST="$channel" \
     -e OPENCLAW_DEP_SENTINEL="$dep_sentinel" \
@@ -447,7 +448,7 @@ run_root_owned_global_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-root-owned.XXXXXX")"
 
   echo "Running bundled channel root-owned global install Docker E2E..."
-  if ! docker run --rm --user root \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm --user root \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
@@ -623,7 +624,7 @@ run_setup_entry_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-setup-entry.XXXXXX")"
 
   echo "Running bundled channel setup-entry runtime deps Docker E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
@@ -874,7 +875,7 @@ run_disabled_config_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-disabled-config.XXXXXX")"
 
   echo "Running bundled channel disabled-config runtime deps Docker E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
@@ -1039,7 +1040,7 @@ run_update_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-update.XXXXXX")"
 
   echo "Running bundled channel runtime deps Docker update E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
     "${PACKAGE_DOCKER_ARGS[@]}" \
@@ -1386,7 +1387,7 @@ run_load_failure_scenario() {
   run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-channel-load-failure.XXXXXX")"
 
   echo "Running bundled channel load-failure isolation Docker E2E..."
-  if ! docker run --rm \
+  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
