@@ -34,7 +34,13 @@ let mockedReplyThreadTs: string | undefined = THREAD_TS;
 let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
 let mockedDispatchSequence: Array<{
   kind: "tool" | "block" | "final";
-  payload: { text: string; isError?: boolean; mediaUrl?: string; mediaUrls?: string[] };
+  payload: {
+    text: string;
+    isError?: boolean;
+    isReasoning?: boolean;
+    mediaUrl?: string;
+    mediaUrls?: string[];
+  };
 }> = [];
 
 const noop = () => {};
@@ -289,7 +295,13 @@ vi.mock("../reply.runtime.js", () => ({
     replyOptions?: { disableBlockStreaming?: boolean };
     dispatcher: {
       deliver: (
-        payload: { text: string; isError?: boolean; mediaUrl?: string; mediaUrls?: string[] },
+        payload: {
+          text: string;
+          isError?: boolean;
+          isReasoning?: boolean;
+          mediaUrl?: string;
+          mediaUrls?: string[];
+        },
         info: { kind: "tool" | "block" | "final" },
       ) => Promise<void>;
     };
@@ -386,6 +398,25 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         text: FINAL_REPLY_TEXT,
       }),
     );
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses reasoning payloads before Slack native streaming delivery", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "Reasoning:\n_hidden_", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(startSlackStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: FINAL_REPLY_TEXT,
+      }),
+    );
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
 
