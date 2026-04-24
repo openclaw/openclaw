@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as nativeHookRelayTesting } from "../../../../src/agents/harness/native-hook-relay.js";
+import { buildAgentRuntimePlan } from "../../../../src/agents/runtime-plan/build.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -44,6 +45,28 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     timeoutMs: 5_000,
     authStorage: {} as never,
     modelRegistry: {} as never,
+  } as EmbeddedRunAttemptParams;
+}
+
+function createParamsWithRuntimePlan(
+  sessionFile: string,
+  workspaceDir: string,
+): EmbeddedRunAttemptParams {
+  const params = createParams(sessionFile, workspaceDir);
+  return {
+    ...params,
+    runtimePlan: buildAgentRuntimePlan({
+      provider: params.provider,
+      modelId: params.modelId,
+      model: params.model,
+      modelApi: params.model.api,
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      config: params.config,
+      workspaceDir,
+      agentDir: tempDir,
+      thinkingLevel: params.thinkLevel,
+    }),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -354,7 +377,7 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
     await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
 
@@ -398,6 +421,8 @@ describe("runCodexAppServerAttempt", () => {
         sessionId: "session-1",
         provider: "codex",
         model: "gpt-5.4-codex",
+        resolvedRef: "codex/gpt-5.4-codex",
+        harnessId: "codex",
         assistantTexts: ["hello back"],
         lastAssistant: expect.objectContaining({
           role: "assistant",
