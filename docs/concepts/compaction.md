@@ -113,6 +113,20 @@ the summary:
 /compact Focus on the API design decisions
 ```
 
+## Codex harness compaction
+
+When an embedded agent session uses the Codex app-server harness, Codex owns the
+native thread and native compaction operation. OpenClaw keeps a transcript mirror
+for channel history and future harness switching, but the canonical compacted
+thread stays in Codex.
+
+OpenClaw plugin hooks still expose `before_compaction` and `after_compaction`
+for the Codex harness from the app-server compaction item stream. Codex native
+`PreCompact` and `PostCompact` hooks, when supported by the installed Codex
+app-server, are separate Codex command hooks configured through Codex. They are
+useful for low-level Codex audit or policy, but they do not replace the
+OpenClaw plugin hook contract.
+
 ## Using a different model
 
 By default, compaction uses your agent's primary model. You can use a more

@@ -530,11 +530,17 @@ thread unless Codex exposes that operation through app-server or native hook
 callbacks.
 
 When newer Codex app-server builds expose native compaction and model lifecycle
-hook events, OpenClaw should version-gate that protocol support and map the
-events into the existing OpenClaw hook contract where the semantics are honest.
-Until then, OpenClaw's `before_compaction`, `after_compaction`, `llm_input`, and
-`llm_output` events are adapter-level observations, not byte-for-byte captures
-of Codex's internal request or compaction payloads.
+hook events, OpenClaw version-gates that protocol support and maps events into
+the existing OpenClaw hook contract where the semantics are honest. The
+OpenClaw `before_compaction`, `after_compaction`, `llm_input`, and `llm_output`
+events remain adapter-level observations, not byte-for-byte captures of Codex's
+internal request or compaction payloads.
+
+Codex native `PreCompact` and `PostCompact` hooks are lower-level Codex command
+hooks. They run inside Codex around native thread compaction, using Codex hook
+configuration. OpenClaw's plugin hooks do not require a user or project
+`hooks.json`, and OpenClaw does not double-fire `before_compaction` or
+`after_compaction` just because native Codex compaction hooks are available.
 
 Codex native `hook/started` and `hook/completed` app-server notifications are
 projected as `codex_app_server.hook` agent events for trajectory and debugging.
@@ -563,6 +569,12 @@ reasoning or plan records when the app-server emits them. Today, OpenClaw only
 records native compaction start and completion signals. It does not yet expose a
 human-readable compaction summary or an auditable list of which entries Codex
 kept after compaction.
+
+On Codex app-server builds with native compaction hook support, Codex can also
+run its own `PreCompact` and `PostCompact` command hooks around that native
+operation. Those hooks are useful for Codex-owned audit and policy. OpenClaw
+still treats the app-server compaction item stream as the source for OpenClaw
+plugin `before_compaction` and `after_compaction` events.
 
 Because Codex owns the canonical native thread, `tool_result_persist` does not
 currently rewrite Codex-native tool result records. It only applies when
