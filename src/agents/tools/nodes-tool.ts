@@ -374,9 +374,13 @@ export function createNodesTool(options?: {
               pushData = buf.toString("base64");
               pushEncoding = "base64";
             } else {
+              const inlineEncoding =
+                typeof params.encoding === "string" && params.encoding.trim()
+                  ? (params.encoding.trim() as "base64" | "utf8")
+                  : "utf8";
               pushData = inlineData!;
-              pushEncoding = "utf8";
-              size = Buffer.byteLength(pushData, "utf8");
+              pushEncoding = inlineEncoding;
+              size = Buffer.from(pushData, inlineEncoding).length;
               if (size > FILE_TRANSFER_MAX_BYTES) {
                 throw new Error(
                   `file_push: inline data size ${size} exceeds max ${FILE_TRANSFER_MAX_BYTES} bytes`,
