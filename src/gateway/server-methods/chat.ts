@@ -86,6 +86,7 @@ import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
+import type { GatewayClient } from "./shared-types.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -144,6 +145,13 @@ export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_MAX_INLINE_IMAGE_DATA_BYTES = 48 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const CHAT_HISTORY_INLINE_IMAGE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+]);
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -706,10 +714,7 @@ function sanitizeChatHistoryContentBlock(
     delete entry.data;
     entry.source = {
       type: "base64",
-      media_type:
-        typeof entry.mimeType === "string" && entry.mimeType.trim().length > 0
-          ? entry.mimeType
-          : "image/png",
+      media_type: resolveChatHistoryInlineImageMediaType(entry.mimeType),
     };
     if (
       opts?.preserveInlineImageData === true &&
@@ -739,6 +744,15 @@ function sanitizeChatHistoryContentBlock(
     }
   }
   return { block: changed ? entry : block, changed };
+}
+
+function resolveChatHistoryInlineImageMediaType(value: unknown): string {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return CHAT_HISTORY_INLINE_IMAGE_MEDIA_TYPES.has(normalized) ? normalized : "image/png";
+}
+
+function canPreserveInlineChatHistoryImages(client: GatewayClient | undefined): boolean {
+  return (client?.connect?.scopes ?? []).includes(ADMIN_SCOPE);
 }
 
 function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
@@ -1690,7 +1704,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
-    const preserveInlineImageData = isWebchatClient(client?.connect?.client);
+    const preserveInlineImageData = canPreserveInlineChatHistoryImages(client);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       sanitizeChatHistoryMessages(sanitized, effectiveMaxChars, {
         preserveInlineImageData,
