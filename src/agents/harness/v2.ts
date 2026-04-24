@@ -82,7 +82,6 @@ export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
       params: prepared.params,
       lifecycleState: "started",
     }),
-    resume: async (session) => session,
     send: async (session) => harness.runAttempt(session.params),
     resolveOutcome: async (session, result) =>
       applyAgentHarnessResultClassification(harness, result, session.params),

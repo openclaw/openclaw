@@ -211,6 +211,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
     const prepared = await v2.prepare(params);
     const session = await v2.start(prepared);
 
+    expect(v2.resume).toBeUndefined();
     expect(await v2.send(session)).toBe(result);
     expect(runAttempt).toHaveBeenCalledWith(params);
     expect(session).toMatchObject({
