@@ -34,28 +34,3 @@ export const UNRELATED_TOOL_CALLS_PAYLOAD_APIS = [
   "anthropic-messages",
   "google-generative-ai",
 ] as const;
-
-export const CODEX_APP_SERVER_TRANSPORT_CONFIG = {
-  appServer: {
-    transport: "websocket",
-    url: "wss://codex.example.test/app-server",
-    authToken: "secret-token",
-    headers: {
-      "x-openclaw-contract": "transport",
-    },
-    requestTimeoutMs: 12_345,
-    approvalPolicy: "on-request",
-    sandbox: "workspace-write",
-    approvalsReviewer: "guardian_subagent",
-    serviceTier: "flex",
-  },
-} as const;
-
-export const CODEX_REASONING_EFFORT_CASES = [
-  { thinkLevel: "minimal", effort: "minimal" },
-  { thinkLevel: "low", effort: "low" },
-  { thinkLevel: "medium", effort: "medium" },
-  { thinkLevel: "high", effort: "high" },
-  { thinkLevel: "xhigh", effort: "xhigh" },
-  { thinkLevel: "off", effort: null },
-] as const;
