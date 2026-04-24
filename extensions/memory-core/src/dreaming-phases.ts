@@ -1718,7 +1718,10 @@ export async function runDreamingSweepPhases(params: {
     });
     // Defensive cleanup: ensure the light-phase narrative session is deleted even if
     // generateAndAppendDreamNarrative's primary cleanup was skipped due to an error.
-    if (params.subagent) {
+    // Skip when narratives are detached: the queued subagent run hasn't read the
+    // session yet, so eager cleanup would race the writer and silently drop the
+    // diary entry. The narrative function does its own cleanup in finally{}.
+    if (params.subagent && !params.detachNarratives) {
       const lightSessionKey = buildNarrativeSessionKey({
         workspaceDir: params.workspaceDir,
         phase: "light",
@@ -1743,7 +1746,8 @@ export async function runDreamingSweepPhases(params: {
       detachNarratives: params.detachNarratives,
     });
     // Defensive cleanup: ensure the REM-phase narrative session is deleted.
-    if (params.subagent) {
+    // Skip when narratives are detached (see light-phase comment above).
+    if (params.subagent && !params.detachNarratives) {
       const remSessionKey = buildNarrativeSessionKey({
         workspaceDir: params.workspaceDir,
         phase: "rem",
