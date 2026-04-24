@@ -200,4 +200,72 @@ describe("withReplyDispatcher", () => {
       }),
     );
   });
+
+  it("passes explicit direct conversation type for generic silent-reply policy keys", async () => {
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx({
+        SessionKey: "agent:test:main",
+        ChatType: "dm",
+        Surface: "discord",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(hoisted.createReplyDispatcherWithTypingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silentReplyContext: expect.objectContaining({
+          sessionKey: "agent:test:main",
+          surface: "discord",
+          conversationType: "direct",
+        }),
+      }),
+    );
+  });
+
+  it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx({
+        SessionKey: "agent:test:main",
+        CommandSource: "native",
+        CommandTargetSessionKey: "agent:test:direct:user",
+        ChatType: "group",
+        Surface: "telegram",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const silentReplyContext =
+      hoisted.createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0]?.silentReplyContext;
+    expect(silentReplyContext).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:test:direct:user",
+        surface: "telegram",
+      }),
+    );
+    expect(silentReplyContext).not.toEqual(expect.objectContaining({ conversationType: "group" }));
+  });
 });

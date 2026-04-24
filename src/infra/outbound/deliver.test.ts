@@ -915,7 +915,7 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("applies silent-reply policy from the outbound session", async () => {
+  it("applies silent-reply rewrite policy from the outbound session", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-silent", roomId: "!room" });
     const cfg: OpenClawConfig = {
       agents: {
@@ -924,9 +924,6 @@ describe("deliverOutboundPayloads", () => {
             direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -945,7 +942,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMatrix).toHaveBeenCalledTimes(1);
-    expect(sendMatrix.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMatrix.mock.calls[0]?.[1]).toBeTruthy();
     expect(sendMatrix.mock.calls[0]?.[1]).not.toBe("NO_REPLY");
   });
 

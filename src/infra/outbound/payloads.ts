@@ -243,18 +243,18 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    const rewrittenPayload: ReplyPayload = {
+    const visibleSilentPayload: ReplyPayload = {
       ...entry.payload,
       text: resolveSilentReplyRewriteText({
         seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
       }),
     };
-    if (!isRenderablePayload(rewrittenPayload)) {
+    if (!isRenderablePayload(visibleSilentPayload)) {
       continue;
     }
     plan.push({
-      payload: rewrittenPayload,
-      parts: resolveSendableOutboundReplyParts(rewrittenPayload),
+      payload: visibleSilentPayload,
+      parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
       hasPresentation: entry.hasPresentation,
       hasInteractive: entry.hasInteractive,
       hasChannelData: entry.hasChannelData,
