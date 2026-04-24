@@ -319,6 +319,14 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
+};
+
+export type GatewayThinkingLevelOption = {
+  id: string;
+  label: string;
 };
 
 export type ChatModelOverride = import("./chat-model-ref.types.ts").ChatModelOverride;
@@ -411,6 +419,7 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: boolean;

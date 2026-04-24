@@ -25,7 +25,10 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
-import { listThinkingLevelLabels, resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import {
+  listThinkingLevelOptions,
+  resolveThinkingDefaultForModel,
+} from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -1072,10 +1075,17 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
+  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model);
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
+    thinkingLevels,
+    thinkingOptions: thinkingLevels.map((level) => level.label),
+    thinkingDefault: resolveThinkingDefaultForModel({
+      provider: resolved.provider,
+      model: resolved.model,
+    }),
   };
 }
 
@@ -1377,6 +1387,7 @@ export function buildGatewaySessionRow(params: {
   const rowModel = selectedModel?.model ?? model;
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
 
   return {
     key,
@@ -1402,7 +1413,8 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
-    thinkingOptions: listThinkingLevelLabels(thinkingProvider, thinkingModel),
+    thinkingLevels,
+    thinkingOptions: thinkingLevels.map((level) => level.label),
     thinkingDefault: resolveThinkingDefaultForModel({
       provider: thinkingProvider,
       model: thinkingModel,
