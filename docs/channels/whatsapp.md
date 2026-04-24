@@ -164,7 +164,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
     - if no allowlist is configured, the linked self number is allowed by default
-    - outbound `fromMe` DMs are never auto-paired
+    - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
 
   </Tab>
 
