@@ -1381,6 +1381,35 @@ lives on the [First-run FAQ](/help/faq-first-run).
 Model Q&A — defaults, selection, aliases, switching, failover, auth profiles —
 lives on the [Models FAQ](/help/faq-models).
 
+<AccordionGroup>
+  <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.7"?'>
+    This means the **provider isn't configured** (no MiniMax provider config or auth
+    profile was found), so the model can't be resolved.
+
+    Fix checklist:
+
+    1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
+    2. Make sure MiniMax is configured (wizard or JSON), or that MiniMax auth
+       exists in env/auth profiles so the matching provider can be injected
+       (`MINIMAX_API_KEY` for `minimax`, `MINIMAX_OAUTH_TOKEN` or stored MiniMax
+       OAuth for `minimax-portal`).
+    3. Use the exact model id (case-sensitive) for your auth path:
+       `minimax/MiniMax-M2.7` or `minimax/MiniMax-M2.7-highspeed` for API-key
+       setup, or `minimax-portal/MiniMax-M2.7` /
+       `minimax-portal/MiniMax-M2.7-highspeed` for OAuth setup.
+    4. Run:
+
+       ```bash
+       openclaw models list
+       ```
+
+       and pick from the list (or `/model list` in chat).
+
+    See [MiniMax](/providers/minimax) and [Models](/concepts/models).
+
+  </Accordion>
+</AccordionGroup>
+
 ## Gateway: ports, "already running", and remote mode
 
 <AccordionGroup>
