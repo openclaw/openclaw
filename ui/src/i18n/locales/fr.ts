@@ -265,6 +265,20 @@ export const fr: TranslationMap = {
     },
     connection: {
       title: "Comment se connecter",
+      lead: "OpenClaw Control se connecte à une passerelle en cours d’exécution. Utilisez l’URL de la passerelle et le jeton de la machine qui héberge OpenClaw.",
+      beforeStartTitle: "Avant de commencer",
+      beforeStartToken:
+        "Un jeton de passerelle est généralement requis, sauf si vous avez explicitement désactivé l’authentification de la Control UI.",
+      beforeStartHost:
+        "ws://127.0.0.1:18789 ne fonctionne que sur la machine hôte. Depuis un autre appareil, utilisez l’IP de l’hôte, une URL Tailscale ou un lien de tableau de bord avec jeton.",
+      beforeStartPassword:
+        "Le mot de passe de la passerelle n’est nécessaire que si votre passerelle en utilise un.",
+      afterConnectTitle: "Ce qui se passe après la connexion",
+      afterConnectBody:
+        "Une fois connecté, cette page devient votre console d’exploitation en direct pour les sessions, canaux, journaux, modèles, appareils et automatisations.",
+      authRequiredTitle: "Jeton de passerelle manquant ou refusé",
+      authRequiredBody:
+        "Si vous voyez une erreur d’autorisation, le jeton est absent, expiré ou provient d’une autre instance de passerelle.",
       step1: "Démarrez le Gateway sur votre machine hôte :",
       step2: "Obtenez une URL du tableau de bord avec jeton :",
       step3:

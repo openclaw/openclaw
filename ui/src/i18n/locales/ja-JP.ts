@@ -267,6 +267,20 @@ export const ja_JP: TranslationMap = {
     },
     connection: {
       title: "接続方法",
+      lead: "OpenClaw Control は稼働中のゲートウェイに接続します。OpenClaw を動かしているマシンのゲートウェイ URL とトークンを使用してください。",
+      beforeStartTitle: "始める前に",
+      beforeStartToken:
+        "Control UI の認証を明示的に無効にしていない限り、通常はゲートウェイトークンが必要です。",
+      beforeStartHost:
+        "ws://127.0.0.1:18789 はホストマシン上でのみ動作します。別のデバイスからは、ホスト IP、Tailscale URL、またはトークン付きダッシュボードリンクを使用してください。",
+      beforeStartPassword:
+        "ゲートウェイのパスワードは、ゲートウェイがそれを使う設定になっている場合にのみ必要です。",
+      afterConnectTitle: "接続後にできること",
+      afterConnectBody:
+        "接続すると、このページはセッション、チャネル、ログ、モデル、デバイス、自動化を扱うライブ運用コンソールになります。",
+      authRequiredTitle: "ゲートウェイトークンがないか拒否されました",
+      authRequiredBody:
+        "未認証エラーが表示される場合、トークンがない、期限切れである、または別のゲートウェイインスタンスのものです。",
       step1: "ホストマシンで Gateway を起動します:",
       step2: "トークン付きのダッシュボード URL を取得します:",
       step3: "上に WebSocket URL とトークンを貼り付けるか、トークン付き URL を直接開いてください。",

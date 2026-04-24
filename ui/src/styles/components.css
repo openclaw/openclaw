@@ -22,7 +22,7 @@
 }
 
 .login-gate__card {
-  width: min(520px, 100%);
+  width: min(760px, 100%);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -51,6 +51,73 @@
   color: var(--muted);
   font-size: 14px;
   margin-top: 4px;
+}
+
+.login-gate__intro {
+  margin-bottom: 18px;
+  text-align: center;
+}
+
+.login-gate__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.login-gate__lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.login-gate__callout-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.login-gate__callout-card {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--card) 84%, var(--bg));
+}
+
+.login-gate__callout-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.login-gate__callout-body {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.login-gate__bullets {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.login-gate__bullets li + li {
+  margin-top: 6px;
 }
 
 .login-gate__form {
@@ -82,6 +149,13 @@
   padding: 10px 16px;
   font-size: 15px;
   font-weight: 600;
+}
+
+.login-gate__error-hint {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(239, 68, 68, 0.25);
+  color: inherit;
 }
 
 .login-gate__help {
@@ -159,6 +233,17 @@
 .login-gate__docs {
   margin-top: 10px;
   font-size: 11px;
+}
+
+@media (max-width: 720px) {
+  .login-gate__card {
+    width: 100%;
+    padding: 24px;
+  }
+
+  .login-gate__callout-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ===========================================

@@ -267,6 +267,20 @@ export const de: TranslationMap = {
     },
     connection: {
       title: "So verbindest du dich",
+      lead: "OpenClaw Control verbindet sich mit einem laufenden Gateway. Verwende die Gateway-URL und das Token von dem Rechner, auf dem OpenClaw läuft.",
+      beforeStartTitle: "Bevor du beginnst",
+      beforeStartToken:
+        "Ein Gateway-Token ist normalerweise erforderlich, es sei denn, du hast die Control-UI-Authentifizierung ausdrücklich deaktiviert.",
+      beforeStartHost:
+        "ws://127.0.0.1:18789 funktioniert nur auf dem Host-Rechner. Verwende auf einem anderen Gerät die Host-IP, eine Tailscale-URL oder einen tokenisierten Dashboard-Link.",
+      beforeStartPassword:
+        "Ein Gateway-Passwort wird nur benötigt, wenn dein Gateway damit konfiguriert ist.",
+      afterConnectTitle: "Was nach dem Verbinden passiert",
+      afterConnectBody:
+        "Nach dem Verbinden wird diese Seite zu deiner Live-Konsole für Sitzungen, Kanäle, Logs, Modelle, Geräte und Automatisierung.",
+      authRequiredTitle: "Gateway-Token fehlt oder wurde abgelehnt",
+      authRequiredBody:
+        "Wenn du einen Fehler wegen fehlender Berechtigung siehst, fehlt das Token, ist abgelaufen oder stammt von einer anderen Gateway-Instanz.",
       step1: "Starte das Gateway auf deinem Host-Rechner:",
       step2: "Rufe eine tokenisierte Dashboard-URL ab:",
       step3:

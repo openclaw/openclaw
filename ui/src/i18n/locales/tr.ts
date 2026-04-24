@@ -266,6 +266,20 @@ export const tr: TranslationMap = {
     },
     connection: {
       title: "Nasıl bağlanılır",
+      lead: "OpenClaw Control çalışan bir ağ geçidine bağlanır. OpenClaw’u barındıran makinedeki ağ geçidi URL’sini ve belirtecini kullanın.",
+      beforeStartTitle: "Başlamadan önce",
+      beforeStartToken:
+        "Control UI kimlik doğrulamasını açıkça kapatmadıysanız genellikle bir ağ geçidi belirteci gerekir.",
+      beforeStartHost:
+        "ws://127.0.0.1:18789 yalnızca ana makinede çalışır. Başka bir cihazda ana makinenin IP’sini, bir Tailscale URL’sini veya belirteçli pano bağlantısını kullanın.",
+      beforeStartPassword:
+        "Ağ geçidi parolası yalnızca ağ geçidiniz bu şekilde yapılandırılmışsa gerekir.",
+      afterConnectTitle: "Bağlandıktan sonra ne olur",
+      afterConnectBody:
+        "Bağlandıktan sonra bu sayfa oturumlar, kanallar, günlükler, modeller, cihazlar ve otomasyon için canlı operasyon konsolunuz olur.",
+      authRequiredTitle: "Ağ geçidi belirteci eksik veya reddedildi",
+      authRequiredBody:
+        "Yetkisiz hatası görüyorsanız belirteç eksiktir, süresi dolmuştur veya başka bir ağ geçidi örneğine aittir.",
       step1: "Ana bilgisayarınızda Gateway’i başlatın:",
       step2: "Token içeren bir kontrol paneli URL'si alın:",
       step3:

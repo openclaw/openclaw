@@ -263,6 +263,20 @@ export const id: TranslationMap = {
     },
     connection: {
       title: "Cara terhubung",
+      lead: "OpenClaw Control terhubung ke gateway yang sedang berjalan. Gunakan URL gateway dan token dari mesin yang menjalankan OpenClaw.",
+      beforeStartTitle: "Sebelum memulai",
+      beforeStartToken:
+        "Token gateway biasanya diperlukan kecuali Anda memang menonaktifkan autentikasi Control UI secara eksplisit.",
+      beforeStartHost:
+        "ws://127.0.0.1:18789 hanya berfungsi di mesin host. Untuk perangkat lain, gunakan IP host, URL Tailscale, atau tautan dasbor bertoken.",
+      beforeStartPassword:
+        "Kata sandi gateway hanya diperlukan jika gateway Anda memang dikonfigurasi menggunakannya.",
+      afterConnectTitle: "Apa yang terjadi setelah terhubung",
+      afterConnectBody:
+        "Setelah terhubung, halaman ini menjadi konsol operasi langsung Anda untuk sesi, kanal, log, model, perangkat, dan otomasi.",
+      authRequiredTitle: "Token gateway tidak ada atau ditolak",
+      authRequiredBody:
+        "Jika Anda melihat kesalahan tidak berwenang, tokennya tidak ada, sudah kedaluwarsa, atau berasal dari instance gateway yang berbeda.",
       step1: "Mulai gateway di mesin host Anda:",
       step2: "Dapatkan URL dasbor bertoken:",
       step3: "Tempel URL WebSocket dan token di atas, atau buka URL bertoken langsung.",

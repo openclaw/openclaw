@@ -262,6 +262,20 @@ export const ko: TranslationMap = {
     },
     connection: {
       title: "연결 방법",
+      lead: "OpenClaw Control은 실행 중인 게이트웨이에 연결됩니다. OpenClaw를 호스팅하는 머신의 게이트웨이 URL과 토큰을 사용하세요.",
+      beforeStartTitle: "시작하기 전에",
+      beforeStartToken:
+        "Control UI 인증을 명시적으로 비활성화하지 않았다면 일반적으로 게이트웨이 토큰이 필요합니다.",
+      beforeStartHost:
+        "ws://127.0.0.1:18789 는 호스트 머신에서만 동작합니다. 다른 기기에서는 호스트 IP, Tailscale URL 또는 토큰이 포함된 대시보드 링크를 사용하세요.",
+      beforeStartPassword:
+        "게이트웨이 비밀번호는 게이트웨이가 그렇게 구성된 경우에만 필요합니다.",
+      afterConnectTitle: "연결 후 진행되는 일",
+      afterConnectBody:
+        "연결되면 이 페이지는 세션, 채널, 로그, 모델, 기기, 자동화를 위한 실시간 운영 콘솔이 됩니다.",
+      authRequiredTitle: "게이트웨이 토큰이 없거나 거부되었습니다",
+      authRequiredBody:
+        "권한 없음 오류가 표시되면 토큰이 없거나 만료되었거나 다른 게이트웨이 인스턴스의 토큰입니다.",
       step1: "호스트 머신에서 gateway를 시작하세요:",
       step2: "토큰이 포함된 대시보드 URL을 가져오세요:",
       step3: "위에 WebSocket URL과 토큰을 붙여넣거나, 토큰이 포함된 URL을 직접 여세요.",

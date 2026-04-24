@@ -5,26 +5,229 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="Connect to your OpenClaw gateway with clearer setup guidance, host-machine instructions, and operator-focused context."
+    />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <style>
+      :root {
+        --shell-bg: radial-gradient(circle at top, #17233d 0%, #0a0f19 42%, #060910 100%);
+        --shell-panel: rgba(9, 14, 24, 0.78);
+        --shell-border: rgba(135, 166, 255, 0.18);
+        --shell-text: #eef4ff;
+        --shell-muted: #a9b7d8;
+        --shell-accent: #71f7c7;
+        --shell-accent-2: #8fb3ff;
+        --shell-warn: #ffcf70;
+        --shell-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+      }
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #060910;
+      }
+      body {
+        color: var(--shell-text);
+        background-image: var(--shell-bg);
+        font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .control-shell {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 32px 24px 64px;
+      }
+      .control-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+        gap: 20px;
+        margin-bottom: 20px;
+      }
+      .hero-card,
+      .guide-card {
+        background: var(--shell-panel);
+        border: 1px solid var(--shell-border);
+        border-radius: 24px;
+        box-shadow: var(--shell-shadow);
+        backdrop-filter: blur(14px);
+      }
+      .hero-card {
+        padding: 28px 30px;
+      }
+      .hero-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(113, 247, 199, 0.12);
+        color: var(--shell-accent);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .hero-card h1 {
+        margin: 16px 0 10px;
+        font-size: clamp(36px, 5vw, 56px);
+        line-height: 1.02;
+        letter-spacing: -0.04em;
+      }
+      .hero-card p {
+        margin: 0;
+        max-width: 62ch;
+        color: var(--shell-muted);
+        font-size: 17px;
+        line-height: 1.6;
+      }
+      .hero-points {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 18px;
+      }
+      .hero-point {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(143, 179, 255, 0.1);
+        color: var(--shell-text);
+        font-size: 14px;
+      }
+      .guide-card {
+        padding: 22px 24px;
+      }
+      .guide-card h2,
+      .shell-note h2 {
+        margin: 0 0 12px;
+        font-size: 18px;
+        letter-spacing: -0.02em;
+      }
+      .guide-card ol,
+      .shell-note ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--shell-muted);
+        line-height: 1.6;
+      }
+      .guide-card li + li,
+      .shell-note li + li {
+        margin-top: 8px;
+      }
+      .guide-card code,
+      .shell-note code {
+        padding: 2px 7px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--shell-text);
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.92em;
+      }
+      .shell-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 20px;
+        align-items: start;
+      }
+      .app-frame {
+        background: rgba(8, 12, 20, 0.44);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 26px;
+        padding: 14px;
+        box-shadow: var(--shell-shadow);
+      }
+      .app-frame openclaw-app {
+        display: block;
+        min-height: 720px;
+        border-radius: 18px;
+        overflow: clip;
+      }
+      .shell-side {
+        display: grid;
+        gap: 18px;
+      }
+      .shell-note {
+        background: var(--shell-panel);
+        border: 1px solid var(--shell-border);
+        border-radius: 22px;
+        padding: 20px 20px 18px;
+        box-shadow: var(--shell-shadow);
+        backdrop-filter: blur(14px);
+      }
+      .shell-note p {
+        margin: 0;
+        color: var(--shell-muted);
+        line-height: 1.6;
+        font-size: 14px;
+      }
+      .shell-kicker {
+        color: var(--shell-accent-2);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+      }
+      .shell-warning {
+        color: var(--shell-warn);
+      }
+      .shell-footer {
+        margin-top: 18px;
+        color: var(--shell-muted);
+        font-size: 13px;
+        text-align: center;
+      }
+      .shell-footer a {
+        color: var(--shell-accent);
+        text-decoration: none;
+      }
+      @media (max-width: 1080px) {
+        .control-hero,
+        .shell-grid {
+          grid-template-columns: 1fr;
+        }
+        .shell-side {
+          grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        }
+      }
+      @media (max-width: 720px) {
+        .control-shell {
+          padding: 20px 14px 40px;
+        }
+        .hero-card,
+        .guide-card,
+        .shell-note {
+          padding: 18px;
+          border-radius: 18px;
+        }
+        .app-frame {
+          padding: 10px;
+          border-radius: 18px;
+        }
+      }
+    </style>
     <script>
       (function () {
         var THEMES = { claw: 1, knot: 1, dash: 1 };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
-          dark: "claw:dark",
-          light: "claw:light",
-          openknot: "knot:dark",
-          fieldmanual: "dash:dark",
-          clawdash: "dash:light",
-          system: "claw:system",
+          dark: 'claw:dark',
+          light: 'claw:light',
+          openknot: 'knot:dark',
+          fieldmanual: 'dash:dark',
+          clawdash: 'dash:light',
+          system: 'claw:system',
         };
         try {
           var keys = Object.keys(localStorage);
           var raw;
           for (var i = 0; i < keys.length; i++) {
-            if (keys[i].indexOf("openclaw.control.settings.v1") === 0) {
+            if (keys[i].indexOf('openclaw.control.settings.v1') === 0) {
               raw = localStorage.getItem(keys[i]);
               if (raw) break;
             }
@@ -33,37 +236,95 @@
           var s = JSON.parse(raw);
           var t = s && s.theme;
           var m = s && s.themeMode;
-          if (typeof t !== "string") t = "";
-          if (typeof m !== "string") m = "";
+          if (typeof t !== 'string') t = '';
+          if (typeof m !== 'string') m = '';
           var legacy = LEGACY[t];
-          var theme = THEMES[t] ? t : legacy ? legacy.split(":")[0] : "claw";
-          var mode = MODES[m] ? m : legacy ? legacy.split(":")[1] : "system";
-          if (mode === "system") {
-            mode = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+          var theme = THEMES[t] ? t : legacy ? legacy.split(':')[0] : 'claw';
+          var mode = MODES[m] ? m : legacy ? legacy.split(':')[1] : 'system';
+          if (mode === 'system') {
+            mode = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
           }
           var resolved =
-            theme === "knot"
-              ? mode === "light"
-                ? "openknot-light"
-                : "openknot"
-              : theme === "dash"
-                ? mode === "light"
-                  ? "dash-light"
-                  : "dash"
-                : mode === "light"
-                  ? "light"
-                  : "dark";
-          document.documentElement.setAttribute("data-theme", resolved);
-          document.documentElement.setAttribute(
-            "data-theme-mode",
-            resolved.indexOf("light") !== -1 ? "light" : "dark",
-          );
+            theme === 'knot'
+              ? mode === 'light'
+                ? 'openknot-light'
+                : 'openknot'
+              : theme === 'dash'
+                ? mode === 'light'
+                  ? 'dash-light'
+                  : 'dash'
+                : mode === 'light'
+                  ? 'light'
+                  : 'dark';
+          document.documentElement.setAttribute('data-theme', resolved);
+          document.documentElement.setAttribute('data-theme-mode', resolved.indexOf('light') !== -1 ? 'light' : 'dark');
         } catch (e) {}
       })();
     </script>
   </head>
   <body>
-    <openclaw-app></openclaw-app>
+    <main class="control-shell">
+      <section class="control-hero" aria-label="OpenClaw connection guidance">
+        <article class="hero-card">
+          <div class="hero-eyebrow">OpenClaw Control</div>
+          <h1>Connect to your gateway with less guessing.</h1>
+          <p>
+            This page is for operators connecting to a running OpenClaw gateway. Start the gateway on the host machine,
+            generate a tokenized dashboard link, then connect here or open that tokenized URL directly.
+          </p>
+          <div class="hero-points">
+            <div class="hero-point">Gateway token is usually required</div>
+            <div class="hero-point">127.0.0.1 only works on the host machine</div>
+            <div class="hero-point">Password is only needed if your gateway uses one</div>
+          </div>
+        </article>
+        <aside class="guide-card">
+          <h2>Before you start</h2>
+          <ol>
+            <li>Run <code>openclaw gateway run</code> on the machine hosting OpenClaw.</li>
+            <li>Run <code>openclaw dashboard</code> to get a tokenized dashboard URL.</li>
+            <li>Use that URL directly, or paste its WebSocket URL and token into the form below.</li>
+          </ol>
+        </aside>
+      </section>
+
+      <section class="shell-grid">
+        <div class="app-frame">
+          <openclaw-app></openclaw-app>
+        </div>
+        <aside class="shell-side">
+          <section class="shell-note">
+            <div class="shell-kicker">Connection hints</div>
+            <h2>Use the right address</h2>
+            <p>
+              The default <code>ws://127.0.0.1:18789</code> only works when your browser is on the same machine as the gateway.
+              If the gateway runs elsewhere, replace <code>127.0.0.1</code> with that host’s reachable address.
+            </p>
+          </section>
+          <section class="shell-note">
+            <div class="shell-kicker shell-warning">Common issue</div>
+            <h2>“Gateway token missing” is a setup hint, not a dead end.</h2>
+            <ul>
+              <li>Run <code>openclaw dashboard</code> on the host machine.</li>
+              <li>Open the generated tokenized URL directly, or paste the token into the Gateway Token field.</li>
+              <li>If a password was configured on the gateway, enter it too.</li>
+            </ul>
+          </section>
+          <section class="shell-note">
+            <div class="shell-kicker">Operator note</div>
+            <h2>What happens after connect</h2>
+            <p>
+              Once connected, this control app shows sessions, channels, logs, and other operator tools. The sign-in form below
+              is just the front door to the live gateway.
+            </p>
+          </section>
+        </aside>
+      </section>
+
+      <div class="shell-footer">
+        Need a tokenized link? Run <code>openclaw dashboard</code> on the host machine.
+      </div>
+    </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

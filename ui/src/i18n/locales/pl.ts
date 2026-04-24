@@ -264,6 +264,20 @@ export const pl: TranslationMap = {
     },
     connection: {
       title: "Jak się połączyć",
+      lead: "OpenClaw Control łączy się z działającą bramą. Użyj adresu URL bramy i tokenu z maszyny hostującej OpenClaw.",
+      beforeStartTitle: "Zanim zaczniesz",
+      beforeStartToken:
+        "Token bramy jest zwykle wymagany, chyba że jawnie wyłączono uwierzytelnianie Control UI.",
+      beforeStartHost:
+        "ws://127.0.0.1:18789 działa tylko na komputerze hosta. Na innym urządzeniu użyj adresu IP hosta, adresu Tailscale lub linku do pulpitu z tokenem.",
+      beforeStartPassword:
+        "Hasło bramy jest potrzebne tylko wtedy, gdy brama została tak skonfigurowana.",
+      afterConnectTitle: "Co dzieje się po połączeniu",
+      afterConnectBody:
+        "Po połączeniu ta strona staje się konsolą operacyjną na żywo dla sesji, kanałów, logów, modeli, urządzeń i automatyzacji.",
+      authRequiredTitle: "Brakuje tokenu bramy albo został odrzucony",
+      authRequiredBody:
+        "Jeśli widzisz błąd braku autoryzacji, token jest nieobecny, wygasł albo pochodzi z innej instancji bramy.",
       step1: "Uruchom Gateway na komputerze hosta:",
       step2: "Uzyskaj URL panelu z tokenem:",
       step3: "Wklej powyżej URL WebSocket i token albo otwórz bezpośrednio URL z tokenem.",

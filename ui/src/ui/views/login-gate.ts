@@ -5,10 +5,19 @@ import { icons } from "../icons.ts";
 import { normalizeBasePath } from "../navigation.ts";
 import { agentLogoUrl } from "./agents-utils.ts";
 import { renderConnectCommand } from "./connect-command.ts";
+import { resolveAuthHintKind } from "./overview-hints.ts";
 
 export function renderLoginGate(state: AppViewState) {
   const basePath = normalizeBasePath(state.basePath ?? "");
   const faviconSrc = agentLogoUrl(basePath);
+  const authHintKind = resolveAuthHintKind({
+    connected: state.connected,
+    lastError: state.lastError,
+    lastErrorCode: state.lastErrorCode,
+    hasToken: Boolean(state.settings.token?.trim()),
+    hasPassword: Boolean(state.password?.trim()),
+  });
+  const showAuthHint = authHintKind === "required" || authHintKind === "failed";
 
   return html`
     <div class="login-gate">
@@ -18,6 +27,31 @@ export function renderLoginGate(state: AppViewState) {
           <div class="login-gate__title">OpenClaw</div>
           <div class="login-gate__sub">${t("login.subtitle")}</div>
         </div>
+
+        <div class="login-gate__intro">
+          <div class="login-gate__eyebrow">Operator access</div>
+          <p class="login-gate__lead">${t("overview.connection.lead")}</p>
+        </div>
+
+        <div class="login-gate__callout-grid">
+          <section class="login-gate__callout-card">
+            <div class="login-gate__callout-title">
+              ${t("overview.connection.beforeStartTitle")}
+            </div>
+            <ul class="login-gate__bullets">
+              <li>${t("overview.connection.beforeStartToken")}</li>
+              <li>${t("overview.connection.beforeStartHost")}</li>
+              <li>${t("overview.connection.beforeStartPassword")}</li>
+            </ul>
+          </section>
+          <section class="login-gate__callout-card">
+            <div class="login-gate__callout-title">
+              ${t("overview.connection.afterConnectTitle")}
+            </div>
+            <p class="login-gate__callout-body">${t("overview.connection.afterConnectBody")}</p>
+          </section>
+        </div>
+
         <div class="login-gate__form">
           <label class="field">
             <span>${t("overview.access.wsUrl")}</span>
@@ -105,6 +139,12 @@ export function renderLoginGate(state: AppViewState) {
         ${state.lastError
           ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${state.lastError}</div>
+              ${showAuthHint
+                ? html`<div class="login-gate__error-hint">
+                    <strong>${t("overview.connection.authRequiredTitle")}</strong>
+                    <div>${t("overview.connection.authRequiredBody")}</div>
+                  </div>`
+                : ""}
             </div>`
           : ""}
         <div class="login-gate__help">

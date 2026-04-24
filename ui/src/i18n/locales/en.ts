@@ -259,6 +259,20 @@ export const en: TranslationMap = {
     },
     connection: {
       title: "How to connect",
+      lead: "OpenClaw Control connects to a running gateway. Use the gateway URL and token from the machine hosting OpenClaw.",
+      beforeStartTitle: "Before you start",
+      beforeStartToken:
+        "A gateway token is usually required unless you explicitly disabled control UI auth.",
+      beforeStartHost:
+        "ws://127.0.0.1:18789 only works on the host machine. For another device, use the host IP, Tailscale URL, or tokenized dashboard link.",
+      beforeStartPassword:
+        "Gateway password is only needed if your gateway is configured with one.",
+      afterConnectTitle: "What happens after connect",
+      afterConnectBody:
+        "Once connected, this page becomes your live operations console for sessions, channels, logs, models, devices, and automation.",
+      authRequiredTitle: "Gateway token missing or rejected",
+      authRequiredBody:
+        "If you see an unauthorized error, the token is missing, expired, or from a different gateway instance.",
       step1: "Start the gateway on your host machine:",
       step2: "Get a tokenized dashboard URL:",
       step3: "Paste the WebSocket URL and token above, or open the tokenized URL directly.",
