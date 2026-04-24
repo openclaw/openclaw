@@ -30,6 +30,16 @@ export class CronService implements CronServiceContract {
     ops.stop(this.state);
   }
 
+  /**
+   * Gracefully stop: drain in-flight operations and flush state to disk.
+   * Use this instead of `stop()` when replacing the service (e.g. during
+   * hot config reload) to prevent the old instance from overwriting
+   * changes loaded by the new one.
+   */
+  async stopGraceful() {
+    await ops.stopGraceful(this.state);
+  }
+
   async status() {
     return await ops.status(this.state);
   }
