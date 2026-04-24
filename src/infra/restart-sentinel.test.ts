@@ -136,7 +136,7 @@ describe("restart sentinel", () => {
       status: "error" as const,
       ts: Date.now(),
       message: "Patch failed",
-      doctorHint: "Run openclaw doctor",
+      doctorHint: "Run gemmaclaw doctor",
       stats: { mode: "patch", reason: "validation failed" },
     };
 
@@ -145,7 +145,7 @@ describe("restart sentinel", () => {
         "Gateway restart config-patch error (patch)",
         "Patch failed",
         "Reason: validation failed",
-        "Run openclaw doctor",
+        "Run gemmaclaw doctor",
       ].join("\n"),
     );
   });
@@ -242,7 +242,7 @@ describe("restart sentinel message dedup", () => {
 
   it("formats the non-interactive doctor command", () => {
     expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toContain(
-      "openclaw doctor --non-interactive",
+      "gemmaclaw doctor --non-interactive",
     );
   });
 });

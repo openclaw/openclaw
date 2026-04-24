@@ -23,6 +23,7 @@ const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+// oxlint-disable-next-line typescript/no-redundant-type-constituents -- false positive: oxlint can't resolve OutputRuntimeEnv through openclaw/plugin-sdk path alias
 let lastRuntime: ReturnType<typeof createNonExitingRuntimeEnv> | null = null;
 const TEST_DOC_TOKEN = "ZsJfdxrBFo0RwuxteOLc1Ekvneb";
 const TEST_WIKI_TOKEN = "OtYpd5pKOoMeQzxrzkocv9KIn4H";

@@ -30,6 +30,7 @@ const {
 } = getFeishuLifecycleTestMocks();
 
 let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
+// oxlint-disable-next-line typescript/no-redundant-type-constituents -- false positive: oxlint can't resolve OutputRuntimeEnv through openclaw/plugin-sdk path alias
 let lastRuntime: ReturnType<typeof createRuntimeEnv> | null = null;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const { cfg: lifecycleConfig, account: lifecycleAccount } = createFeishuLifecycleFixture({

@@ -185,14 +185,14 @@ export function expectWhatsAppOpenPolicySetup(
 
 export function expectNoWhatsAppLoginFollowup(harness: WizardPromptHarness): void {
   expect(harness.note).not.toHaveBeenCalledWith(
-    expect.stringContaining("openclaw channels login"),
+    expect.stringContaining("gemmaclaw channels login"),
     WHATSAPP_LOGIN_NOTE_TITLE,
   );
 }
 
 export function expectWhatsAppLoginFollowup(harness: WizardPromptHarness): void {
   expect(harness.note).toHaveBeenCalledWith(
-    expect.stringContaining("openclaw channels login"),
+    expect.stringContaining("gemmaclaw channels login"),
     WHATSAPP_LOGIN_NOTE_TITLE,
   );
 }

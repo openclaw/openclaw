@@ -145,6 +145,6 @@ describe("graceful plugin initialization failure", () => {
     expect(summary).toBeDefined();
     expect(summary).toContain("register: warn-register");
     expect(summary).toContain("validation: warn-validation");
-    expect(summary).toContain("openclaw plugins list");
+    expect(summary).toContain("gemmaclaw plugins list");
   });
 });

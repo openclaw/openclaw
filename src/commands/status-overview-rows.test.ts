@@ -48,7 +48,7 @@ describe("status-overview-rows", () => {
         { Item: "Version", Value: expect.any(String) },
         { Item: "OS", Value: "macOS" },
         { Item: "Config", Value: "/tmp/openclaw.json" },
-        { Item: "Security", Value: "Run: openclaw security audit --deep" },
+        { Item: "Security", Value: "Run: gemmaclaw security audit --deep" },
         { Item: "Secrets", Value: "2 diagnostics" },
       ]),
     );

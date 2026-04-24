@@ -104,7 +104,7 @@ describe("gateway startup config recovery", () => {
         log: { info: vi.fn(), warn: vi.fn() },
       }),
     ).rejects.toThrow(
-      `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.`,
+      `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "gemmaclaw doctor --fix" to repair, then retry.`,
     );
 
     expect(recoveryNotice.enqueueConfigRecoveryNotice).not.toHaveBeenCalled();

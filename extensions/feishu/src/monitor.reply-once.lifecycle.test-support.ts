@@ -27,6 +27,7 @@ const {
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 
+// oxlint-disable-next-line typescript/no-redundant-type-constituents -- false positive: oxlint can't resolve OutputRuntimeEnv through openclaw/plugin-sdk path alias
 let lastRuntime: ReturnType<typeof createRuntimeEnv> | null = null;
 let lifecycleCore: ReturnType<typeof installFeishuLifecycleReplyRuntime>;
 const handleMessageMock = vi.fn();

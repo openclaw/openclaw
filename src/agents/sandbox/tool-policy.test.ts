@@ -291,7 +291,7 @@ describe("sandbox/tool-policy", () => {
     expect(message).not.toContain(`Session: ${sessionKey}`);
     expect(message).toContain("Session: agent:… -rf /");
     expect(message).toContain(
-      "openclaw sandbox explain --session 'agent:main:weird session;rm -rf /'",
+      "gemmaclaw sandbox explain --session 'agent:main:weird session;rm -rf /'",
     );
   });
 
@@ -322,7 +322,7 @@ describe("sandbox/tool-policy", () => {
     expect(sessionLine).toBeDefined();
     expect(sessionLine).not.toContain(sessionKey);
     expect(sessionLine).toContain("\\n");
-    expect(message).toContain("openclaw sandbox explain --agent main");
+    expect(message).toContain("gemmaclaw sandbox explain --agent main");
     expect(message).not.toContain("--session");
   });
 });
