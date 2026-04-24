@@ -3187,6 +3187,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
               },
+              reminderGuard: {
+                type: "boolean",
+                title: "Reminder Guard Enabled",
+                description:
+                  "When true (default), OpenClaw appends a note to agent replies that promise a future reminder but did not back it with a core cron.add or an active session cron job. Set false for agents that schedule reminders through an external system (for example a plugin-registered tool with its own store) to suppress the note. Per-agent `reminderGuard` overrides this default.",
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -5842,6 +5848,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Fast Mode Default",
                   description:
                     "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+                },
+                reminderGuard: {
+                  type: "boolean",
                 },
                 skills: {
                   type: "array",
@@ -25870,6 +25879,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Media Generation Auto Provider Fallback",
       help: "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
       tags: ["reliability"],
+    },
+    "agents.defaults.reminderGuard": {
+      label: "Reminder Guard Enabled",
+      help: "When true (default), OpenClaw appends a note to agent replies that promise a future reminder but did not back it with a core cron.add or an active session cron job. Set false for agents that schedule reminders through an external system (for example a plugin-registered tool with its own store) to suppress the note. Per-agent `reminderGuard` overrides this default.",
+      tags: ["advanced"],
     },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",

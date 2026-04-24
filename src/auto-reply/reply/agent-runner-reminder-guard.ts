@@ -1,3 +1,8 @@
+import {
+  resolveAgentReminderGuardEnabled,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { loadCronStore, resolveCronStorePath } from "../../cron/store.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
@@ -62,4 +67,36 @@ export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPa
       text: `${trimmed}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
     };
   });
+}
+
+export async function applyReminderGuardNote(params: {
+  replyPayloads: ReplyPayload[];
+  successfulCronAdds: number;
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+}): Promise<ReplyPayload[]> {
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
+  if (!resolveAgentReminderGuardEnabled(params.cfg, agentId)) {
+    return params.replyPayloads;
+  }
+  const hasCommitment = params.replyPayloads.some(
+    (payload) =>
+      !payload.isError &&
+      typeof payload.text === "string" &&
+      hasUnbackedReminderCommitment(payload.text),
+  );
+  if (!hasCommitment || params.successfulCronAdds > 0) {
+    return params.replyPayloads;
+  }
+  const coveredByExistingCron = await hasSessionRelatedCronJobs({
+    cronStorePath: params.cfg.cron?.store,
+    sessionKey: params.sessionKey,
+  });
+  if (coveredByExistingCron) {
+    return params.replyPayloads;
+  }
+  return appendUnscheduledReminderNote(params.replyPayloads);
 }

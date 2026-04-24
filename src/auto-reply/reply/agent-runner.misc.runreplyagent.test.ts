@@ -7,6 +7,7 @@ import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
@@ -1666,7 +1667,16 @@ describe("runReplyAgent messaging tool suppression", () => {
 });
 
 describe("runReplyAgent reminder commitment guard", () => {
-  function createRun(params?: { sessionKey?: string; omitSessionKey?: boolean }) {
+  beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
+  function createRun(params?: {
+    sessionKey?: string;
+    omitSessionKey?: boolean;
+    agentDefaults?: { reminderGuard?: boolean };
+    agentEntries?: Array<{ id: string; reminderGuard?: boolean; default?: boolean }>;
+  }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "telegram",
@@ -1676,6 +1686,21 @@ describe("runReplyAgent reminder commitment guard", () => {
       Surface: "telegram",
     } as unknown as TemplateContext;
     const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const baseCfg = createCliBackendTestConfig();
+    const cfg =
+      params?.agentDefaults || params?.agentEntries
+        ? {
+            ...baseCfg,
+            agents: {
+              ...baseCfg.agents,
+              defaults: {
+                ...baseCfg.agents?.defaults,
+                ...params?.agentDefaults,
+              },
+              ...(params?.agentEntries ? { list: params.agentEntries } : {}),
+            },
+          }
+        : baseCfg;
     const followupRun = {
       prompt: "hello",
       summaryLine: "hello",
@@ -1686,7 +1711,7 @@ describe("runReplyAgent reminder commitment guard", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: createCliBackendTestConfig(),
+        config: cfg,
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1871,6 +1896,50 @@ describe("runReplyAgent reminder commitment guard", () => {
     const result = await createRun({ sessionKey: "main" });
     expect(result).toMatchObject({
       text: "I'll remind you after lunch.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    });
+  });
+
+  it("suppresses guard note when agents.defaults.reminderGuard is false (#70666)", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you tomorrow morning." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun({ agentDefaults: { reminderGuard: false } });
+    expect(result).toMatchObject({
+      text: "I'll remind you tomorrow morning.",
+    });
+  });
+
+  it("suppresses guard note when per-agent reminderGuard is false (#70666)", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you tomorrow morning." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun({
+      agentEntries: [{ id: "main", default: true, reminderGuard: false }],
+    });
+    expect(result).toMatchObject({
+      text: "I'll remind you tomorrow morning.",
+    });
+  });
+
+  it("per-agent reminderGuard:true overrides a global reminderGuard:false (#70666)", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you tomorrow morning." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun({
+      agentDefaults: { reminderGuard: false },
+      agentEntries: [{ id: "main", default: true, reminderGuard: true }],
+    });
+    expect(result).toMatchObject({
+      text: "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
     });
   });
 });

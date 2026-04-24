@@ -1179,6 +1179,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Ordered fallback music-generation models (provider/model).",
   "agents.defaults.mediaGenerationAutoProviderFallback":
     "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+  "agents.defaults.reminderGuard":
+    "When true (default), OpenClaw appends a note to agent replies that promise a future reminder but did not back it with a core cron.add or an active session cron job. Set false for agents that schedule reminders through an external system (for example a plugin-registered tool with its own store) to suppress the note. Per-agent `reminderGuard` overrides this default.",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",

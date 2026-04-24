@@ -302,6 +302,7 @@ export type AgentDefaultsConfig = {
   elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
+  reminderGuard?: boolean;
   /**
    * Block streaming boundary:
    * - "text_end": end of each assistant text content block (before tool calls)
