@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPermissiveTool } from "../../../../test/helpers/agents/schema-normalization-runtime-contract.js";
+import {
+  createParameterFreeTool,
+  createPermissiveTool,
+  normalizedParameterFreeSchema,
+} from "../../../../test/helpers/agents/schema-normalization-runtime-contract.js";
 import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 
@@ -77,7 +81,7 @@ function threadStartResult(threadId = "thread-1") {
   };
 }
 
-describe("Codex app-server schema normalization runtime contract", () => {
+describe("Codex app-server dynamic tool schema boundary contract", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-schema-contract-"));
   });
@@ -87,14 +91,14 @@ describe("Codex app-server schema normalization runtime contract", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes executable dynamic tool schemas through thread start unchanged", async () => {
+  it("passes prepared executable dynamic tool schemas through thread start unchanged", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const permissiveTool = createPermissiveTool("message");
+    const parameterFreeTool = createParameterFreeTool("message");
     const dynamicTool = {
-      name: permissiveTool.name,
-      description: permissiveTool.description,
-      inputSchema: permissiveTool.parameters,
+      name: parameterFreeTool.name,
+      description: parameterFreeTool.description,
+      inputSchema: normalizedParameterFreeSchema(),
     };
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
