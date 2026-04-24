@@ -4,6 +4,7 @@
 #   1. Install/detect the runtime
 #   2. Pull the smallest known-working model
 #   3. Send a chat completion request and assert non-empty reply
+#   4. Test the setup wizard agent run path
 #
 # Note: Ollama binary (1.7GB .tgz) is pre-installed during build to avoid
 # CI timeout issues. The E2E test still exercises model pull + inference.

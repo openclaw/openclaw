@@ -43,17 +43,16 @@ CPU-only is a first-class path, not a fallback afterthought.
 
 ## Status
 
-Planning is active. Phase 1 benchmarks are scoped but execution is gated by evidence collection, not assumptions. No promises on timelines. Contributions and hardware reports are welcome.
+Phase 2 tooling is live: `gemmaclaw setup` auto-detects hardware and provisions the best backend. Phase 1 benchmarks continue in parallel. Contributions and hardware reports are welcome.
 
 ## Getting started
 
 ### Prerequisites
 
 - Node.js 22+ and pnpm
-- For gemma.cpp backend: cmake, g++ (or clang++), and git
-- For gemma.cpp model downloads: a [HuggingFace token](https://huggingface.co/settings/tokens) (`HF_TOKEN` env var)
+- For gemma.cpp backend (advanced): cmake, g++ (or clang++), git, and a [HuggingFace token](https://huggingface.co/settings/tokens) (`HF_TOKEN`)
 
-No pre-installed Ollama, llama.cpp, or gemma.cpp required. Gemmaclaw downloads and manages everything.
+No pre-installed Ollama, llama.cpp, or gemma.cpp required. Gemmaclaw downloads and manages everything under `~/.gemmaclaw/`.
 
 ### Install
 
@@ -64,9 +63,48 @@ pnpm install
 pnpm build
 ```
 
-### Provision a backend
+### Quick setup (recommended)
 
-Pick a backend and provision it. This downloads the runtime, pulls the smallest known-working Gemma model, starts the server, and verifies a chat completion:
+One command. Detects your hardware, picks the safest backend, provisions it, and runs a smoke test:
+
+```bash
+node gemmaclaw.mjs setup
+```
+
+Example output:
+
+```
+Detecting hardware...
+  CPU: x64, 12 cores (AMD Ryzen 9 5900X)
+  RAM: 31.3 GB total, 22.1 GB available
+  GPU: NVIDIA RTX 3090 (24 GB VRAM)
+
+Recommended: Gemma 3 1B (Ollama) (815 MB download)
+  NVIDIA GPU detected. Ollama provides the best GPU acceleration.
+
+Provisioning ollama on port 11434...
+[Ollama] Runtime started on port 11434 (PID 12345).
+[Ollama] Model ready.
+
+Smoke test passed. Response: "Hello!"
+
+Setup complete! Your Gemma assistant is ready.
+  API: http://127.0.0.1:11434/v1/chat/completions
+  Model: gemma3:1b
+  PID: 12345
+```
+
+### Advanced setup
+
+Step-by-step prompts to override backend, model, and port:
+
+```bash
+node gemmaclaw.mjs setup --advanced
+```
+
+### Manual provisioning (advanced)
+
+`gemmaclaw provision` is the low-level primitive. Use it when you know exactly what you want:
 
 ```bash
 # Ollama (recommended for GPU setups, ~815 MB model download)
@@ -79,11 +117,9 @@ node gemmaclaw.mjs provision --backend llama-cpp
 HF_TOKEN=hf_... node gemmaclaw.mjs provision --backend gemma-cpp
 ```
 
-The command prints the API base URL and PID when done. The backend stays running in the background.
-
 ### Verify it works
 
-After provisioning, the backend serves an OpenAI-compatible API at `http://127.0.0.1:<port>/v1/chat/completions`. Test it:
+After setup or provisioning, the backend serves an OpenAI-compatible API. Test it:
 
 ```bash
 curl http://127.0.0.1:11434/v1/chat/completions \
@@ -91,7 +127,7 @@ curl http://127.0.0.1:11434/v1/chat/completions \
   -d '{"model":"gemma3:1b","messages":[{"role":"user","content":"Say hello"}]}'
 ```
 
-Ports: Ollama = 11434, llama.cpp = 8080, gemma.cpp = 11436.
+Default ports: Ollama = 11434, llama.cpp = 8080, gemma.cpp = 11436.
 
 ### Troubleshooting
 
@@ -99,8 +135,8 @@ Ports: Ollama = 11434, llama.cpp = 8080, gemma.cpp = 11436.
 - **llama.cpp server won't start**: verify the model file exists at `~/.gemmaclaw/models/llama-cpp/`. Re-run provision to re-download.
 - **gemma.cpp build fails**: ensure cmake and g++ are installed (`apt-get install cmake g++`). Check that git submodules initialized correctly.
 - **gemma.cpp model download fails**: verify `HF_TOKEN` is set and has access to the gated Gemma model on HuggingFace.
-- **"Healthcheck failed"**: the backend process started but did not respond in time. Check system resources (RAM, disk). Increase timeout by re-provisioning on a faster machine.
-- **Port already in use**: another process is using the default port. Use `--port <N>` to pick a different one.
+- **"Healthcheck failed"**: the backend process started but did not respond in time. Check system resources (RAM, disk).
+- **Port already in use**: another process is using the default port. Use `--port <N>` to pick a different one, or use advanced setup.
 
 ### Data directory
 
@@ -120,7 +156,7 @@ To verify all backends work from a clean environment:
 # Build the E2E image
 docker build -f test/e2e/Dockerfile.provision -t gemmaclaw-provision-e2e .
 
-# Test individual backends
+# Test individual backends (direct provision + agent run)
 docker run --rm gemmaclaw-provision-e2e ollama
 docker run --rm gemmaclaw-provision-e2e llama-cpp
 docker run --rm -e HF_TOKEN=hf_... gemmaclaw-provision-e2e gemma-cpp
