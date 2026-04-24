@@ -58,7 +58,8 @@ Preferred plugin path is npm package distribution plus local extension loading f
 If you build a plugin, host and maintain it in your own repository.
 The bar for adding optional plugins to core is intentionally high.
 Plugin docs: [`docs/tools/plugin.md`](docs/tools/plugin.md)
-Community plugin listing + PR bar: [`docs/plugins/community.md`](docs/plugins/community.md)
+Plugin discovery, official publisher status, provenance, and security review live in [ClawHub](https://clawhub.ai/).
+OpenClaw docs should document core extension points; plugin promotion belongs in ClawHub, preferably under vetted org publishers for official plugins.
 
 Memory is a special plugin slot where only one memory plugin can be active at a time.
 Today we ship multiple memory options; over time we plan to converge on one recommended default path.
@@ -66,8 +67,8 @@ Today we ship multiple memory options; over time we plan to converge on one reco
 ### Skills
 
 We still ship some bundled skills for baseline UX.
-New skills should be published to [ClawHub](https://clawhub.ai/) first, not added to core by default.
-Core skill additions should be rare and require a strong product or security reason.
+New skills should be published through [ClawHub](https://clawhub.ai/) first, not added to core by default.
+Official or bundled promotion should require a clear product, security, or maintainer-ownership reason.
 
 ### MCP Support
 
