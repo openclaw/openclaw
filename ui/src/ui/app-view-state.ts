@@ -229,7 +229,7 @@ export type AppViewState = {
   threadsResult: SessionsListResult | null;
   threadsError: string | null;
   sessionsFilterActive: string;
-  sessionsFilterLimit: string;
+  sessionsFilterLimit: number;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsHideCron: boolean;
