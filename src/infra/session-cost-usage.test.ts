@@ -230,7 +230,11 @@ describe("session cost usage", () => {
     } as unknown as OpenClawConfig;
 
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30, config });
+      const summary = await loadCostUsageSummary({
+        startMs: Date.parse("2026-03-18T00:00:00.000Z"),
+        endMs: Date.parse("2026-03-19T23:59:59.999Z"),
+        config,
+      });
       expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-03-18", "2026-03-19"]);
       expect(summary.daily[0]?.totalTokens).toBe(10);
       expect(summary.daily[1]?.totalTokens).toBe(15);
@@ -292,7 +296,8 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({
-        days: 30,
+        startMs: Date.parse("2026-03-18T00:00:00.000Z"),
+        endMs: Date.parse("2026-03-18T23:59:59.999Z"),
         config,
         dayBucketMode: { type: "utc" },
       });

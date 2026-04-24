@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildMemoryFlushPlan } from "../../../extensions/memory-core/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -17,11 +18,6 @@ import {
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import {
-  resolveMemoryFlushPromptForRun,
-  resolveMemoryFlushRelativePathForRun,
-  resolveMemoryFlushSettings,
-} from "./memory-flush.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -342,36 +338,12 @@ async function runReplyAgentWithBase(params: {
   });
 }
 
-function resolveMemoryFlushDateStamp(relativePath: string): string {
-  return relativePath.replace(/^memory\//, "").replace(/\.md$/, "");
-}
-
 function registerBuiltInMemoryFlushPlanResolver() {
   registerMemoryFlushPlanResolver(({ cfg, nowMs }) => {
-    const settings = resolveMemoryFlushSettings(cfg);
-    if (!settings) {
-      return null;
-    }
-    const resolvedNowMs = Number.isFinite(nowMs) ? (nowMs as number) : Date.now();
-    const relativePath = resolveMemoryFlushRelativePathForRun({
+    return buildMemoryFlushPlan({
       cfg,
-      nowMs: resolvedNowMs,
+      nowMs,
     });
-    return {
-      softThresholdTokens: settings.softThresholdTokens,
-      forceFlushTranscriptBytes: settings.forceFlushTranscriptBytes,
-      reserveTokensFloor: settings.reserveTokensFloor,
-      prompt: resolveMemoryFlushPromptForRun({
-        prompt: settings.prompt,
-        cfg,
-        nowMs: resolvedNowMs,
-      }),
-      systemPrompt: settings.systemPrompt.replaceAll(
-        "YYYY-MM-DD",
-        resolveMemoryFlushDateStamp(relativePath),
-      ),
-      relativePath,
-    };
   });
 }
 describe("runReplyAgent heartbeat followup guard", () => {
