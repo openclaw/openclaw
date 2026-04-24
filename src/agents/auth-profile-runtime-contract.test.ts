@@ -9,13 +9,15 @@ import {
 } from "../../test/helpers/agents/auth-profile-runtime-contract.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
 import { runAgentAttempt } from "./command/attempt-execution.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
+type LoadPluginManifestRegistry = typeof ManifestRegistryModule.loadPluginManifestRegistry;
+
 const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn<() => PluginManifestRegistry>(() => ({
+  vi.fn<LoadPluginManifestRegistry>(() => ({
     plugins: [],
     diagnostics: [],
   })),
@@ -113,6 +115,7 @@ async function runAuthContractAttempt(params: {
   authProfileProvider: string;
   authProfileOverride: string;
 }) {
+  const cfg = {} as OpenClawConfig;
   const sessionEntry: SessionEntry = {
     sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
     updatedAt: Date.now(),
@@ -127,7 +130,7 @@ async function runAuthContractAttempt(params: {
   await runAgentAttempt({
     providerOverride: params.providerOverride,
     modelOverride: "gpt-5.4",
-    cfg: {} as OpenClawConfig,
+    cfg,
     sessionEntry,
     sessionId: sessionEntry.sessionId,
     sessionKey: AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
@@ -152,6 +155,13 @@ async function runAuthContractAttempt(params: {
     storePath: params.storePath,
     sessionHasHistory: false,
   });
+
+  return {
+    aliasLookupParams: {
+      config: cfg,
+      workspaceDir: params.tmpDir,
+    },
+  };
 }
 
 describe("Auth profile runtime contract - Pi and CLI adapter", () => {
@@ -189,12 +199,17 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
   ] as const)(
     "resolves %s through the provider auth alias resolver using a mocked manifest",
     (provider, expectedAuthProvider) => {
-      expect(resolveProviderIdForAuth(provider)).toBe(expectedAuthProvider);
+      expect(
+        resolveProviderIdForAuth(provider, {
+          config: {} as OpenClawConfig,
+          workspaceDir: tmpDir,
+        }),
+      ).toBe(expectedAuthProvider);
     },
   );
 
   it("forwards an OpenAI Codex auth profile when the selected provider is codex-cli", async () => {
-    await runAuthContractAttempt({
+    const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -207,13 +222,14 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+        aliasLookupParams,
         sessionAuthProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       }),
     );
   });
 
   it("forwards an OpenAI Codex auth profile when the auth provider is the legacy codex-cli alias", async () => {
-    await runAuthContractAttempt({
+    const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -226,6 +242,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
+        aliasLookupParams,
         sessionAuthProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       }),
     );
@@ -273,7 +290,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
   });
 
   it("accepts the legacy codex-cli auth-provider alias on the embedded OpenAI Codex path", async () => {
-    await runAuthContractAttempt({
+    const { aliasLookupParams } = await runAuthContractAttempt({
       tmpDir,
       storePath,
       providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
@@ -286,6 +303,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
+        aliasLookupParams,
         sessionAuthProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       }),
     );
