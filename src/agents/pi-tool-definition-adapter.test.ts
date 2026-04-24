@@ -183,6 +183,31 @@ describe("toClientToolDefinitions – param coercion", () => {
     );
     expect(calledWith).toEqual({ action: "search", params: { q: "test", page: 1 } });
   });
+
+  // Regression: when Pi invokes the wrapped client-tool definition's execute()
+  // callback during the model loop, the adapter must return `terminate: true`
+  // on the stub result so Pi stops its agent loop right after this batch
+  // (`shouldTerminateToolBatch` in pi-ai's agent-loop.ts). Without it, Pi
+  // would feed the placeholder stub back as a normal tool result and run
+  // another model turn — the model would then narrate the stub (e.g. "I see
+  // status: pending...") alongside the real function_call we hand back to the
+  // /v1/responses caller, producing a ghost turn the caller never asked for.
+  // See the full architecture rationale in pi-tool-definition-adapter.ts at
+  // the `terminate: true` site.
+  it("returns terminate=true on the execute result so Pi aborts the loop after handoff", async () => {
+    const [def] = toClientToolDefinitions([makeClientTool("search")], () => undefined);
+    if (!def) {
+      throw new Error("missing client tool definition");
+    }
+    const result = await def.execute(
+      "call-terminate-1",
+      { query: "hello" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    expect(result.terminate).toBe(true);
+  });
 });
 
 describe("client tool name conflict checks", () => {

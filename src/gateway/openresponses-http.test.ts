@@ -936,6 +936,228 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(events.some((event) => event.data === "[DONE]")).toBe(true);
   });
 
+  // Regression: the canonical OpenAI Responses API streaming sequence for a
+  // function_call delivers arguments via dedicated events:
+  //   response.output_item.added                  (function_call item announced)
+  //   response.function_call_arguments.delta      (args string chunk(s))
+  //   response.function_call_arguments.done       (consolidated full args)
+  //   response.output_item.done                   (function_call item finalized)
+  //
+  // OpenClaw previously only emitted .added and .done with arguments stuffed
+  // into the item field. Spec-strict client parsers (including IntelligenceKit's
+  // own custom parser) ignore item.arguments on .added and rely on
+  // function_call_arguments.delta + .done to fill their args buffer — so they
+  // observed arguments == "{}" for every client-tool call.
+  //
+  // This test pins the canonical four-event sequence so we don't regress.
+  it("emits function_call_arguments.delta + .done between output_item events for streamed tool calls", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    const fullArgs = '{"alpha":42,"beta":"hello","gamma":[1,2,3]}';
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ack" }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call_canonical_1",
+            name: "probe",
+            arguments: fullArgs,
+          },
+        ],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "x",
+      tools: WEATHER_TOOL,
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+    const eventTypes = events.map((event) => event.event).filter(Boolean);
+
+    // Find the indices of the four function-call related events so we can also
+    // assert ordering, not just presence. output_item.{added,done} also fire
+    // for the assistant text item that precedes the function_call, so we
+    // can't just match on the event type — we have to look at the embedded
+    // item.type to find the function_call's bookend events specifically.
+    const isFunctionCallItemEvent = (event: { event?: string; data?: string }, eventType: string) => {
+      if (event.event !== eventType) {
+        return false;
+      }
+      try {
+        const parsed = JSON.parse(event.data ?? "{}") as { item?: { type?: string } };
+        return parsed.item?.type === "function_call";
+      } catch {
+        return false;
+      }
+    };
+    const fcAddedIdx = events.findIndex((event) =>
+      isFunctionCallItemEvent(event, "response.output_item.added"),
+    );
+    const fcDoneIdx = events.findIndex((event) =>
+      isFunctionCallItemEvent(event, "response.output_item.done"),
+    );
+    const fcArgsDeltaIdx = eventTypes.findIndex(
+      (t) => t === "response.function_call_arguments.delta",
+    );
+    const fcArgsDoneIdx = eventTypes.findIndex(
+      (t) => t === "response.function_call_arguments.done",
+    );
+
+    // All four must be present.
+    expect(
+      fcAddedIdx,
+      "missing response.output_item.added for function_call",
+    ).toBeGreaterThanOrEqual(0);
+    expect(fcArgsDeltaIdx, "missing response.function_call_arguments.delta").toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(fcArgsDoneIdx, "missing response.function_call_arguments.done").toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(fcDoneIdx, "missing response.output_item.done for function_call").toBeGreaterThanOrEqual(
+      0,
+    );
+
+    // Order must be added < delta < done(args) < done(item).
+    expect(fcArgsDeltaIdx).toBeGreaterThan(fcAddedIdx);
+    expect(fcArgsDoneIdx).toBeGreaterThan(fcArgsDeltaIdx);
+    expect(fcDoneIdx).toBeGreaterThan(fcArgsDoneIdx);
+
+    // The delta event must carry the full args string in `delta` (we don't
+    // chunk artificially — by emission time we already have the whole string).
+    const deltaEvent = events[fcArgsDeltaIdx];
+    const deltaPayload = JSON.parse(deltaEvent?.data ?? "{}") as {
+      type?: string;
+      delta?: string;
+      item_id?: string;
+    };
+    expect(deltaPayload.type).toBe("response.function_call_arguments.delta");
+    expect(deltaPayload.delta).toBe(fullArgs);
+    expect(typeof deltaPayload.item_id).toBe("string");
+
+    // The done event must carry the consolidated args string in `arguments`.
+    const doneEvent = events[fcArgsDoneIdx];
+    const donePayload = JSON.parse(doneEvent?.data ?? "{}") as {
+      type?: string;
+      arguments?: string;
+      item_id?: string;
+    };
+    expect(donePayload.type).toBe("response.function_call_arguments.done");
+    expect(donePayload.arguments).toBe(fullArgs);
+    // The item_id on the args events must match the function_call item_id so
+    // accumulators on the client can correlate the chunks back to the item.
+    expect(donePayload.item_id).toBe(deltaPayload.item_id);
+  });
+
+  // Regression: at output_item.added time the function_call args have not yet
+  // streamed, so item.arguments must be the empty string. Real OpenAI does
+  // this; the dedicated function_call_arguments.{delta,done} events that follow
+  // carry the actual payload. If we ship the full args on .added AND repeat
+  // them on .delta, parsers that seed from item.arguments and then append on
+  // .delta (e.g. pi-ai) end up with a transiently doubled raw buffer. Today
+  // that's invisible because partial-json stops at the first complete value
+  // and pi-ai's synthetic-delta guard only fires for prefix-extensions — but
+  // it's "works by accident." Match the spec.
+  it("emits empty item.arguments on output_item.added for streamed function_calls", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    const fullArgs = '{"alpha":42,"beta":"hello","gamma":[1,2,3]}';
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "ack" }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call_added_empty_args",
+            name: "probe",
+            arguments: fullArgs,
+          },
+        ],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "x",
+      tools: WEATHER_TOOL,
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+
+    // Find every output_item.added event and locate the one whose item is the
+    // function_call. (There's also one for the assistant message earlier.)
+    const addedFunctionCallEvent = events.find((event) => {
+      if (event.event !== "response.output_item.added") {
+        return false;
+      }
+      try {
+        const parsed = JSON.parse(event.data ?? "{}") as {
+          item?: { type?: string };
+        };
+        return parsed.item?.type === "function_call";
+      } catch {
+        return false;
+      }
+    });
+    expect(addedFunctionCallEvent, "missing output_item.added for function_call").toBeDefined();
+
+    const addedPayload = JSON.parse(addedFunctionCallEvent!.data ?? "{}") as {
+      item?: { type?: string; arguments?: string };
+    };
+    expect(addedPayload.item?.type).toBe("function_call");
+    // The arguments field must be empty on .added — args arrive via the
+    // dedicated function_call_arguments.{delta,done} events that follow.
+    expect(addedPayload.item?.arguments).toBe("");
+
+    // And the corresponding output_item.done MUST carry the populated args
+    // (the item is "completed" at that point — args belong on the item).
+    const doneFunctionCallEvent = events.toReversed().find((event) => {
+      if (event.event !== "response.output_item.done") {
+        return false;
+      }
+      try {
+        const parsed = JSON.parse(event.data ?? "{}") as {
+          item?: { type?: string };
+        };
+        return parsed.item?.type === "function_call";
+      } catch {
+        return false;
+      }
+    });
+    expect(doneFunctionCallEvent, "missing output_item.done for function_call").toBeDefined();
+    const donePayloadItem = JSON.parse(doneFunctionCallEvent!.data ?? "{}") as {
+      item?: { type?: string; arguments?: string };
+    };
+    expect(donePayloadItem.item?.arguments).toBe(fullArgs);
+
+    // Regression: the response.completed event embeds the final response
+    // snapshot. Its `output` array's function_call entry must carry the
+    // populated args, not the empty placeholder used on output_item.added.
+    // (Without this assertion, a snapshot-reading consumer would see args
+    // == "" for every streamed client-tool call.)
+    const completedEvent = events.find((event) => event.event === "response.completed");
+    expect(completedEvent, "missing response.completed").toBeDefined();
+    const completedPayload = JSON.parse(completedEvent!.data ?? "{}") as {
+      response?: {
+        output?: Array<{ type?: string; arguments?: string }>;
+      };
+    };
+    const snapshotFunctionCall = completedPayload.response?.output?.find(
+      (item) => item.type === "function_call",
+    );
+    expect(snapshotFunctionCall, "missing function_call in response.completed snapshot").toBeDefined();
+    expect(snapshotFunctionCall?.arguments).toBe(fullArgs);
+  });
+
   it("reuses the prior session when previous_response_id is provided", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

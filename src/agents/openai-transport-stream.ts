@@ -476,6 +476,37 @@ async function processResponsesStream(
           partial: output,
         });
       }
+    } else if (type === "response.function_call_arguments.done") {
+      // The Responses-API convention is that the dedicated
+      // function_call_arguments.{delta,done} events are the canonical source
+      // of streamed function-call arguments — `output_item.done`'s
+      // `item.arguments` is a finalization snapshot, not a reliable carrier
+      // when no deltas were emitted. A conformant upstream may legitimately
+      // deliver the full arguments JSON only via this event with no
+      // intermediate deltas. Assigning `event.arguments` to `partialJson`
+      // here guarantees the subsequent `output_item.done` branch finds the
+      // real args on `currentBlock.partialJson` instead of falling back to
+      // the "{}" default.
+      if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
+        const previousPartialJson = stringifyJsonLike(currentBlock.partialJson);
+        const finalArguments = stringifyJsonLike(event.arguments);
+        currentBlock.partialJson = finalArguments;
+        currentBlock.arguments = parseStreamingJson(finalArguments);
+        // If deltas didn't carry the tail, emit the delta between what we
+        // already streamed and the authoritative final args so downstream
+        // consumers see a coherent sequence.
+        if (finalArguments.startsWith(previousPartialJson)) {
+          const delta = finalArguments.slice(previousPartialJson.length);
+          if (delta.length > 0) {
+            stream.push({
+              type: "toolcall_delta",
+              contentIndex: blockIndex(),
+              delta,
+              partial: output,
+            });
+          }
+        }
+      }
     } else if (type === "response.output_item.done") {
       const item = event.item as Record<string, unknown>;
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
@@ -1819,4 +1850,5 @@ function mapStopReason(reason: string | null) {
 export const __testing = {
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
+  processResponsesStream,
 };
