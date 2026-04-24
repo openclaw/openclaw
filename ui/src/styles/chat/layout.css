@@ -524,6 +524,12 @@
   color: var(--muted);
 }
 
+@supports (-webkit-touch-callout: none) {
+  .agent-chat__input > textarea {
+    font-size: 16px;
+  }
+}
+
 .agent-chat__toolbar {
   display: flex;
   align-items: center;
