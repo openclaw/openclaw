@@ -19,6 +19,7 @@ export type ChromeNodeRealtimeAudioBridgeHandle = {
   providerId: string;
   nodeId: string;
   bridgeId: string;
+  speak: (instructions?: string) => void;
   stop: () => Promise<void>;
 };
 
@@ -81,6 +82,8 @@ export async function startNodeRealtimeAudioBridge(params: {
     provider: resolved.provider,
     providerConfig: resolved.providerConfig,
     instructions: params.config.realtime.instructions,
+    initialGreetingInstructions: params.config.realtime.introMessage,
+    triggerGreetingOnReady: Boolean(params.config.realtime.introMessage),
     markStrategy: "ack-immediately",
     tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
     audioSink: {
@@ -188,6 +191,9 @@ export async function startNodeRealtimeAudioBridge(params: {
     providerId: resolved.provider.id,
     nodeId: params.nodeId,
     bridgeId: params.bridgeId,
+    speak: (instructions) => {
+      bridge?.triggerGreeting(instructions);
+    },
     stop,
   };
 }

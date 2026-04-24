@@ -201,10 +201,14 @@ function parseNodeStartResult(raw: unknown): {
   bridgeId?: string;
   audioBridge?: { type?: string };
 } {
-  if (!raw || typeof raw !== "object") {
+  const value =
+    raw && typeof raw === "object" && "payload" in raw
+      ? (raw as { payload?: unknown }).payload
+      : raw;
+  if (!value || typeof value !== "object") {
     throw new Error("Google Meet node returned an invalid start result.");
   }
-  return raw as {
+  return value as {
     launched?: boolean;
     bridgeId?: string;
     audioBridge?: { type?: string };

@@ -48,6 +48,7 @@ export type GoogleMeetConfig = {
     provider?: string;
     model?: string;
     instructions?: string;
+    introMessage?: string;
     toolPolicy: GoogleMeetToolPolicy;
     providers: Record<string, Record<string, unknown>>;
   };
@@ -99,6 +100,7 @@ export const DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
 ] as const;
 
 export const DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS = `You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} before answering.`;
+export const DEFAULT_GOOGLE_MEET_REALTIME_INTRO_MESSAGE = "Say exactly: I'm here and listening.";
 
 export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   enabled: true,
@@ -125,6 +127,7 @@ export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   realtime: {
     provider: "openai",
     instructions: DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS,
+    introMessage: DEFAULT_GOOGLE_MEET_REALTIME_INTRO_MESSAGE,
     toolPolicy: "safe-read-only",
     providers: {},
   },
@@ -339,6 +342,9 @@ export function resolveGoogleMeetConfigWithEnv(
       instructions:
         normalizeOptionalString(realtime.instructions) ??
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.instructions,
+      introMessage:
+        normalizeOptionalString(realtime.introMessage) ??
+        DEFAULT_GOOGLE_MEET_CONFIG.realtime.introMessage,
       toolPolicy: resolveToolPolicy(
         realtime.toolPolicy,
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.toolPolicy,

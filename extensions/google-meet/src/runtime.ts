@@ -49,6 +49,7 @@ function resolveMode(input: GoogleMeetMode | undefined, config: GoogleMeetConfig
 export class GoogleMeetRuntime {
   readonly #sessions = new Map<string, GoogleMeetSession>();
   readonly #sessionStops = new Map<string, () => Promise<void>>();
+  readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
 
   constructor(
     private readonly params: {
@@ -151,6 +152,7 @@ export class GoogleMeetRuntime {
           result.audioBridge?.type === "node-command-pair"
         ) {
           this.#sessionStops.set(session.id, result.audioBridge.stop);
+          this.#sessionSpeakers.set(session.id, result.audioBridge.speak);
         }
         session.notes.push(
           result.audioBridge
@@ -215,10 +217,28 @@ export class GoogleMeetRuntime {
     const stop = this.#sessionStops.get(sessionId);
     if (stop) {
       this.#sessionStops.delete(sessionId);
+      this.#sessionSpeakers.delete(sessionId);
       await stop();
     }
     session.state = "ended";
     session.updatedAt = nowIso();
     return { found: true, session };
+  }
+
+  speak(
+    sessionId: string,
+    instructions?: string,
+  ): { found: boolean; spoken: boolean; session?: GoogleMeetSession } {
+    const session = this.#sessions.get(sessionId);
+    if (!session) {
+      return { found: false, spoken: false };
+    }
+    const speak = this.#sessionSpeakers.get(sessionId);
+    if (!speak || session.state !== "active") {
+      return { found: true, spoken: false, session };
+    }
+    speak(instructions || this.params.config.realtime.introMessage);
+    session.updatedAt = nowIso();
+    return { found: true, spoken: true, session };
   }
 }
