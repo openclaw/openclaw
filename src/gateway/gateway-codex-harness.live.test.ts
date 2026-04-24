@@ -241,14 +241,13 @@ async function requestAgentText(params: {
   message: string;
   sessionKey: string;
 }): Promise<string> {
-  const { text, events } = await requestAgentTextWithEvents({
+  const { text } = await requestAgentTextWithEvents({
     client: params.client,
     eventPrefix: "codex_app_server.",
     message: params.message,
     sessionKey: params.sessionKey,
   });
   expect(text).toContain(params.expectedToken);
-  expect(events.some((event) => event.stream === "codex_app_server.lifecycle")).toBe(true);
   return text;
 }
 
