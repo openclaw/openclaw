@@ -208,7 +208,7 @@ OpenClaw scans for plugins in this order (first match wins):
   app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
   `codex/*` model refs
 
-## Troubleshooting Runtime Hooks
+## Troubleshooting runtime hooks
 
 If a plugin appears in `plugins list` but `register(api)` side effects or hooks
 do not run in live chat traffic, check these first:
