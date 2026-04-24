@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -13,7 +14,6 @@ const sendDiscordTextMock = vi.hoisted(() => vi.fn());
 const buildDiscordSendErrorMock = vi.hoisted(() =>
   vi.fn<(err: unknown, ctx?: unknown) => Promise<unknown>>(async (err: unknown) => err),
 );
-const DEFAULT_CFG = {} as OpenClawConfig;
 const retryAsyncMock = vi.hoisted(() =>
   vi.fn(
     async (
@@ -101,7 +101,7 @@ describe("deliverDiscordReply", () => {
     }> = {},
   ) => {
     const threadBindings = createThreadBindingManager({
-      cfg: DEFAULT_CFG,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       persist: false,
       enableSweeper: false,

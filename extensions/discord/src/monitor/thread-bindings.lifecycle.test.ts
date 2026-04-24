@@ -9,6 +9,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
@@ -76,7 +77,7 @@ function createTestThreadBindingManager(
   },
 ) {
   return createThreadBindingManager({
-    cfg: {} as OpenClawConfig,
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
     ...params,
   });
 }
@@ -270,7 +271,7 @@ describe("thread binding lifecycle", () => {
     try {
       const manager = createTestThreadBindingManager({
         accountId: "default",
-        cfg: {} as OpenClawConfig,
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
         persist: false,
         enableSweeper: false,
         idleTimeoutMs: 60_000,
@@ -310,7 +311,7 @@ describe("thread binding lifecycle", () => {
     try {
       const manager = createTestThreadBindingManager({
         accountId: "default",
-        cfg: {} as OpenClawConfig,
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
         persist: false,
         enableSweeper: false,
         idleTimeoutMs: 0,
@@ -786,7 +787,7 @@ describe("thread binding lifecycle", () => {
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-2" });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       channel: "discord",
       to: "channel:thread-1",
@@ -827,7 +828,7 @@ describe("thread binding lifecycle", () => {
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-lookup" });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       channel: "discord",
       to: "channel:thread-lookup",
@@ -1314,7 +1315,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
@@ -1358,7 +1359,7 @@ describe("thread binding lifecycle", () => {
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:uncertain",
       storeSessionKey: "agent:codex:acp:uncertain",
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       storePath: "/tmp/mock-sessions.json",
       storeReadFailed: true,
       entry: undefined,
@@ -1366,7 +1367,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
@@ -1405,7 +1406,7 @@ describe("thread binding lifecycle", () => {
     hoisted.readAcpSessionEntry.mockReturnValue(null);
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
@@ -1454,7 +1455,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => ({ status: "stale", reason: "status-timeout-running-stale" }),
     });
@@ -1498,7 +1499,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => ({ status: "uncertain", reason: "status-timeout" }),
     });
@@ -1546,7 +1547,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
     });
 
@@ -1612,7 +1613,7 @@ describe("thread binding lifecycle", () => {
     let secondProbeStartedBeforeFirstResolved = false;
 
     const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => {
         probeCallCount += 1;
@@ -1684,7 +1685,7 @@ describe("thread binding lifecycle", () => {
     });
 
     const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       healthProbe: async () => {
         probeCalls += 1;
