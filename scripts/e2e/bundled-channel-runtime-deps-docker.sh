@@ -904,9 +904,56 @@ assert_dep_absent_everywhere() {
       exit 1
     fi
   done
-  if find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f | grep -q .; then
-    echo "disabled $channel unexpectedly staged $dep_path externally" >&2
-    find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+
+  if ! node - <<'NODE' "$OPENCLAW_PLUGIN_STAGE_DIR" "$dep_path"
+const fs = require("node:fs");
+const path = require("node:path");
+
+const stageDir = process.argv[2];
+const depName = process.argv[3];
+const manifestName = ".openclaw-runtime-deps.json";
+const matches = [];
+
+function visit(dir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      visit(fullPath);
+      continue;
+    }
+    if (entry.name !== manifestName) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+    } catch {
+      continue;
+    }
+    const specs = Array.isArray(parsed.specs) ? parsed.specs : [];
+    for (const spec of specs) {
+      if (typeof spec === "string" && spec.startsWith(`${depName}@`)) {
+        matches.push(`${fullPath}: ${spec}`);
+      }
+    }
+  }
+}
+
+visit(stageDir);
+if (matches.length > 0) {
+  process.stderr.write(`${matches.join("\n")}\n`);
+  process.exit(1);
+}
+NODE
+  then
+    echo "disabled $channel unexpectedly selected $dep_path for external runtime deps" >&2
+    cat /tmp/openclaw-disabled-config-doctor.log >&2
     exit 1
   fi
 }
@@ -969,7 +1016,7 @@ assert_dep_absent_everywhere telegram grammy "$root"
 assert_dep_absent_everywhere slack @slack/web-api "$root"
 assert_dep_absent_everywhere discord discord-api-types "$root"
 
-if grep -Eq "\\[plugins\\] (telegram|slack|discord) installed bundled runtime deps:" /tmp/openclaw-disabled-config-doctor.log; then
+if grep -Eq "(used by .*\\b(telegram|slack|discord)\\b|\\[plugins\\] (telegram|slack|discord) installed bundled runtime deps:)" /tmp/openclaw-disabled-config-doctor.log; then
   echo "doctor installed runtime deps for an explicitly disabled channel/plugin" >&2
   cat /tmp/openclaw-disabled-config-doctor.log >&2
   exit 1
