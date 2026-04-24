@@ -26,7 +26,9 @@ type AcpxRuntimeLike = AcpRuntime & {
   doctor?(): Promise<{
     ok: boolean;
     message: string;
-    details?: string[];
+    // Upstream acpx doctor may include Error instances and plain objects
+    // alongside strings; treat everything as unknown and coerce on read.
+    details?: ReadonlyArray<unknown>;
   }>;
 };
 
@@ -79,8 +81,30 @@ function warnOnIgnoredLegacyCompatibilityConfig(params: {
   );
 }
 
-function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
-  const detailText = report.details?.filter(Boolean).join("; ").trim();
+function coerceDoctorDetailToString(detail: unknown): string {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (detail instanceof Error) {
+    return detail.message;
+  }
+  try {
+    return JSON.stringify(detail);
+  } catch {
+    return String(detail);
+  }
+}
+
+function formatDoctorFailureMessage(report: {
+  message: string;
+  details?: ReadonlyArray<unknown>;
+}): string {
+  const detailText = report.details
+    ?.filter((entry) => entry !== null && entry !== undefined && entry !== "")
+    .map(coerceDoctorDetailToString)
+    .filter((entry) => entry.length > 0)
+    .join("; ")
+    .trim();
   return detailText ? `${report.message} (${detailText})` : report.message;
 }
 
