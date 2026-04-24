@@ -911,6 +911,7 @@ describe("matrix CLI verification commands", () => {
 
     expect(pruneMatrixStaleGatewayDevicesMock).toHaveBeenCalledWith({
       accountId: "poe",
+      cfg: {},
     });
     expect(console.log).toHaveBeenCalledWith("Deleted stale OpenClaw devices: BritdXC6iL");
     expect(console.log).toHaveBeenCalledWith("Current device: A7hWrQ70ea");
