@@ -3,7 +3,7 @@ summary: "Google Meet plugin: join explicit Meet URLs through Chrome or Twilio w
 read_when:
   - You want an OpenClaw agent to join a Google Meet call
   - You are configuring Chrome or Twilio as a Google Meet transport
-title: "Google Meet Plugin"
+title: "Google Meet plugin"
 ---
 
 # Google Meet (plugin)
@@ -312,3 +312,9 @@ BlackHole device can echo other participants back into the call.
 `googlemeet leave` stops the command-pair realtime audio bridge for Chrome
 sessions. For Twilio sessions delegated through the Voice Call plugin, it also
 hangs up the underlying voice call.
+
+## Related
+
+- [Voice call plugin](/plugins/voice-call)
+- [Talk mode](/nodes/talk)
+- [Building plugins](/plugins/building-plugins)
