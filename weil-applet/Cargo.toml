@@ -1,0 +1,24 @@
+[package]
+name = "openclaw_weil"
+version = "0.1.0"
+edition = "2024"
+description = "OpenClaw rewritten as a Weilliptic smart contract applet"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+weil_rs      = { path = "../../contract-sdk/rust/weil_rs" }
+weil_macros  = { path = "../../contract-sdk/rust/weil_rs/weil_macros" }
+w_cerebrum   = { path = "../../contract-sdk/rust/cerebrum" }
+wadk-utils   = { path = "../../wadk-utils" }
+anyhow       = "1.0"
+serde        = { version = "1.0", features = ["derive"] }
+serde_json   = "1.0"
+
+[profile.release]
+panic         = "abort"
+opt-level     = "z"
+lto           = true
+codegen-units = 1
+strip         = true
