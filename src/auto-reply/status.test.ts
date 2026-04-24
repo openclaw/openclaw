@@ -382,6 +382,43 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Fast");
   });
 
+  it("shows a non-PI harness next to fast mode when resolved", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "codex-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "codex",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast · codex");
+  });
+
+  it("hides the default PI harness label", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "pi-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "pi",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast");
+    expect(normalizeTestText(text)).not.toContain("· pi");
+  });
+
   it("hides fast mode when disabled", () => {
     const text = buildStatusMessage({
       agent: {
@@ -1824,7 +1861,7 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain("/skill - Run a skill by name.");
     expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
     expect(text).toContain("/compact - Compact the session context.");
-    expect(text).toContain("/models - List model providers/models or add a model.");
+    expect(text).toContain("/models - List model providers/models.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });

@@ -6,8 +6,6 @@ read_when:
 title: "LM Studio"
 ---
 
-# LM Studio
-
 LM Studio is a friendly yet powerful app for running open-weight models on your own hardware. It lets you run llama.cpp (GGUF) or MLX models (Apple Silicon). Comes in a GUI package or headless daemon (`llmster`). For product and setup docs, see [lmstudio.ai](https://lmstudio.ai/).
 
 ## Quick start
@@ -173,3 +171,9 @@ If setup reports HTTP 401, verify your API key:
 ### Just-in-time model loading
 
 LM Studio supports just-in-time (JIT) model loading, where models are loaded on first request. Make sure you have this enabled to avoid 'Model not loaded' errors.
+
+## Related
+
+- [Model selection](/concepts/model-providers)
+- [Ollama](/providers/ollama)
+- [Local models](/gateway/local-models)

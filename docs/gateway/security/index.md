@@ -5,15 +5,14 @@ read_when:
 title: "Security"
 ---
 
-# Security
-
 <Warning>
-**Personal assistant trust model:** this guidance assumes one trusted operator boundary per gateway (single-user/personal assistant model).
-OpenClaw is **not** a hostile multi-tenant security boundary for multiple adversarial users sharing one agent/gateway.
-If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
+  **Personal assistant trust model.** This guidance assumes one trusted
+  operator boundary per gateway (single-user, personal-assistant model).
+  OpenClaw is **not** a hostile multi-tenant security boundary for multiple
+  adversarial users sharing one agent or gateway. If you need mixed-trust or
+  adversarial-user operation, split trust boundaries (separate gateway +
+  credentials, ideally separate OS users or hosts).
 </Warning>
-
-**On this page:** [Trust model](#scope-first-personal-assistant-security-model) | [Quick audit](#quick-check-openclaw-security-audit) | [Hardened baseline](#hardened-baseline-in-60-seconds) | [DM access model](#dm-access-model-pairing-allowlist-open-disabled) | [Configuration hardening](#configuration-hardening-examples) | [Incident response](#incident-response)
 
 ## Scope first: personal assistant security model
 
@@ -115,15 +114,29 @@ Use this as the quick model when triaging risk:
 
 ## Not vulnerabilities by design
 
-These patterns are commonly reported and are usually closed as no-action unless a real boundary bypass is shown:
+<Accordion title="Common findings that are out of scope">
 
-- Prompt-injection-only chains without a policy/auth/sandbox bypass.
-- Claims that assume hostile multi-tenant operation on one shared host/config.
-- Claims that classify normal operator read-path access (for example `sessions.list`/`sessions.preview`/`chat.history`) as IDOR in a shared-gateway setup.
-- Localhost-only deployment findings (for example HSTS on loopback-only gateway).
-- Discord inbound webhook signature findings for inbound paths that do not exist in this repo.
-- Reports that treat node pairing metadata as a hidden second per-command approval layer for `system.run`, when the real execution boundary is still the gateway's global node command policy plus the node's own exec approvals.
-- "Missing per-user authorization" findings that treat `sessionKey` as an auth token.
+These patterns get reported often and are usually closed as no-action unless
+a real boundary bypass is demonstrated:
+
+- Prompt-injection-only chains without a policy, auth, or sandbox bypass.
+- Claims that assume hostile multi-tenant operation on one shared host or
+  config.
+- Claims that classify normal operator read-path access (for example
+  `sessions.list` / `sessions.preview` / `chat.history`) as IDOR in a
+  shared-gateway setup.
+- Localhost-only deployment findings (for example HSTS on a loopback-only
+  gateway).
+- Discord inbound webhook signature findings for inbound paths that do not
+  exist in this repo.
+- Reports that treat node pairing metadata as a hidden second per-command
+  approval layer for `system.run`, when the real execution boundary is still
+  the gateway's global node command policy plus the node's own exec
+  approvals.
+- "Missing per-user authorization" findings that treat `sessionKey` as an
+  auth token.
+
+</Accordion>
 
 ## Hardened baseline in 60 seconds
 
@@ -313,7 +326,7 @@ production.
   </Accordion>
 </AccordionGroup>
 
-## Reverse Proxy Configuration
+## Reverse proxy configuration
 
 If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), configure
 `gateway.trustedProxies` for proper forwarded-client IP handling.
@@ -405,7 +418,7 @@ OpenClaw can refresh the skills list mid-session:
 
 Treat skill folders as **trusted code** and restrict who can modify them.
 
-## The Threat Model
+## The threat model
 
 Your AI assistant can:
 
@@ -450,6 +463,10 @@ Two built-in tools can make persistent control-plane changes:
 The owner-only `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
+Agent-driven `gateway config.apply` and `gateway config.patch` edits are
+fail-closed by default: only a narrow set of prompt, model, and mention-gating
+paths are agent-tunable. New sensitive config trees are therefore protected
+unless they are deliberately added to the allowlist.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
@@ -481,9 +498,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 
 Details: [Plugins](/tools/plugin)
 
-<a id="dm-access-model-pairing-allowlist-open-disabled"></a>
-
-## DM access model (pairing / allowlist / open / disabled)
+## DM access model: pairing, allowlist, open, disabled
 
 All current DM-capable channels support a DM policy (`dmPolicy` or `*.dm.policy`) that gates inbound DMs **before** the message is processed:
 
@@ -526,7 +541,7 @@ Treat the snippet above as **secure DM mode**:
 
 If you run multiple accounts on the same channel, use `per-account-channel-peer` instead. If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one canonical identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
 
-## Allowlists (DM + groups) - terminology
+## Allowlists for DMs and groups
 
 OpenClaw has two separate “who can trigger me?” layers:
 
@@ -656,9 +671,7 @@ Recommendations:
 - When running small models, **enable sandboxing for all sessions** and **disable web_search/web_fetch/browser** unless inputs are tightly controlled.
 - For chat-only personal assistants with trusted input and no tools, smaller models are usually fine.
 
-<a id="reasoning-verbose-output-in-groups"></a>
-
-## Reasoning & verbose output in groups
+## Reasoning and verbose output in groups
 
 `/reasoning`, `/verbose`, and `/trace` can expose internal reasoning, tool
 output, or plugin diagnostics that
@@ -671,7 +684,7 @@ Guidance:
 - If you enable them, do so only in trusted DMs or tightly controlled rooms.
 - Remember: verbose and trace output can include tool args, URLs, plugin diagnostics, and data the model saw.
 
-## Configuration Hardening (examples)
+## Configuration hardening examples
 
 ### File permissions
 
@@ -833,7 +846,13 @@ If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via
 SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 Plaintext `ws://` is loopback-only by default. For trusted private-network
-paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
+paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
+break-glass. This is intentionally process environment only, not an
+`openclaw.json` config key.
+Mobile pairing and Android manual or scanned gateway routes are stricter:
+cleartext is accepted for loopback, but private-LAN, link-local, `.local`, and
+dotless hostnames must use TLS unless you explicitly opt into the trusted
+private-network cleartext path.
 
 Local device pairing:
 
@@ -1224,7 +1243,7 @@ Common use cases:
 }
 ```
 
-## Incident Response
+## Incident response
 
 If your AI does something bad:
 
@@ -1254,7 +1273,7 @@ If your AI does something bad:
 - What the attacker sent + what the agent did
 - Whether the Gateway was exposed beyond loopback (LAN/Tailscale Funnel/Serve)
 
-## Secret Scanning (detect-secrets)
+## Secret scanning with detect-secrets
 
 CI runs the `detect-secrets` pre-commit hook in the `secrets` job.
 Pushes to `main` always run an all-files scan. Pull requests use a changed-file
@@ -1287,7 +1306,7 @@ otherwise. If it fails, there are new candidates not yet in the baseline.
 
 Commit the updated `.secrets.baseline` once it reflects the intended state.
 
-## Reporting Security Issues
+## Reporting security issues
 
 Found a vulnerability in OpenClaw? Please report responsibly:
 

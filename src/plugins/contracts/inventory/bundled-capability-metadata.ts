@@ -23,6 +23,7 @@ export type BundledPluginContractSnapshot = {
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
   musicGenerationProviderIds: string[];
+  webContentExtractorIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
@@ -127,6 +128,9 @@ export function buildBundledPluginContractSnapshot(
       manifest.contracts?.musicGenerationProviders,
       (value) => value.trim(),
     ),
+    webContentExtractorIds: uniqueStrings(manifest.contracts?.webContentExtractors, (value) =>
+      value.trim(),
+    ),
     webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders, (value) =>
       value.trim(),
     ),
@@ -150,6 +154,7 @@ export function hasBundledPluginContractSnapshotCapabilities(
     entry.imageGenerationProviderIds.length > 0 ||
     entry.videoGenerationProviderIds.length > 0 ||
     entry.musicGenerationProviderIds.length > 0 ||
+    entry.webContentExtractorIds.length > 0 ||
     entry.webFetchProviderIds.length > 0 ||
     entry.webSearchProviderIds.length > 0 ||
     entry.toolNames.length > 0

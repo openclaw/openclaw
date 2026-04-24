@@ -139,13 +139,13 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredLiveProvider).toBe("openai");
     expect(config?.requiredLiveModel).toBe("gpt-5.4");
     expect(config?.offDirective).toBe("/think off");
-    expect(config?.maxDirective).toBe("/think max");
+    expect(config?.maxDirective).toBe("/think medium");
     expect(config?.reasoningDirective).toBe("/reasoning on");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "enables reasoning display and disables thinking",
-      "switches to max thinking",
-      "verifies max thinking emits visible reasoning",
-      "verifies max thinking completes the answer",
+      "switches to medium thinking",
+      "verifies medium thinking emits visible reasoning",
+      "verifies medium thinking completes the answer",
     ]);
   });
 

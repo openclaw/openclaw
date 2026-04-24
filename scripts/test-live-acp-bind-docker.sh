@@ -161,19 +161,9 @@ WRAP
     ;;
 esac
 tmp_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_dir"
-}
-trap cleanup EXIT
 source /src/scripts/lib/live-docker-stage.sh
 openclaw_live_stage_source_tree "$tmp_dir"
-# Use a writable node_modules overlay in the temp repo. Vite writes bundled
-# config artifacts under the nearest node_modules/.vite-temp path, and the
-# build-stage /app/node_modules tree is root-owned in this Docker lane.
-mkdir -p "$tmp_dir/node_modules"
-cp -aRs /app/node_modules/. "$tmp_dir/node_modules"
-rm -rf "$tmp_dir/node_modules/.vite-temp"
-mkdir -p "$tmp_dir/node_modules/.vite-temp"
+openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
@@ -289,6 +279,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
     -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
     -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
+    -e OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}" \
     -e OPENCLAW_LIVE_TEST=1 \
     -e OPENCLAW_LIVE_ACP_BIND=1 \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \

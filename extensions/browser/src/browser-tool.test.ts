@@ -105,10 +105,12 @@ vi.mock("../../../src/agents/tools/nodes-utils.js", async () => {
 });
 
 const gatewayMocks = vi.hoisted(() => ({
-  callGatewayTool: vi.fn(async () => ({
-    ok: true,
-    payload: { result: { ok: true, running: true } },
-  })),
+  callGatewayTool: vi.fn(
+    async (): Promise<Record<string, unknown>> => ({
+      ok: true,
+      payload: { result: { ok: true, running: true } },
+    }),
+  ),
 }));
 vi.mock("../../../src/agents/tools/gateway.js", () => gatewayMocks);
 
@@ -146,6 +148,66 @@ vi.mock("../../../src/agents/tools/common.js", async () => {
   return {
     ...actual,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
+  };
+});
+
+vi.mock("./browser-tool.runtime.js", () => {
+  const readStringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const readStringParam = (
+    params: Record<string, unknown>,
+    key: string,
+    opts?: { required?: boolean; label?: string },
+  ) => {
+    const value = readStringValue(params[key])?.trim();
+    if (value) {
+      return value;
+    }
+    if (opts?.required) {
+      throw new Error(`${opts.label ?? key} required`);
+    }
+    return undefined;
+  };
+
+  return {
+    DEFAULT_AI_SNAPSHOT_MAX_CHARS: 40_000,
+    DEFAULT_UPLOAD_DIR: "/tmp/openclaw-browser-uploads",
+    BrowserToolSchema: {},
+    ...browserActionsMocks,
+    ...browserClientMocks,
+    ...browserConfigMocks,
+    ...configMocks,
+    ...gatewayMocks,
+    ...sessionTabRegistryMocks,
+    applyBrowserProxyPaths: vi.fn(),
+    getBrowserProfileCapabilities: (profile: Record<string, unknown>) => ({
+      usesChromeMcp: profile.driver === "existing-session",
+    }),
+    imageResultFromFile: toolCommonMocks.imageResultFromFile,
+    jsonResult: (result: unknown) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+      details: result,
+    }),
+    listNodes: nodesUtilsMocks.listNodes,
+    normalizeOptionalString: (value: unknown) => readStringValue(value)?.trim() || undefined,
+    persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
+    readStringParam,
+    readStringValue,
+    resolveExistingPathsWithinRoot: vi.fn(async ({ requestedPaths }) => ({
+      ok: true,
+      paths: requestedPaths,
+    })),
+    resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
+      const node = nodes.find(
+        (entry) => entry.nodeId === requested || entry.displayName === requested,
+      );
+      if (!node?.nodeId || typeof node.nodeId !== "string") {
+        throw new Error(`Node not found: ${requested}`);
+      }
+      return node.nodeId;
+    },
+    selectDefaultNodeFromList: (nodes: Array<Record<string, unknown>>) => nodes[0] ?? null,
+    wrapExternalContent: (text: string) =>
+      `<<<EXTERNAL_UNTRUSTED_CONTENT source="browser">>>\n${text}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>`,
   };
 });
 
@@ -238,6 +300,16 @@ async function runSnapshotToolCall(params: {
   const tool = createBrowserTool();
   await tool.execute?.("call-1", { action: "snapshot", target: "host", ...params });
 }
+
+describe("browser tool description", () => {
+  it("warns agents about existing-session act timeout limits", () => {
+    const tool = createBrowserTool();
+
+    expect(tool.description).toContain('profile="user"');
+    expect(tool.description).toContain("omit timeoutMs on act:type");
+    expect(tool.description).toContain("existing-session profiles");
+  });
+});
 
 describe("browser tool snapshot maxChars", () => {
   registerBrowserToolAfterEachReset();
@@ -435,6 +507,60 @@ describe("browser tool snapshot maxChars", () => {
       }),
     );
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("falls back to role refs when a node snapshot cannot provide aria refs", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool
+      .mockRejectedValueOnce(new Error("INVALID_REQUEST: Error: refs=aria not supported."))
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          result: {
+            ok: true,
+            format: "ai",
+            targetId: "tab-1",
+            url: "https://meet.google.com/abc-defg-hij",
+            snapshot: 'button "Admit"',
+            refs: { e1: { role: "button", name: "Admit" } },
+          },
+        },
+      });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "node",
+      node: "Browser Node",
+      targetId: "tab-1",
+      refs: "aria",
+      depth: 4,
+      maxChars: 12_000,
+    });
+
+    expect(result?.details).toMatchObject({ refsFallback: "role" });
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      1,
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          path: "/snapshot",
+          query: expect.objectContaining({ refs: "aria" }),
+        }),
+      }),
+    );
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          path: "/snapshot",
+          query: expect.objectContaining({ refs: "role" }),
+        }),
+      }),
+    );
   });
 
   it("gives node.invoke extra slack beyond the default proxy timeout", async () => {

@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
@@ -194,6 +197,11 @@ jobs:
                 }).map((shard) => ({
                   check_name: shard.checkName,
                   extensions_csv: shard.extensionIds.join(","),
+                  runner: isCanonicalRepository && [0, 3, 4].includes(shard.index)
+                    ? "blacksmith-8vcpu-ubuntu-2404"
+                    : isCanonicalRepository
+                      ? "blacksmith-4vcpu-ubuntu-2404"
+                      : "ubuntu-24.04",
                   shard_index: shard.index + 1,
                   task: "extensions-batch",
                 }))
@@ -208,6 +216,7 @@ jobs:
                 configs: shard.configs,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
+                runner: shard.runner,
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -493,18 +502,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Ensure secrets base commit (PR fast path)
@@ -654,7 +663,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -694,18 +703,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -746,7 +755,6 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 3
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -783,18 +791,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -886,18 +894,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -914,7 +922,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -954,18 +962,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -975,7 +983,9 @@ jobs:
 
       - name: Run extension shard
         env:
+          NODE_OPTIONS: --max-old-space-size=6144
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
+          OPENCLAW_VITEST_MAX_WORKERS: 1
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
 
@@ -1035,7 +1045,7 @@ jobs:
     name: checks-node-compat-node22
     needs: [preflight]
     if: needs.preflight.outputs.run_node == 'true' && github.event_name == 'push'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -1072,18 +1082,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1112,14 +1122,10 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    # Keep core shards on GitHub-hosted runners. The Blacksmith pool is already
-    # occupied by build and extension shards; queueing these shards there hides
-    # actual test-speed improvements behind runner wait time.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && (matrix.runner || 'ubuntu-24.04') || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
@@ -1156,18 +1162,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1322,18 +1328,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1344,7 +1350,15 @@ jobs:
       - name: Run changed extension tests
         env:
           OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
-        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
+        run: |
+          set -euo pipefail
+          if [ "$OPENCLAW_CHANGED_EXTENSION" = "telegram" ]; then
+            export OPENCLAW_VITEST_MAX_WORKERS=1
+            export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144"
+            pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION" -- --pool=forks
+            exit 0
+          fi
+          pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check shards.
   check-shard:
@@ -1357,7 +1371,6 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 3
       matrix:
         include:
           - check_name: check-preflight-guards
@@ -1365,16 +1378,16 @@ jobs:
             runner: ubuntu-24.04
           - check_name: check-prod-types
             task: prod-types
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            runner: ubuntu-24.04
+            runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
           - check_name: check-test-types
             task: test-types
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-strict-smoke
             task: strict-smoke
             runner: ubuntu-24.04
@@ -1413,18 +1426,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1449,7 +1462,7 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              pnpm lint
+              pnpm lint --threads=8
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
@@ -1498,7 +1511,6 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 3
       matrix:
         include:
           - check_name: check-additional-boundaries
@@ -1546,18 +1558,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1744,18 +1756,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -2093,18 +2105,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -x "$workdir/apps/android/gradlew" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Java

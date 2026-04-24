@@ -1,13 +1,11 @@
 ---
-title: Channel Presentation Refactor Plan
 summary: Decouple semantic message presentation from channel native UI renderers.
+title: Channel presentation refactor plan
 read_when:
   - Refactoring channel message UI, interactive payloads, or native channel renderers
   - Changing message tool capabilities, delivery hints, or cross-context markers
   - Debugging Discord Carbon import fanout or channel plugin runtime laziness
 ---
-
-# Channel Presentation Refactor Plan
 
 ## Status
 
@@ -252,3 +250,8 @@ Add or update:
 - Should `delivery.pin` be implemented for Discord, Slack, MS Teams, and Feishu in the first pass, or only Telegram first?
 - Should `delivery` eventually absorb existing fields such as `replyToId`, `replyToCurrent`, `silent`, and `audioAsVoice`, or stay focused on post-send behaviors?
 - Should presentation support images or file references directly, or should media remain separate from UI layout for now?
+
+## Related
+
+- [Channels overview](/channels)
+- [Message presentation](/plugins/message-presentation)

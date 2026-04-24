@@ -1,65 +1,86 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { listEmbeddedExtensionFactories } from "../plugins/embedded-extension-factory.js";
-import { clearPluginLoaderCache, loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildEmbeddedExtensionFactories } from "./pi-embedded-runner/extensions.js";
+import {
+  cleanupTempPluginTestEnvironment,
+  createTempPluginDir,
+  resetActivePluginRegistryForTest,
+  writeTempPlugin,
+} from "./test-helpers/temp-plugin-extension-fixtures.js";
 
-const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const tempDirs: string[] = [];
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-ext-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function writeTempPlugin(params: {
-  dir: string;
-  id: string;
-  body: string;
-  manifest?: Record<string, unknown>;
-  filename?: string;
-}): string {
-  const pluginDir = path.join(params.dir, params.id);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  const file = path.join(pluginDir, params.filename ?? `${params.id}.mjs`);
-  fs.writeFileSync(file, params.body, "utf-8");
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        ...params.manifest,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  return file;
+  return createTempPluginDir(tempDirs, "openclaw-embedded-ext-");
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  clearPluginLoaderCache();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  if (originalBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  }
+  cleanupTempPluginTestEnvironment(tempDirs, originalBundledPluginsDir);
 });
 
 describe("buildEmbeddedExtensionFactories", () => {
+  it("bridges middleware mutations with unique fallback tool call ids", async () => {
+    const seenToolCallIds: string[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "tokenjuice",
+      rawHandler: () => undefined,
+      handler: (event) => {
+        seenToolCallIds.push(event.toolCallId);
+        event.result.content = [{ type: "text", text: `compacted ${seenToolCallIds.length}` }];
+        return undefined;
+      },
+      harnesses: ["pi"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+    expect(factories).toHaveLength(1);
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+
+    const first = await handler?.(
+      { toolName: "exec", content: [{ type: "text", text: "raw 1" }], details: {} },
+      { cwd: "/tmp" },
+    );
+    const second = await handler?.(
+      { toolName: "exec", content: [{ type: "text", text: "raw 2" }], details: {} },
+      { cwd: "/tmp" },
+    );
+
+    expect(first).toEqual({
+      content: [{ type: "text", text: "compacted 1" }],
+      details: {},
+    });
+    expect(second).toEqual({
+      content: [{ type: "text", text: "compacted 2" }],
+      details: {},
+    });
+    expect(seenToolCallIds).toHaveLength(2);
+    expect(seenToolCallIds[0]).toMatch(/^pi-/);
+    expect(seenToolCallIds[1]).toMatch(/^pi-/);
+    expect(seenToolCallIds[0]).not.toBe(seenToolCallIds[1]);
+  });
+
   it("includes plugin-registered embedded extension factories and restores them from cache", async () => {
     const tmp = createTempDir();
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
@@ -101,10 +122,10 @@ describe("buildEmbeddedExtensionFactories", () => {
       modelId: "gpt-5.4",
       model: undefined,
     });
-    expect(firstFactories).toHaveLength(1);
+    expect(firstFactories).toHaveLength(2);
     expect(listEmbeddedExtensionFactories()).toHaveLength(1);
 
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetActivePluginRegistryForTest();
     expect(listEmbeddedExtensionFactories()).toHaveLength(0);
 
     loadOpenClawPlugins(options);
@@ -116,10 +137,10 @@ describe("buildEmbeddedExtensionFactories", () => {
       modelId: "gpt-5.4",
       model: undefined,
     });
-    expect(cachedFactories).toHaveLength(1);
+    expect(cachedFactories).toHaveLength(2);
 
     const handlers = new Map<string, Function>();
-    await cachedFactories[0]?.({
+    await cachedFactories[1]?.({
       on(event: string, handler: Function) {
         handlers.set(event, handler);
       },
@@ -172,7 +193,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         modelId: "gpt-5.4",
         model: undefined,
       }),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   });
 
   it("rejects bundled plugins that omit the Pi embedded extension manifest contract", () => {
@@ -292,10 +313,10 @@ describe("buildEmbeddedExtensionFactories", () => {
       modelId: "gpt-5.4",
       model: undefined,
     });
-    expect(factories).toHaveLength(1);
+    expect(factories).toHaveLength(2);
 
     await expect(
-      factories[0]?.({
+      factories[1]?.({
         on() {},
       } as never),
     ).resolves.toBeUndefined();

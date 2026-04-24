@@ -4,7 +4,7 @@ read_when:
   - Explaining how streaming or chunking works on channels
   - Changing block streaming or channel chunking behavior
   - Debugging duplicate/early block replies or channel preview streaming
-title: "Streaming and Chunking"
+title: "Streaming and chunking"
 ---
 
 # Streaming + chunking
@@ -156,6 +156,7 @@ Slack:
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`) when available.
 - `block` uses append-style draft previews.
 - `progress` uses status preview text, then final answer.
+- Native and draft preview streaming suppress block replies for that turn, so a Slack reply is streamed by one delivery path only.
 - Final media/error payloads and progress finals do not create throwaway draft messages; only text/block finals that can edit the preview flush pending draft text.
 
 Mattermost:

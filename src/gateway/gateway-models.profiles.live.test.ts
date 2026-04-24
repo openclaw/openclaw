@@ -515,7 +515,7 @@ describe("resolveGatewayLiveMaxModels", () => {
   });
 
   it("keeps explicit gateway model lists uncapped unless a cap is provided", () => {
-    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.4,anthropic/claude-opus-4-6";
+    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.5,anthropic/claude-opus-4-6";
     delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
     delete process.env.OPENCLAW_LIVE_MAX_MODELS;
 

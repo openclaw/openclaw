@@ -4,10 +4,8 @@ read_when:
   - Learning how to configure OpenClaw
   - Looking for configuration examples
   - Setting up OpenClaw for the first time
-title: "Configuration Examples"
+title: "Configuration examples"
 ---
-
-# Configuration Examples
 
 Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
@@ -629,3 +627,8 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
 - Provider IDs differ (phone numbers, user IDs, channel IDs). Use the provider docs to confirm the format.
 - Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
 - See [Providers](/providers) and [Troubleshooting](/gateway/troubleshooting) for deeper setup notes.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Configuration](/gateway/configuration)

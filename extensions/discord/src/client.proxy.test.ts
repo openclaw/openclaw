@@ -35,7 +35,7 @@ describe("createDiscordRestClient proxy support", () => {
       },
     } as OpenClawConfig;
 
-    const { rest } = createDiscordRestClient({}, cfg);
+    const { rest } = createDiscordRestClient({ cfg });
     const requestClient = rest as unknown as {
       customFetch?: typeof fetch;
       options?: { fetch?: typeof fetch };
@@ -54,7 +54,7 @@ describe("createDiscordRestClient proxy support", () => {
       },
     } as OpenClawConfig;
 
-    const { rest } = createDiscordRestClient({}, cfg);
+    const { rest } = createDiscordRestClient({ cfg });
     const requestClient = rest as unknown as {
       options?: { fetch?: typeof fetch };
     };
@@ -72,7 +72,7 @@ describe("createDiscordRestClient proxy support", () => {
       },
     } as OpenClawConfig;
 
-    const { rest } = createDiscordRestClient({}, cfg);
+    const { rest } = createDiscordRestClient({ cfg });
     const requestClient = rest as unknown as {
       options?: { fetch?: typeof fetch };
     };
@@ -91,7 +91,7 @@ describe("createDiscordRestClient proxy support", () => {
       },
     } as OpenClawConfig;
 
-    const { rest } = createDiscordRestClient({}, cfg);
+    const { rest } = createDiscordRestClient({ cfg });
     const requestClient = rest as unknown as {
       options?: { fetch?: typeof fetch };
     };
@@ -110,7 +110,7 @@ describe("createDiscordRestClient proxy support", () => {
       },
     } as OpenClawConfig;
 
-    const { rest } = createDiscordRestClient({}, cfg);
+    const { rest } = createDiscordRestClient({ cfg });
     const requestClient = rest as unknown as {
       options?: { fetch?: typeof fetch };
     };

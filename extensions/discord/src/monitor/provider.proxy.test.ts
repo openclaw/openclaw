@@ -1,5 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+function resolveGatewayInfoFetch(resolve: ((value: Response) => void) | undefined): void {
+  expect(resolve).toBeDefined();
+  resolve!({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+  } as Response);
+}
+
 const {
   GatewayIntents,
   baseRegisterClientSpy,
@@ -42,9 +51,15 @@ const {
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    client: unknown;
+    ws: unknown;
+    isConnecting: boolean;
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
+      this.client = undefined;
+      this.ws = undefined;
+      this.isConnecting = false;
     }
     async registerClient(client: unknown) {
       baseRegisterClientSpy(client);
@@ -125,9 +140,11 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 
 describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
+  let waitForDiscordGatewayPluginRegistration: typeof import("./gateway-plugin.js").waitForDiscordGatewayPluginRegistration;
 
   beforeAll(async () => {
-    ({ createDiscordGatewayPlugin } = await import("./gateway-plugin.js"));
+    ({ createDiscordGatewayPlugin, waitForDiscordGatewayPluginRegistration } =
+      await import("./gateway-plugin.js"));
   });
 
   function createRuntime() {
@@ -161,6 +178,22 @@ describe("createDiscordGatewayPlugin", () => {
 
   async function registerGatewayClient(plugin: unknown) {
     await (
+      plugin as {
+        registerClient: (client: {
+          options: { token: string };
+          registerListener: typeof baseRegisterClientSpy;
+          unregisterListener: ReturnType<typeof vi.fn>;
+        }) => Promise<void>;
+      }
+    ).registerClient({
+      options: { token: "token-123" },
+      registerListener: baseRegisterClientSpy,
+      unregisterListener: vi.fn(),
+    });
+  }
+
+  function startIgnoredGatewayRegistration(plugin: unknown) {
+    void (
       plugin as {
         registerClient: (client: {
           options: { token: string };
@@ -311,6 +344,64 @@ describe("createDiscordGatewayPlugin", () => {
     } as Response);
   });
 
+  it("keeps Carbon-ignored fatal metadata failures handled for supervised startup", async () => {
+    const runtime = createRuntime();
+    const unhandledReasons: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledReasons.push(reason);
+    };
+    globalFetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "401: Unauthorized",
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      startIgnoredGatewayRegistration(plugin);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandledReasons).toHaveLength(0);
+      const registration = waitForDiscordGatewayPluginRegistration(plugin);
+      if (!registration) {
+        throw new Error("expected Discord gateway registration promise");
+      }
+      await expect(registration).rejects.toThrow("Failed to get gateway information from Discord");
+      expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  it("exposes Carbon-ignored successful registrations for startup await", async () => {
+    const runtime = createRuntime();
+    globalFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    startIgnoredGatewayRegistration(plugin);
+    const registration = waitForDiscordGatewayPluginRegistration(plugin);
+    if (!registration) {
+      throw new Error("expected Discord gateway registration promise");
+    }
+    await registration;
+
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+    expect((plugin as unknown as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
+      "wss://gateway.discord.gg",
+    );
+  });
+
   it("uses proxy agent for gateway WebSocket when configured", async () => {
     const runtime = createRuntime();
 
@@ -443,6 +534,89 @@ describe("createDiscordGatewayPlugin", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("discord: gateway metadata lookup failed transiently"),
     );
+  });
+
+  it("sets client reference before the async gateway-info fetch resolves (regression for #52372)", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    let fetchResolve: ((v: Response) => void) | undefined;
+    globalFetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          fetchResolve = resolve;
+        }),
+    );
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    const clientArg = {
+      options: { token: "token-race" },
+      registerListener: baseRegisterClientSpy,
+      unregisterListener: vi.fn(),
+    };
+    const registerPromise = (
+      plugin as unknown as {
+        registerClient: (c: typeof clientArg) => Promise<void>;
+      }
+    ).registerClient(clientArg);
+
+    // Before the metadata fetch resolves, this.client should already be set so
+    // that a concurrent identify() cannot observe an undefined client.
+    expect((plugin as unknown as { client: unknown }).client).toBe(clientArg);
+
+    resolveGatewayInfoFetch(fetchResolve);
+    await registerPromise;
+
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips super.registerClient when an external connect starts during the metadata fetch (regression for #52372)", async () => {
+    const runCase = async (markStarted: (plugin: unknown) => void) => {
+      vi.useFakeTimers();
+      const runtime = createRuntime();
+      let fetchResolve: ((v: Response) => void) | undefined;
+      globalFetchMock.mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            fetchResolve = resolve;
+          }),
+      );
+      const plugin = createDiscordGatewayPlugin({
+        discordConfig: {},
+        runtime,
+      });
+
+      const clientArg = {
+        options: { token: "token-race" },
+        registerListener: baseRegisterClientSpy,
+        unregisterListener: vi.fn(),
+      };
+      const registerPromise = (
+        plugin as unknown as {
+          registerClient: (c: typeof clientArg) => Promise<void>;
+        }
+      ).registerClient(clientArg);
+
+      markStarted(plugin);
+      resolveGatewayInfoFetch(fetchResolve);
+      await registerPromise;
+    };
+
+    await runCase((plugin) => {
+      (plugin as { ws: unknown }).ws = { readyState: 1 };
+    });
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+
+    baseRegisterClientSpy.mockClear();
+    globalFetchMock.mockReset();
+    vi.useRealTimers();
+
+    await runCase((plugin) => {
+      (plugin as { isConnecting: boolean }).isConnecting = true;
+    });
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
   });
 
   it("refreshes fallback gateway metadata on the next register attempt", async () => {

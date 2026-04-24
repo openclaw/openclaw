@@ -57,19 +57,19 @@ export type PluginManifestActivationCapability = "provider" | "channel" | "tool"
 
 export type PluginManifestActivation = {
   /**
-   * Provider ids that should activate this plugin when explicitly requested.
-   * This is metadata only; runtime loading still happens through the loader.
+   * Provider ids that should include this plugin in activation/load plans.
+   * This is planner metadata only; runtime behavior still comes from register().
    */
   onProviders?: string[];
-  /** Agent harness runtime ids that should activate this plugin. */
+  /** Agent harness runtime ids that should include this plugin in activation/load plans. */
   onAgentHarnesses?: string[];
-  /** Command ids that should activate this plugin. */
+  /** Command ids that should include this plugin in activation/load plans. */
   onCommands?: string[];
-  /** Channel ids that should activate this plugin. */
+  /** Channel ids that should include this plugin in activation/load plans. */
   onChannels?: string[];
-  /** Route kinds that should activate this plugin. */
+  /** Route kinds that should include this plugin in activation/load plans. */
   onRoutes?: string[];
-  /** Cheap capability hints used by future activation planning. */
+  /** Broad capability hints for activation/load plans. Prefer narrower ownership metadata. */
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
@@ -194,7 +194,13 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
-  /** Cheap provider-auth env lookup without booting plugin runtime. */
+  /**
+   * Cheap provider-auth env lookup without booting plugin runtime.
+   *
+   * @deprecated Prefer setup.providers[].envVars for generic setup/status env
+   * metadata. This field remains supported through the provider env-var
+   * compatibility adapter during the deprecation window.
+   */
   providerAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;
@@ -205,7 +211,7 @@ export type PluginManifest = {
    * and non-runtime auth-choice routing before provider runtime loads.
    */
   providerAuthChoices?: PluginManifestProviderAuthChoice[];
-  /** Cheap activation hints exposed before plugin runtime loads. */
+  /** Cheap activation planner metadata exposed before plugin runtime loads. */
   activation?: PluginManifestActivation;
   /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
   setup?: PluginManifestSetup;
@@ -233,6 +239,7 @@ export type PluginManifest = {
 
 export type PluginManifestContracts = {
   embeddedExtensionFactories?: string[];
+  agentToolResultMiddleware?: string[];
   /**
    * Provider ids whose external auth profile hook can contribute runtime-only
    * credentials. Declaring this lets auth-store overlays load only the owning
@@ -247,6 +254,7 @@ export type PluginManifestContracts = {
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
   musicGenerationProviders?: string[];
+  webContentExtractors?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   tools?: string[];
@@ -426,6 +434,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   }
 
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
+  const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
@@ -437,11 +446,13 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
   const musicGenerationProviders = normalizeTrimmedStringList(value.musicGenerationProviders);
+  const webContentExtractors = normalizeTrimmedStringList(value.webContentExtractors);
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
+    ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
@@ -451,6 +462,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
     ...(musicGenerationProviders.length > 0 ? { musicGenerationProviders } : {}),
+    ...(webContentExtractors.length > 0 ? { webContentExtractors } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),

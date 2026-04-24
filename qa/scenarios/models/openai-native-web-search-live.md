@@ -32,7 +32,7 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --scenario openai-native-web-search-live`.
+  summary: Run with `OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --fast --thinking medium --scenario openai-native-web-search-live`.
   config:
     requiredProvider: openai
     requiredModel: gpt-5.4

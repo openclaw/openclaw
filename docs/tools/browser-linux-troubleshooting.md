@@ -1,10 +1,8 @@
 ---
 summary: "Fix Chrome/Brave/Edge/Chromium CDP startup issues for OpenClaw browser control on Linux"
 read_when: "Browser control fails on Linux, especially with snap Chromium"
-title: "Browser Troubleshooting"
+title: "Browser troubleshooting"
 ---
-
-# Browser Troubleshooting (Linux)
 
 ## Problem: "Failed to start Chrome CDP on port 18800"
 
@@ -143,3 +141,9 @@ Notes:
 - Remote CDP profiles accept `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) for `/json/version` discovery, or WS(S) when your browser
   service gives you a direct DevTools socket URL.
+
+## Related
+
+- [Browser](/tools/browser)
+- [Browser login](/tools/browser-login)
+- [Browser WSL2 troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)

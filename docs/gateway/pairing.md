@@ -4,10 +4,8 @@ read_when:
   - Implementing node pairing approvals without macOS UI
   - Adding CLI flows for approving remote nodes
   - Extending gateway protocol with node management
-title: "Gateway-Owned Pairing"
+title: "Gateway-owned pairing"
 ---
-
-# Gateway-owned pairing (Option B)
 
 In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
 are allowed to join. UIs (macOS app, future clients) are just frontends that
@@ -166,3 +164,9 @@ Security notes:
 - The transport is **stateless**; it does not store membership.
 - If the Gateway is offline or pairing is disabled, nodes cannot pair.
 - If the Gateway is in remote mode, pairing still happens against the remote Gateway’s store.
+
+## Related
+
+- [Channel pairing](/channels/pairing)
+- [Nodes](/nodes)
+- [Devices CLI](/cli/devices)

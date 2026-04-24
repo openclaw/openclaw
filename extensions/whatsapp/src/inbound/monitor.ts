@@ -5,7 +5,8 @@ import type {
   WAMessage,
   WASocket,
 } from "@whiskeysockets/baileys";
-import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -29,6 +30,7 @@ import {
 import {
   describeReplyContext,
   extractLocationData,
+  extractContactContext,
   extractMediaPlaceholder,
   extractMentionedJids,
   extractText,
@@ -457,6 +459,7 @@ export async function attachWebInboxToSocket(
   type EnrichedInboundMessage = {
     body: string;
     location?: ReturnType<typeof extractLocationData>;
+    contactContext?: ReturnType<typeof extractContactContext>;
     replyContext?: ReturnType<typeof describeReplyContext>;
     mediaPath?: string;
     mediaType?: string;
@@ -466,6 +469,7 @@ export async function attachWebInboxToSocket(
   const enrichInboundMessage = async (msg: WAMessage): Promise<EnrichedInboundMessage | null> => {
     const location = extractLocationData(msg.message ?? undefined);
     const locationText = location ? formatLocationText(location) : undefined;
+    const contactContext = extractContactContext(msg.message ?? undefined);
     let body = extractText(msg.message ?? undefined);
     if (locationText) {
       body = [body, locationText].filter(Boolean).join("\n").trim();
@@ -507,6 +511,7 @@ export async function attachWebInboxToSocket(
     return {
       body,
       location: location ?? undefined,
+      contactContext,
       replyContext,
       mediaPath,
       mediaType,
@@ -591,6 +596,16 @@ export async function attachWebInboxToSocket(
       selfE164: self.e164 ?? undefined,
       fromMe: Boolean(msg.key?.fromMe),
       location: enriched.location ?? undefined,
+      untrustedStructuredContext: enriched.contactContext
+        ? [
+            {
+              label: "WhatsApp contact",
+              source: "whatsapp",
+              type: enriched.contactContext.kind,
+              payload: enriched.contactContext,
+            },
+          ]
+        : undefined,
       sendComposing,
       reply,
       sendMedia,

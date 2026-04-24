@@ -6,6 +6,7 @@ import { createStartAccountContext } from "../../../test/helpers/plugins/start-a
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import * as sendModule from "./send.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
@@ -144,7 +145,7 @@ describe("discordPlugin outbound", () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("media"));
 
     const result = await discordPlugin.outbound!.sendMedia!({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       to: "channel:123",
       text: "hi",
       mediaUrl: "/tmp/image.png",
@@ -178,7 +179,7 @@ describe("discordPlugin outbound", () => {
       .mockResolvedValueOnce({ messageId: "video-1" });
 
     const result = await discordPlugin.outbound!.sendMedia!({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       to: "channel:123",
       text: "done - tiny cyber-lobster clip incoming",
       mediaUrl: "/tmp/molty.mp4",
@@ -218,7 +219,7 @@ describe("discordPlugin outbound", () => {
     const sendPollSpy = vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(sendPollDiscord);
     try {
       const result = await discordPlugin.outbound!.sendPoll!({
-        cfg: {} as OpenClawConfig,
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
         to: "channel:123",
         poll: {
           question: "Best shell?",

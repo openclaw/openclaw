@@ -1,7 +1,7 @@
 import { serializePayload } from "@buape/carbon";
 import { ComponentType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   DISCORD_CUSTOM_ID_MAX_CHARS,
   DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,
@@ -80,7 +80,7 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
 describe("loadDiscordModelPickerData", () => {
   it("reuses buildModelsProviderData as source of truth with agent scope", async () => {
     const expected = createModelsProviderData({ openai: ["gpt-4o"] });
-    const cfg = {} as OpenClawConfig;
+    const cfg = EMPTY_DISCORD_TEST_CONFIG;
     buildModelsProviderDataMock.mockResolvedValue(expected);
 
     const result = await loadDiscordModelPickerData(cfg, "support");

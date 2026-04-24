@@ -1,14 +1,12 @@
 ---
-title: "Building Channel Plugins"
-sidebarTitle: "Channel Plugins"
 summary: "Step-by-step guide to building a messaging channel plugin for OpenClaw"
+title: "Building channel plugins"
+sidebarTitle: "Channel Plugins"
 read_when:
   - You are building a new messaging channel plugin
   - You want to connect OpenClaw to a messaging platform
   - You need to understand the ChannelPlugin adapter surface
 ---
-
-# Building Channel Plugins
 
 This guide walks through building a channel plugin that connects OpenClaw to a
 messaging platform. By the end you will have a working channel with DM security,
@@ -633,7 +631,7 @@ Write colocated tests in `src/channel.test.ts`:
   <Card title="Message tool integration" icon="puzzle" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
     describeMessageTool and action discovery
   </Card>
-  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture#channel-target-resolution">
+  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture-internals#channel-target-resolution">
     inferTargetChatType, looksLikeId, resolveTarget
   </Card>
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
@@ -654,3 +652,9 @@ surface unless you are maintaining that bundled plugin family directly.
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
 - [Plugin Manifest](/plugins/manifest) — full manifest schema
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Agent harness plugins](/plugins/sdk-agent-harness)

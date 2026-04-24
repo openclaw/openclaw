@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw doctor` (health checks + guided repairs)"
 read_when:
   - You have connectivity/auth issues and want guided fixes
   - You updated and want a sanity check
-title: "doctor"
+title: "Doctor"
 ---
 
 # `openclaw doctor`
@@ -63,3 +63,8 @@ launchctl getenv OPENCLAW_GATEWAY_PASSWORD
 launchctl unsetenv OPENCLAW_GATEWAY_TOKEN
 launchctl unsetenv OPENCLAW_GATEWAY_PASSWORD
 ```
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway doctor](/gateway/doctor)

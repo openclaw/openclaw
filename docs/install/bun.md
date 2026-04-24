@@ -3,10 +3,8 @@ summary: "Bun workflow (experimental): installs and gotchas vs pnpm"
 read_when:
   - You want the fastest local dev loop (bun + watch)
   - You hit Bun install/patch/lifecycle script issues
-title: "Bun (Experimental)"
+title: "Bun (experimental)"
 ---
-
-# Bun (Experimental)
 
 <Warning>
 Bun is **not recommended for gateway runtime** (known issues with WhatsApp and Telegram). Use Node for production.
@@ -53,3 +51,9 @@ bun pm trust @whiskeysockets/baileys protobufjs
 ## Caveats
 
 Some scripts still hardcode pnpm (for example `docs:build`, `ui:*`, `protocol:check`). Run those via pnpm for now.
+
+## Related
+
+- [Install overview](/install)
+- [Node.js](/install/node)
+- [Updating](/install/updating)

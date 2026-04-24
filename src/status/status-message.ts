@@ -56,6 +56,7 @@ import {
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatFastModeLabel } from "./status-labels.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -87,6 +88,7 @@ export type StatusArgs = {
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedFast?: boolean;
+  resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
@@ -262,11 +264,12 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
-const formatFastModeLabel = (enabled: boolean) => {
-  if (!enabled) {
+const formatHarnessLabel = (harnessId: string | undefined) => {
+  const normalized = normalizeOptionalLowercaseString(harnessId);
+  if (!normalized || normalized === "pi" || normalized === "auto") {
     return null;
   }
-  return "Fast";
+  return normalized;
 };
 
 const readUsageFromSessionLog = (
@@ -744,6 +747,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Runner: ${runnerLabel}`,
     `Think: ${thinkLevel}`,
     formatFastModeLabel(fastMode),
+    formatHarnessLabel(args.resolvedHarness),
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
