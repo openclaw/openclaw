@@ -4,6 +4,7 @@ import {
   GPT5_PREFIXED_CONTRACT_MODEL_ID,
   NON_GPT5_CONTRACT_MODEL_ID,
   NON_OPENAI_CONTRACT_PROVIDER_ID,
+  CODEX_CONTRACT_PROVIDER_ID,
   OPENAI_CODEX_CONTRACT_PROVIDER_ID,
   OPENAI_CONTRACT_PROVIDER_ID,
   openAiPluginPersonalityConfig,
@@ -55,6 +56,17 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     expect(nonOpenAiContribution?.sectionOverrides?.interaction_style).toContain(
       "This is a live chat, not a memo.",
     );
+  });
+
+  it("keeps Codex virtual providers in the OpenAI-family personality fallback scope", () => {
+    const contribution = resolveContribution({
+      providerId: CODEX_CONTRACT_PROVIDER_ID,
+      modelId: GPT5_CONTRACT_MODEL_ID,
+      config: openAiPluginPersonalityConfig("off"),
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides).toEqual({});
   });
 
   it("does not apply GPT-5 overlays to non-GPT-5 models", () => {
