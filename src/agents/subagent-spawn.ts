@@ -1162,7 +1162,7 @@ export async function spawnSubagentDirect(
   if (routerRecommendation) {
     try {
       await appendSubagentModelRouterTelemetry({
-        config: resolveSubagentModelRouterConfig(cfg),
+        config: routerRecommendation.resolvedConfig ?? resolveSubagentModelRouterConfig(cfg),
         event: {
           component: "openclaw.subagent_spawn",
           requestId: childRunId,
