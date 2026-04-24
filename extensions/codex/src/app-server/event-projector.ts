@@ -409,7 +409,7 @@ export class CodexAppServerEventProjector {
     if (!run) {
       return;
     }
-    const durationMs = readNumberLike(run, "durationMs");
+    const durationMs = readNumber(run, "durationMs");
     const entries = readHookOutputEntries(run.entries);
     this.emitAgentEvent({
       stream: "codex_app_server.hook",
@@ -656,18 +656,6 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 function readNumber(record: JsonObject, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readNumberLike(record: JsonObject, key: string): number | undefined {
-  const value = record[key];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }
 
 function readHookOutputEntries(
