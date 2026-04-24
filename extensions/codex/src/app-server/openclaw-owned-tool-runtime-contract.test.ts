@@ -4,6 +4,7 @@ import { wrapToolWithBeforeToolCallHook } from "../../../../src/agents/pi-tools.
 import {
   installCodexToolResultMiddleware,
   installOpenClawOwnedToolHooks,
+  mediaToolResult,
   resetOpenClawOwnedToolHooks,
   textToolResult,
 } from "../../../../test/helpers/agents/openclaw-owned-tool-runtime-contract.js";
@@ -256,6 +257,114 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
         expect.objectContaining({
           runId: "run-error",
           toolCallId: "call-error",
+        }),
+      );
+    });
+  });
+
+  it("records successful Codex messaging text, media, and target telemetry", async () => {
+    const hooks = installOpenClawOwnedToolHooks();
+    const execute = vi.fn(async () => textToolResult("Sent."));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createContractTool({ name: "message", execute })],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-message" },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-message",
+      namespace: null,
+      tool: "message",
+      arguments: {
+        action: "send",
+        text: "hello from Codex",
+        mediaUrl: "/tmp/codex-reply.png",
+        provider: "telegram",
+        to: "chat-1",
+        threadId: "thread-ts-1",
+      },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "Sent." }],
+    });
+    expect(bridge.telemetry).toMatchObject({
+      didSendViaMessagingTool: true,
+      messagingToolSentTexts: ["hello from Codex"],
+      messagingToolSentMediaUrls: ["/tmp/codex-reply.png"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          to: "chat-1",
+          threadId: "thread-ts-1",
+        },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(hooks.afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "message",
+          toolCallId: "call-message",
+          params: expect.objectContaining({
+            text: "hello from Codex",
+            mediaUrl: "/tmp/codex-reply.png",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-message",
+          toolCallId: "call-message",
+        }),
+      );
+    });
+  });
+
+  it("records successful Codex media artifacts from tool results", async () => {
+    const hooks = installOpenClawOwnedToolHooks();
+    const execute = vi.fn(async () =>
+      mediaToolResult("Generated media reply.", "/tmp/reply.opus", true),
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createContractTool({ name: "tts", execute })],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-media" },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-media",
+      namespace: null,
+      tool: "tts",
+      arguments: { text: "hello" },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "Generated media reply." }],
+    });
+    expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
+    await vi.waitFor(() => {
+      expect(hooks.afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "tts",
+          toolCallId: "call-media",
+          result: expect.objectContaining({
+            details: {
+              media: {
+                mediaUrl: "/tmp/reply.opus",
+                audioAsVoice: true,
+              },
+            },
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-media",
+          toolCallId: "call-media",
         }),
       );
     });
