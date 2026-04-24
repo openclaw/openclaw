@@ -111,13 +111,19 @@ openclaw browser --browser-profile work tabs
 
 ```bash
 openclaw browser tabs
-openclaw browser tab new
+openclaw browser tab new --label docs
+openclaw browser tab label t1 docs
 openclaw browser tab select 2
 openclaw browser tab close 2
-openclaw browser open https://docs.openclaw.ai
-openclaw browser focus <targetId>
-openclaw browser close <targetId>
+openclaw browser open https://docs.openclaw.ai --label docs
+openclaw browser focus docs
+openclaw browser close t1
 ```
+
+`tabs` returns the raw `targetId` plus a stable `tabId` such as `t1`. You can
+also assign a label with `open --label`, `tab new --label`, or `tab label`.
+`focus`, `close`, snapshots, and actions accept the raw `targetId`, `tabId`,
+label, or a unique target-id prefix.
 
 ## Snapshot / screenshot / actions
 

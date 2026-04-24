@@ -171,6 +171,10 @@ Eligibility includes skill metadata gates, runtime environment/config checks,
 and the effective agent skill allowlist when `agents.defaults.skills` or
 `agents.list[].skills` is configured.
 
+Plugin-bundled skills are eligible only when their owning plugin is enabled.
+This lets tool plugins expose deeper operating guides without embedding all of
+that guidance directly in every tool description.
+
 ```
 <available_skills>
   <skill>
