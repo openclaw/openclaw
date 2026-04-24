@@ -19,6 +19,10 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOllamaThinkingDisabledWrapper,
+  shouldApplyOllamaThinkingOffCompat,
+} from "./ollama-stream-wrappers.js";
+import {
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
@@ -427,6 +431,15 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${ctx.provider}/${ctx.modelId})`,
     );
     ctx.agent.streamFn = createSiliconFlowThinkingWrapper(ctx.agent.streamFn);
+  }
+
+  // Ollama thinking models (e.g. Qwen 3.5) think by default.
+  // When thinking is explicitly off, inject chat_template_kwargs to disable it.
+  if (shouldApplyOllamaThinkingOffCompat({ provider: ctx.provider, thinkingLevel: ctx.thinkingLevel })) {
+    log.debug(
+      `disabling thinking for Ollama model (${ctx.provider}/${ctx.modelId})`,
+    );
+    ctx.agent.streamFn = createOllamaThinkingDisabledWrapper(ctx.agent.streamFn);
   }
 }
 
