@@ -55,13 +55,25 @@ openclaw_live_stage_source_tree() {
 openclaw_live_link_runtime_tree() {
   local dest_dir="${1:?destination directory required}"
 
-  ln -s /app/node_modules "$dest_dir/node_modules"
+  if [ ! -e "$dest_dir/node_modules" ]; then
+    ln -s /app/node_modules "$dest_dir/node_modules"
+  fi
   ln -s /app/dist "$dest_dir/dist"
   if [ -d /app/dist-runtime/extensions ]; then
     export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
   elif [ -d /app/dist/extensions ]; then
     export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
   fi
+}
+
+openclaw_live_stage_node_modules() {
+  local dest_dir="${1:?destination directory required}"
+  local target_dir="$dest_dir/node_modules"
+
+  mkdir -p "$target_dir"
+  find /app/node_modules -mindepth 1 -maxdepth 1 -exec ln -s {} "$target_dir" \;
+  rm -rf "$target_dir/.vite-temp"
+  mkdir -p "$target_dir/.vite-temp"
 }
 
 openclaw_live_stage_state_dir() {
