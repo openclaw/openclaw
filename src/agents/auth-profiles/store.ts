@@ -363,8 +363,9 @@ export { hasAnyAuthProfileStoreSource } from "./source-check.js";
 
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
+  loadedAtMs?: number,
 ): void {
-  replaceRuntimeAuthProfileStoreSnapshotsImpl(entries);
+  replaceRuntimeAuthProfileStoreSnapshotsImpl(entries, loadedAtMs);
 }
 
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
