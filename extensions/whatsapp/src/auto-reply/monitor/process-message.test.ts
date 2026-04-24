@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoisted mocks used across tests so vi.mock factories can reference them.
-const { resolvePolicyMock, buildContextMock } = vi.hoisted(() => ({
+const { resolvePolicyMock, buildContextMock, runMessageReceivedMock } = vi.hoisted(() => ({
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
+  runMessageReceivedMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
@@ -29,6 +30,13 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
     updateWhatsAppMainLastRoute: () => {},
   };
 });
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: (hookName: string) => hookName === "message_received",
+    runMessageReceived: runMessageReceivedMock,
+  }),
+}));
 
 vi.mock("../../identity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../identity.js")>();
@@ -113,6 +121,7 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
   };
 });
 
+import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { processMessage } from "./process-message.js";
 
 // ---------------------------------------------------------------------------
@@ -201,12 +210,18 @@ describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
     resolvePolicyMock.mockReset();
+    runMessageReceivedMock.mockClear();
+    clearInternalHooks();
     buildContextMock.mockImplementation(
       (params: { groupSystemPrompt?: string; combinedBody?: string }) => ({
         GroupSystemPrompt: params.groupSystemPrompt,
         Body: params.combinedBody ?? "",
       }),
     );
+  });
+
+  afterEach(() => {
+    clearInternalHooks();
   });
 
   it("resolves group systemPrompt from account config and passes it into buildWhatsAppInboundContext", async () => {
@@ -217,5 +232,69 @@ describe("processMessage group system prompt wiring", () => {
     await callProcessMessage();
 
     expect(buildContextMock.mock.calls[0][0].groupSystemPrompt).toBe("from config");
+  });
+
+  it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {
+    const internalReceived = vi.fn();
+    registerInternalHook("message:received", internalReceived);
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      BodyForCommands: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      From: GROUP_JID,
+      To: "+15550001111",
+      SessionKey: baseRoute.sessionKey,
+      AccountId: "default",
+      MessageSid: "msg1",
+      SenderId: "+15550002222",
+      SenderName: "Alice",
+      SenderE164: "+15550002222",
+      Timestamp: 1710000000,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: GROUP_JID,
+      GroupSubject: "Test Group",
+    }));
+
+    await callProcessMessage();
+
+    expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
+    expect(runMessageReceivedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: GROUP_JID,
+        content: "hi",
+        timestamp: 1710000000,
+        messageId: "msg1",
+        senderId: "+15550002222",
+        sessionKey: baseRoute.sessionKey,
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        accountId: "default",
+        conversationId: GROUP_JID,
+        sessionKey: baseRoute.sessionKey,
+        messageId: "msg1",
+        senderId: "+15550002222",
+      }),
+    );
+    expect(internalReceived).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        action: "received",
+        sessionKey: baseRoute.sessionKey,
+        context: expect.objectContaining({
+          from: GROUP_JID,
+          content: "hi",
+          timestamp: 1710000000,
+          channelId: "whatsapp",
+          accountId: "default",
+          conversationId: GROUP_JID,
+          messageId: "msg1",
+        }),
+      }),
+    );
   });
 });

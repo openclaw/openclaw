@@ -1,3 +1,13 @@
+import {
+  createInternalHookEvent,
+  deriveInboundMessageHookContext,
+  fireAndForgetHook,
+  toInternalMessageReceivedContext,
+  toPluginMessageContext,
+  toPluginMessageReceivedEvent,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
 import {
@@ -48,6 +58,34 @@ import {
   type LoadConfigFn,
   type resolveAgentRoute,
 } from "./runtime-api.js";
+
+function emitWhatsAppMessageReceivedHooks(params: {
+  ctx: ReturnType<typeof buildWhatsAppInboundContext>;
+  sessionKey: string;
+}): void {
+  const canonical = deriveInboundMessageHookContext(params.ctx);
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_received")) {
+    fireAndForgetHook(
+      hookRunner.runMessageReceived(
+        toPluginMessageReceivedEvent(canonical),
+        toPluginMessageContext(canonical),
+      ),
+      "whatsapp: message_received plugin hook failed",
+    );
+  }
+  fireAndForgetHook(
+    triggerInternalHook(
+      createInternalHookEvent(
+        "message",
+        "received",
+        params.sessionKey,
+        toInternalMessageReceivedContext(canonical),
+      ),
+    ),
+    "whatsapp: message_received internal hook failed",
+  );
+}
 
 function resolvePinnedMainDmRecipient(params: {
   cfg: ReturnType<LoadConfigFn>;
@@ -264,6 +302,10 @@ export async function processMessage(params: {
     },
     replyThreading,
     visibleReplyTo: visibleReplyTo ?? undefined,
+  });
+  emitWhatsAppMessageReceivedHooks({
+    ctx: ctxPayload,
+    sessionKey: params.route.sessionKey,
   });
 
   const pinnedMainDmRecipient = resolvePinnedMainDmRecipient({
