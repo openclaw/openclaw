@@ -314,7 +314,11 @@ describe("google-meet plugin", () => {
     expect(normalizeMeetUrl("https://meet.google.com/abc-defg-hij")).toBe(
       "https://meet.google.com/abc-defg-hij",
     );
+    expect(normalizeMeetUrl("https://meet.google.com/abc-defg-hij/notes")).toBe(
+      "https://meet.google.com/abc-defg-hij/notes",
+    );
     expect(() => normalizeMeetUrl("https://example.com/abc-defg-hij")).toThrow("meet.google.com");
+    expect(() => normalizeMeetUrl("https://meet.google.com/abc-defg-hijx")).toThrow("meeting code");
   });
 
   it("advertises only the googlemeet CLI descriptor", () => {

@@ -40,7 +40,9 @@ export function normalizeMeetUrl(input: unknown): string {
   if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "meet.google.com") {
     throw new Error("url must be an explicit https://meet.google.com/... URL");
   }
-  if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i.test(url.pathname)) {
+  const meetingCodeMatch = /^\/[a-z]{3}-[a-z]{4}-[a-z]{3}/i.exec(url.pathname);
+  const nextPathChar = meetingCodeMatch ? url.pathname.at(meetingCodeMatch[0].length) : undefined;
+  if (!meetingCodeMatch || (nextPathChar && nextPathChar !== "/")) {
     throw new Error("url must include a Google Meet meeting code");
   }
   return url.toString();
