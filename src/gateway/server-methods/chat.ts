@@ -1253,6 +1253,19 @@ export function sanitizeChatHistoryMessages(
   return changed ? next : messages;
 }
 
+export function sanitizeInjectedAssistantMessageForChatBroadcast(
+  message: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const displayMessage = stripInlineDirectiveTagsFromMessageForDisplay(
+    stripEnvelopeFromMessage(message) as Record<string, unknown>,
+  );
+  const sanitized = sanitizeChatHistoryMessages([displayMessage]);
+  if (sanitized.length === 0) {
+    return null;
+  }
+  return sanitized[0] as Record<string, unknown>;
+}
+
 function appendCanvasBlockToAssistantHistoryMessage(params: {
   message: unknown;
   preview: ReturnType<typeof extractCanvasFromText>;
@@ -2821,14 +2834,17 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     // Broadcast to webchat for immediate UI update
+    const visibleMessage = sanitizeInjectedAssistantMessageForChatBroadcast(appended.message);
+    if (!visibleMessage) {
+      respond(true, { ok: true, messageId: appended.messageId });
+      return;
+    }
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
       sessionKey,
       seq: 0,
       state: "final" as const,
-      message: stripInlineDirectiveTagsFromMessageForDisplay(
-        stripEnvelopeFromMessage(appended.message) as Record<string, unknown>,
-      ),
+      message: visibleMessage,
     };
     context.broadcast("chat", chatPayload);
     context.nodeSendToSession(sessionKey, "chat", chatPayload);

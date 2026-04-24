@@ -21,6 +21,7 @@ import {
   augmentChatHistoryWithCanvasBlocks,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
+  sanitizeInjectedAssistantMessageForChatBroadcast,
   sanitizeChatSendMessageInput,
 } from "./chat.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -453,6 +454,36 @@ describe("sanitizeChatHistoryMessages", () => {
         timestamp: 3,
       },
     ]);
+  });
+
+  it("drops commentary-only injected assistant entries from live chat broadcasts", () => {
+    const result = sanitizeInjectedAssistantMessageForChatBroadcast({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "continue",
+          textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+        },
+      ],
+      timestamp: 2,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps normal injected assistant entries for live chat broadcasts", () => {
+    const result = sanitizeInjectedAssistantMessageForChatBroadcast({
+      role: "assistant",
+      content: [{ type: "text", text: "visible reply" }],
+      timestamp: 3,
+    });
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "visible reply" }],
+      timestamp: 3,
+    });
   });
 });
 
