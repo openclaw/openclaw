@@ -1,31 +1,74 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AppViewState } from "../app-view-state.ts";
+import {
+  createModelCatalog,
+  createSessionsListResult,
+  DEFAULT_CHAT_MODEL_CATALOG,
+} from "../chat-model.test-helpers.ts";
+import { renderChatAvatar } from "../chat/chat-avatar.ts";
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../chat/chat-welcome.ts";
+import { renderChatSessionSelect } from "../chat/session-controls.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { ModelCatalogEntry } from "../types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
+
+const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
+  vi.fn(async (state: AppViewState) => {
+    const agentId = state.agentsSelectedId ?? "main";
+    const sessionKey = state.sessionKey;
+    await state.client?.request("tools.effective", { agentId, sessionKey });
+    const override = state.chatModelOverrides[sessionKey];
+    state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override?.value ?? "(default)"}`;
+    state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
+  }),
+);
+const loadSessionsMock = vi.hoisted(() =>
+  vi.fn(async (state: AppViewState) => {
+    const res = await state.client?.request("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    if (res) {
+      state.sessionsResult = res as AppViewState["sessionsResult"];
+    }
+  }),
+);
 
 vi.mock("../icons.ts", () => ({
   icons: {},
 }));
 
+vi.mock("../controllers/agents.ts", () => ({
+  refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
+}));
+
+vi.mock("../controllers/sessions.ts", () => ({
+  loadSessions: loadSessionsMock,
+}));
+
 vi.mock("./agents-utils.ts", () => ({
+  isRenderableControlUiAvatarUrl: (value: string) =>
+    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
   agentLogoUrl: () => "/openclaw-logo.svg",
   assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
   resolveChatAvatarRenderUrl: (
     candidate: string | null | undefined,
     agent: { identity?: { avatar?: string; avatarUrl?: string } },
   ) => {
+    const isRenderableControlUiAvatarUrl = (value: string) =>
+      /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
     if (typeof candidate === "string" && candidate.startsWith("blob:")) {
       return candidate;
     }
-    if (
-      typeof agent.identity?.avatarUrl === "string" &&
-      agent.identity.avatarUrl.startsWith("blob:")
-    ) {
-      return agent.identity.avatarUrl;
+    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
+      if (typeof value === "string" && isRenderableControlUiAvatarUrl(value)) {
+        return value;
+      }
     }
     return null;
   },
@@ -36,6 +79,12 @@ vi.mock("./agents-utils.ts", () => ({
     return value.length <= 3 ? value : null;
   },
 }));
+
+function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
+  const container = document.createElement("div");
+  render(renderChatAvatar(...params), container);
+  return container.querySelector<HTMLElement>(".chat-avatar");
+}
 
 function renderQueue(params: {
   queue: ChatQueueItem[];
@@ -54,6 +103,135 @@ function renderQueue(params: {
   );
   return container;
 }
+
+function createChatHeaderState(
+  overrides: {
+    model?: string | null;
+    modelProvider?: string | null;
+    models?: ModelCatalogEntry[];
+    omitSessionFromList?: boolean;
+  } = {},
+): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
+  let currentModel = overrides.model ?? null;
+  let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
+  const omitSessionFromList = overrides.omitSessionFromList ?? false;
+  const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
+  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (method === "sessions.patch") {
+      const nextModel = (params.model as string | null | undefined) ?? null;
+      if (!nextModel) {
+        currentModel = null;
+        currentModelProvider = null;
+      } else {
+        const normalized = nextModel.trim();
+        const slashIndex = normalized.indexOf("/");
+        if (slashIndex > 0) {
+          currentModelProvider = normalized.slice(0, slashIndex);
+          currentModel = normalized.slice(slashIndex + 1);
+        } else {
+          currentModel = normalized;
+          const matchingProviders = catalog
+            .filter((entry) => entry.id === normalized)
+            .map((entry) => entry.provider)
+            .filter(Boolean);
+          currentModelProvider =
+            matchingProviders.length === 1 ? matchingProviders[0] : currentModelProvider;
+        }
+      }
+      return { ok: true, key: "main" };
+    }
+    if (method === "chat.history") {
+      return { messages: [], thinkingLevel: null };
+    }
+    if (method === "sessions.list") {
+      return createSessionsListResult({
+        model: currentModel,
+        modelProvider: currentModelProvider,
+        omitSessionFromList,
+      });
+    }
+    if (method === "models.list") {
+      return { models: catalog };
+    }
+    if (method === "tools.effective") {
+      return {
+        agentId: "main",
+        profile: "coding",
+        groups: [],
+      };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const state = {
+    sessionKey: "main",
+    connected: true,
+    sessionsHideCron: true,
+    sessionsResult: createSessionsListResult({
+      model: currentModel,
+      modelProvider: currentModelProvider,
+      omitSessionFromList,
+    }),
+    chatModelOverrides: {},
+    chatModelCatalog: catalog,
+    chatModelsLoading: false,
+    client: { request } as unknown as GatewayBrowserClient,
+    settings: {
+      gatewayUrl: "",
+      token: "",
+      locale: "en",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "dark",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      chatFocusMode: false,
+      chatShowThinking: false,
+    },
+    chatMessage: "",
+    chatStream: null,
+    chatStreamStartedAt: null,
+    chatRunId: null,
+    chatQueue: [],
+    chatMessages: [],
+    chatLoading: false,
+    chatThinkingLevel: null,
+    lastError: null,
+    chatAvatarUrl: null,
+    basePath: "",
+    hello: null,
+    agentsList: null,
+    agentsPanel: "overview",
+    agentsSelectedId: null,
+    toolsEffectiveLoading: false,
+    toolsEffectiveLoadingKey: null,
+    toolsEffectiveResultKey: null,
+    toolsEffectiveError: null,
+    toolsEffectiveResult: null,
+    applySettings(next: AppViewState["settings"]) {
+      state.settings = next;
+    },
+    loadAssistantIdentity: vi.fn(),
+    resetToolStream: vi.fn(),
+    resetChatScroll: vi.fn(),
+  } as unknown as AppViewState & {
+    client: GatewayBrowserClient;
+    settings: AppViewState["settings"];
+  };
+  return { state, request };
+}
+
+async function flushTasks() {
+  await vi.dynamicImportSettled();
+}
+
+afterEach(() => {
+  loadSessionsMock.mockClear();
+  refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
+  vi.unstubAllGlobals();
+});
 
 describe("chat queue", () => {
   it("renders Steer only for queued messages during an active run", () => {
@@ -75,16 +253,62 @@ describe("chat queue", () => {
     steerButtons[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onQueueSteer).toHaveBeenCalledWith("queued-1");
-  });
 
-  it("hides queued-message Steer when no run is active", () => {
-    const container = renderQueue({
+    const inactiveContainer = renderQueue({
       canAbort: false,
       onQueueSteer: vi.fn(),
       queue: [{ id: "queued-1", text: "tighten the plan", createdAt: 1 }],
     });
 
-    expect(container.querySelector(".chat-queue__steer")).toBeNull();
+    expect(inactiveContainer.querySelector(".chat-queue__steer")).toBeNull();
+  });
+});
+
+describe("renderChatAvatar", () => {
+  it("uses the assistant fallback when no assistant avatar is configured", () => {
+    const avatar = renderAvatar(["assistant"]);
+
+    expect(avatar).not.toBeNull();
+    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+  });
+
+  it("renders assistant fallback, blob image, and text avatars", () => {
+    const remoteAvatar = renderAvatar([
+      "assistant",
+      { avatar: "https://example.com/avatar.png", name: "Val" },
+    ]);
+    expect(remoteAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+
+    const blobAvatar = renderAvatar(["assistant", { avatar: "blob:managed-image", name: "Val" }]);
+    expect(blobAvatar?.tagName).toBe("IMG");
+    expect(blobAvatar?.getAttribute("src")).toBe("blob:managed-image");
+
+    const textAvatar = renderAvatar(["assistant", { avatar: "VC", name: "Val" }]);
+    expect(textAvatar?.tagName).toBe("DIV");
+    expect(textAvatar?.textContent).toContain("VC");
+    expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
+  });
+
+  it("uses the assistant fallback while authenticated avatar routes are loading", () => {
+    const avatar = renderAvatar([
+      "assistant",
+      { avatar: "/avatar/main", name: "OpenClaw" },
+      undefined,
+      "",
+      "session-token",
+    ]);
+
+    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+  });
+
+  it("renders local user image and text avatars", () => {
+    const imageAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "/avatar/user" }]);
+    expect(imageAvatar?.getAttribute("src")).toBe("/avatar/user");
+    expect(imageAvatar?.getAttribute("alt")).toBe("Buns");
+
+    const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
+    expect(textAvatar?.tagName).toBe("DIV");
+    expect(textAvatar?.textContent).toContain("AB");
   });
 });
 
@@ -125,34 +349,176 @@ describe("chat welcome", () => {
     return container;
   }
 
-  it("renders configured assistant text avatars in the welcome state", () => {
-    const container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
+  it("renders configured assistant avatars and fallback in the welcome state", () => {
+    let container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
     const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
     expect(avatar).not.toBeNull();
     expect(avatar?.tagName).toBe("DIV");
     expect(avatar?.textContent).toContain("VC");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
-  });
 
-  it("renders configured assistant image avatars in the welcome state", () => {
-    const container = renderWelcome({
+    container = renderWelcome({
       assistantAvatar: "avatars/val.png",
       assistantAvatarUrl: "blob:identity-avatar",
     });
 
-    const avatar = container.querySelector<HTMLImageElement>("img");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("blob:identity-avatar");
-    expect(avatar?.getAttribute("alt")).toBe("Val");
+    const imageAvatar = container.querySelector<HTMLImageElement>("img");
+    expect(imageAvatar).not.toBeNull();
+    expect(imageAvatar?.getAttribute("src")).toBe("blob:identity-avatar");
+    expect(imageAvatar?.getAttribute("alt")).toBe("Val");
+
+    container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
+
+    const fallbackAvatar = container.querySelector<HTMLImageElement>(
+      ".agent-chat__avatar--logo img",
+    );
+    expect(fallbackAvatar).not.toBeNull();
+    expect(fallbackAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+    expect(fallbackAvatar?.getAttribute("alt")).toBe("Val");
+  });
+});
+
+describe("chat session controls", () => {
+  it("patches the current session model from the chat header picker", async () => {
+    const { state, request } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("");
+
+    modelSelect!.value = "openai/gpt-5-mini";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "openai/gpt-5-mini",
+    });
+    expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+    await flushTasks();
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
   });
 
-  it("uses the Molty png as the welcome fallback assistant avatar", () => {
-    const container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
+  it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
+    const { state, request } = createChatHeaderState();
+    state.agentsPanel = "tools";
+    state.agentsSelectedId = "main";
+    state.toolsEffectiveResultKey = "main:main";
+    state.toolsEffectiveResult = {
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
 
-    const avatar = container.querySelector<HTMLImageElement>(".agent-chat__avatar--logo img");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
-    expect(avatar?.getAttribute("alt")).toBe("Val");
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    modelSelect!.value = "openai/gpt-5-mini";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+    expect(request).toHaveBeenCalledWith("tools.effective", {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
+  });
+
+  it("clears the session model override back to the default model", async () => {
+    const { state, request } = createChatHeaderState({ model: "gpt-5-mini" });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
+
+    modelSelect!.value = "";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: null,
+    });
+    await flushTasks();
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
+  });
+
+  it("disables the chat header model picker while a run is active", () => {
+    const { state } = createChatHeaderState();
+    state.chatRunId = "run-123";
+    state.chatStream = "Working";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.disabled).toBe(true);
+  });
+
+  it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    modelSelect!.value = "openai/gpt-5-mini";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+    render(renderChatSessionSelect(state), container);
+
+    const rerendered = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(rerendered?.value).toBe("openai/gpt-5-mini");
+  });
+
+  it("uses default thinking options when the active session is absent", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai-codex",
+      defaultsThinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "adaptive", label: "adaptive" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "maximum" },
+      ],
+      omitSessionFromList: true,
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    const options = [...(thinkingSelect?.options ?? [])].map((option) => option.value);
+
+    expect(options).toContain("adaptive");
+    expect(options).toContain("xhigh");
+    expect(options).toContain("max");
+    expect(
+      [...(thinkingSelect?.options ?? [])]
+        .find((option) => option.value === "max")
+        ?.textContent?.trim(),
+    ).toBe("maximum");
   });
 });
