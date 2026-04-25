@@ -737,6 +737,14 @@
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
     },
+    "./plugin-sdk/session-transcript-hit": {
+      "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",
+      "default": "./dist/plugin-sdk/session-transcript-hit.js"
+    },
+    "./plugin-sdk/session-visibility": {
+      "types": "./dist/plugin-sdk/session-visibility.d.ts",
+      "default": "./dist/plugin-sdk/session-visibility.js"
+    },
     "./plugin-sdk/ssrf-dispatcher": {
       "types": "./dist/plugin-sdk/ssrf-dispatcher.d.ts",
       "default": "./dist/plugin-sdk/ssrf-dispatcher.js"
@@ -1463,6 +1471,7 @@
     "test:contracts:plugins": "node scripts/run-vitest.mjs run --config test/vitest/vitest.contracts-plugin.config.ts --maxWorkers=1",
     "test:coverage": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --coverage",
     "test:coverage:changed": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --coverage --changed origin/main",
+    "test:docker:agents-delete-shared-workspace": "bash scripts/e2e/agents-delete-shared-workspace-docker.sh",
     "test:docker:all": "node scripts/test-docker-all.mjs",
     "test:docker:bundled-channel-deps": "bash scripts/e2e/bundled-channel-runtime-deps-docker.sh",
     "test:docker:bundled-channel-deps:fast": "OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=1 bash scripts/e2e/bundled-channel-runtime-deps-docker.sh",

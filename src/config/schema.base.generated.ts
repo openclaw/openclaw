@@ -750,6 +750,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
                 },
+                executablePath: {
+                  type: "string",
+                },
                 attachOnly: {
                   type: "boolean",
                   title: "Browser Profile Attach-only Mode",
@@ -3444,6 +3447,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     const: "continuation-skip",
                   },
+                  {
+                    type: "string",
+                    const: "never",
+                  },
                 ],
                 title: "Context Injection",
                 description:
@@ -4722,7 +4729,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "boolean",
                         title: "Compaction Quality Guard Enabled",
                         description:
-                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
                       },
                       maxRetries: {
                         type: "integer",
@@ -4736,7 +4743,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     additionalProperties: false,
                     title: "Compaction Quality Guard",
                     description:
-                      "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+                      "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
                   },
                   postIndexSync: {
                     type: "string",
@@ -6431,6 +6438,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Context Limits",
                   description:
                     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
+                },
+                contextTokens: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
                 },
                 heartbeat: {
                   type: "object",
@@ -22032,6 +22044,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
+              pairing: {
+                type: "object",
+                properties: {
+                  autoApproveCidrs: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    title: "Gateway Node Pairing Auto-Approve CIDRs",
+                    description:
+                      "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Gateway Node Pairing",
+                description:
+                  "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
+              },
               allowCommands: {
                 type: "array",
                 items: {
@@ -24872,6 +24902,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Pin browser routing to a specific node id or name (optional).",
       tags: ["network"],
     },
+    "gateway.nodes.pairing": {
+      label: "Gateway Node Pairing",
+      help: "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
+      tags: ["network"],
+    },
+    "gateway.nodes.pairing.autoApproveCidrs": {
+      label: "Gateway Node Pairing Auto-Approve CIDRs",
+      help: "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
+      tags: ["security", "access", "network", "advanced"],
+    },
     "gateway.nodes.allowCommands": {
       label: "Gateway Node Allowlist (Extra Commands)",
       help: "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
@@ -26066,12 +26106,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.compaction.qualityGuard": {
       label: "Compaction Quality Guard",
-      help: "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+      help: "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard.enabled": {
       label: "Compaction Quality Guard Enabled",
-      help: "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+      help: "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard.maxRetries": {
@@ -26336,6 +26376,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.snapshotDefaults.mode": {
       label: "Browser Snapshot Mode",
       help: "Default snapshot extraction mode controlling how page content is transformed for agent consumption. Choose the mode that balances readability, fidelity, and token footprint for your workflows.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup": {
+      label: "Browser Tab Cleanup",
+      help: "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.enabled": {
+      label: "Browser Tab Cleanup Enabled",
+      help: "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.idleMinutes": {
+      label: "Browser Tab Cleanup Idle Minutes",
+      help: "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.maxTabsPerSession": {
+      label: "Browser Tab Cleanup Max Tabs Per Session",
+      help: "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+      tags: ["performance", "storage"],
+    },
+    "browser.tabCleanup.sweepMinutes": {
+      label: "Browser Tab Cleanup Sweep Minutes",
+      help: "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
       tags: ["advanced"],
     },
     "browser.ssrfPolicy": {

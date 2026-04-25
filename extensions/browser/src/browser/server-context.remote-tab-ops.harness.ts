@@ -31,6 +31,12 @@ export function makeState(
       noSandbox: false,
       attachOnly: false,
       ssrfPolicy: { allowPrivateNetwork: true },
+      tabCleanup: {
+        enabled: true,
+        idleMinutes: 120,
+        maxTabsPerSession: 8,
+        sweepMinutes: 5,
+      },
       defaultProfile: profile,
       profiles: {
         remote: {

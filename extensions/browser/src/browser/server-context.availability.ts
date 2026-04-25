@@ -200,7 +200,9 @@ export function createProfileAvailability({
     throw new BrowserProfileUnavailableError(formatChromeMcpAttachFailure(lastError));
   };
 
-  const ensureBrowserAvailable = async (): Promise<void> => {
+  let inflightEnsureBrowserAvailable: Promise<void> | null = null;
+
+  const ensureBrowserAvailableOnce = async (): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       if (profile.userDataDir && !fs.existsSync(profile.userDataDir)) {
@@ -303,6 +305,16 @@ export function createProfileAvailability({
         )}`,
       );
     }
+  };
+
+  const ensureBrowserAvailable = async (): Promise<void> => {
+    if (inflightEnsureBrowserAvailable) {
+      return inflightEnsureBrowserAvailable;
+    }
+    inflightEnsureBrowserAvailable = ensureBrowserAvailableOnce().finally(() => {
+      inflightEnsureBrowserAvailable = null;
+    });
+    return inflightEnsureBrowserAvailable;
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {

@@ -3,14 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  requireRuntimeConfig,
+  type MarkdownTableMode,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -60,6 +64,10 @@ type DiscordSendOpts = {
   rest?: RequestClient;
   replyTo?: string;
   retry?: RetryConfig;
+  textLimit?: number;
+  maxLinesPerMessage?: number;
+  tableMode?: MarkdownTableMode;
+  chunkMode?: ChunkMode;
   components?: DiscordSendComponents;
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
@@ -81,6 +89,7 @@ async function sendDiscordThreadTextChunks(params: {
   request: DiscordClientRequest;
   maxLinesPerMessage?: number;
   chunkMode: ReturnType<typeof resolveChunkMode>;
+  maxChars?: number;
   silent?: boolean;
 }): Promise<void> {
   for (const chunk of params.chunks) {
@@ -95,6 +104,7 @@ async function sendDiscordThreadTextChunks(params: {
       undefined,
       params.chunkMode,
       params.silent,
+      params.maxChars,
     );
   }
 }
@@ -150,12 +160,18 @@ export async function sendMessageDiscord(
     channel: "discord",
     accountId: accountInfo.accountId,
   });
-  const chunkMode = resolveChunkMode(cfg, "discord", accountInfo.accountId);
+  const effectiveTableMode = opts.tableMode ?? tableMode;
+  const chunkMode = opts.chunkMode ?? resolveChunkMode(cfg, "discord", accountInfo.accountId);
+  const maxLinesPerMessage = opts.maxLinesPerMessage ?? accountInfo.config.maxLinesPerMessage;
+  const textLimit =
+    typeof opts.textLimit === "number" && Number.isFinite(opts.textLimit)
+      ? Math.max(1, Math.min(Math.floor(opts.textLimit), 2000))
+      : undefined;
   const mediaMaxBytes =
     typeof accountInfo.config.mediaMaxMb === "number"
       ? accountInfo.config.mediaMaxMb * 1024 * 1024
       : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
-  const textWithTables = convertMarkdownTables(text ?? "", tableMode);
+  const textWithTables = convertMarkdownTables(text ?? "", effectiveTableMode);
   const textWithMentions = rewriteDiscordKnownMentions(textWithTables, {
     accountId: accountInfo.accountId,
   });
@@ -169,8 +185,9 @@ export async function sendMessageDiscord(
   if (isForumLikeType(channelType)) {
     const threadName = deriveForumThreadName(textWithTables);
     const chunks = buildDiscordTextChunks(textWithMentions, {
-      maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
+      maxLinesPerMessage,
       chunkMode,
+      maxChars: textLimit,
     });
     const starterContent = chunks[0]?.trim() ? chunks[0] : threadName;
     const starterComponents = resolveDiscordSendComponents({
@@ -227,19 +244,21 @@ export async function sendMessageDiscord(
           mediaMaxBytes,
           undefined,
           request,
-          accountInfo.config.maxLinesPerMessage,
+          maxLinesPerMessage,
           undefined,
           undefined,
           chunkMode,
           opts.silent,
+          textLimit,
         );
         await sendDiscordThreadTextChunks({
           rest,
           threadId,
           chunks: afterMediaChunks,
           request,
-          maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
+          maxLinesPerMessage,
           chunkMode,
+          maxChars: textLimit,
           silent: opts.silent,
         });
       } else {
@@ -248,8 +267,9 @@ export async function sendMessageDiscord(
           threadId,
           chunks: remainingChunks,
           request,
-          maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
+          maxLinesPerMessage,
           chunkMode,
+          maxChars: textLimit,
           silent: opts.silent,
         });
       }
@@ -291,11 +311,12 @@ export async function sendMessageDiscord(
         mediaMaxBytes,
         opts.replyTo,
         request,
-        accountInfo.config.maxLinesPerMessage,
+        maxLinesPerMessage,
         opts.components,
         opts.embeds,
         chunkMode,
         opts.silent,
+        textLimit,
       );
     } else {
       result = await sendDiscordText(
@@ -304,11 +325,12 @@ export async function sendMessageDiscord(
         textWithMentions,
         opts.replyTo,
         request,
-        accountInfo.config.maxLinesPerMessage,
+        maxLinesPerMessage,
         opts.components,
         opts.embeds,
         chunkMode,
         opts.silent,
+        textLimit,
       );
     }
   } catch (err) {

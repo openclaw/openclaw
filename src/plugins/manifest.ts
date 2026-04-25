@@ -5,6 +5,19 @@ import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.confi
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import {
+  normalizeModelCatalog,
+  type ModelCatalog,
+  type ModelCatalogAlias,
+  type ModelCatalogCost,
+  type ModelCatalogDiscovery,
+  type ModelCatalogInput,
+  type ModelCatalogModel,
+  type ModelCatalogProvider,
+  type ModelCatalogStatus,
+  type ModelCatalogSuppression,
+  type ModelCatalogTieredCost,
+} from "../model-catalog/index.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
@@ -41,6 +54,17 @@ export type PluginManifestModelSupport = {
    */
   modelPatterns?: string[];
 };
+
+export type PluginManifestModelCatalogInput = ModelCatalogInput;
+export type PluginManifestModelCatalogDiscovery = ModelCatalogDiscovery;
+export type PluginManifestModelCatalogStatus = ModelCatalogStatus;
+export type PluginManifestModelCatalogTieredCost = ModelCatalogTieredCost;
+export type PluginManifestModelCatalogCost = ModelCatalogCost;
+export type PluginManifestModelCatalogModel = ModelCatalogModel;
+export type PluginManifestModelCatalogProvider = ModelCatalogProvider;
+export type PluginManifestModelCatalogAlias = ModelCatalogAlias;
+export type PluginManifestModelCatalogSuppression = ModelCatalogSuppression;
+export type PluginManifestModelCatalog = ModelCatalog;
 
 export type PluginManifestProviderEndpoint = {
   /**
@@ -176,6 +200,11 @@ export type PluginManifest = {
    * Use this for shorthand model refs that omit an explicit provider prefix.
    */
   modelSupport?: PluginManifestModelSupport;
+  /**
+   * Declarative model catalog metadata used by future read-only listing,
+   * onboarding, and model picker surfaces before provider runtime loads.
+   */
+  modelCatalog?: PluginManifestModelCatalog;
   /** Cheap provider endpoint metadata used before provider runtime loads. */
   providerEndpoints?: PluginManifestProviderEndpoint[];
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
@@ -886,6 +915,9 @@ export function loadPluginManifest(
   const providers = normalizeTrimmedStringList(raw.providers);
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
+  const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
+    ownedProviders: new Set(providers),
+  });
   const providerEndpoints = normalizeManifestProviderEndpoints(raw.providerEndpoints);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
@@ -926,6 +958,7 @@ export function loadPluginManifest(
       providers,
       providerDiscoveryEntry,
       modelSupport,
+      modelCatalog,
       providerEndpoints,
       cliBackends,
       syntheticAuthRefs,

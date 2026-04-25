@@ -43,6 +43,12 @@ function makeState(): BrowserServerState {
       noSandbox: false,
       attachOnly: false,
       defaultProfile: "chrome-live",
+      tabCleanup: {
+        enabled: true,
+        idleMinutes: 120,
+        maxTabsPerSession: 8,
+        sweepMinutes: 5,
+      },
       profiles: {
         "chrome-live": {
           cdpPort: 18801,

@@ -111,6 +111,7 @@ Use this as the quick model when triaging risk:
 | `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
 | Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
 | Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
+| `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
 
 ## Not vulnerabilities by design
 
@@ -133,6 +134,12 @@ a real boundary bypass is demonstrated:
   approval layer for `system.run`, when the real execution boundary is still
   the gateway's global node command policy plus the node's own exec
   approvals.
+- Reports that treat configured `gateway.nodes.pairing.autoApproveCidrs` as a
+  vulnerability by itself. This setting is disabled by default, requires
+  explicit CIDR/IP entries, only applies to first-time `role: node` pairing with
+  no requested scopes, and does not auto-approve operator/browser/Control UI,
+  WebChat, role upgrades, scope upgrades, metadata changes, public-key changes,
+  or same-host loopback trusted-proxy header paths.
 - "Missing per-user authorization" findings that treat `sessionKey` as an
   auth token.
 
@@ -352,6 +359,12 @@ gateway:
 ```
 
 When `trustedProxies` is configured, the Gateway uses `X-Forwarded-For` to determine the client IP. `X-Real-IP` is ignored by default unless `gateway.allowRealIpFallback: true` is explicitly set.
+
+Trusted proxy headers do not make node device pairing automatically trusted.
+`gateway.nodes.pairing.autoApproveCidrs` is a separate, disabled-by-default
+operator policy. Even when enabled, loopback-source trusted-proxy header paths
+are excluded from node auto-approval because local callers can forge those
+headers.
 
 Good reverse proxy behavior (overwrite incoming forwarding headers):
 

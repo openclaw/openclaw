@@ -1,5 +1,6 @@
 import path from "node:path";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
+import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { captureScreenshot, snapshotAria } from "../cdp.js";
 import {
   evaluateChromeMcpScript,
@@ -11,6 +12,7 @@ import {
   buildAiSnapshotFromChromeMcpSnapshot,
   flattenChromeMcpSnapshotToAriaNodes,
 } from "../chrome-mcp.snapshot.js";
+import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -22,7 +24,7 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
-import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import {
   getPwAiModule,
   handleRouteError,
@@ -40,9 +42,18 @@ import {
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
+
+function browserNavigationPolicyForProfile(ctx: BrowserRouteContext, profileCtx: ProfileContext) {
+  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
+    browserProxyMode: resolveBrowserNavigationProxyMode({
+      resolved: ctx.state().resolved,
+      profile: profileCtx.profile,
+    }),
+  });
+}
 
 async function collectChromeMcpSnapshotUrls(params: {
   profileName: string;
@@ -250,7 +261,7 @@ export function registerBrowserAgentSnapshotRoutes(
         targetId,
         run: async ({ profileCtx, tab, cdpUrl }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-            const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+            const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
             await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
             const result = await navigateChromeMcpPage({
               profileName: profileCtx.profile.name,
@@ -269,7 +280,7 @@ export function registerBrowserAgentSnapshotRoutes(
             cdpUrl,
             targetId: tab.targetId,
             url,
-            ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
+            ...browserNavigationPolicyForProfile(ctx, profileCtx),
           });
           const currentTargetId = await resolveTargetIdAfterNavigate({
             oldTargetId: tab.targetId,
@@ -328,6 +339,11 @@ export function registerBrowserAgentSnapshotRoutes(
       const element = toStringOrEmpty(body.element) || undefined;
       const labels = toBoolean(body.labels) ?? false;
       const type = body.type === "jpeg" ? "jpeg" : "png";
+      const timeoutMsRaw = toNumber(body.timeoutMs);
+      const timeoutMs =
+        timeoutMsRaw !== undefined
+          ? Math.max(1, Math.floor(timeoutMsRaw))
+          : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
 
       if (fullPage && (ref || element)) {
         return jsonError(res, 400, "fullPage is not supported for element screenshots");
@@ -340,7 +356,7 @@ export function registerBrowserAgentSnapshotRoutes(
         targetId,
         run: async ({ profileCtx, tab, cdpUrl }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-            const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+            const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
             if (element) {
               return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
             }
@@ -370,6 +386,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   targetId: tab.targetId,
                   fullPage,
                   format: type,
+                  timeoutMs,
                 });
                 await saveNormalizedScreenshotResponse({
                   res,
@@ -397,6 +414,7 @@ export function registerBrowserAgentSnapshotRoutes(
               uid: ref,
               fullPage,
               format: type,
+              timeoutMs,
             });
             await saveNormalizedScreenshotResponse({
               res,
@@ -433,6 +451,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 targetId: tab.targetId,
                 refs: snap.refs,
                 type,
+                timeoutMs,
               });
               await saveNormalizedScreenshotResponse({
                 res,
@@ -453,6 +472,7 @@ export function registerBrowserAgentSnapshotRoutes(
               element,
               fullPage,
               type,
+              timeoutMs,
             });
             buffer = snap.buffer;
           } else {
@@ -461,6 +481,7 @@ export function registerBrowserAgentSnapshotRoutes(
               fullPage,
               format: type,
               quality: type === "jpeg" ? 85 : undefined,
+              timeoutMs,
             });
           }
 
@@ -497,7 +518,7 @@ export function registerBrowserAgentSnapshotRoutes(
           return jsonError(res, 400, "labels/mode=efficient require format=ai");
         }
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
           if (plan.selectorValue || plan.frameSelectorValue) {
             return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
           }

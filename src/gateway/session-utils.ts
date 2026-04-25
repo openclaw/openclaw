@@ -19,12 +19,17 @@ import {
   resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
 import {
+  countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
+import {
+  RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
+  shouldKeepSubagentRunChildLink,
+} from "../agents/subagent-run-liveness.js";
 import {
   listThinkingLevelOptions,
   resolveThinkingDefaultForModel,
@@ -81,6 +86,7 @@ import type {
   GatewayAgentRow,
   GatewaySessionRow,
   GatewaySessionsDefaults,
+  SessionRunStatus,
   SessionsListResult,
 } from "./session-utils.types.js";
 
@@ -291,9 +297,36 @@ function resolveEstimatedSessionCostUsd(params: {
   return resolveNonNegativeNumber(estimated);
 }
 
+const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
+
+function isFinitePositiveTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunStatus, "running"> {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
+
+function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
+  if (isTerminalSessionStatus(entry.status) || isFinitePositiveTimestamp(entry.endedAt)) {
+    const endedAt = isFinitePositiveTimestamp(entry.endedAt) ? entry.endedAt : entry.updatedAt;
+    return (
+      isFinitePositiveTimestamp(endedAt) && now - endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
+    );
+  }
+  if (entry.status === "running" || isFinitePositiveTimestamp(entry.startedAt)) {
+    return true;
+  }
+  return (
+    isFinitePositiveTimestamp(entry.updatedAt) &&
+    now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS
+  );
+}
+
 function resolveChildSessionKeys(
   controllerSessionKey: string,
   store: Record<string, SessionEntry>,
+  now = Date.now(),
 ): string[] | undefined {
   const childSessionKeys = new Set<string>();
   for (const entry of listSubagentRunsForController(controllerSessionKey)) {
@@ -302,10 +335,21 @@ function resolveChildSessionKeys(
       continue;
     }
     const latest = getSessionDisplaySubagentRunByChildSessionKey(childSessionKey);
+    if (!latest) {
+      continue;
+    }
     const latestControllerSessionKey =
       normalizeOptionalString(latest?.controllerSessionKey) ||
       normalizeOptionalString(latest?.requesterSessionKey);
     if (latestControllerSessionKey !== controllerSessionKey) {
+      continue;
+    }
+    if (
+      !shouldKeepSubagentRunChildLink(latest, {
+        activeDescendants: countActiveDescendantRuns(childSessionKey),
+        now,
+      })
+    ) {
       continue;
     }
     childSessionKeys.add(childSessionKey);
@@ -327,6 +371,16 @@ function resolveChildSessionKeys(
       if (latestControllerSessionKey !== controllerSessionKey) {
         continue;
       }
+      if (
+        !shouldKeepSubagentRunChildLink(latest, {
+          activeDescendants: countActiveDescendantRuns(key),
+          now,
+        })
+      ) {
+        continue;
+      }
+    } else if (!shouldKeepStoreOnlyChildLink(entry, now)) {
+      continue;
     }
     childSessionKeys.add(key);
   }
@@ -981,89 +1035,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   };
 }
 
-// Merge with existing entry based on latest timestamp to ensure data consistency and avoid overwriting with less complete data.
-function mergeSessionEntryIntoCombined(params: {
-  cfg: OpenClawConfig;
-  combined: Record<string, SessionEntry>;
-  entry: SessionEntry;
-  agentId: string;
-  canonicalKey: string;
-}) {
-  const { cfg, combined, entry, agentId, canonicalKey } = params;
-  const existing = combined[canonicalKey];
-
-  if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
-    combined[canonicalKey] = {
-      ...entry,
-      ...existing,
-      spawnedBy: canonicalizeSpawnedByForAgent(cfg, agentId, existing.spawnedBy ?? entry.spawnedBy),
-    };
-  } else {
-    combined[canonicalKey] = {
-      ...existing,
-      ...entry,
-      spawnedBy: canonicalizeSpawnedByForAgent(
-        cfg,
-        agentId,
-        entry.spawnedBy ?? existing?.spawnedBy,
-      ),
-    };
-  }
-}
-
-export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
-  storePath: string;
-  store: Record<string, SessionEntry>;
-} {
-  const storeConfig = cfg.session?.store;
-  if (storeConfig && !isStorePathTemplate(storeConfig)) {
-    const storePath = resolveStorePath(storeConfig);
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadSessionStore(storePath);
-    const combined: Record<string, SessionEntry> = {};
-    for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId: defaultAgentId,
-        sessionKey: key,
-      });
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId: defaultAgentId,
-        canonicalKey,
-      });
-    }
-    return { storePath, store: combined };
-  }
-
-  const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
-  const combined: Record<string, SessionEntry> = {};
-  for (const target of targets) {
-    const agentId = target.agentId;
-    const storePath = target.storePath;
-    const store = loadSessionStore(storePath);
-    for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId,
-        sessionKey: key,
-      });
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId,
-        canonicalKey,
-      });
-    }
-  }
-
-  const storePath =
-    typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
-  return { storePath, store: combined };
-}
+export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
 export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
@@ -1344,7 +1316,7 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
-  const childSessions = resolveChildSessionKeys(key, store);
+  const childSessions = resolveChildSessionKeys(key, store, now);
   const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
@@ -1527,9 +1499,18 @@ export function listSessionsFromStore(params: {
         const latestControllerSessionKey =
           normalizeOptionalString(latest.controllerSessionKey) ||
           normalizeOptionalString(latest.requesterSessionKey);
-        return latestControllerSessionKey === spawnedBy;
+        return (
+          latestControllerSessionKey === spawnedBy &&
+          shouldKeepSubagentRunChildLink(latest, {
+            activeDescendants: countActiveDescendantRuns(key),
+            now,
+          })
+        );
       }
-      return entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy;
+      return (
+        shouldKeepStoreOnlyChildLink(entry, now) &&
+        (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
+      );
     })
     .filter(([, entry]) => {
       if (!label) {

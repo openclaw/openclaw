@@ -8,7 +8,7 @@ read_when:
 
 Core config reference for `~/.openclaw/openclaw.json`. For a task-oriented overview, see [Configuration](/gateway/configuration).
 
-This page covers the main OpenClaw config surfaces and links out when a subsystem has its own deeper reference. It does **not** try to inline every channel/plugin-owned command catalog or every deep memory/QMD knob on one page.
+Covers the main OpenClaw config surfaces and links out when a subsystem has its own deeper reference. Channel- and plugin-owned command catalogs and deep memory/QMD knobs live on their own pages rather than on this one.
 
 Code truth:
 
@@ -19,7 +19,7 @@ Code truth:
 Dedicated deep references:
 
 - [Memory configuration reference](/reference/memory-config) for `agents.defaults.memorySearch.*`, `memory.qmd.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`
-- [Slash Commands](/tools/slash-commands) for the current built-in + bundled command catalog
+- [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog
 - owning channel/plugin pages for channel-specific command surfaces
 
 Config format is **JSON5** (comments + trailing commas allowed). All fields are optional — OpenClaw uses safe defaults when omitted.
@@ -167,9 +167,19 @@ See [Plugins](/tools/plugin).
       // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
     },
+    tabCleanup: {
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    },
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" },
+      work: {
+        cdpPort: 18801,
+        color: "#0066CC",
+        executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      },
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
       brave: {
         driver: "existing-session",
@@ -190,6 +200,9 @@ See [Plugins](/tools/plugin).
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
+- `tabCleanup` reclaims tracked primary-agent tabs after idle time or when a
+  session exceeds its cap. Set `idleMinutes: 0` or `maxTabsPerSession: 0` to
+  disable those individual cleanup modes.
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled when unset, so browser navigation stays strict by default.
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when you intentionally trust private-network browser navigation.
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
@@ -209,7 +222,11 @@ See [Plugins](/tools/plugin).
   `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.
+- Local managed profiles can set `executablePath` to override the global
+  `browser.executablePath` for that profile. Use this to run one profile in
+  Chrome and another in Brave.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
+- `browser.executablePath` accepts `~` for your OS home directory.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
   `--disable-gpu`, window sizing, or debug flags).
@@ -280,6 +297,14 @@ See [Plugins](/tools/plugin).
     trustedProxies: ["10.0.0.1"],
     // Optional. Default false.
     allowRealIpFallback: false,
+    nodes: {
+      pairing: {
+        // Optional. Default unset/disabled.
+        autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
+      },
+      allowCommands: ["canvas.navigate"],
+      denyCommands: ["system.run"],
+    },
     tools: {
       // Additional /tools/invoke HTTP denies
       deny: ["browser"],
@@ -342,6 +367,8 @@ See [Plugins](/tools/plugin).
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
+- `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
+- `gateway.nodes.allowCommands` / `gateway.nodes.denyCommands`: global allow/deny shaping for declared node commands after pairing and allowlist evaluation.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list.
 

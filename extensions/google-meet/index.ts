@@ -19,6 +19,7 @@ import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./src/meet
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
+import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
 
 const googleMeetConfigSchema = {
   parse(value: unknown) {
@@ -144,12 +145,13 @@ const GoogleMeetToolSchema = Type.Object({
       "setup_status",
       "resolve_space",
       "preflight",
+      "recover_current_tab",
       "leave",
       "speak",
       "test_speech",
     ],
     description:
-      "Google Meet action to run. create creates a meeting and joins it by default; pass join=false to only mint a meeting URL.",
+      "Google Meet action to run. create creates and joins by default; pass join=false to only mint a URL. After a timeout or unclear browser state, call recover_current_tab before retrying join.",
   }),
   join: Type.Optional(
     Type.Boolean({
@@ -249,8 +251,11 @@ export default definePluginEntry({
       return runtime;
     };
 
+    const formatGatewayError = (err: unknown) =>
+      isGoogleMeetBrowserManualActionError(err) ? err.payload : { error: formatErrorMessage(err) };
+
     const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
-      respond(false, { error: formatErrorMessage(err) });
+      respond(false, formatGatewayError(err));
     };
 
     api.registerGatewayMethod(
@@ -309,11 +314,23 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.recoverCurrentTab",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const rt = await ensureRuntime();
+          respond(true, await rt.recoverCurrentTab({ url: normalizeOptionalString(params?.url) }));
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.setup",
       async ({ respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, rt.setupStatus());
+          respond(true, await rt.setupStatus());
         } catch (err) {
           sendError(respond, err);
         }
@@ -378,7 +395,8 @@ export default definePluginEntry({
     api.registerTool({
       name: "google_meet",
       label: "Google Meet",
-      description: "Join and track Google Meet sessions through Chrome or Twilio.",
+      description:
+        "Join and track Google Meet sessions through Chrome or Twilio. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);
@@ -428,9 +446,13 @@ export default definePluginEntry({
               const rt = await ensureRuntime();
               return json(rt.status(normalizeOptionalString(raw.sessionId)));
             }
+            case "recover_current_tab": {
+              const rt = await ensureRuntime();
+              return json(await rt.recoverCurrentTab({ url: normalizeOptionalString(raw.url) }));
+            }
             case "setup_status": {
               const rt = await ensureRuntime();
-              return json(rt.setupStatus());
+              return json(await rt.setupStatus());
             }
             case "resolve_space": {
               const { token: _token, ...result } = await resolveSpaceFromParams(config, raw);
@@ -467,7 +489,7 @@ export default definePluginEntry({
               throw new Error("unknown google_meet action");
           }
         } catch (err) {
-          return json({ error: formatErrorMessage(err) });
+          return json(formatGatewayError(err));
         }
       },
     });

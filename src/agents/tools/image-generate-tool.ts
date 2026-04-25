@@ -18,6 +18,7 @@ import type {
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/image-ops.js";
 import {
@@ -37,6 +38,7 @@ import {
   isCapabilityProviderConfigured,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
+  resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -415,6 +417,7 @@ async function loadReferenceImages(params: {
   maxBytes?: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<
   Array<{
     sourceImage: ImageGenerationSourceImage;
@@ -491,6 +494,7 @@ async function loadReferenceImages(params: {
         : await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
             localRoots,
+            ssrfPolicy: params.ssrfPolicy,
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -549,6 +553,7 @@ export function createImageGenerateTool(options?: {
   }
   const effectiveCfg =
     applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
+  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -646,6 +651,7 @@ export function createImageGenerateTool(options?: {
         maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
       const modeCaps =

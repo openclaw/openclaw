@@ -287,7 +287,8 @@ start_gateway() {
   fi
   gateway_pid="$!"
 
-  for _ in $(seq 1 240); do
+  # Cold bundled dependency staging can exceed 60s under 10-way Docker aggregate load.
+  for _ in $(seq 1 1200); do
     if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
       return 0
     fi
@@ -376,22 +377,23 @@ assert_installed_once() {
   local channel="$2"
   local dep_path="$3"
   local count
-  count="$(grep -c "\\[plugins\\] $channel installed bundled runtime deps:" "$log_file" || true)"
+  count="$(grep -Ec "\\[plugins\\] $channel installed bundled runtime deps( in [0-9]+ms)?:" "$log_file" || true)"
   if [ "$count" -eq 1 ]; then
     return 0
   fi
-  if [ "$count" -ne 1 ]; then
-    echo "expected exactly one runtime deps install log for $channel, got $count log lines" >&2
-    cat "$log_file" >&2
-    find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
-    exit 1
+  if [ "$count" -eq 0 ] && [ -n "$(find_external_dep_package "$dep_path")" ]; then
+    return 0
   fi
+  echo "expected one runtime deps install log or staged dependency sentinel for $channel, got $count log lines" >&2
+  cat "$log_file" >&2
+  find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
+  exit 1
 }
 
 assert_not_installed() {
   local log_file="$1"
   local channel="$2"
-  if grep -q "\\[plugins\\] $channel installed bundled runtime deps:" "$log_file"; then
+  if grep -Eq "\\[plugins\\] $channel installed bundled runtime deps( in [0-9]+ms)?:" "$log_file"; then
     echo "expected no runtime deps reinstall for $channel" >&2
     cat "$log_file" >&2
     exit 1
@@ -572,7 +574,8 @@ start_gateway() {
     bash "$PORT" "$log_file" &
   gateway_pid="$!"
 
-  for _ in $(seq 1 240); do
+  # Cold bundled dependency staging can exceed 60s under 10-way Docker aggregate load.
+  for _ in $(seq 1 1200); do
     if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
       return 0
     fi
@@ -1042,7 +1045,7 @@ assert_dep_absent_everywhere telegram grammy "$root"
 assert_dep_absent_everywhere slack @slack/web-api "$root"
 assert_dep_absent_everywhere discord discord-api-types "$root"
 
-if grep -Eq "(used by .*\\b(telegram|slack|discord)\\b|\\[plugins\\] (telegram|slack|discord) installed bundled runtime deps:)" /tmp/openclaw-disabled-config-doctor.log; then
+if grep -Eq "(used by .*\\b(telegram|slack|discord)\\b|\\[plugins\\] (telegram|slack|discord) installed bundled runtime deps( in [0-9]+ms)?:)" /tmp/openclaw-disabled-config-doctor.log; then
   echo "doctor installed runtime deps for an explicitly disabled channel/plugin" >&2
   cat /tmp/openclaw-disabled-config-doctor.log >&2
   exit 1

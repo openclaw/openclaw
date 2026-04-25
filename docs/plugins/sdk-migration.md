@@ -5,7 +5,7 @@ sidebarTitle: "Migrate to SDK"
 read_when:
   - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
   - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
-  - You use api.registerEmbeddedExtensionFactory
+  - You used api.registerEmbeddedExtensionFactory before OpenClaw 2026.4.24
   - You are updating a plugin to the modern plugin architecture
   - You maintain an external OpenClaw plugin
 ---
@@ -24,12 +24,14 @@ anything they needed from a single entry point:
   new plugin architecture was being built.
 - **`openclaw/extension-api`** — a bridge that gave plugins direct access to
   host-side helpers like the embedded agent runner.
-- **`api.registerEmbeddedExtensionFactory(...)`** — a Pi-only bundled extension
-  hook that could observe embedded-runner events such as `tool_result`.
+- **`api.registerEmbeddedExtensionFactory(...)`** — a removed Pi-only bundled
+  extension hook that could observe embedded-runner events such as
+  `tool_result`.
 
-These surfaces are now **deprecated**. They still work at runtime, but new
-plugins must not use them, and existing plugins should migrate before the next
-major release removes them.
+The broad import surfaces are now **deprecated**. They still work at runtime,
+but new plugins must not use them, and existing plugins should migrate before
+the next major release removes them. The Pi-only embedded extension factory
+registration API has been removed; use tool-result middleware instead.
 
 OpenClaw does not remove or reinterpret documented plugin behavior in the same
 change that introduces a replacement. Breaking contract changes must first go
@@ -40,6 +42,7 @@ registration behavior.
 <Warning>
   The backwards-compatibility layer will be removed in a future major release.
   Plugins that still import from these surfaces will break when that happens.
+  Pi-only embedded extension factory registrations already no longer load.
 </Warning>
 
 ## Why this changed
@@ -91,19 +94,12 @@ releases.
 
 <Steps>
   <Step title="Migrate Pi tool-result extensions to middleware">
-    Bundled plugins should replace Pi-only
+    Bundled plugins must replace Pi-only
     `api.registerEmbeddedExtensionFactory(...)` tool-result handlers with
     runtime-neutral middleware.
 
     ```typescript
-    // Before: Pi-only compatibility hook
-    api.registerEmbeddedExtensionFactory((pi) => {
-      pi.on("tool_result", async (event) => {
-        return compactToolResult(event);
-      });
-    });
-
-    // After: Pi and Codex runtime dynamic tools
+    // Pi and Codex runtime dynamic tools
     api.registerAgentToolResultMiddleware(async (event) => {
       return compactToolResult(event);
     }, {
@@ -121,10 +117,8 @@ releases.
     }
     ```
 
-    Keep `contracts.embeddedExtensionFactories` only for bundled compatibility
-    code that still needs direct Pi embedded-runner events. External plugins
-    cannot register tool-result middleware because it can rewrite high-trust
-    tool output before the model sees it.
+    External plugins cannot register tool-result middleware because it can
+    rewrite high-trust tool output before the model sees it.
 
   </Step>
 
@@ -268,7 +262,7 @@ releases.
   | `plugin-sdk/inbound-reply-dispatch` | Inbound reply helpers | Shared record-and-dispatch helpers |
   | `plugin-sdk/messaging-targets` | Messaging target parsing | Target parsing/matching helpers |
   | `plugin-sdk/outbound-media` | Outbound media helpers | Shared outbound media loading |
-  | `plugin-sdk/outbound-runtime` | Outbound runtime helpers | Outbound identity/send delegate and payload planning helpers |
+  | `plugin-sdk/outbound-runtime` | Outbound runtime helpers | Outbound delivery, identity/send delegate, session, formatting, and payload planning helpers |
   | `plugin-sdk/thread-bindings-runtime` | Thread-binding helpers | Thread-binding lifecycle and adapter helpers |
   | `plugin-sdk/agent-media-payload` | Legacy media payload helpers | Agent media payload builder for legacy field layouts |
   | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
@@ -284,7 +278,7 @@ releases.
   | `plugin-sdk/gateway-runtime` | Gateway helpers | Gateway client and channel-status patch helpers |
   | `plugin-sdk/config-runtime` | Config helpers | Config load/write helpers |
   | `plugin-sdk/telegram-command-config` | Telegram command helpers | Fallback-stable Telegram command validation helpers when the bundled Telegram contract surface is unavailable |
-  | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers |
+  | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers, and structured approval display path formatting |
   | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
   | `plugin-sdk/approval-client-runtime` | Approval client helpers | Native exec approval profile/filter helpers |
   | `plugin-sdk/approval-delivery-runtime` | Approval delivery helpers | Native approval capability/delivery adapters |
@@ -624,8 +618,8 @@ canonical replacement.
 
   <Accordion title="Embedded extension factories → agent tool-result middleware">
     Covered in "How to migrate → Migrate Pi tool-result extensions to
-    middleware" above. Included here for completeness: the Pi-only
-    `api.registerEmbeddedExtensionFactory(...)` path is deprecated in favor of
+    middleware" above. Included here for completeness: the removed Pi-only
+    `api.registerEmbeddedExtensionFactory(...)` path is replaced by
     `api.registerAgentToolResultMiddleware(...)` with an explicit runtime
     list in `contracts.agentToolResultMiddleware`.
   </Accordion>

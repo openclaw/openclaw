@@ -69,11 +69,14 @@ export type SnapshotResult =
 
 export async function browserStatus(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<BrowserStatus> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
-    timeoutMs: 1500,
+    timeoutMs:
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : 1500,
   });
 }
 
@@ -87,29 +90,47 @@ export async function browserDoctor(
   });
 }
 
-export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]> {
+export async function browserProfiles(
+  baseUrl?: string,
+  opts?: { timeoutMs?: number },
+): Promise<ProfileStatus[]> {
   const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(
     withBaseUrl(baseUrl, `/profiles`),
     {
-      timeoutMs: 3000,
+      timeoutMs:
+        typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+          ? Math.max(1, Math.floor(opts.timeoutMs))
+          : 3000,
     },
   );
   return res.profiles ?? [];
 }
 
-export async function browserStart(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStart(
+  baseUrl?: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs:
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : 15000,
   });
 }
 
-export async function browserStop(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
+export async function browserStop(
+  baseUrl?: string,
+  opts?: { profile?: string; timeoutMs?: number },
+): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/stop${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs:
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : 15000,
   });
 }
 
@@ -186,12 +207,17 @@ export async function browserDeleteProfile(
 
 export async function browserTabs(
   baseUrl?: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<BrowserTab[]> {
   const q = buildProfileQuery(opts?.profile);
   const res = await fetchBrowserJson<{ running: boolean; tabs: BrowserTab[] }>(
     withBaseUrl(baseUrl, `/tabs${q}`),
-    { timeoutMs: 3000 },
+    {
+      timeoutMs:
+        typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+          ? Math.max(1, Math.floor(opts.timeoutMs))
+          : 3000,
+    },
   );
   return res.tabs ?? [];
 }
@@ -199,40 +225,49 @@ export async function browserTabs(
 export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
-  opts?: { profile?: string; label?: string },
+  opts?: { profile?: string; label?: string; timeoutMs?: number },
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, ...(opts?.label ? { label: opts.label } : {}) }),
-    timeoutMs: 15000,
+    timeoutMs:
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : 15000,
   });
 }
 
 export async function browserFocusTab(
   baseUrl: string | undefined,
   targetId: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/focus${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId }),
-    timeoutMs: 5000,
+    timeoutMs:
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : 5000,
   });
 }
 
 export async function browserCloseTab(
   baseUrl: string | undefined,
   targetId: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; timeoutMs?: number },
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/${encodeURIComponent(targetId)}${q}`), {
     method: "DELETE",
-    timeoutMs: 5000,
+    timeoutMs:
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : 5000,
   });
 }
 

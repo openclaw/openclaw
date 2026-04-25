@@ -252,6 +252,7 @@ import {
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  hasPromptSubmissionContent,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -451,14 +452,6 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalImageBlocks,
     maxMessageTextChars,
   };
-}
-
-function hasPromptSubmissionContent(params: {
-  prompt: string;
-  messages: readonly AgentMessage[];
-  imageCount: number;
-}): boolean {
-  return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
 }
 
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
@@ -1200,6 +1193,12 @@ export async function runEmbeddedAttempt(
         contextWindowTokens: params.contextTokenBudget,
         inputProvenance: params.inputProvenance,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        missingToolResultText:
+          params.model.api === "openai-responses" ||
+          params.model.api === "azure-openai-responses" ||
+          params.model.api === "openai-codex-responses"
+            ? "aborted"
+            : undefined,
         allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
@@ -1374,6 +1373,7 @@ export async function runEmbeddedAttempt(
           await baseConvertToLlm(normalizeAssistantReplayContent(messages));
       }
       let prePromptMessageCount = activeSession.messages.length;
+      let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
@@ -1846,6 +1846,7 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated, {
               erroredAssistantResultPolicy: "drop",
+              ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
             })
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
@@ -1855,6 +1856,7 @@ export async function runEmbeddedAttempt(
 
         if (params.contextEngine) {
           try {
+            unwindowedContextEngineMessagesForPrecheck = activeSession.messages.slice();
             const assembled = await assembleAttemptContextEngine({
               contextEngine: params.contextEngine,
               sessionId: params.sessionId,
@@ -2453,29 +2455,19 @@ export async function runEmbeddedAttempt(
 
           const reserveTokens = settingsManager.getCompactionReserveTokens();
           const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
-          const preemptiveCompaction =
-            params.contextEngine?.info?.ownsCompaction === true
-              ? {
-                  route: "fits" as const,
-                  shouldCompact: false,
-                  estimatedPromptTokens: 0,
-                  promptBudgetBeforeReserve: 0,
-                  overflowTokens: 0,
-                  toolResultReducibleChars: 0,
-                  effectiveReserveTokens: reserveTokens,
-                }
-              : shouldPreemptivelyCompactBeforePrompt({
-                  messages: activeSession.messages,
-                  systemPrompt: systemPromptText,
-                  prompt: effectivePrompt,
-                  contextTokenBudget,
-                  reserveTokens,
-                  toolResultMaxChars: resolveLiveToolResultMaxChars({
-                    contextWindowTokens: contextTokenBudget,
-                    cfg: params.config,
-                    agentId: sessionAgentId,
-                  }),
-                });
+          const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
+            messages: activeSession.messages,
+            unwindowedMessages: unwindowedContextEngineMessagesForPrecheck,
+            systemPrompt: systemPromptText,
+            prompt: effectivePrompt,
+            contextTokenBudget,
+            reserveTokens,
+            toolResultMaxChars: resolveLiveToolResultMaxChars({
+              contextWindowTokens: contextTokenBudget,
+              cfg: params.config,
+              agentId: sessionAgentId,
+            }),
+          });
           if (preemptiveCompaction.route === "truncate_tool_results_only") {
             const toolResultMaxChars = resolveLiveToolResultMaxChars({
               contextWindowTokens: contextTokenBudget,

@@ -24,6 +24,10 @@ export function normalizeMinimaxTtsBaseUrl(baseUrl?: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
+function normalizeMinimaxTtsPitch(pitch: number): number {
+  return Math.trunc(pitch);
+}
+
 export async function minimaxTTS(params: {
   text: string;
   apiKey: string;
@@ -70,7 +74,7 @@ export async function minimaxTTS(params: {
             voice_id: voiceId,
             speed,
             vol,
-            pitch,
+            pitch: normalizeMinimaxTtsPitch(pitch),
           },
           audio_setting: {
             format,

@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import {
@@ -40,6 +41,7 @@ import {
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
+  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import { type ToolModelConfig } from "./model-config.helpers.js";
@@ -430,6 +432,7 @@ async function loadReferenceAssets(params: {
   maxBytes?: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<
   Array<{
     sourceAsset: VideoGenerationSourceAsset;
@@ -520,6 +523,7 @@ async function loadReferenceAssets(params: {
         : await loadWebMedia(resolvedPath ?? resolvedInput, {
             maxBytes: params.maxBytes,
             localRoots,
+            ssrfPolicy: params.ssrfPolicy,
           });
     if (media.kind !== params.expectedKind) {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
@@ -810,6 +814,7 @@ export function createVideoGenerateTool(options?: {
       const action = resolveAction(args);
       const effectiveCfg =
         applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
 
       if (action === "list") {
         return createVideoGenerateListActionResult(effectiveCfg);
@@ -900,6 +905,7 @@ export function createVideoGenerateTool(options?: {
         expectedKind: "image",
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       // Attach roles to the loaded image assets (positional, by index into images[]).
       for (let i = 0; i < loadedReferenceImages.length; i++) {
@@ -913,6 +919,7 @@ export function createVideoGenerateTool(options?: {
         expectedKind: "video",
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       for (let i = 0; i < loadedReferenceVideos.length; i++) {
         const role = videoRoles[i];
@@ -925,6 +932,7 @@ export function createVideoGenerateTool(options?: {
         expectedKind: "audio",
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       for (let i = 0; i < loadedReferenceAudios.length; i++) {
         const role = audioRoles[i];

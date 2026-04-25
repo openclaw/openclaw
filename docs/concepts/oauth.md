@@ -171,8 +171,8 @@ How to see what profile IDs exist:
 
 Related docs:
 
-- [/concepts/model-failover](/concepts/model-failover) (rotation + cooldown rules)
-- [/tools/slash-commands](/tools/slash-commands) (command surface)
+- [Model failover](/concepts/model-failover) (rotation + cooldown rules)
+- [Slash commands](/tools/slash-commands) (command surface)
 
 ## Related
 

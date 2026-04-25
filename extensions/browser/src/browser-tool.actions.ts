@@ -209,19 +209,21 @@ function withRoleRefsFallback<T extends { refs?: "aria" | "role" }>(
 export async function executeTabsAction(params: {
   baseUrl?: string;
   profile?: string;
+  timeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
 }): Promise<AgentToolResult<unknown>> {
-  const { baseUrl, profile, proxyRequest } = params;
+  const { baseUrl, profile, timeoutMs, proxyRequest } = params;
   if (proxyRequest) {
     const result = await proxyRequest({
       method: "GET",
       path: "/tabs",
       profile,
+      timeoutMs,
     });
     const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
     return formatTabsToolResult(tabs);
   }
-  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile });
+  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs });
   return formatTabsToolResult(tabs);
 }
 
@@ -230,6 +232,7 @@ export async function executeSnapshotAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = browserToolActionDeps.loadConfig().browser?.snapshotDefaults;
@@ -308,6 +311,7 @@ export async function executeSnapshotAction(params: {
     refsFallback = "role";
     snapshot = await readSnapshot(withRoleRefsFallback(snapshotQuery));
   }
+  params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
@@ -408,6 +412,7 @@ export async function executeActAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   try {
@@ -421,6 +426,10 @@ export async function executeActAction(params: {
       : await browserToolActionDeps.browserAct(baseUrl, request, {
           profile,
         });
+    params.onTabActivity?.(
+      readStringValue((result as { targetId?: unknown }).targetId) ??
+        readStringValue(request.targetId),
+    );
     return jsonResult(result);
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
@@ -448,6 +457,10 @@ export async function executeActAction(params: {
             : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
                 profile,
               });
+          params.onTabActivity?.(
+            readStringValue((retryResult as { targetId?: unknown }).targetId) ??
+              readStringValue(retryRequest.targetId),
+          );
           return jsonResult(retryResult);
         } catch {
           // Fall through to explicit stale-target guidance.

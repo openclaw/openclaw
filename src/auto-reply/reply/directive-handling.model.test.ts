@@ -87,6 +87,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
+  resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
@@ -333,6 +334,16 @@ describe("/model chat UX", () => {
 
     expect(reply?.text).toContain("Current:");
     expect(reply?.text).toContain("Browse: /models");
+    expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("treats /model list as a models browser alias, not a model id", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model list"),
+    });
+
+    expect(reply?.text).toContain("Providers:");
+    expect(reply?.text).toContain("Use: /models <provider>");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 

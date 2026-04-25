@@ -357,13 +357,14 @@ async function sendDiscordText(
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
   silent?: boolean,
+  maxChars?: number,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
   }
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
-  const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode });
+  const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars });
   const sendChunk = async (chunk: string, isFirst: boolean) => {
     const chunkComponents = resolveDiscordSendComponents({
       components,
@@ -418,6 +419,7 @@ async function sendDiscordMedia(
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
   silent?: boolean,
+  maxChars?: number,
 ) {
   const media = await loadWebMedia(
     mediaUrl,
@@ -429,7 +431,9 @@ async function sendDiscordMedia(
     media.fileName ||
     (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
     "upload";
-  const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
+  const chunks = text
+    ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
+    : [];
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
@@ -477,6 +481,7 @@ async function sendDiscordMedia(
       undefined,
       chunkMode,
       silent,
+      maxChars,
     );
   }
   return res;

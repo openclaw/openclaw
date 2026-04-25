@@ -381,16 +381,27 @@ export function buildEmbeddedRunPayloads(params: {
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
-    .map((item) => ({
-      text: normalizeOptionalString(item.text),
-      mediaUrls: item.media?.length ? item.media : undefined,
-      mediaUrl: item.media?.[0],
-      isError: item.isError,
-      replyToId: item.replyToId,
-      replyToTag: item.replyToTag,
-      replyToCurrent: item.replyToCurrent,
-      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
-    }))
+    .map((item) => {
+      const payload = {
+        text: normalizeOptionalString(item.text),
+        mediaUrls: item.media?.length ? item.media : undefined,
+        mediaUrl: item.media?.[0],
+        isError: item.isError,
+        replyToId: item.replyToId,
+        replyToTag: item.replyToTag,
+        replyToCurrent: item.replyToCurrent,
+        audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      };
+      if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
+        const silentText = payload.text;
+        payload.text = undefined;
+        if (hasOutboundReplyContent(payload)) {
+          return payload;
+        }
+        payload.text = silentText;
+      }
+      return payload;
+    })
     .filter((p) => {
       if (!hasOutboundReplyContent(p)) {
         return false;

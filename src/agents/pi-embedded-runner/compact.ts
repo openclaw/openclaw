@@ -37,7 +37,11 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import {
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+  resolveContextInjectionMode,
+} from "../bootstrap-files.js";
 import {
   listChannelSupportedActions,
   resolveChannelMessageToolCapabilities,
@@ -471,17 +475,19 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-    const { contextFiles } = await resolveBootstrapContextForRun({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      warn: makeBootstrapWarn({
-        sessionLabel,
-        workspaceDir: effectiveWorkspace,
-        warn: (message) => log.warn(message),
-      }),
-    });
+    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const { contextFiles } = contextInjectionMode === "never"
+      ? { contextFiles: [] }
+      : await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({
+            sessionLabel,
+            warn: (message) => log.warn(message),
+          }),
+        });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
@@ -810,6 +816,12 @@ export async function compactEmbeddedPiSessionDirect(
         config: params.config,
         contextWindowTokens: ctxInfo.tokens,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        missingToolResultText:
+          model.api === "openai-responses" ||
+          model.api === "azure-openai-responses" ||
+          model.api === "openai-codex-responses"
+            ? "aborted"
+            : undefined,
         allowedToolNames,
       });
       checkpointSnapshot = captureCompactionCheckpointSnapshot({
@@ -965,6 +977,11 @@ export async function compactEmbeddedPiSessionDirect(
           const limited = transcriptPolicy.repairToolUseResultPairing
             ? sanitizeToolUseResultPairing(truncated, {
                 erroredAssistantResultPolicy: "drop",
+                ...(model.api === "openai-responses" ||
+                model.api === "azure-openai-responses" ||
+                model.api === "openai-codex-responses"
+                  ? { missingToolResultText: "aborted" }
+                  : {}),
               })
             : truncated;
           if (limited.length > 0) {
@@ -1059,6 +1076,8 @@ export async function compactEmbeddedPiSessionDirect(
             try {
               const hardenedBoundary = await hardenManualCompactionBoundary({
                 sessionFile: params.sessionFile,
+                preserveRecentTail:
+                  typeof params.config?.agents?.defaults?.compaction?.keepRecentTokens === "number",
               });
               if (hardenedBoundary.applied) {
                 effectiveFirstKeptEntryId =

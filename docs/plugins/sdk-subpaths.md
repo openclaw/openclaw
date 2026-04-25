@@ -50,7 +50,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/inbound-reply-dispatch` | Shared inbound record-and-dispatch helpers |
     | `plugin-sdk/messaging-targets` | Target parsing/matching helpers |
     | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
-    | `plugin-sdk/outbound-runtime` | Outbound identity, send delegate, and payload planning helpers |
+    | `plugin-sdk/outbound-runtime` | Outbound delivery, identity, send delegate, session, formatting, and payload planning helpers |
     | `plugin-sdk/poll-runtime` | Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
     | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
@@ -122,6 +122,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
     | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
+    | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
     | `plugin-sdk/reply-dedupe` | Narrow inbound reply dedupe reset helpers |
     | `plugin-sdk/channel-contract-testing` | Narrow channel contract test helpers without the broad testing barrel |
     | `plugin-sdk/command-auth-native` | Native command auth + native session-target helpers |
@@ -156,7 +157,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/config-runtime` | Config load/write helpers and plugin-config lookup helpers |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
     | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text-runtime barrel |
-    | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
+    | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers, and structured approval display path formatting |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize and conversation-label helpers |
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers such as `buildHistoryContext`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
@@ -264,7 +265,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
   <Accordion title="Reserved bundled-helper subpaths">
     | Family | Current subpaths | Intended use |
     | --- | --- | --- |
-    | Browser | `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-node-runtime`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-security-runtime`, `plugin-sdk/browser-setup-tools`, `plugin-sdk/browser-support` | Bundled browser plugin support helpers (`browser-support` remains the compatibility barrel) |
+    | Browser | `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-node-runtime`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-security-runtime`, `plugin-sdk/browser-setup-tools`, `plugin-sdk/browser-support` | Bundled browser plugin support helpers. `browser-profiles` exports `resolveBrowserConfig`, `resolveProfile`, `ResolvedBrowserConfig`, `ResolvedBrowserProfile`, and `ResolvedBrowserTabCleanupConfig` for the normalized `browser.tabCleanup` shape. `browser-support` remains the compatibility barrel. |
     | Matrix | `plugin-sdk/matrix`, `plugin-sdk/matrix-helper`, `plugin-sdk/matrix-runtime-heavy`, `plugin-sdk/matrix-runtime-shared`, `plugin-sdk/matrix-runtime-surface`, `plugin-sdk/matrix-surface`, `plugin-sdk/matrix-thread-bindings` | Bundled Matrix helper/runtime surface |
     | Line | `plugin-sdk/line`, `plugin-sdk/line-core`, `plugin-sdk/line-runtime`, `plugin-sdk/line-surface` | Bundled LINE helper/runtime surface |
     | IRC | `plugin-sdk/irc`, `plugin-sdk/irc-surface` | Bundled IRC helper surface |
