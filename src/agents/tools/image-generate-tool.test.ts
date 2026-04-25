@@ -478,6 +478,67 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("MEDIA:/tmp/generated-2.png");
   });
 
+  it("uses configured timeoutMs for image generation and lets calls override it", async () => {
+    stubImageGenerationProviders();
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cat.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+                timeoutMs: 180_000,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const defaultResult = await tool.execute("call-timeout-default", {
+      prompt: "A cat wearing sunglasses",
+    });
+    const overrideResult = await tool.execute("call-timeout-override", {
+      prompt: "A cat wearing sunglasses",
+      timeoutMs: 12_345,
+    });
+
+    expect(generateImage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        timeoutMs: 180_000,
+      }),
+    );
+    expect(generateImage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        timeoutMs: 12_345,
+      }),
+    );
+    expect(defaultResult.details).toMatchObject({ timeoutMs: 180_000 });
+    expect(overrideResult.details).toMatchObject({ timeoutMs: 12_345 });
+  });
+
   it("forwards output hints and OpenAI provider options", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",

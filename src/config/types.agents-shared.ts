@@ -12,6 +12,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Optional provider request timeout in milliseconds for capabilities that support it. */
+      timeoutMs?: number;
     };
 
 export type AgentEmbeddedHarnessConfig = {

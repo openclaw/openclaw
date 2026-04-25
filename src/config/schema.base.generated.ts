@@ -3199,6 +3199,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Ordered fallback models (provider/model). Used when the primary model fails.",
                       },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -3225,6 +3230,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         title: "Image Model Fallbacks",
                         description: "Ordered fallback image models (provider/model).",
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
                       },
                     },
                     additionalProperties: false,
@@ -3253,6 +3263,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Image Generation Model Fallbacks",
                         description: "Ordered fallback image-generation models (provider/model).",
                       },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Image Generation Timeout (ms)",
+                        description:
+                          "Default provider request timeout in milliseconds for image_generate calls. Per-call timeoutMs overrides this.",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -3280,6 +3298,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Video Generation Model Fallbacks",
                         description: "Ordered fallback video-generation models (provider/model).",
                       },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -3306,6 +3329,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         title: "Music Generation Model Fallbacks",
                         description: "Ordered fallback music-generation models (provider/model).",
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
                       },
                     },
                     additionalProperties: false,
@@ -3339,6 +3367,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         title: "PDF Model Fallbacks",
                         description: "Ordered fallback PDF models (provider/model).",
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
                       },
                     },
                     additionalProperties: false,
@@ -5333,6 +5366,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               type: "string",
                             },
                           },
+                          timeoutMs: {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
                         },
                         additionalProperties: false,
                       },
@@ -5955,6 +5993,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           items: {
                             type: "string",
                           },
+                        },
+                        timeoutMs: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
                         },
                       },
                       additionalProperties: false,
@@ -26088,6 +26131,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Image Generation Model Fallbacks",
       help: "Ordered fallback image-generation models (provider/model).",
       tags: ["reliability", "media"],
+    },
+    "agents.defaults.imageGenerationModel.timeoutMs": {
+      label: "Image Generation Timeout (ms)",
+      help: "Default provider request timeout in milliseconds for image_generate calls. Per-call timeoutMs overrides this.",
+      tags: ["performance", "media"],
     },
     "agents.defaults.videoGenerationModel.primary": {
       label: "Video Generation Model",

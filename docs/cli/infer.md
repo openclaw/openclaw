@@ -156,6 +156,7 @@ Use `image` for generation, edit, and description.
 ```bash
 openclaw infer image generate --prompt "friendly lobster illustration" --json
 openclaw infer image generate --prompt "cinematic product photo of headphones" --json
+openclaw infer image generate --prompt "slow image backend" --timeout-ms 180000 --json
 openclaw infer image describe --file ./photo.jpg --json
 openclaw infer image describe --file ./ui-screenshot.png --model openai/gpt-4.1-mini --json
 openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --json

@@ -638,7 +638,7 @@ export function createImageGenerateTool(options?: {
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
-      const timeoutMs = readGenerationTimeoutMs(params);
+      const timeoutMs = readGenerationTimeoutMs(params) ?? imageGenerationModelConfig.timeoutMs;
       const quality = normalizeQuality(readStringParam(params, "quality"));
       const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
       const providerOptions = normalizeProviderOptions(params);

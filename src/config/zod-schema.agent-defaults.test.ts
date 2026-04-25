@@ -25,6 +25,28 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
+  it("accepts imageGenerationModel timeoutMs", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      imageGenerationModel: {
+        primary: "openrouter/openai/gpt-5.4-image-2",
+        timeoutMs: 180_000,
+      },
+    })!;
+
+    expect(defaults.imageGenerationModel).toEqual({
+      primary: "openrouter/openai/gpt-5.4-image-2",
+      timeoutMs: 180_000,
+    });
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        imageGenerationModel: {
+          primary: "openrouter/openai/gpt-5.4-image-2",
+          timeoutMs: 0,
+        },
+      }),
+    ).toThrow();
+  });
+
   it("accepts mediaGenerationAutoProviderFallback", () => {
     expect(() =>
       AgentDefaultsSchema.parse({

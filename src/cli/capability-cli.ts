@@ -704,6 +704,7 @@ async function runImageGenerate(params: {
   resolution?: "1K" | "2K" | "4K";
   file?: string[];
   output?: string;
+  timeoutMs?: number;
 }) {
   const cfg = loadConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
@@ -727,6 +728,7 @@ async function runImageGenerate(params: {
     size: params.size,
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
+    timeoutMs: params.timeoutMs,
     inputImages,
   });
   const outputs = await Promise.all(
@@ -1436,6 +1438,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--size <size>", "Size hint like 1024x1024")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
     .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -1448,6 +1451,7 @@ export function registerCapabilityCli(program: Command) {
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1460,6 +1464,7 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -1470,6 +1475,7 @@ export function registerCapabilityCli(program: Command) {
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
           file: files,
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);

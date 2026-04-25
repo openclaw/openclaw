@@ -24,6 +24,8 @@ The tool only appears when at least one image generation provider is available. 
     defaults: {
       imageGenerationModel: {
         primary: "openai/gpt-image-2",
+        // Optional default provider request timeout for image_generate.
+        timeoutMs: 180_000,
       },
     },
   },
@@ -150,6 +152,7 @@ Tool results report the applied settings. When OpenClaw remaps geometry during p
     defaults: {
       imageGenerationModel: {
         primary: "openai/gpt-image-2",
+        timeoutMs: 180_000,
         fallbacks: [
           "openrouter/google/gemini-3.1-flash-image-preview",
           "google/gemini-3.1-flash-image-preview",
@@ -185,6 +188,8 @@ Notes:
   `agents.defaults.mediaGenerationAutoProviderFallback: false` if you want image
   generation to use only the explicit `model`, `primary`, and `fallbacks`
   entries.
+- Set `agents.defaults.imageGenerationModel.timeoutMs` for slow image backends.
+  A per-call `timeoutMs` tool parameter overrides the configured default.
 - Use `action: "list"` to inspect the currently registered providers, their
   default models, and auth env-var hints.
 

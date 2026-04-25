@@ -517,6 +517,42 @@ describe("capability cli", () => {
     );
   });
 
+  it("passes image generation timeout through to runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--timeout-ms",
+        "180000",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "friendly lobster",
+        timeoutMs: 180000,
+      }),
+    );
+  });
+
   it("streams url-only generated videos to --output paths", async () => {
     mocks.generateVideo.mockResolvedValue({
       provider: "vydra",
