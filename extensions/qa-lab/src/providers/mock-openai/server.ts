@@ -1373,6 +1373,7 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("memory_search", {
         query: "current Project Nebula codename ORBIT-10",
         maxResults: 3,
+        corpus: "sessions",
       });
     }
     const results = Array.isArray(toolJson?.results)

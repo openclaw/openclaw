@@ -834,7 +834,9 @@ describe("qa mock openai server", () => {
       }),
     });
     expect(memory.status).toBe(200);
-    expect(await memory.text()).toContain('"name":"memory_search"');
+    const memoryText = await memory.text();
+    expect(memoryText).toContain('"name":"memory_search"');
+    expect(memoryText).toContain('\\"corpus\\":\\"sessions\\"');
 
     const memoryFollowup = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
