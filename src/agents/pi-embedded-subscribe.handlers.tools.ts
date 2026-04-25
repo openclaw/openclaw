@@ -192,9 +192,9 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
 function shouldSuppressStructuredMediaToolOutput(params: {
   toolName: string;
   isToolError: boolean;
-  hasStructuredMedia: boolean;
+  hasDeliverableStructuredMedia: boolean;
 }): boolean {
-  return params.toolName === "tts" && !params.isToolError && params.hasStructuredMedia;
+  return params.toolName === "tts" && !params.isToolError && params.hasDeliverableStructuredMedia;
 }
 
 function buildPatchSummaryText(summary: ApplyPatchSummary): string {
@@ -520,8 +520,16 @@ async function emitToolResultOutput(params: {
   }
 
   const outputText = extractToolResultText(sanitizedResult);
+  const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
+  const mediaUrls = mediaReply
+    ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)
+    : [];
   const shouldEmitOutput =
-    !shouldSuppressStructuredMediaToolOutput({ toolName, isToolError, hasStructuredMedia }) &&
+    !shouldSuppressStructuredMediaToolOutput({
+      toolName,
+      isToolError,
+      hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
+    }) &&
     (ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText }));
   if (shouldEmitOutput) {
     if (outputText) {
@@ -543,16 +551,9 @@ async function emitToolResultOutput(params: {
     return;
   }
 
-  const mediaReply = extractToolResultMediaArtifact(result);
   if (!mediaReply) {
     return;
   }
-  const mediaUrls = filterToolResultMediaUrls(
-    rawToolName,
-    mediaReply.mediaUrls,
-    result,
-    ctx.builtinToolNames,
-  );
   const pendingMediaUrls =
     emittedToolOutputMediaUrls.length === 0
       ? mediaUrls
