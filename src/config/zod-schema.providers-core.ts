@@ -985,6 +985,11 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   contextVisibility: ContextVisibilityModeSchema.optional(),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
+  // Forwarded to bolt's App constructor as `logLevel`. Lets operators silence
+  // designed-and-benign socket-mode WARNs (e.g. the unconditional pong-timeout
+  // notice in @slack/socket-mode 2.0.6 that fires every ~30s during normal
+  // operation). Default INFO matches bolt's own default. (#71531)
+  logLevel: z.enum(["DEBUG", "INFO", "WARN", "ERROR"]).optional(),
 }).superRefine((value, ctx) => {
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
   const allowFrom = value.allowFrom ?? value.dm?.allowFrom;

@@ -231,6 +231,41 @@ describe("createSlackBoltApp", () => {
     expect(eagerAuthTestCalls).toBe(0);
   });
 
+  it("forwards logLevel to bolt's App when provided so operators can suppress sub-library WARN noise (#71531)", () => {
+    const clientOptions = { teamId: "T1" };
+    const { app } = createSlackBoltApp({
+      interop: {
+        App: FakeApp as never,
+        HTTPReceiver: FakeHTTPReceiver as never,
+        SocketModeReceiver: FakeSocketModeReceiver as never,
+      },
+      slackMode: "socket",
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions,
+      logLevel: "ERROR",
+    });
+    expect((app as unknown as FakeApp).args).toMatchObject({ logLevel: "ERROR" });
+  });
+
+  it("omits logLevel when not provided so bolt's default INFO behavior is preserved", () => {
+    const clientOptions = { teamId: "T1" };
+    const { app } = createSlackBoltApp({
+      interop: {
+        App: FakeApp as never,
+        HTTPReceiver: FakeHTTPReceiver as never,
+        SocketModeReceiver: FakeSocketModeReceiver as never,
+      },
+      slackMode: "socket",
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions,
+    });
+    expect((app as unknown as FakeApp).args).not.toHaveProperty("logLevel");
+  });
+
   it("keeps Bolt self filtering except assistant message_changed events", () => {
     expect(
       shouldSkipOpenClawSlackSelfEvent({

@@ -159,6 +159,8 @@ export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boo
   );
 }
 
+export type SlackBoltLogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
+
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
   slackMode: "socket" | "http";
@@ -167,6 +169,10 @@ export function createSlackBoltApp(params: {
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
+  // Forwarded to bolt's App as `logLevel`. Lets operators suppress
+  // designed-and-benign sub-library WARNs (e.g. socket-mode's unconditional
+  // pong-timeout notice). Omit to keep bolt's default. (#71531)
+  logLevel?: SlackBoltLogLevel;
 }) {
   const receiver =
     params.slackMode === "socket"
@@ -190,6 +196,7 @@ export function createSlackBoltApp(params: {
     // verification is enabled. Invalid tokens can reject before any listener
     // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
     tokenVerificationEnabled: false,
+    ...(params.logLevel ? { logLevel: params.logLevel } : {}),
   });
   app.use(async (args) => {
     if (shouldSkipOpenClawSlackSelfEvent(args)) {
