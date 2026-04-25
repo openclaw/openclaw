@@ -152,6 +152,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.profiles.*.cdpUrl": "Browser Profile CDP URL",
   "browser.profiles.*.userDataDir": "Browser Profile User Data Dir",
   "browser.profiles.*.driver": "Browser Profile Driver",
+  "browser.profiles.*.headless": "Browser Profile Headless Mode",
   "browser.profiles.*.attachOnly": "Browser Profile Attach-only Mode",
   "browser.profiles.*.color": "Browser Profile Accent Color",
   tools: "Tools",

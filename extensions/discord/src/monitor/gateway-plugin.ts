@@ -14,7 +14,6 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import * as undici from "undici";
 import * as ws from "ws";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
@@ -473,8 +472,6 @@ export function createDiscordGatewayPlugin(params: {
   runtime: RuntimeEnv;
   __testing?: {
     HttpsProxyAgentCtor?: typeof httpsProxyAgent.HttpsProxyAgent;
-    ProxyAgentCtor?: typeof undici.ProxyAgent;
-    undiciFetch?: typeof undici.fetch;
     webSocketCtor?: DiscordGatewayWebSocketCtor;
     registerClient?: (
       plugin: carbonGateway.GatewayPlugin,
@@ -520,31 +517,24 @@ export function createDiscordGatewayPlugin(params: {
     validateDiscordProxyUrl(proxy);
     const HttpsProxyAgentCtor =
       params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
-    const ProxyAgentCtor = params.__testing?.ProxyAgentCtor ?? undici.ProxyAgent;
     const wsAgent = new HttpsProxyAgentCtor<string>(proxy);
-    const fetchAgent = new ProxyAgentCtor(proxy);
 
     params.runtime.log?.("discord: gateway proxy enabled");
 
     return createGatewayPlugin({
       options,
       fetchImpl: async (input, init) => {
-        const response = (await (params.__testing?.undiciFetch ?? undici.fetch)(
+        return await fetchDiscordGatewayMetadataDirect(
           input,
           init,
-        )) as unknown as Response;
-        captureHttpExchange({
-          url: input,
-          method: (init?.method as string | undefined) ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-          response,
-          flowId: randomUUID(),
-          meta: { subsystem: "discord-gateway-metadata" },
-        });
-        return response;
+          debugProxySettings.enabled
+            ? false
+            : {
+                flowId: randomUUID(),
+                meta: { subsystem: "discord-gateway-metadata" },
+              },
+        );
       },
-      fetchInit: { dispatcher: fetchAgent },
       wsAgent,
       runtime: params.runtime,
       testing: params.__testing
