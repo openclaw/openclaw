@@ -2,54 +2,7 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
-
-### Changes
-
-- Browser/config: support per-profile `browser.profiles.<name>.headless` overrides for locally launched browser profiles, so one profile can run headless without forcing all browser profiles headless. Thanks @nakamotoliu.
-- Plugins/PDF: move local PDF extraction into a bundled `document-extract` plugin so core no longer owns `pdfjs-dist` or PDF image-rendering dependencies. Thanks @vincentkoc.
-- Matrix: require full cross-signing identity trust for self-device verification and add `openclaw matrix verify self` so operators can establish that trust from the CLI. (#70401) Thanks @gumadeiras.
-
-### Fixes
-
-- Plugins/runtime deps: log bundled plugin runtime-dependency staging before synchronous npm installs start and include elapsed timing afterward, so first boot after upgrades no longer looks hung while dependencies are being repaired. Thanks @steipete.
-- Agents/failover: forward embedded run abort signals into provider-owned model streams, cap implicit LLM idle watchdogs below long run timeouts, and mark 429 responses without usable retry timing as non-retryable so GitHub Copilot rate limits fail over or surface promptly instead of hanging until run timeout. Fixes #71120. Thanks @steipete.
-- Plugins/Google Meet: make meeting creation join by default, with an explicit URL-only opt-out, so agents that create a Meet also enter it. Thanks @steipete.
-- Telegram/polling: persist accepted update offsets before long-running handlers complete so poller restarts do not replay already-ingested updates, while keeping same-process retries for handler failures. Thanks @steipete.
-- Telegram/config: include generated Telegram channel config schema metadata in packaged plugin manifests so forum-topic/group config is accepted before runtime loads. Thanks @steipete.
-- CLI/Claude: include user-configured `mcp.servers` in the strict Claude CLI MCP bundle config, matching Pi runs while preserving the OpenClaw loopback override. Fixes #70909. Thanks @keishingu.
-- Browser/tool: keep explicit AI snapshots from inheriting the efficient role-snapshot default and preserve numeric Playwright AI refs, so `--format ai` remains a real AI snapshot path. Fixes #62550. Thanks @ly85206559.
-- Gateway/config: keep in-process config patch reload comparisons on the resolved source snapshot when `${VAR}` env refs are restored on disk, avoiding false full gateway restarts for unchanged gateway/plugin secrets. Fixes #71208. Thanks @robbiethompson18.
-- Slack/messages: serialize write-client requests and whole outbound sends per target so rapid multi-message Slack replies preserve send order. Fixes #69101. (#69105) Thanks @nightq and @ztexydt-cqh.
-- Slack/messages: keep Slack bot tokens out of internal message-ordering and DM cache keys. Thanks @steipete.
-- Slack/exec approvals: resolve native approval button clicks over the Gateway instead of delivering `/approve ...` as plain agent text, preserving retry buttons if Gateway resolution fails. Fixes #71023. (#71025) Thanks @marusan03.
-- Browser/tool: expose browser doctor diagnostics to agents and extend `openclaw doctor` browser readiness notes for managed Chromium launch prerequisites. (#62948, #62936) Thanks @seanc-dev.
-- Slack/files: return non-image `download-file` results as local file paths instead of image payloads, and include Slack file IDs in inbound file placeholders so agents can call `download-file`. Fixes #71212. Thanks @teamrazo.
-- Browser control: scope standalone loopback auth to the resolved active gateway credential and fail closed when password mode lacks a resolved password, so inactive tokens or passwords no longer authorize browser routes. Fixes #65626. (#65639) Thanks @coygeek.
-- Control UI/Codex harness: emit native Codex app-server assistant and lifecycle completion events so live webchat runs stop spinning without needing a transcript reload fallback. (#70815) Thanks @lesaai.
-- Agents/sessions: persist the runtime-resolved context budget from embedded agent runs, so Codex GPT-5.5 sessions keep the catalog/runtime context cap instead of falling back to the generic 200k status value. Fixes #71294. Thanks @tud0r.
-- Agents/tools: fail runs before model submission when explicit tool allowlists resolve to no callable tools, preventing text-only hallucinated tool results for missing tools such as plugin commands that were not registered. Fixes #71292. Thanks @steipete.
-- Agents/embedded: skip provider submission when an embedded run has no prompt, replay history, or prompt-local images, preventing empty OpenAI Responses requests from surfacing provider errors into user channels. Fixes #71130. Thanks @steipete.
-- Providers/MiniMax: keep M2.7 chat model metadata text-only so image tool requests route through `MiniMax-VL-01` instead of the Anthropic-compatible chat endpoint. Fixes #71296. Thanks @ilker-cevikkaya.
-- Discord/replies: run `message_sending` plugin hooks for Discord reply delivery, including DM targets, so plugins can transform or cancel outbound Discord replies consistently with other channels. Fixes #59350. (#71094) Thanks @wei840222.
-- Control UI/commands: carry provider-owned thinking option ids/labels in session rows and defaults so fresh sessions show and accept dynamic modes such as `adaptive`, `xhigh`, and `max`. Fixes #71269. Thanks @Young-Khalil.
-- Image generation: make explicit `model=` overrides exact-only so failed `openai/gpt-image-2` requests no longer fall through to Gemini or other configured providers, and update `image_generate list` to mention OpenAI Codex OAuth as valid auth for `openai/gpt-image-2`. Fixes #71290 and #71231. Thanks @Young-Khalil and @steipete.
-- Providers/GitHub Copilot: keep the plugin stream wrapper from claiming transport selection before OpenClaw picks a boundary-aware stream path, avoiding Pi's stale fallback Copilot headers on normal model turns. Thanks @steipete.
-- Discord/subagents: pass runtime config into thread-bound native subagent binding and require it at the helper boundary so Discord channel resolution keeps account-aware config. Fixes #71054. (#70945) Thanks @jai.
-- Slack/Assistant: accept Slack Assistant DM `message_changed` events when their metadata identifies the human sender, while continuing to drop self-authored bot edits. Fixes #55445. Thanks @AlfredPros.
-- Slack/native streaming: suppress reasoning-only payloads before `chat.startStream`/`appendStream`, so Claude extended-thinking blocks no longer appear as visible Slack messages. Fixes #59687. Thanks @vision-ifc.
-- Slack/block replies: keep multi-part block deliveries in the first Slack reply thread when `replyToMode` is `first`, matching text reply threading instead of leaking later blocks into the channel. Fixes #49341. Thanks @pholmstr and @xiwuqi.
-- Slack/thread broadcasts: process `thread_broadcast` events as user messages so replies sent with "Also send to channel" reach the agent instead of becoming metadata-only system events. Fixes #56605 and #4351. Thanks @clawSean and @jlowin.
-- Slack/threading: ignore internal reply ids when choosing Slack `thread_ts` values, so resumed replies keep the real Slack thread anchor instead of leaking to the channel root. Fixes #68790. Thanks @MonkeyLeeT and @martingarramon.
-- Agents/failover: stop body-less HTTP 400/422 proxy failures from defaulting to `"format"` classification, so embedded retries surface the opaque provider failure instead of falling into a compaction loop. Fixes #66462. (#67024) Thanks @altaywtf and @HongzhuLiu.
-- Plugins/loader: use cached discovery-mode snapshot loads for read-only plugin capability lookups, keep snapshot caches isolated from active Gateway registries, and make same-plugin channel/HTTP route re-registration idempotent so repeated snapshot or hot-reload paths no longer rerun full plugin side effects or accumulate duplicate surfaces. Fixes #51781, #52031, #54181, and #57514. Thanks @livingghost, @okuyam2y, @ShionEria, and @bbshih.
-- Plugins/loader: reuse the compatible active Gateway registry for broad runtime plugin ensure calls after a gateway-bindable boot load, so non-bundled plugins no longer re-run `register()` during the same boot path. Fixes #69250. Thanks @markthebest12.
-- Plugins/hooks: keep the gateway-bindable hook runner installed when later default-mode plugin loads activate a different registry, preserving Gateway subagent lifecycle hooks across runtime cache misses. Fixes #63166. Thanks @steipete.
-- Media/input: resolve canonical inbound media refs through the shared media loader so native prompt image replay and explicit image/PDF tools can read `media://inbound/<id>` and managed inbound replay paths under workspace-only file policy. Thanks @steipete.
-- Media/tools: centralize media reference scheme classification for image, PDF, image-generation, video-generation, and music-generation inputs so managed inbound refs are accepted consistently. Thanks @steipete.
-- Control UI/media: resolve canonical inbound media refs before serving assistant media previews, so `media://inbound/<id>` sources no longer pass access checks but fail file open. Thanks @steipete.
-
-## 2026.4.24
+## 2026.4.24 (Unreleased)
 
 ### Breaking
 
@@ -57,6 +10,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Browser/config: support per-profile `browser.profiles.<name>.headless` overrides for locally launched browser profiles, so one profile can run headless without forcing all browser profiles headless. Thanks @nakamotoliu.
+- Plugins/PDF: move local PDF extraction into a bundled `document-extract` plugin so core no longer owns `pdfjs-dist` or PDF image-rendering dependencies. Thanks @vincentkoc.
+- Matrix: require full cross-signing identity trust for self-device verification and add `openclaw matrix verify self` so operators can establish that trust from the CLI. (#70401) Thanks @gumadeiras.
 - WebChat/sessions: keep runtime-only prompt context out of visible transcript history and scrub legacy wrappers from session history surfaces. Thanks @91wan.
 - Gradium: add a bundled text-to-speech provider with voice-note and telephony output support. (#64958) Thanks @LaurentMazare.
 - Plugins/setup: honor explicit `setup.requiresRuntime: false` as a descriptor-only setup contract while keeping omitted values on the legacy setup-api fallback path. Thanks @vincentkoc.
@@ -107,6 +63,42 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/runtime deps: log bundled plugin runtime-dependency staging before synchronous npm installs start and include elapsed timing afterward, so first boot after upgrades no longer looks hung while dependencies are being repaired. Thanks @steipete.
+- Agents/failover: forward embedded run abort signals into provider-owned model streams, cap implicit LLM idle watchdogs below long run timeouts, and mark 429 responses without usable retry timing as non-retryable so GitHub Copilot rate limits fail over or surface promptly instead of hanging until run timeout. Fixes #71120. Thanks @steipete.
+- Plugins/Google Meet: make meeting creation join by default, with an explicit URL-only opt-out, so agents that create a Meet also enter it. Thanks @steipete.
+- Telegram/polling: persist accepted update offsets before long-running handlers complete so poller restarts do not replay already-ingested updates, while keeping same-process retries for handler failures. Thanks @steipete.
+- Telegram/config: include generated Telegram channel config schema metadata in packaged plugin manifests so forum-topic/group config is accepted before runtime loads. Thanks @steipete.
+- CLI/Claude: include user-configured `mcp.servers` in the strict Claude CLI MCP bundle config, matching Pi runs while preserving the OpenClaw loopback override. Fixes #70909. Thanks @keishingu.
+- Browser/tool: keep explicit AI snapshots from inheriting the efficient role-snapshot default and preserve numeric Playwright AI refs, so `--format ai` remains a real AI snapshot path. Fixes #62550. Thanks @ly85206559.
+- Gateway/config: keep in-process config patch reload comparisons on the resolved source snapshot when `${VAR}` env refs are restored on disk, avoiding false full gateway restarts for unchanged gateway/plugin secrets. Fixes #71208. Thanks @robbiethompson18.
+- Slack/messages: serialize write-client requests and whole outbound sends per target so rapid multi-message Slack replies preserve send order. Fixes #69101. (#69105) Thanks @nightq and @ztexydt-cqh.
+- Slack/messages: keep Slack bot tokens out of internal message-ordering and DM cache keys. Thanks @steipete.
+- Slack/exec approvals: resolve native approval button clicks over the Gateway instead of delivering `/approve ...` as plain agent text, preserving retry buttons if Gateway resolution fails. Fixes #71023. (#71025) Thanks @marusan03.
+- Browser/tool: expose browser doctor diagnostics to agents and extend `openclaw doctor` browser readiness notes for managed Chromium launch prerequisites. (#62948, #62936) Thanks @seanc-dev.
+- Slack/files: return non-image `download-file` results as local file paths instead of image payloads, and include Slack file IDs in inbound file placeholders so agents can call `download-file`. Fixes #71212. Thanks @teamrazo.
+- Browser control: scope standalone loopback auth to the resolved active gateway credential and fail closed when password mode lacks a resolved password, so inactive tokens or passwords no longer authorize browser routes. Fixes #65626. (#65639) Thanks @coygeek.
+- Control UI/Codex harness: emit native Codex app-server assistant and lifecycle completion events so live webchat runs stop spinning without needing a transcript reload fallback. (#70815) Thanks @lesaai.
+- Agents/sessions: persist the runtime-resolved context budget from embedded agent runs, so Codex GPT-5.5 sessions keep the catalog/runtime context cap instead of falling back to the generic 200k status value. Fixes #71294. Thanks @tud0r.
+- Agents/tools: fail runs before model submission when explicit tool allowlists resolve to no callable tools, preventing text-only hallucinated tool results for missing tools such as plugin commands that were not registered. Fixes #71292. Thanks @steipete.
+- Agents/embedded: skip provider submission when an embedded run has no prompt, replay history, or prompt-local images, preventing empty OpenAI Responses requests from surfacing provider errors into user channels. Fixes #71130. Thanks @steipete.
+- Providers/MiniMax: keep M2.7 chat model metadata text-only so image tool requests route through `MiniMax-VL-01` instead of the Anthropic-compatible chat endpoint. Fixes #71296. Thanks @ilker-cevikkaya.
+- Discord/replies: run `message_sending` plugin hooks for Discord reply delivery, including DM targets, so plugins can transform or cancel outbound Discord replies consistently with other channels. Fixes #59350. (#71094) Thanks @wei840222.
+- Control UI/commands: carry provider-owned thinking option ids/labels in session rows and defaults so fresh sessions show and accept dynamic modes such as `adaptive`, `xhigh`, and `max`. Fixes #71269. Thanks @Young-Khalil.
+- Image generation: make explicit `model=` overrides exact-only so failed `openai/gpt-image-2` requests no longer fall through to Gemini or other configured providers, and update `image_generate list` to mention OpenAI Codex OAuth as valid auth for `openai/gpt-image-2`. Fixes #71290 and #71231. Thanks @Young-Khalil and @steipete.
+- Providers/GitHub Copilot: keep the plugin stream wrapper from claiming transport selection before OpenClaw picks a boundary-aware stream path, avoiding Pi's stale fallback Copilot headers on normal model turns. Thanks @steipete.
+- Discord/subagents: pass runtime config into thread-bound native subagent binding and require it at the helper boundary so Discord channel resolution keeps account-aware config. Fixes #71054. (#70945) Thanks @jai.
+- Slack/Assistant: accept Slack Assistant DM `message_changed` events when their metadata identifies the human sender, while continuing to drop self-authored bot edits. Fixes #55445. Thanks @AlfredPros.
+- Slack/native streaming: suppress reasoning-only payloads before `chat.startStream`/`appendStream`, so Claude extended-thinking blocks no longer appear as visible Slack messages. Fixes #59687. Thanks @vision-ifc.
+- Slack/block replies: keep multi-part block deliveries in the first Slack reply thread when `replyToMode` is `first`, matching text reply threading instead of leaking later blocks into the channel. Fixes #49341. Thanks @pholmstr and @xiwuqi.
+- Slack/thread broadcasts: process `thread_broadcast` events as user messages so replies sent with "Also send to channel" reach the agent instead of becoming metadata-only system events. Fixes #56605 and #4351. Thanks @clawSean and @jlowin.
+- Slack/threading: ignore internal reply ids when choosing Slack `thread_ts` values, so resumed replies keep the real Slack thread anchor instead of leaking to the channel root. Fixes #68790. Thanks @MonkeyLeeT and @martingarramon.
+- Agents/failover: stop body-less HTTP 400/422 proxy failures from defaulting to `"format"` classification, so embedded retries surface the opaque provider failure instead of falling into a compaction loop. Fixes #66462. (#67024) Thanks @altaywtf and @HongzhuLiu.
+- Plugins/loader: use cached discovery-mode snapshot loads for read-only plugin capability lookups, keep snapshot caches isolated from active Gateway registries, and make same-plugin channel/HTTP route re-registration idempotent so repeated snapshot or hot-reload paths no longer rerun full plugin side effects or accumulate duplicate surfaces. Fixes #51781, #52031, #54181, and #57514. Thanks @livingghost, @okuyam2y, @ShionEria, and @bbshih.
+- Plugins/loader: reuse the compatible active Gateway registry for broad runtime plugin ensure calls after a gateway-bindable boot load, so non-bundled plugins no longer re-run `register()` during the same boot path. Fixes #69250. Thanks @markthebest12.
+- Plugins/hooks: keep the gateway-bindable hook runner installed when later default-mode plugin loads activate a different registry, preserving Gateway subagent lifecycle hooks across runtime cache misses. Fixes #63166. Thanks @steipete.
+- Media/input: resolve canonical inbound media refs through the shared media loader so native prompt image replay and explicit image/PDF tools can read `media://inbound/<id>` and managed inbound replay paths under workspace-only file policy. Thanks @steipete.
+- Media/tools: centralize media reference scheme classification for image, PDF, image-generation, video-generation, and music-generation inputs so managed inbound refs are accepted consistently. Thanks @steipete.
+- Control UI/media: resolve canonical inbound media refs before serving assistant media previews, so `media://inbound/<id>` sources no longer pass access checks but fail file open. Thanks @steipete.
 - Auth/Codex: bootstrap `openai-codex:default` from Codex CLI credentials on fresh installs without replacing a locally refreshed OpenClaw OAuth token later. Fixes #71305. Thanks @Gforce10-design.
 - Plugin SDK/tool-result transforms: bound middleware `details`, validate in-place result mutations, and mark fail-closed middleware fallbacks with canonical `error` status. Thanks @vincentkoc.
 - Discord/gateway: prevent startup from getting stuck at `awaiting gateway readiness` when Carbon gateway registration races with a lifecycle reconnect. Fixes #52372. (#68159) Thanks @IVY-AI-gif.
