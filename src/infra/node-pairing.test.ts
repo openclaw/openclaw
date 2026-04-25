@@ -1,5 +1,5 @@
-import { describe, expect, test } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   approveNodePairing,
   getPairedNode,
@@ -30,11 +30,21 @@ async function setupPairedNode(baseDir: string): Promise<string> {
   return paired.token;
 }
 
+const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
+
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-node-pairing-" }, run);
+  return await run(await tempDirs.make("case"));
 }
 
 describe("node pairing tokens", () => {
+  beforeAll(async () => {
+    await tempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await tempDirs.cleanup();
+  });
+
   test("reuses existing pending requests for the same node", async () => {
     await withNodePairingDir(async (baseDir) => {
       const first = await requestNodePairing(
