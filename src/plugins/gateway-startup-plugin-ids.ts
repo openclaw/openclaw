@@ -9,14 +9,13 @@ import {
 } from "../memory-host-sdk/dreaming.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
-import {
-  createPluginActivationSource,
-  normalizePluginId,
-  normalizePluginsConfig,
-  resolveEffectivePluginActivationState,
-} from "./config-state.js";
+import { resolveEffectivePluginActivationState } from "./config-state.js";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import {
+  createPluginRegistryIdNormalizer,
+  loadPluginRegistrySnapshot,
+  normalizePluginsConfigWithRegistry,
+} from "./plugin-registry.js";
 
 function listDisabledChannelIds(config: OpenClawConfig): Set<string> {
   const channels = config.channels;
@@ -64,7 +63,10 @@ function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<str
   return new Set([DEFAULT_MEMORY_DREAMING_PLUGIN_ID, resolveMemoryDreamingPluginId(config)]);
 }
 
-function resolveExplicitMemorySlotStartupPluginId(config: OpenClawConfig): string | undefined {
+function resolveExplicitMemorySlotStartupPluginId(
+  config: OpenClawConfig,
+  normalizePluginId: (pluginId: string) => string,
+): string | undefined {
   const configuredSlot = config.plugins?.slots?.memory?.trim();
   if (!configuredSlot || configuredSlot.toLowerCase() === "none") {
     return undefined;
@@ -101,8 +103,11 @@ function hasConfiguredStartupChannel(params: {
 function canStartConfiguredChannelPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   config: OpenClawConfig;
-  pluginsConfig: ReturnType<typeof normalizePluginsConfig>;
-  activationSource: ReturnType<typeof createPluginActivationSource>;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
 }): boolean {
   if (!params.pluginsConfig.enabled) {
     return false;
@@ -166,15 +171,16 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   if (configuredChannelIds.size === 0) {
     return [];
   }
-  const pluginsConfig = normalizePluginsConfig(params.config.plugins);
-  const activationSource = createPluginActivationSource({
-    config: params.config,
-  });
   const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, index);
+  const activationSource = {
+    plugins: pluginsConfig,
+    rootConfig: params.config,
+  };
   return index.plugins
     .filter(
       (plugin) =>
@@ -197,28 +203,28 @@ export function resolveGatewayStartupPluginIds(params: {
   env: NodeJS.ProcessEnv;
 }): string[] {
   const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
-  const pluginsConfig = normalizePluginsConfig(params.config.plugins);
-  // Startup must classify allowlist exceptions against the raw config snapshot,
-  // not the auto-enabled effective snapshot, or configured-only channels can be
-  // misclassified as explicit enablement.
-  const activationSource = createPluginActivationSource({
-    config: params.activationSourceConfig ?? params.config,
-  });
-  const requiredAgentHarnessRuntimes = new Set(
-    collectConfiguredAgentHarnessRuntimes(
-      params.activationSourceConfig ?? params.config,
-      params.env,
-    ),
-  );
-  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
-  const explicitMemorySlotStartupPluginId = resolveExplicitMemorySlotStartupPluginId(
-    params.activationSourceConfig ?? params.config,
-  );
   const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, index);
+  // Startup must classify allowlist exceptions against the raw config snapshot,
+  // not the auto-enabled effective snapshot, or configured-only channels can be
+  // misclassified as explicit enablement.
+  const activationSourceConfig = params.activationSourceConfig ?? params.config;
+  const activationSource = {
+    plugins: normalizePluginsConfigWithRegistry(activationSourceConfig.plugins, index),
+    rootConfig: activationSourceConfig,
+  };
+  const requiredAgentHarnessRuntimes = new Set(
+    collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env),
+  );
+  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
+  const explicitMemorySlotStartupPluginId = resolveExplicitMemorySlotStartupPluginId(
+    activationSourceConfig,
+    createPluginRegistryIdNormalizer(index),
+  );
   return index.plugins
     .filter((plugin) => {
       if (hasConfiguredStartupChannel({ plugin, configuredChannelIds })) {

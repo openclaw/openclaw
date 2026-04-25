@@ -6,6 +6,7 @@ import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-sto
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
+  createPluginRegistryIdNormalizer,
   getPluginRecord,
   inspectPluginRegistry,
   isPluginEnabled,
@@ -13,6 +14,7 @@ import {
   listPluginRecords,
   loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
+  normalizePluginsConfigWithRegistry,
   refreshPluginRegistry,
   resolveChannelOwners,
   resolveCliBackendOwners,
@@ -194,6 +196,44 @@ describe("plugin registry facade", () => {
     expect(
       resolveProviderOwners({ index, providerId: "demo", config, includeDisabled: true }),
     ).toEqual(["demo"]);
+  });
+
+  it("normalizes plugin config ids through registry contribution aliases", () => {
+    const index = createIndex("openai");
+    index.plugins[0] = {
+      ...index.plugins[0]!,
+      contributions: {
+        ...index.plugins[0]!.contributions,
+        providers: ["openai", "openai-codex"],
+        channels: ["openai-chat"],
+      },
+    };
+
+    const normalizePluginId = createPluginRegistryIdNormalizer(index);
+    expect(normalizePluginId("OpenAI-Codex")).toBe("openai");
+    expect(normalizePluginId("openai-chat")).toBe("openai");
+    expect(normalizePluginId("unknown-plugin")).toBe("unknown-plugin");
+
+    expect(
+      normalizePluginsConfigWithRegistry(
+        {
+          allow: ["openai-chat"],
+          entries: {
+            "OpenAI-Codex": {
+              enabled: false,
+            },
+          },
+        },
+        index,
+      ),
+    ).toMatchObject({
+      allow: ["openai"],
+      entries: {
+        openai: {
+          enabled: false,
+        },
+      },
+    });
   });
 
   it("reads the persisted registry before deriving from discovered candidates", async () => {

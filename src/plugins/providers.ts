@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
-import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import { resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   isActivatedManifestOwner,
@@ -13,6 +13,7 @@ import {
 } from "./manifest-registry.js";
 import {
   loadPluginRegistrySnapshot,
+  normalizePluginsConfigWithRegistry,
   resolvePluginContributionOwners,
   resolveProviderOwners,
   type PluginRegistryRecord,
@@ -25,7 +26,7 @@ type ProviderManifestLoadParams = {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 };
-type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfig>;
+type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
 type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
   onlyPluginIds?: readonly string[];
 };
@@ -80,7 +81,7 @@ function resolveProviderOwnerPluginIds(
   }
   const pluginIdSet = new Set(params.pluginIds);
   const registry = loadProviderRegistrySnapshot(params);
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(
     registry,
     (plugin) => pluginIdSet.has(plugin.pluginId) && params.isEligible(plugin, normalizedConfig),
@@ -144,7 +145,7 @@ export function resolveEnabledProviderPluginIds(params: {
   onlyPluginIds?: readonly string[];
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -201,7 +202,7 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
   const declaredPluginIds =
     params.declaredPluginIds ?? new Set(resolveExternalAuthProfileProviderPluginIds(params));
   const registry = loadProviderRegistrySnapshot(params);
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -225,7 +226,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(registry, (plugin) => {
     if (
       !(
@@ -541,7 +542,7 @@ export function resolveNonBundledProviderPluginIds(params: {
   env?: PluginLoadOptions["env"];
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -561,7 +562,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   env?: PluginLoadOptions["env"];
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   const enabledProviderPluginIds = listRegistryPluginIds(
     registry,
     (plugin) =>

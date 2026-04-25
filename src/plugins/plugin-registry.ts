@@ -1,4 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  normalizePluginsConfigWithResolver,
+  type NormalizedPluginsConfig,
+} from "./config-normalization-shared.js";
 import {
   readPersistedInstalledPluginIndexSync,
   type InstalledPluginIndexStoreInspection,
@@ -81,6 +86,53 @@ export type ResolveSetupProviderOwnersParams = PluginRegistryContributionOptions
 
 function normalizeContributionId(value: string): string {
   return value.trim();
+}
+
+function normalizePluginRegistryAlias(value: string): string {
+  return value.trim();
+}
+
+function normalizePluginRegistryAliasKey(value: string): string {
+  return normalizePluginRegistryAlias(value).toLowerCase();
+}
+
+export function createPluginRegistryIdNormalizer(
+  index: PluginRegistrySnapshot,
+): (pluginId: string) => string {
+  const aliases = new Map<string, string>();
+  for (const plugin of [...index.plugins].toSorted((left, right) =>
+    left.pluginId.localeCompare(right.pluginId),
+  )) {
+    const pluginId = normalizePluginRegistryAlias(plugin.pluginId);
+    if (!pluginId) {
+      continue;
+    }
+    aliases.set(normalizePluginRegistryAliasKey(pluginId), pluginId);
+    for (const alias of [
+      ...plugin.contributions.providers,
+      ...plugin.contributions.channels,
+      ...plugin.contributions.setupProviders,
+      ...plugin.contributions.cliBackends,
+      ...plugin.contributions.modelCatalogProviders,
+    ]) {
+      const normalizedAlias = normalizePluginRegistryAlias(alias);
+      const normalizedAliasKey = normalizePluginRegistryAliasKey(alias);
+      if (normalizedAlias && !aliases.has(normalizedAliasKey)) {
+        aliases.set(normalizedAliasKey, pluginId);
+      }
+    }
+  }
+  return (pluginId: string) => {
+    const trimmed = normalizePluginRegistryAlias(pluginId);
+    return aliases.get(normalizePluginRegistryAliasKey(trimmed)) ?? trimmed;
+  };
+}
+
+export function normalizePluginsConfigWithRegistry(
+  config: OpenClawConfig["plugins"] | undefined,
+  index: PluginRegistrySnapshot,
+): NormalizedPluginsConfig {
+  return normalizePluginsConfigWithResolver(config, createPluginRegistryIdNormalizer(index));
 }
 
 function hasEnvFlag(env: NodeJS.ProcessEnv, name: string): boolean {
