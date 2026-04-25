@@ -17,6 +17,24 @@ let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePlug
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
 
+function forceNodeRuntimeVersionsForTest(): () => void {
+  const originalVersions = process.versions;
+  const nodeVersions = { ...originalVersions } as NodeJS.ProcessVersions & {
+    bun?: string | undefined;
+  };
+  delete nodeVersions.bun;
+  Object.defineProperty(process, "versions", {
+    configurable: true,
+    value: nodeVersions,
+  });
+  return () => {
+    Object.defineProperty(process, "versions", {
+      configurable: true,
+      value: originalVersions,
+    });
+  };
+}
+
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
 }
@@ -166,6 +184,7 @@ describe("setup-registry getJiti", () => {
       diagnostics: [],
     });
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const restoreVersions = forceNodeRuntimeVersionsForTest();
 
     try {
       resolvePluginSetupRegistry({
@@ -173,6 +192,7 @@ describe("setup-registry getJiti", () => {
         env: {},
       });
     } finally {
+      restoreVersions();
       platformSpy.mockRestore();
     }
 

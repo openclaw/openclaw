@@ -19,6 +19,24 @@ const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const FACADE_LOADER_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
 type FacadeLoaderJitiFactory = NonNullable<Parameters<typeof setFacadeLoaderJitiFactoryForTest>[0]>;
 
+function forceNodeRuntimeVersionsForTest(): () => void {
+  const originalVersions = process.versions;
+  const nodeVersions = { ...originalVersions } as NodeJS.ProcessVersions & {
+    bun?: string | undefined;
+  };
+  delete nodeVersions.bun;
+  Object.defineProperty(process, "versions", {
+    configurable: true,
+    value: nodeVersions,
+  });
+  return () => {
+    Object.defineProperty(process, "versions", {
+      configurable: true,
+      value: originalVersions,
+    });
+  };
+}
+
 function createBundledPluginDir(prefix: string, marker: string): string {
   return createBundledPluginPublicSurfaceFixture({ createTempDirSync, marker, prefix });
 }
@@ -127,6 +145,7 @@ describe("plugin-sdk facade loader", () => {
       })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
     }) as FacadeLoaderJitiFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const restoreVersions = forceNodeRuntimeVersionsForTest();
 
     try {
       expect(
@@ -143,6 +162,7 @@ describe("plugin-sdk facade loader", () => {
         }),
       );
     } finally {
+      restoreVersions();
       platformSpy.mockRestore();
     }
   });
