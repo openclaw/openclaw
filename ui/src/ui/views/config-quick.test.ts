@@ -42,7 +42,7 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onUserNameChange: vi.fn(),
     onUserAvatarChange: vi.fn(),
     configObject: {},
-    onApplyPreset: vi.fn(),
+    onSelectPreset: vi.fn(),
     onAdvancedSettings: vi.fn(),
     connected: true,
     gatewayUrl: "ws://localhost:18789",
