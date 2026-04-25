@@ -278,12 +278,12 @@ function handleAssistantAvatarFileSelect(e: Event, props: QuickSettingsProps) {
     return;
   }
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.addEventListener("load", () => {
     const result = typeof reader.result === "string" ? reader.result : "";
     if (result) {
       void onAssistantAvatarOverrideChange(result);
     }
-  };
+  });
   reader.readAsDataURL(file);
   input.value = "";
 }
