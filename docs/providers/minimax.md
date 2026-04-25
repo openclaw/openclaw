@@ -12,7 +12,7 @@ MiniMax also provides:
 
 - Bundled speech synthesis via T2A v2
 - Bundled image understanding via `MiniMax-VL-01`
-- Bundled music generation via `music-2.5+`
+- Bundled music generation via `music-2.6`
 - Bundled `web_search` through the MiniMax Coding Plan search API
 
 Provider split:
@@ -30,7 +30,7 @@ Provider split:
 | `MiniMax-M2.7-highspeed` | Chat (reasoning) | Faster M2.7 reasoning tier               |
 | `MiniMax-VL-01`          | Vision           | Image understanding model                |
 | `image-01`               | Image generation | Text-to-image and image-to-image editing |
-| `music-2.5+`             | Music generation | Default music model                      |
+| `music-2.6`              | Music generation | Default music model                      |
 | `music-2.5`              | Music generation | Previous music generation tier           |
 | `music-2.0`              | Music generation | Legacy music generation tier             |
 | `MiniMax-Hailuo-2.3`     | Video generation | Text-to-video and image reference flows  |
@@ -282,7 +282,7 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
 The bundled `minimax` plugin also registers music generation through the shared
 `music_generate` tool.
 
-- Default music model: `minimax/music-2.5+`
+- Default music model: `minimax/music-2.6`
 - Also supports `minimax/music-2.5` and `minimax/music-2.0`
 - Prompt controls: `lyrics`, `instrumental`, `durationSeconds`
 - Output format: `mp3`
@@ -295,7 +295,7 @@ To use MiniMax as the default music provider:
   agents: {
     defaults: {
       musicGenerationModel: {
-        primary: "minimax/music-2.5+",
+        primary: "minimax/music-2.6",
       },
     },
   },
