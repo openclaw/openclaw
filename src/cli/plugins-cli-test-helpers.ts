@@ -14,6 +14,7 @@ type ListMarketplacePluginsFn =
   (typeof import("../plugins/marketplace.js"))["listMarketplacePlugins"];
 type ResolveMarketplaceInstallShortcutFn =
   (typeof import("../plugins/marketplace.js"))["resolveMarketplaceInstallShortcut"];
+type LoadPluginInstallRecordsParams = { config?: OpenClawConfig };
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(mock: unknown, ...args: TArgs): TResult {
@@ -32,9 +33,9 @@ export const listMarketplacePlugins: Mock<ListMarketplacePluginsFn> = vi.fn();
 export const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallShortcutFn> = vi.fn();
 export const enablePluginInConfig: UnknownMock = vi.fn();
 export const recordPluginInstall: UnknownMock = vi.fn();
-export const loadPluginInstallRecords: AsyncUnknownMock = vi.fn(async ({ config }) => {
-  const cfg = config as OpenClawConfig | undefined;
-  return structuredClone(cfg?.plugins?.installs ?? {});
+export const loadPluginInstallRecords: AsyncUnknownMock = vi.fn(async (...args: unknown[]) => {
+  const params = args[0] as LoadPluginInstallRecordsParams | undefined;
+  return structuredClone(params?.config?.plugins?.installs ?? {});
 });
 export const writePersistedPluginInstallLedger: AsyncUnknownMock = vi.fn(async () => undefined);
 export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
@@ -518,9 +519,9 @@ export function resetPluginsCliTestState() {
   recordPluginInstall.mockImplementation(
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
-  loadPluginInstallRecords.mockImplementation(async ({ config }) => {
-    const cfg = config as OpenClawConfig | undefined;
-    return structuredClone(cfg?.plugins?.installs ?? {});
+  loadPluginInstallRecords.mockImplementation(async (...args: unknown[]) => {
+    const params = args[0] as LoadPluginInstallRecordsParams | undefined;
+    return structuredClone(params?.config?.plugins?.installs ?? {});
   });
   writePersistedPluginInstallLedger.mockResolvedValue(undefined);
   loadPluginManifestRegistry.mockReturnValue({
