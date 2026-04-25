@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -152,6 +152,107 @@ describe("tool_result_persist hook", () => {
     const toolResult = getPersistedToolResult(sm);
     expect(toolResult.content[0]?.text).toBe("visible output stays small");
     expectPersistedToolResultDetailsCapped(sm);
+  });
+
+  it("caps oversized toolResult details without serializing the original payload", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const oversizedDetails = {
+      status: "completed",
+      sessionId: "exec-large",
+      aggregated: "x".repeat(200_000),
+      sessions: [
+        {
+          sessionId: "proc-large",
+          command: "node noisy-script.js ".repeat(2_000),
+          tail: "z".repeat(20_000),
+        },
+      ],
+    };
+    const originalStringify = JSON.stringify;
+    const stringifySpy = vi.spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+      if (value === oversizedDetails) {
+        throw new Error("unbounded original details stringify");
+      }
+      return originalStringify(value, ...args);
+    });
+
+    try {
+      appendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage);
+      appendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        isError: false,
+        content: [{ type: "text", text: "visible output stays small" }],
+        details: oversizedDetails,
+      } as any);
+    } finally {
+      stringifySpy.mockRestore();
+    }
+
+    const toolResult = getPersistedToolResult(sm);
+    expect(toolResult.content[0]?.text).toBe("visible output stays small");
+    expectPersistedToolResultDetailsCapped(sm);
+    expect(stringifySpy).not.toHaveBeenCalledWith(oversizedDetails);
+  });
+
+  it("caps wide toolResult details without materializing every entry up front", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const wideDetails: Record<string, unknown> = {
+      status: "completed",
+      sessionId: "exec-wide",
+    };
+    for (let index = 0; index < 20_000; index += 1) {
+      wideDetails[`debug_${index}`] = `value-${index}`;
+    }
+    const originalEntries = Object.entries;
+    const originalKeys = Object.keys;
+    const entriesSpy = vi.spyOn(Object, "entries").mockImplementation((value) => {
+      if (value === wideDetails) {
+        throw new Error("wide details entries materialized");
+      }
+      return originalEntries(value);
+    });
+    const keysSpy = vi.spyOn(Object, "keys").mockImplementation((value) => {
+      if (value === wideDetails) {
+        throw new Error("wide details keys materialized");
+      }
+      return originalKeys(value);
+    });
+
+    try {
+      appendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage);
+      appendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        isError: false,
+        content: [{ type: "text", text: "visible output stays small" }],
+        details: wideDetails,
+      } as any);
+    } finally {
+      entriesSpy.mockRestore();
+      keysSpy.mockRestore();
+    }
+
+    const toolResult = getPersistedToolResult(sm);
+    const details = toolResult.details as Record<string, unknown>;
+    expect(details.persistedDetailsTruncated).toBe(true);
+    expect(details.originalDetailKeys).toEqual(
+      expect.arrayContaining(["status", "sessionId", "debug_0"]),
+    );
   });
 
   it("falls back to a compact summary when sanitized details still exceed the cap", () => {

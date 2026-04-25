@@ -1,5 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  boundedJsonUtf8Bytes,
+  firstEnumerableOwnKeys,
+  jsonUtf8BytesOrInfinity,
+  type BoundedJsonUtf8Bytes,
+} from "../infra/json-utf8-bytes.js";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
@@ -43,12 +49,10 @@ const MAX_PERSISTED_DETAIL_STRING_CHARS = 2_000;
 const MAX_PERSISTED_DETAIL_SESSION_COUNT = 10;
 const MAX_PERSISTED_DETAIL_FALLBACK_STRING_CHARS = 200;
 
-function jsonByteLength(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf-8");
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
+function originalDetailsSizeFields(size: BoundedJsonUtf8Bytes): Record<string, number> {
+  return size.complete
+    ? { originalDetailsBytes: size.bytes }
+    : { originalDetailsBytesAtLeast: size.bytes };
 }
 
 function truncatePersistedDetailString(
@@ -95,19 +99,19 @@ function sanitizePersistedSessionDetail(value: unknown): unknown {
 
 function buildPersistedDetailsFallback(
   src: Record<string, unknown> | undefined,
-  originalBytes: number,
+  originalSize: BoundedJsonUtf8Bytes,
   sanitizedBytes?: number,
 ): Record<string, unknown> {
   const fallback: Record<string, unknown> = {
     persistedDetailsTruncated: true,
     finalDetailsTruncated: true,
-    originalDetailsBytes: originalBytes,
+    ...originalDetailsSizeFields(originalSize),
   };
   if (sanitizedBytes !== undefined) {
     fallback.sanitizedDetailsBytes = sanitizedBytes;
   }
   if (src) {
-    fallback.originalDetailKeys = Object.keys(src).slice(0, 40);
+    fallback.originalDetailKeys = firstEnumerableOwnKeys(src, 40);
     for (const key of ["status", "sessionId", "pid", "exitCode", "exitSignal", "truncated"]) {
       const field = src[key];
       if (field !== undefined) {
@@ -124,20 +128,20 @@ function buildPersistedDetailsFallback(
 function enforcePersistedDetailsByteCap(
   value: Record<string, unknown>,
   src: Record<string, unknown> | undefined,
-  originalBytes: number,
+  originalSize: BoundedJsonUtf8Bytes,
 ): Record<string, unknown> {
-  const sanitizedBytes = jsonByteLength(value);
+  const sanitizedBytes = jsonUtf8BytesOrInfinity(value);
   if (sanitizedBytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return value;
   }
-  const fallback = buildPersistedDetailsFallback(src, originalBytes, sanitizedBytes);
-  if (jsonByteLength(fallback) <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
+  const fallback = buildPersistedDetailsFallback(src, originalSize, sanitizedBytes);
+  if (jsonUtf8BytesOrInfinity(fallback) <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return fallback;
   }
   return {
     persistedDetailsTruncated: true,
     finalDetailsTruncated: true,
-    originalDetailsBytes: originalBytes,
+    ...originalDetailsSizeFields(originalSize),
     sanitizedDetailsBytes: sanitizedBytes,
   };
 }
@@ -146,26 +150,26 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
   if (details === undefined || details === null) {
     return details;
   }
-  const originalBytes = jsonByteLength(details);
-  if (originalBytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
+  const originalSize = boundedJsonUtf8Bytes(details, MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES);
+  if (originalSize.complete && originalSize.bytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return details;
   }
   if (typeof details !== "object") {
     return enforcePersistedDetailsByteCap(
       {
         persistedDetailsTruncated: true,
-        originalDetailsBytes: originalBytes,
+        ...originalDetailsSizeFields(originalSize),
         valueType: typeof details,
       },
       undefined,
-      originalBytes,
+      originalSize,
     );
   }
   const src = details as Record<string, unknown>;
   const out: Record<string, unknown> = {
     persistedDetailsTruncated: true,
-    originalDetailsBytes: originalBytes,
-    originalDetailKeys: Object.keys(src).slice(0, 40),
+    ...originalDetailsSizeFields(originalSize),
+    originalDetailKeys: firstEnumerableOwnKeys(src, 40),
   };
   for (const key of [
     "status",
@@ -201,7 +205,7 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
       out.sessionsTruncated = src.sessions.length - MAX_PERSISTED_DETAIL_SESSION_COUNT;
     }
   }
-  return enforcePersistedDetailsByteCap(out, src, originalBytes);
+  return enforcePersistedDetailsByteCap(out, src, originalSize);
 }
 
 function capToolResultDetails(msg: AgentMessage): AgentMessage {
