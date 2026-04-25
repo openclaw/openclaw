@@ -273,7 +273,8 @@ See [Plugins](/tools/plugin).
 - Local managed profiles use `browser.localLaunchTimeoutMs` for Chrome CDP HTTP
   discovery after process start and `browser.localCdpReadyTimeoutMs` for
   post-launch CDP websocket readiness. Raise them on slower hosts where Chrome
-  starts successfully but readiness checks race startup.
+  starts successfully but readiness checks race startup. Both values must be
+  positive integers up to `120000` ms; invalid config values are rejected.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `browser.executablePath` accepts `~` for your OS home directory.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
