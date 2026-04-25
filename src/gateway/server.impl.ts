@@ -811,6 +811,7 @@ export async function startGatewayServer(
     });
     await startListening();
     startupTrace.mark("http.bound");
+    const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     ({
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -851,11 +852,11 @@ export async function startGatewayServer(
     ));
     startupTrace.mark("ready");
 
-    // HTTP is live before sidecars finish; /readyz stays red until the startup sidecars settle.
     const activated = activateGatewayScheduledServices({
       minimalTestGateway,
       cfgAtStart,
       deps,
+      sessionDeliveryRecoveryMaxEnqueuedAt,
       cron: runtimeState.cronState.cron,
       logCron,
       log,

@@ -65,11 +65,7 @@ function buildEntryId(idempotencyKey?: string): string {
 }
 
 async function unlinkBestEffort(filePath: string): Promise<void> {
-  try {
-    await fs.promises.unlink(filePath);
-  } catch {
-    // Best-effort cleanup.
-  }
+  await fs.promises.unlink(filePath).catch(() => undefined);
 }
 
 async function unlinkStaleTmpBestEffort(filePath: string, now: number): Promise<void> {
@@ -245,7 +241,7 @@ export async function loadPendingSessionDeliveries(
       }
       entries.push(await readQueueEntry(filePath));
     } catch {
-      // Skip malformed or inaccessible entries.
+      continue;
     }
   }
   return entries;
