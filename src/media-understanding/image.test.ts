@@ -244,7 +244,17 @@ describe("describeImageWithModel", () => {
             lmstudio: {
               api: "anthropic-messages",
               baseUrl: "http://127.0.0.1:1234",
-              models: [{ id: "google/gemma-4-e2b", input: ["text", "image"] }],
+              models: [
+                {
+                  id: "google/gemma-4-e2b",
+                  name: "google/gemma-4-e2b",
+                  input: ["text", "image"],
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131_072,
+                  maxTokens: 4096,
+                },
+              ],
             },
           },
         },
