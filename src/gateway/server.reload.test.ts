@@ -282,6 +282,7 @@ describe("gateway hot reload", () => {
   let prevOpenAiApiKey: string | undefined;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     prevSkipGmail = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -289,6 +290,7 @@ describe("gateway hot reload", () => {
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    hoisted.cronInstances.length = 0;
     hoisted.activeEmbeddedRunCount.value = 0;
     hoisted.totalPendingReplies.value = 0;
     hoisted.totalQueueSize.value = 0;
@@ -431,38 +433,35 @@ describe("gateway hot reload", () => {
       hoisted.providerManager.stopChannel.mockClear();
       hoisted.providerManager.startChannel.mockClear();
       hoisted.activeEmbeddedRunCount.value = 1;
-      vi.useFakeTimers();
+      const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+      const reloadPromise = onHotReload?.(
+        {
+          changedPaths: ["channels.discord.token"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels.discord.token"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartChannels: new Set(["discord"]),
+          noopPaths: [],
+        },
+        {
+          gateway: { reload: { deferralTimeoutMs: 60_000 } },
+          channels: { discord: { token: "token" } },
+        },
+      );
       try {
-        const reloadPromise = onHotReload?.(
-          {
-            changedPaths: ["channels.discord.token"],
-            restartGateway: false,
-            restartReasons: [],
-            hotReasons: ["channels.discord.token"],
-            reloadHooks: false,
-            restartGmailWatcher: false,
-            restartCron: false,
-            restartHeartbeat: false,
-            restartChannels: new Set(["discord"]),
-            noopPaths: [],
-          },
-          {
-            gateway: { reload: { deferralTimeoutMs: 60_000 } },
-            channels: { discord: { token: "token" } },
-          },
-        );
-
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(500);
+        await delay(550);
         expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
         expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
 
         hoisted.activeEmbeddedRunCount.value = 0;
-        await vi.advanceTimersByTimeAsync(500);
         await reloadPromise;
       } finally {
-        vi.useRealTimers();
         hoisted.activeEmbeddedRunCount.value = 0;
+        await reloadPromise?.catch(() => {});
       }
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
