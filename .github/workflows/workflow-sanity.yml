@@ -81,6 +81,21 @@ jobs:
       - name: Disallow tracked merge conflict markers
         run: node scripts/check-no-conflict-markers.mjs
 
+  gate:
+    name: Workflow Sanity
+    if: always() && github.event_name != 'workflow_dispatch'
+    needs: [no-tabs, actionlint]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Evaluate results
+        run: |
+          results='${{ toJSON(needs.*.result) }}'
+          echo "Job results: $results"
+          if echo "$results" | grep -qE '"failure"|"cancelled"'; then
+            echo "One or more sanity checks failed or were cancelled"
+            exit 1
+          fi
+
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
