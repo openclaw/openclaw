@@ -267,6 +267,20 @@ OpenAI Codex OAuth routes by rewriting default `openai/gpt-image-2` transparent
 requests to `gpt-image-1.5`; Azure and custom OpenAI-compatible endpoints keep
 their configured deployment/model names.
 
+The same setting is exposed for headless CLI runs:
+
+```bash
+openclaw infer image generate \
+  --model openai/gpt-image-1.5 \
+  --output-format png \
+  --openai-background transparent \
+  --prompt "A simple red circle sticker on a transparent background" \
+  --json
+```
+
+Use the same `--output-format` and `--openai-background` flags with
+`openclaw infer image edit` when starting from an input file.
+
 For Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
 `openai-codex` OAuth profile is configured, OpenClaw resolves that stored OAuth
 access token and sends image requests through the Codex Responses backend. It

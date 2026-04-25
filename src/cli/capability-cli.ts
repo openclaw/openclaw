@@ -22,6 +22,10 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { isLoopbackHost } from "../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
+import type {
+  ImageGenerationOpenAIBackground,
+  ImageGenerationOutputFormat,
+} from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import {
   describeImageFile,
@@ -78,6 +82,8 @@ import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
 type CapabilityTransport = "local" | "gateway";
+const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
+const OPENAI_IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 
 type CapabilityMetadata = {
   id: string;
@@ -702,6 +708,8 @@ async function runImageGenerate(params: {
   size?: string;
   aspectRatio?: string;
   resolution?: "1K" | "2K" | "4K";
+  outputFormat?: ImageGenerationOutputFormat;
+  openaiBackground?: ImageGenerationOpenAIBackground;
   file?: string[];
   output?: string;
   timeoutMs?: number;
@@ -728,6 +736,10 @@ async function runImageGenerate(params: {
     size: params.size,
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
+    outputFormat: params.outputFormat,
+    providerOptions: params.openaiBackground
+      ? { openai: { background: params.openaiBackground } }
+      : undefined,
     timeoutMs: params.timeoutMs,
     inputImages,
   });
@@ -849,6 +861,32 @@ function parseOptionalFiniteNumber(
     throw new Error(`${label} must be a finite number`);
   }
   return value;
+}
+
+function normalizeImageOutputFormat(
+  raw: string | undefined,
+): ImageGenerationOutputFormat | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if ((IMAGE_OUTPUT_FORMATS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOutputFormat;
+  }
+  throw new Error("--output-format must be one of png, jpeg, or webp");
+}
+
+function normalizeOpenAIImageBackground(
+  raw: string | undefined,
+): ImageGenerationOpenAIBackground | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if ((OPENAI_IMAGE_BACKGROUNDS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOpenAIBackground;
+  }
+  throw new Error("--openai-background must be one of transparent, opaque, or auto");
 }
 
 function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
@@ -1438,6 +1476,8 @@ export function registerCapabilityCli(program: Command) {
     .option("--size <size>", "Size hint like 1024x1024")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
     .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
+    .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+    .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
@@ -1451,6 +1491,10 @@ export function registerCapabilityCli(program: Command) {
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
+          outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
+          openaiBackground: normalizeOpenAIImageBackground(
+            opts.openaiBackground as string | undefined,
+          ),
           timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
         });
@@ -1464,6 +1508,8 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+    .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
@@ -1475,6 +1521,10 @@ export function registerCapabilityCli(program: Command) {
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
           file: files,
+          outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
+          openaiBackground: normalizeOpenAIImageBackground(
+            opts.openaiBackground as string | undefined,
+          ),
           timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
         });

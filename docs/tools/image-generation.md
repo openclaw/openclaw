@@ -289,6 +289,22 @@ OpenAI or OpenAI Codex OAuth route, OpenClaw rewrites the provider request to
 `gpt-image-1.5`. Azure and custom OpenAI-compatible endpoints keep their
 configured deployment/model names.
 
+For headless CLI generation, use the equivalent `openclaw infer` flags:
+
+```bash
+openclaw infer image generate \
+  --model openai/gpt-image-1.5 \
+  --output-format png \
+  --openai-background transparent \
+  --prompt "A simple red circle sticker on a transparent background" \
+  --json
+```
+
+The same `--output-format` and `--openai-background` flags are available on
+`openclaw infer image edit`. Other bundled providers can return PNGs and may
+preserve alpha when their backend emits it, but OpenClaw only exposes an
+explicit transparent-background control for OpenAI image generation.
+
 Generate one 4K landscape image:
 
 ```

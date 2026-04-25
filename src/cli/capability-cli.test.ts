@@ -553,6 +553,148 @@ describe("capability cli", () => {
     );
   });
 
+  it("passes image output format and OpenAI background hints through to generation runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "transparent.png",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--prompt",
+        "transparent sticker",
+        "--model",
+        "openai/gpt-image-1.5",
+        "--output-format",
+        "png",
+        "--openai-background",
+        "transparent",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "transparent sticker",
+        modelOverride: "openai/gpt-image-1.5",
+        outputFormat: "png",
+        providerOptions: {
+          openai: {
+            background: "transparent",
+          },
+        },
+      }),
+    );
+  });
+
+  it("passes image output format and OpenAI background hints through to edit runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "transparent-edit.png",
+        },
+      ],
+    });
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-edit-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from("png-input"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        inputPath,
+        "--prompt",
+        "make background transparent",
+        "--model",
+        "openai/gpt-image-1.5",
+        "--output-format",
+        "png",
+        "--openai-background",
+        "transparent",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "make background transparent",
+        modelOverride: "openai/gpt-image-1.5",
+        outputFormat: "png",
+        providerOptions: {
+          openai: {
+            background: "transparent",
+          },
+        },
+        inputImages: [
+          expect.objectContaining({
+            fileName: path.basename(inputPath),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("rejects unsupported image output format and OpenAI background hints", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--output-format",
+          "gif",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --output-format must be one of png, jpeg, or webp",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--openai-background",
+          "clear",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --openai-background must be one of transparent, opaque, or auto",
+    );
+  });
+
   it("streams url-only generated videos to --output paths", async () => {
     mocks.generateVideo.mockResolvedValue({
       provider: "vydra",
