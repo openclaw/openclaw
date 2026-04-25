@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
-import { fetchGoogleMeetArtifacts, fetchLatestGoogleMeetConferenceRecord } from "./src/meet.js";
+import { buildGoogleMeetExportManifest, googleMeetExportFileNames } from "./src/cli.js";
+import {
+  fetchGoogleMeetArtifacts,
+  fetchGoogleMeetAttendance,
+  fetchLatestGoogleMeetConferenceRecord,
+} from "./src/meet.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 
 const LIVE_MEETING = process.env.OPENCLAW_GOOGLE_MEET_LIVE_MEETING?.trim() ?? "";
@@ -52,5 +57,29 @@ describeLive("google-meet live", () => {
     });
     expect(artifacts.conferenceRecords.length).toBeLessThanOrEqual(1);
     expect(Array.isArray(artifacts.artifacts)).toBe(true);
+
+    const attendance = await fetchGoogleMeetAttendance({
+      accessToken: token.accessToken,
+      meeting: LIVE_MEETING,
+      pageSize: 5,
+    });
+    expect(attendance.conferenceRecords.length).toBe(artifacts.conferenceRecords.length);
+
+    const manifest = buildGoogleMeetExportManifest({
+      artifacts,
+      attendance,
+      files: googleMeetExportFileNames(),
+      request: {
+        meeting: LIVE_MEETING,
+        pageSize: 5,
+        includeTranscriptEntries: true,
+        includeDocumentBodies: false,
+        allConferenceRecords: false,
+        mergeDuplicateParticipants: true,
+      },
+      tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+    });
+    expect(manifest.files).toContain("manifest.json");
+    expect(manifest.counts.conferenceRecords).toBe(artifacts.conferenceRecords.length);
   }, 120_000);
 });
