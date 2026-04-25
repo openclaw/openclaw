@@ -1,6 +1,8 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
+import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
@@ -34,6 +36,13 @@ export type ModelsProviderData = {
   providers: string[];
   resolvedDefault: { provider: string; model: string };
   modelNames: Map<string, string>;
+  runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
+};
+
+export type ModelsRuntimeChoice = {
+  id: string;
+  label: string;
+  description: string;
 };
 
 type ParsedModelsCommand =
@@ -77,6 +86,9 @@ export async function buildModelsProviderData(
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
+    if (!isModelPickerVisibleProvider(key)) {
+      return;
+    }
     const set = byProvider.get(key) ?? new Set<string>();
     set.add(m);
     byProvider.set(key, set);
@@ -148,7 +160,27 @@ export async function buildModelsProviderData(
     }
   }
 
-  return { byProvider, providers, resolvedDefault, modelNames };
+  const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
+  for (const alias of listLegacyRuntimeModelProviderAliases()) {
+    const provider = normalizeProviderId(alias.provider);
+    const choices = runtimeChoicesByProvider.get(provider) ?? [
+      {
+        id: "pi",
+        label: "OpenClaw Pi Default",
+        description: "Use the built-in OpenClaw Pi runtime.",
+      },
+    ];
+    choices.push({
+      id: alias.runtime,
+      label: alias.runtime,
+      description: alias.cli
+        ? `Run ${provider} models through ${alias.runtime}.`
+        : `Run ${provider} models through the ${alias.runtime} harness.`,
+    });
+    runtimeChoicesByProvider.set(provider, choices);
+  }
+
+  return { byProvider, providers, resolvedDefault, modelNames, runtimeChoicesByProvider };
 }
 
 function formatProviderLine(params: { provider: string; count: number }): string {

@@ -1,36 +1,6 @@
-import {
-  asObject,
-  readResponseTextLimited,
-  trimToUndefined,
-  truncateErrorDetail,
-} from "openclaw/plugin-sdk/speech";
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeGradiumBaseUrl } from "./shared.js";
-
-function formatGradiumErrorPayload(payload: unknown): string | undefined {
-  const root = asObject(payload);
-  if (!root) {
-    return undefined;
-  }
-  const message =
-    trimToUndefined(root.message) ?? trimToUndefined(root.error) ?? trimToUndefined(root.detail);
-  if (message) {
-    return truncateErrorDetail(message);
-  }
-  return undefined;
-}
-
-async function extractGradiumErrorDetail(response: Response): Promise<string | undefined> {
-  const rawBody = trimToUndefined(await readResponseTextLimited(response));
-  if (!rawBody) {
-    return undefined;
-  }
-  try {
-    return formatGradiumErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
-  } catch {
-    return truncateErrorDetail(rawBody);
-  }
-}
 
 export async function gradiumTTS(params: {
   text: string;
@@ -67,17 +37,7 @@ export async function gradiumTTS(params: {
   });
 
   try {
-    if (!response.ok) {
-      const detail = await extractGradiumErrorDetail(response);
-      const requestId =
-        trimToUndefined(response.headers.get("x-request-id")) ??
-        trimToUndefined(response.headers.get("request-id"));
-      throw new Error(
-        `Gradium API error (${response.status})` +
-          (detail ? `: ${detail}` : "") +
-          (requestId ? ` [request_id=${requestId}]` : ""),
-      );
-    }
+    await assertOkOrThrowProviderError(response, "Gradium API error");
 
     return Buffer.from(await response.arrayBuffer());
   } finally {

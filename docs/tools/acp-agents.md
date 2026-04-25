@@ -66,7 +66,9 @@ injects a per-turn native hook relay so plugin hooks can block
 `PermissionRequest` events through OpenClaw approvals. The v1 relay is
 deliberately conservative: it does not mutate Codex-native tool arguments,
 rewrite Codex thread records, or gate final answers/Stop hooks. Use explicit
-ACP only when you want the ACP runtime/session model.
+ACP only when you want the ACP runtime/session model. The embedded Codex support
+boundary is documented in the
+[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
 
 Natural-language triggers that should route to the ACP runtime:
 
@@ -327,7 +329,8 @@ Interface details:
 - `resumeSessionId` (optional): resume an existing ACP session instead of creating a new one. The agent replays its conversation history via `session/load`. Requires `runtime: "acp"`.
 - `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
-- `model` (optional): explicit model override for the ACP child session. Honored for `runtime: "acp"` so the child uses the requested model instead of silently falling back to the target agent default.
+- `model` (optional): explicit model override for the ACP child session. Honored for `runtime: "acp"` so the child uses the requested model instead of silently falling back to the target agent default. Codex ACP spawns normalize OpenClaw Codex refs such as `openai-codex/gpt-5.4` to Codex ACP startup config before `session/new`; slash forms such as `openai-codex/gpt-5.4/high` also set Codex ACP reasoning effort.
+- `thinking` (optional): explicit thinking/reasoning effort for the ACP child session. For Codex ACP, `minimal` maps to low effort, `low`/`medium`/`high`/`xhigh` map directly, and `off` omits the reasoning-effort startup override.
 
 ## Delivery model
 
@@ -520,7 +523,8 @@ Notes:
 
 Equivalent operations:
 
-- `/acp model <id>` maps to runtime config key `model`.
+- `/acp model <id>` maps to runtime config key `model`. For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to Codex ACP `reasoning_effort`.
+- `/acp set thinking <level>` maps to runtime config key `thinking`. For Codex ACP, OpenClaw sends the corresponding `reasoning_effort` where the adapter supports one.
 - `/acp permissions <profile>` maps to runtime config key `approval_policy`.
 - `/acp timeout <seconds>` maps to runtime config key `timeout`.
 - `/acp cwd <path>` updates runtime cwd override directly.

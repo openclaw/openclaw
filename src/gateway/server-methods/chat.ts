@@ -49,7 +49,7 @@ import {
   type ChatAbortControllerEntry,
   type ChatAbortOps,
   isChatStopCommandText,
-  resolveChatRunExpiresAtMs,
+  registerChatAbortController,
 } from "../chat-abort.js";
 import {
   type ChatImageContent,
@@ -2238,15 +2238,16 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      const abortController = new AbortController();
-      context.chatAbortControllers.set(clientRunId, {
-        controller: abortController,
+      const activeRunAbort = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: clientRunId,
         sessionId: entry?.sessionId ?? clientRunId,
         sessionKey: rawSessionKey,
-        startedAtMs: now,
-        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+        timeoutMs,
+        now,
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        kind: "chat-send",
       });
       context.addChatRun(clientRunId, {
         sessionKey,
@@ -2506,7 +2507,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         dispatcher,
         replyOptions: {
           runId: clientRunId,
-          abortSignal: abortController.signal,
+          abortSignal: activeRunAbort.controller.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
           onAgentRunStart: (runId) => {
@@ -2743,7 +2744,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
-          context.chatAbortControllers.delete(clientRunId);
+          activeRunAbort.cleanup();
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
         });
     } catch (err) {

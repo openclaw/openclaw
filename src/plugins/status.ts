@@ -10,6 +10,7 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
+import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import {
   buildPluginShapeSummary,
@@ -18,8 +19,13 @@ import {
 } from "./inspect-shape.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import {
+  loadPluginRegistrySnapshotWithMetadata,
+  type PluginRegistrySnapshotDiagnostic,
+  type PluginRegistrySnapshotSource,
+} from "./plugin-registry.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
-import type { PluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -32,11 +38,17 @@ export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
 };
 
+export type PluginRegistryStatusReport = PluginStatusReport & {
+  registrySource: PluginRegistrySnapshotSource;
+  registryDiagnostics: readonly PluginRegistrySnapshotDiagnostic[];
+};
+
 export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
   code: "legacy-before-agent-start" | "hook-only";
+  compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
 };
@@ -100,6 +112,7 @@ function buildCompatibilityNoticesForInspect(
     warnings.push({
       pluginId: inspect.plugin.id,
       code: "legacy-before-agent-start",
+      compatCode: "legacy-before-agent-start",
       severity: "warn",
       message:
         "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
@@ -109,6 +122,7 @@ function buildCompatibilityNoticesForInspect(
     warnings.push({
       pluginId: inspect.plugin.id,
       code: "hook-only",
+      compatCode: "hook-only-plugin-shape",
       severity: "info",
       message:
         "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
@@ -138,6 +152,66 @@ type PluginReportParams = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
 };
+
+function buildPluginRecordFromInstalledIndex(
+  plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,
+): PluginRecord {
+  return {
+    id: plugin.pluginId,
+    name: plugin.pluginId,
+    ...(plugin.packageVersion ? { version: plugin.packageVersion } : {}),
+    format: "openclaw",
+    source: plugin.manifestPath,
+    rootDir: plugin.rootDir,
+    origin: plugin.origin,
+    enabled: plugin.enabled,
+    status: plugin.enabled ? "loaded" : "disabled",
+    toolNames: [],
+    hookNames: [],
+    channelIds: [...plugin.contributions.channels],
+    cliBackendIds: [...plugin.contributions.cliBackends],
+    providerIds: [...plugin.contributions.providers],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServiceIds: [],
+    commands: [...plugin.contributions.commandAliases],
+    httpRoutes: 0,
+    hookCount: 0,
+    configSchema: false,
+    contracts: {},
+  };
+}
+
+export function buildPluginRegistrySnapshotReport(
+  params?: PluginReportParams,
+): PluginRegistryStatusReport {
+  const config = params?.config ?? loadConfig();
+  const result = loadPluginRegistrySnapshotWithMetadata({
+    config,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+  });
+  return {
+    workspaceDir: params?.workspaceDir,
+    ...createEmptyPluginRegistry(),
+    plugins: result.snapshot.plugins.map(buildPluginRecordFromInstalledIndex),
+    diagnostics: [...result.snapshot.diagnostics],
+    registrySource: result.source,
+    registryDiagnostics: result.diagnostics,
+  };
+}
 
 function buildPluginReport(
   params: PluginReportParams | undefined,

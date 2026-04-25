@@ -206,10 +206,11 @@ export type GatewayReloadConfig = {
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
   /**
-   * Maximum time (ms) to wait for in-flight operations to complete before
-   * forcing a SIGUSR1 restart. Default: 300000 (5 minutes).
-   * Lower values risk aborting active subagent LLM calls.
-   * @see https://github.com/openclaw/openclaw/issues/47711
+   * Optional maximum time (ms) to wait for in-flight operations to complete
+   * before forcing a restart. Absent or 0 waits indefinitely and logs periodic
+   * still-pending warnings.
+   * Lower positive values risk aborting active subagent LLM calls.
+   * @see https://github.com/openclaw/openclaw/issues/65485
    */
   deferralTimeoutMs?: number;
 };
@@ -363,6 +364,15 @@ export type GatewayPushConfig = {
   apns?: GatewayPushApnsConfig;
 };
 
+export type GatewayNodePairingConfig = {
+  /**
+   * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
+   * Only applies to fresh node pairing requests with no requested scopes.
+   * Default: unset/disabled.
+   */
+  autoApproveCidrs?: string[];
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -371,6 +381,8 @@ export type GatewayNodesConfig = {
     /** Pin to a specific node id/name (optional). */
     node?: string;
   };
+  /** Pairing policy for node-role gateway clients. */
+  pairing?: GatewayNodePairingConfig;
   /** Additional node.invoke commands to allow on the gateway. */
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */

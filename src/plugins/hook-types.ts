@@ -59,6 +59,8 @@ export type PluginHookName =
   | "before_prompt_build"
   | "before_agent_start"
   | "before_agent_reply"
+  | "model_call_started"
+  | "model_call_ended"
   | "llm_input"
   | "llm_output"
   | "agent_end"
@@ -90,6 +92,8 @@ export const PLUGIN_HOOK_NAMES = [
   "before_prompt_build",
   "before_agent_start",
   "before_agent_reply",
+  "model_call_started",
+  "model_call_ended",
   "llm_input",
   "llm_output",
   "agent_end",
@@ -187,6 +191,26 @@ export type PluginHookLlmInputEvent = {
   imagesCount: number;
 };
 
+export type PluginHookModelCallBaseEvent = {
+  runId: string;
+  callId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  api?: string;
+  transport?: string;
+};
+
+export type PluginHookModelCallStartedEvent = PluginHookModelCallBaseEvent;
+
+export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
+  durationMs: number;
+  outcome: "completed" | "error";
+  errorCategory?: string;
+  upstreamRequestIdHash?: string;
+};
+
 export type PluginHookLlmOutputEvent = {
   runId: string;
   sessionId: string;
@@ -217,6 +241,7 @@ export type PluginHookLlmOutputEvent = {
 };
 
 export type PluginHookAgentEndEvent = {
+  runId?: string;
   messages: unknown[];
   success: boolean;
   error?: string;
@@ -675,6 +700,14 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentReplyEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
+  model_call_started: (
+    event: PluginHookModelCallStartedEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  model_call_ended: (
+    event: PluginHookModelCallEndedEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,

@@ -7,6 +7,7 @@ import {
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
   validateConfigObjectWithPlugins,
@@ -17,6 +18,7 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
 import { installPluginFromClawHub } from "../../plugins/clawhub.js";
+import { loadPluginInstallRecords } from "../../plugins/install-ledger-store.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
 import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
 import type { PluginRecord } from "../../plugins/registry.js";
@@ -48,6 +50,7 @@ function renderJsonBlock(label: string, value: unknown): string {
 function buildPluginInspectJson(params: {
   id: string;
   config: OpenClawConfig;
+  installRecords: Record<string, PluginInstallRecord>;
   report: PluginStatusReport;
 }): {
   inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>;
@@ -73,12 +76,13 @@ function buildPluginInspectJson(params: {
       severity: warning.severity,
       message: formatPluginCompatibilityNotice(warning),
     })),
-    install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
+    install: params.installRecords[inspect.plugin.id] ?? null,
   };
 }
 
 function buildAllPluginInspectJson(params: {
   config: OpenClawConfig;
+  installRecords: Record<string, PluginInstallRecord>;
   report: PluginStatusReport;
 }): Array<{
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number];
@@ -99,7 +103,7 @@ function buildAllPluginInspectJson(params: {
       severity: warning.severity,
       message: formatPluginCompatibilityNotice(warning),
     })),
-    install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
+    install: params.installRecords[inspect.plugin.id] ?? null,
   }));
 }
 
@@ -412,6 +416,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   }
 
   if (pluginsCommand.action === "inspect") {
+    const installRecords = await loadPluginInstallRecords({ config: loaded.config });
     if (!pluginsCommand.name) {
       return {
         shouldContinue: false,
@@ -422,13 +427,17 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
       return {
         shouldContinue: false,
         reply: {
-          text: renderJsonBlock("🔌 Plugins", buildAllPluginInspectJson(loaded)),
+          text: renderJsonBlock(
+            "🔌 Plugins",
+            buildAllPluginInspectJson({ ...loaded, installRecords }),
+          ),
         },
       };
     }
     const payload = buildPluginInspectJson({
       id: pluginsCommand.name,
       config: loaded.config,
+      installRecords,
       report: loaded.report,
     });
     if (!payload) {
@@ -473,11 +482,23 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
   await writeConfigFile(validated.config);
+  let registryWarning: string | undefined;
+  await refreshPluginRegistryAfterConfigMutation({
+    config: validated.config,
+    reason: "policy-changed",
+    logger: {
+      warn: (message) => {
+        registryWarning = message;
+      },
+    },
+  });
 
   return {
     shouldContinue: false,
     reply: {
-      text: `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Restart the gateway to apply.`,
+      text:
+        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Restart the gateway to apply.` +
+        (registryWarning ? `\n${registryWarning}` : ""),
     },
   };
 };

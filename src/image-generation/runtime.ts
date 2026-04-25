@@ -1,5 +1,6 @@
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -34,6 +35,9 @@ export function listRuntimeImageGenerationProviders(params?: { config?: OpenClaw
 export async function generateImage(
   params: GenerateImageParams,
 ): Promise<GenerateImageRuntimeResult> {
+  const timeoutMs =
+    params.timeoutMs ??
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
     modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
@@ -89,7 +93,7 @@ export async function generateImage(
         quality: sanitized.quality,
         outputFormat: sanitized.outputFormat,
         inputImages: params.inputImages,
-        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         providerOptions: params.providerOptions,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {

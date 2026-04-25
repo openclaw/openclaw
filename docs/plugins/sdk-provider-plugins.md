@@ -340,7 +340,7 @@ API key auth, and dynamic model resolution.
       Each family builder is composed from lower-level public helpers exported from the same package, which you can reach for when a provider needs to go off the common pattern:
 
       - `openclaw/plugin-sdk/provider-model-shared` — `ProviderReplayFamily`, `buildProviderReplayFamilyHooks(...)`, and the raw replay builders (`buildOpenAICompatibleReplayPolicy`, `buildAnthropicReplayPolicyForModel`, `buildGoogleGeminiReplayPolicy`, `buildHybridAnthropicOrOpenAIReplayPolicy`). Also exports Gemini replay helpers (`sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode`) and endpoint/model helpers (`resolveProviderEndpoint`, `normalizeProviderId`, `normalizeGooglePreviewModelId`, `normalizeNativeXaiModelId`).
-      - `openclaw/plugin-sdk/provider-stream` — `ProviderStreamFamily`, `buildProviderStreamFamilyHooks(...)`, `composeProviderStreamWrappers(...)`, plus the shared OpenAI/Codex wrappers (`createOpenAIAttributionHeadersWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, `createCodexNativeWebSearchWrapper`) and shared proxy/provider wrappers (`createOpenRouterWrapper`, `createToolStreamWrapper`, `createMinimaxFastModeWrapper`).
+      - `openclaw/plugin-sdk/provider-stream` — `ProviderStreamFamily`, `buildProviderStreamFamilyHooks(...)`, `composeProviderStreamWrappers(...)`, plus the shared OpenAI/Codex wrappers (`createOpenAIAttributionHeadersWrapper`, `createOpenAIFastModeWrapper`, `createOpenAIServiceTierWrapper`, `createOpenAIResponsesContextManagementWrapper`, `createCodexNativeWebSearchWrapper`), DeepSeek V4 OpenAI-compatible wrapper (`createDeepSeekV4OpenAICompatibleThinkingWrapper`), and shared proxy/provider wrappers (`createOpenRouterWrapper`, `createToolStreamWrapper`, `createMinimaxFastModeWrapper`).
       - `openclaw/plugin-sdk/provider-tools` — `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks("gemini")`, underlying Gemini schema helpers (`normalizeGeminiToolSchemas`, `inspectGeminiToolSchemas`), and xAI compat helpers (`resolveXaiModelCompatPatch()`, `applyXaiModelCompat(model)`). The bundled xAI plugin uses `normalizeResolvedModel` + `contributeResolvedModelCompat` with these to keep xAI rules owned by the provider.
 
       Some stream helpers stay provider-local on purpose. `@openclaw/anthropic-provider` keeps `wrapAnthropicProviderStream`, `resolveAnthropicBetas`, `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the lower-level Anthropic wrapper builders in its own public `api.ts` / `contract-api.ts` seam because they encode Claude OAuth beta handling and `context1m` gating. The xAI plugin similarly keeps native xAI Responses shaping in its own `wrapStreamFn` (`/fast` aliases, default `tool_stream`, unsupported strict-tool cleanup, xAI-specific reasoning-payload removal).
@@ -493,18 +493,42 @@ API key auth, and dynamic model resolution.
     <Tabs>
       <Tab title="Speech (TTS)">
         ```typescript
+        import {
+          assertOkOrThrowProviderError,
+          postJsonRequest,
+        } from "openclaw/plugin-sdk/provider-http";
+
         api.registerSpeechProvider({
           id: "acme-ai",
           label: "Acme Speech",
           isConfigured: ({ config }) => Boolean(config.messages?.tts),
-          synthesize: async (req) => ({
-            audioBuffer: Buffer.from(/* PCM data */),
-            outputFormat: "mp3",
-            fileExtension: ".mp3",
-            voiceCompatible: false,
-          }),
+          synthesize: async (req) => {
+            const { response, release } = await postJsonRequest({
+              url: "https://api.example.com/v1/speech",
+              headers: new Headers({ "Content-Type": "application/json" }),
+              body: { text: req.text },
+              timeoutMs: req.timeoutMs,
+              fetchFn: fetch,
+              auditContext: "acme speech",
+            });
+            try {
+              await assertOkOrThrowProviderError(response, "Acme Speech API error");
+              return {
+                audioBuffer: Buffer.from(await response.arrayBuffer()),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: false,
+              };
+            } finally {
+              await release();
+            }
+          },
         });
         ```
+
+        Use `assertOkOrThrowProviderError(...)` for provider HTTP failures so
+        plugins share capped error-body reads, JSON error parsing, and
+        request-id suffixes.
       </Tab>
       <Tab title="Realtime transcription">
         Prefer `createRealtimeTranscriptionWebSocketSession(...)` — the shared

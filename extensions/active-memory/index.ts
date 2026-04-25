@@ -7,6 +7,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
+  resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveLivePluginConfigObject,
@@ -787,6 +788,7 @@ function buildRecallPrompt(params: {
     "Your job is to search memory and return only the most relevant memory context for that model.",
     "You receive conversation context, including the user's latest message.",
     "Use only memory_search and memory_get.",
+    "When searching for preference or habit recall, use a permissive memory_search threshold before deciding that no useful memory exists.",
     "Do not answer the user directly.",
     `Prompt style: ${params.config.promptStyle}.`,
     ...buildPromptStyleLines(params.config.promptStyle),
@@ -1549,13 +1551,11 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   return turns;
 }
 
-function parseModelCandidate(modelRef: string | undefined) {
+function parseModelCandidate(modelRef: string | undefined, defaultProvider = DEFAULT_PROVIDER) {
   if (!modelRef) {
     return undefined;
   }
-  return (
-    parseModelRef(modelRef, DEFAULT_PROVIDER) ?? { provider: DEFAULT_PROVIDER, model: modelRef }
-  );
+  return parseModelRef(modelRef, defaultProvider) ?? { provider: defaultProvider, model: modelRef };
 }
 
 function getModelRef(
@@ -1569,14 +1569,20 @@ function getModelRef(
 ): { provider: string; model: string } | undefined {
   const currentRunModel =
     ctx?.modelProviderId && ctx?.modelId ? `${ctx.modelProviderId}/${ctx.modelId}` : undefined;
+  const configuredDefaultModel = resolveAgentEffectiveModelPrimary(api.config, agentId)
+    ? resolveDefaultModelForAgent({ cfg: api.config, agentId })
+    : undefined;
+  const defaultProvider = configuredDefaultModel?.provider ?? DEFAULT_PROVIDER;
   const candidates = [
     config.model,
     currentRunModel,
-    resolveAgentEffectiveModelPrimary(api.config, agentId),
+    configuredDefaultModel
+      ? `${configuredDefaultModel.provider}/${configuredDefaultModel.model}`
+      : undefined,
     config.modelFallback,
   ];
   for (const candidate of candidates) {
-    const parsed = parseModelCandidate(candidate);
+    const parsed = parseModelCandidate(candidate, defaultProvider);
     if (parsed) {
       return parsed;
     }
@@ -1684,6 +1690,8 @@ async function runRecallSubagent(params: {
       thinkLevel: params.config.thinking,
       reasoningLevel: "off",
       silentExpected: true,
+      authProfileFailurePolicy: "local",
+      cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
     });
     if (params.abortSignal?.aborted) {

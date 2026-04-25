@@ -1,6 +1,7 @@
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "../media-types.js";
 import type { SlackThreadStarter } from "../thread.js";
@@ -125,7 +126,7 @@ export async function resolveSlackMessageContent(params: {
     !mediaPlaceholder && fallbackFiles.length > 0
       ? fallbackFiles
           .slice(0, MAX_SLACK_MEDIA_FILES)
-          .map((file) => normalizeOptionalString(file.name) ?? "file")
+          .map((file) => formatSlackFileReference(file))
           .join(", ")
       : undefined;
   const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;

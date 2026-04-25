@@ -92,7 +92,7 @@ describe("channel plugin module loader helpers", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("keeps Windows dist loads off Jiti native import", async () => {
+  it("uses native Jiti import for Windows dist loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
     vi.doMock("jiti", () => ({
       createJiti,
@@ -119,7 +119,7 @@ describe("channel plugin module loader helpers", () => {
       expect(createJiti).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          tryNative: false,
+          tryNative: true,
         }),
       );
     } finally {

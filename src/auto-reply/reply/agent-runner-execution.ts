@@ -13,6 +13,7 @@ import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -351,6 +352,7 @@ function collapseRepeatedFailureDetail(message: string): string {
 }
 
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 
 function buildMissingApiKeyFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -366,6 +368,22 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
   }
   return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+}
+
+function formatForwardedExternalRunFailureText(message: string): string {
+  const sanitized = sanitizeUserFacingText(message, { errorContext: true })
+    .trim()
+    .replace(/^⚠️\s*/u, "")
+    .replace(/\s+/gu, " ");
+  if (!sanitized) {
+    return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+  }
+  const detail =
+    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+      ? `${sanitized.slice(0, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      : sanitized;
+  const suffix = /[.!?]$/u.test(detail) ? "" : ".";
+  return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
 }
 
 function buildExternalRunFailureText(message: string): string {
@@ -385,7 +403,7 @@ function buildExternalRunFailureText(message: string): string {
     }
     return `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`;
   }
-  return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+  return formatForwardedExternalRunFailureText(normalizedMessage);
 }
 
 function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {
@@ -569,6 +587,7 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
+  transcriptCommandBody?: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   replyThreading?: TemplateContext["ReplyThreading"];
@@ -931,7 +950,18 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          if (isCliProvider(provider, runtimeConfig)) {
+          const agentRuntimeOverride = normalizeOptionalString(
+            params.getActiveSessionEntry()?.agentRuntimeOverride,
+          );
+          const cliExecutionProvider =
+            resolveCliRuntimeExecutionProvider({
+              provider,
+              cfg: runtimeConfig,
+              agentId: params.followupRun.run.agentId,
+              runtimeOverride: agentRuntimeOverride,
+            }) ?? provider;
+
+          if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
             const startedAt = Date.now();
             notifyAgentRunStart();
             emitAgentEvent({
@@ -944,11 +974,15 @@ export async function runAgentTurnWithFallback(params: {
             });
             const cliSessionBinding = getCliSessionBinding(
               params.getActiveSessionEntry(),
-              provider,
+              cliExecutionProvider,
             );
-            const authProfile = resolveRunAuthProfile(params.followupRun.run, provider, {
-              config: runtimeConfig,
-            });
+            const authProfile = resolveRunAuthProfile(
+              params.followupRun.run,
+              cliExecutionProvider,
+              {
+                config: runtimeConfig,
+              },
+            );
             const hookMessageProvider = resolveOriginMessageProvider({
               originatingChannel: params.followupRun.originatingChannel,
               provider: params.sessionCtx.Provider,
@@ -965,7 +999,8 @@ export async function runAgentTurnWithFallback(params: {
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
                   prompt: params.commandBody,
-                  provider,
+                  transcriptPrompt: params.transcriptCommandBody,
+                  provider: cliExecutionProvider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
                   timeoutMs: params.followupRun.run.timeoutMs,
@@ -1085,8 +1120,14 @@ export async function runAgentTurnWithFallback(params: {
                 groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
+                ...(agentRuntimeOverride &&
+                agentRuntimeOverride !== "auto" &&
+                agentRuntimeOverride !== "default"
+                  ? { agentHarnessId: agentRuntimeOverride }
+                  : {}),
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
+                transcriptPrompt: params.transcriptCommandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(

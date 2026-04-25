@@ -1,4 +1,8 @@
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  resolveRealtimeVoiceAgentConsultToolPolicy,
+  type RealtimeVoiceAgentConsultToolPolicy,
+} from "openclaw/plugin-sdk/realtime-voice";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,7 +10,7 @@ import {
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
 export type GoogleMeetMode = "realtime" | "transcribe";
-export type GoogleMeetToolPolicy = "safe-read-only" | "owner" | "none";
+export type GoogleMeetToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 
 export type GoogleMeetConfig = {
   enabled: boolean;
@@ -259,13 +263,6 @@ function resolveMode(value: unknown, fallback: GoogleMeetMode): GoogleMeetMode {
   return normalized === "realtime" || normalized === "transcribe" ? normalized : fallback;
 }
 
-function resolveToolPolicy(value: unknown, fallback: GoogleMeetToolPolicy): GoogleMeetToolPolicy {
-  const normalized = normalizeOptionalLowercaseString(value);
-  return normalized === "safe-read-only" || normalized === "owner" || normalized === "none"
-    ? normalized
-    : fallback;
-}
-
 export function resolveGoogleMeetConfig(input: unknown): GoogleMeetConfig {
   return resolveGoogleMeetConfigWithEnv(input);
 }
@@ -364,7 +361,7 @@ export function resolveGoogleMeetConfigWithEnv(
       introMessage:
         normalizeOptionalString(realtime.introMessage) ??
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.introMessage,
-      toolPolicy: resolveToolPolicy(
+      toolPolicy: resolveRealtimeVoiceAgentConsultToolPolicy(
         realtime.toolPolicy,
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.toolPolicy,
       ),
