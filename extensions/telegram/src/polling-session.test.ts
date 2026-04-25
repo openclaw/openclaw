@@ -387,6 +387,60 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("forces a restart when the runner task is pending but reports not running", async () => {
+    const abort = new AbortController();
+    const firstRunnerStop = vi.fn(async () => undefined);
+    const secondRunnerStop = vi.fn(async () => undefined);
+    createTelegramBotMock.mockReturnValue(makeBot());
+
+    let firstTaskResolve: (() => void) | undefined;
+    const firstTask = new Promise<void>((resolve) => {
+      firstTaskResolve = resolve;
+    });
+    let cycle = 0;
+    runMock.mockImplementation(() => {
+      cycle += 1;
+      if (cycle === 1) {
+        return {
+          task: () => firstTask,
+          stop: async () => {
+            await firstRunnerStop();
+            firstTaskResolve?.();
+          },
+          isRunning: () => false,
+        };
+      }
+      return {
+        task: async () => {
+          abort.abort();
+        },
+        stop: secondRunnerStop,
+        isRunning: () => false,
+      };
+    });
+
+    const watchdogHarness = installPollingStallWatchdogHarness();
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      watchdog?.();
+      await runPromise;
+
+      expect(runMock).toHaveBeenCalledTimes(2);
+      expect(firstRunnerStop).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
   it("honors a custom polling stall threshold", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);

@@ -295,7 +295,6 @@ export class TelegramPollingSession {
 
       const stall = liveness.detectStall({
         thresholdMs: this.#stallThresholdMs,
-        runnerIsRunning: runner.isRunning(),
       });
       if (stall) {
         this.#transportState.markDirty();
