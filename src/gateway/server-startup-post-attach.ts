@@ -510,9 +510,9 @@ export async function startGatewayPostAttachRuntime(
 
         try {
           if (params.getChannelRuntimeSnapshot) {
-            const [{ summarizeChannelStartup }] = await Promise.all([
-              import("./channel-startup-summary.js"),
-            ]);
+            const { summarizeChannelStartup } = await import(
+              "./channel-startup-summary.js"
+            );
             const summary = summarizeChannelStartup({
               snapshot: params.getChannelRuntimeSnapshot(),
             });
