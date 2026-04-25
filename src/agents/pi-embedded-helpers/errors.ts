@@ -919,10 +919,9 @@ export function formatAssistantErrorText(
 
   if (providerRuntimeFailureKind === "cloudflare_challenge") {
     return (
-      "Cloudflare blocked the request with a browser challenge (HTTP 403). " +
-      "Node.js TLS fingerprint was detected as non-browser traffic. " +
-      "Set up a local reverse proxy using a browser-compatible HTTP client " +
-      "(e.g. Python cloudscraper) and point the provider's baseUrl to it."
+      "Cloudflare returned a browser challenge (HTTP 403). " +
+      "Try routing requests through a trusted local or browser-compatible proxy " +
+      "and pointing the provider's baseUrl to it."
     );
   }
 

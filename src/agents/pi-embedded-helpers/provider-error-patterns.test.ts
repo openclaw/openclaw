@@ -278,7 +278,7 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     );
   });
 
-  it("formats Cloudflare challenge error with TLS fingerprint guidance", () => {
+  it("formats Cloudflare challenge error with browser challenge guidance", () => {
     const cfChallenge403 =
       '403 <!doctype html><html><body><div id="cf-browser-verification"></div></body></html>';
 
@@ -306,9 +306,9 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     };
 
     const result = formatAssistantErrorText(msg);
-    expect(result).toContain("Cloudflare blocked");
-    expect(result).toContain("TLS fingerprint");
-    expect(result).toContain("reverse proxy");
-    expect(result).toContain("cloudscraper");
+    expect(result).toContain("Cloudflare returned a browser challenge");
+    expect(result).toContain("browser-compatible proxy");
+    expect(result).not.toContain("TLS fingerprint");
+    expect(result).not.toContain("Cloudflare blocked");
   });
 });
