@@ -7,7 +7,7 @@ read_when:
 title: "Text-to-speech"
 ---
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Inworld, Local CLI, Microsoft, MiniMax, OpenAI, Vydra, xAI, or Xiaomi MiMo.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Inworld, Local CLI, Microsoft, MiniMax, OpenAI, Volcengine, Vydra, xAI, or Xiaomi MiMo.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
@@ -20,6 +20,7 @@ It works anywhere OpenClaw can send audio.
 - **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`)
 - **MiniMax** (primary or fallback provider; uses the T2A v2 API)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Volcengine** (primary or fallback provider; uses the BytePlus Seed Speech HTTP API)
 - **Vydra** (primary or fallback provider; shared image, video, and speech provider)
 - **xAI** (primary or fallback provider; uses the xAI TTS API)
 - **Xiaomi MiMo** (primary or fallback provider; uses MiMo TTS through Xiaomi chat completions)
@@ -39,7 +40,7 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want ElevenLabs, Google Gemini, Gradium, Inworld, MiniMax, OpenAI, Vydra, xAI, or Xiaomi MiMo:
+If you want ElevenLabs, Google Gemini, Gradium, Inworld, MiniMax, OpenAI, Volcengine, Vydra, xAI, or Xiaomi MiMo:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
@@ -49,6 +50,9 @@ If you want ElevenLabs, Google Gemini, Gradium, Inworld, MiniMax, OpenAI, Vydra,
   `MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, or
   `MINIMAX_CODING_API_KEY`
 - `OPENAI_API_KEY`
+- `VOLCENGINE_TTS_API_KEY` (or `BYTEPLUS_SEED_SPEECH_API_KEY`);
+  legacy AppID/token auth also accepts `VOLCENGINE_TTS_APPID` and
+  `VOLCENGINE_TTS_TOKEN`
 - `VYDRA_API_KEY`
 - `XAI_API_KEY`
 - `XIAOMI_API_KEY`
@@ -68,6 +72,7 @@ so that provider must also be authenticated if you enable summaries.
 - [Gradium](/providers/gradium)
 - [Inworld TTS API](https://docs.inworld.ai/tts/tts)
 - [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
+- [Volcengine TTS HTTP API](/providers/volcengine#text-to-speech)
 - [Xiaomi MiMo speech synthesis](/providers/xiaomi#text-to-speech)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
@@ -248,6 +253,35 @@ sends it as `Authorization: Basic <apiKey>` without any additional
 encoding, so do not pass a raw bearer token and do not Base64-encode it
 yourself. The key falls back to the `INWORLD_API_KEY` env var. See
 [Inworld provider](/providers/inworld) for full setup.
+
+### Volcengine primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "volcengine",
+      providers: {
+        volcengine: {
+          apiKey: "byteplus_seed_speech_api_key",
+          resourceId: "seed-tts-1.0",
+          voice: "en_female_anna_mars_bigtts",
+          speedRatio: 1.0,
+        },
+      },
+    },
+  },
+}
+```
+
+Volcengine TTS uses the BytePlus Seed Speech API key from the Speech Console,
+not the OpenAI-compatible `VOLCANO_ENGINE_API_KEY` used for Doubao model
+providers. Resolution order is `messages.tts.providers.volcengine.apiKey` ->
+`VOLCENGINE_TTS_API_KEY` -> `BYTEPLUS_SEED_SPEECH_API_KEY`. Legacy AppID/token
+auth still works through `messages.tts.providers.volcengine.appId` / `token` or
+`VOLCENGINE_TTS_APPID` / `VOLCENGINE_TTS_TOKEN`. Voice-note targets request
+provider-native `ogg_opus`; normal audio-file targets request `mp3`.
 
 ### xAI primary
 
@@ -447,7 +481,7 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts:key=value]]` directives or a `[[tts:text]]...[[/tts:text]]` block.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: speech provider id such as `"elevenlabs"`, `"google"`, `"gradium"`, `"inworld"`, `"microsoft"`, `"minimax"`, `"openai"`, `"vydra"`, `"xai"`, or `"xiaomi"` (fallback is automatic).
+- `provider`: speech provider id such as `"elevenlabs"`, `"google"`, `"gradium"`, `"inworld"`, `"microsoft"`, `"minimax"`, `"openai"`, `"volcengine"`, `"vydra"`, `"xai"`, or `"xiaomi"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw uses the first configured speech provider in registry auto-select order.
 - Legacy `provider: "edge"` config is repaired by `openclaw doctor --fix` and
   rewritten to `provider: "microsoft"`.
@@ -461,7 +495,7 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `GRADIUM_API_KEY`, `INWORLD_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `GRADIUM_API_KEY`, `INWORLD_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`). Volcengine uses `appId`/`token` instead.
 - `providers.elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `providers.openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.providers.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
@@ -497,6 +531,21 @@ Then run:
   - If `messages.tts.providers.google.apiKey` is omitted, TTS can reuse `models.providers.google.apiKey` before env fallback.
 - `providers.gradium.baseUrl`: override Gradium API base URL (default `https://api.gradium.ai`).
 - `providers.gradium.voiceId`: Gradium voice identifier (default Emma, `YTpq7expH9539ERJ`).
+- `providers.volcengine.apiKey`: BytePlus Seed Speech API key (env:
+  `VOLCENGINE_TTS_API_KEY` or `BYTEPLUS_SEED_SPEECH_API_KEY`).
+- `providers.volcengine.resourceId`: BytePlus Seed Speech resource id (default
+  `seed-tts-1.0`, env: `VOLCENGINE_TTS_RESOURCE_ID`; use `seed-tts-2.0` when
+  your BytePlus project has TTS 2.0 entitlement).
+- `providers.volcengine.appKey`: BytePlus Seed Speech app key header (default
+  `aGjiRDfUWi`, env: `VOLCENGINE_TTS_APP_KEY`).
+- `providers.volcengine.baseUrl`: override the Seed Speech TTS HTTP endpoint
+  (env: `VOLCENGINE_TTS_BASE_URL`).
+- `providers.volcengine.appId`: legacy Volcengine Speech Console application id (env: `VOLCENGINE_TTS_APPID`).
+- `providers.volcengine.token`: legacy Volcengine Speech Console access token (env: `VOLCENGINE_TTS_TOKEN`).
+- `providers.volcengine.cluster`: legacy Volcengine TTS cluster (default `volcano_tts`, env: `VOLCENGINE_TTS_CLUSTER`).
+- `providers.volcengine.voice`: voice type (default `en_female_anna_mars_bigtts`, env: `VOLCENGINE_TTS_VOICE`).
+- `providers.volcengine.speedRatio`: provider-native speed ratio.
+- `providers.volcengine.emotion`: provider-native emotion tag.
 - `providers.xai.apiKey`: xAI TTS API key (env: `XAI_API_KEY`).
 - `providers.xai.baseUrl`: override the xAI TTS base URL (default `https://api.x.ai/v1`, env: `XAI_BASE_URL`).
 - `providers.xai.voiceId`: xAI voice id (default `eve`; current live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`).
@@ -550,12 +599,13 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `google`, `gradium`, `minimax`, `microsoft`, `vydra`, `xai`, or `xiaomi`; requires `allowProvider: true`)
-- `voice` (OpenAI, Gradium, or Xiaomi voice), `voiceName` / `voice_name` / `google_voice` (Google voice), or `voiceId` (ElevenLabs / Gradium / MiniMax / xAI)
+- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `google`, `gradium`, `minimax`, `microsoft`, `volcengine`, `vydra`, `xai`, or `xiaomi`; requires `allowProvider: true`)
+- `voice` (OpenAI, Gradium, Volcengine, or Xiaomi voice), `voiceName` / `voice_name` / `google_voice` (Google voice), or `voiceId` (ElevenLabs / Gradium / MiniMax / xAI)
 - `model` (OpenAI TTS model, ElevenLabs model id, MiniMax model, or Xiaomi MiMo TTS model) or `google_model` (Google TTS model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0-10)
 - `pitch` (MiniMax integer pitch, -12 to 12; fractional values are truncated before the MiniMax request)
+- `emotion` (Volcengine emotion tag)
 - `applyTextNormalization` (`auto|on|off`)
 - `languageCode` (ISO 639-1)
 - `seed`
