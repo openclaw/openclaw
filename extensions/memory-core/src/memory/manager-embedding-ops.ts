@@ -54,6 +54,24 @@ const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
 
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * Replace any unpaired UTF-16 surrogate code unit with U+FFFD before sending
+ * text to the embeddings provider. Lone surrogates can appear when upstream
+ * chunking splits an emoji or supplementary-plane character across a chunk
+ * boundary; most embedding HTTP clients reject them with a 500 from
+ * `'utf-8' codec can't encode character ...: surrogates not allowed`,
+ * which kills the whole indexing batch (see openclaw#27753).
+ */
+export function stripUnpairedSurrogates(text: string): string {
+  if (typeof text !== "string" || text.length === 0) {
+    return text;
+  }
+  return text.replace(UNPAIRED_SURROGATE_RE, "\uFFFD");
+}
+
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureCount: number;
   protected abstract batchFailureLastError?: string;
@@ -239,16 +257,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
+    const sanitizedTexts = texts.map(stripUnpairedSurrogates);
     return await runMemoryEmbeddingRetryLoop({
       run: async () => {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: batch start", {
           provider: provider.id,
-          items: texts.length,
+          items: sanitizedTexts.length,
           timeoutMs,
         });
         return await this.withTimeout(
-          provider.embedBatch(texts),
+          provider.embedBatch(sanitizedTexts),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
@@ -269,18 +288,23 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const provider = this.provider;
     const embedBatchInputs = provider?.embedBatchInputs;
     if (!embedBatchInputs) {
+      // Fall through — embedBatchWithRetry sanitizes its own input, so we pass raw texts.
       return await this.embedBatchWithRetry(inputs.map((input) => input.text));
     }
+    const sanitizedInputs = inputs.map((input) => ({
+      ...input,
+      text: stripUnpairedSurrogates(input.text),
+    }));
     return await runMemoryEmbeddingRetryLoop({
       run: async () => {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: structured batch start", {
           provider: provider.id,
-          items: inputs.length,
+          items: sanitizedInputs.length,
           timeoutMs,
         });
         return await this.withTimeout(
-          embedBatchInputs(inputs),
+          embedBatchInputs(sanitizedInputs),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
