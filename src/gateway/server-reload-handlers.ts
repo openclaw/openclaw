@@ -297,6 +297,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             restartPending = false;
             params.logReload.info("all operations and replies completed; restarting gateway now");
           },
+          onStillPending: (_pending, elapsedMs) => {
+            const remaining = formatActiveDetails(getActiveCounts());
+            params.logReload.warn(
+              `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active`,
+            );
+          },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
             restartPending = false;
