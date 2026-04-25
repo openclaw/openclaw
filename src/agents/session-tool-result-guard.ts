@@ -159,7 +159,10 @@ function capToolResultDetails(msg: AgentMessage): AgentMessage {
   if (sanitizedDetails === details) {
     return msg;
   }
-  return { ...msg, details: sanitizedDetails };
+  return {
+    ...(msg as Record<string, unknown>),
+    details: sanitizedDetails,
+  } as AgentMessage;
 }
 
 function capToolResultForPersistence(msg: AgentMessage, maxChars: number): AgentMessage {
