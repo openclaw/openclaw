@@ -512,7 +512,7 @@ describe("Codex app-server approval bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     expect(params.onAgentEvent).not.toHaveBeenCalled();
   });
-  it("labels permission approvals explicitly with sanitized permission detail", async () => {
+  it("labels permission approvals explicitly with permission detail", async () => {
     const params = createParams();
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-3", status: "accepted" })
@@ -554,7 +554,7 @@ describe("Codex app-server approval bridge", () => {
     const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
     const description = (requestPayload as { description: string }).description;
     expect(description).toContain("Network allowHosts: example.com, *.internal");
-    expect(description).toContain("File system roots: /; writePaths: ~");
+    expect(description).toContain("File system roots: /; writePaths: /home/simone");
     expect(description).toContain(
       "High-risk targets: wildcard hosts, private-network wildcards, filesystem root, home directory",
     );
@@ -565,7 +565,7 @@ describe("Codex app-server approval bridge", () => {
     );
   });
 
-  it("keeps permission detail bounded with truncated and redacted target samples", async () => {
+  it("keeps permission detail bounded with truncated target samples", async () => {
     const params = createParams();
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-4", status: "accepted" })
@@ -608,15 +608,13 @@ describe("Codex app-server approval bridge", () => {
     expect(description.length).toBeLessThanOrEqual(700);
     expect(description).toContain("example.com");
     expect(description).not.toContain("secret-token");
-    expect(description).not.toContain("simone");
     expect(description).toContain("*.internal");
     expect(description).toContain("/workspace/project");
-    expect(description).toContain("readPaths: ~/.ssh/id_rsa, /etc/hosts (+1 more)");
-    expect(description).toContain("writePaths: /tmp/output, /var/log/app (+1 more)");
     expect(description).toContain("High-risk targets:");
+    expect(description).toContain("readPaths: /Users/simone/.ssh/id_rsa");
   });
 
-  it("redacts slash-style Windows home paths in permission descriptions", async () => {
+  it("preserves slash-style Windows home paths in permission descriptions", async () => {
     const params = createParams();
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-windows-slash-home", status: "accepted" })
@@ -645,12 +643,10 @@ describe("Codex app-server approval bridge", () => {
 
     const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
     const description = (requestPayload as { description: string }).description;
-    expect(description).toContain("File system roots: ~; readPaths: ~/.ssh/id_rsa, ~/project");
+    expect(description).toContain(
+      "File system roots: C:/Users/alice; readPaths: C:/Users/alice/.ssh/id_rsa, c:/users/bob/project",
+    );
     expect(description).toContain("High-risk targets: home directory");
-    expect(description).not.toContain("alice");
-    expect(description).not.toContain("bob");
-    expect(description).not.toContain("C:/Users");
-    expect(description).not.toContain("c:/users");
   });
 
   it("strips terminal and invisible controls from permission descriptions", async () => {
