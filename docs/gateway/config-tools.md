@@ -628,7 +628,7 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
             id: "MiniMax-M2.7",
             name: "MiniMax M2.7",
             reasoning: true,
-            input: ["text", "image"],
+            input: ["text"],
             cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
             contextWindow: 204800,
             maxTokens: 131072,
