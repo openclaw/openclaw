@@ -122,6 +122,26 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("passes the parent heavy-check lock marker to lint commands", () => {
+    const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(plan.commands.find((command) => command.args[0] === "lint:core")?.env).toMatchObject({
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("passes the parent heavy-check lock marker to the full lint command", () => {
+    const result = detectChangedLanes(["pnpm-workspace.yaml"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(plan.commands.find((command) => command.args[0] === "lint")?.env).toMatchObject({
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
   it("routes core test-only changes to core test lanes only", () => {
     const result = detectChangedLanes(["src/shared/string-normalization.test.ts"]);
 
