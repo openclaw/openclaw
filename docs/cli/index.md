@@ -11,6 +11,10 @@ dedicated reference page or is documented with the command it aliases; this
 index lists the commands, the global flags, and the output styling rules that
 apply across the CLI.
 
+Tip: root help should expand command groups that have subcommands. For example,
+`openclaw models --help` should list `auth`, `list`, `set`, `status`, and other
+models subcommands directly instead of only showing the top-level command stub.
+
 ## Command pages
 
 | Area                 | Commands                                                                                                                                                                                                                  |

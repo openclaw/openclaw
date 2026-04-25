@@ -4,6 +4,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
+import { formatHelpExamples } from "./help-format.js";
 
 function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
@@ -283,6 +284,25 @@ export function registerModelsCli(program: Command) {
 
   const auth = models.command("auth").description("Manage model auth profiles");
   auth.option("--agent <id>", "Agent id for auth order get/set/clear");
+  auth.addHelpText(
+    "after",
+    () =>
+      `\n${theme.heading("Common auth flows:")}\n${formatHelpExamples([
+        ["openclaw models auth add", "Interactive helper that chooses auth or token setup."],
+        [
+          "openclaw models auth login --provider openai-codex --set-default",
+          "Reauthenticate Codex and refresh the default model recommendation.",
+        ],
+        [
+          "openclaw models auth setup-token --provider anthropic",
+          "Run a provider token setup flow when a plugin exposes one.",
+        ],
+        [
+          "openclaw models status --probe",
+          "Verify configured providers with live auth probes after login.",
+        ],
+      ])}`,
+  );
   auth.action(() => {
     auth.help();
   });

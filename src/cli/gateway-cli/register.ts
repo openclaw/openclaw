@@ -394,6 +394,11 @@ export function registerGatewayCli(program: Command) {
       .command("gateway")
       .description("Run, inspect, and query the WebSocket Gateway")
       .addHelpText(
+        "beforeAll",
+        () =>
+          `${theme.muted("Note:")} ${theme.command("openclaw gateway")} runs the foreground gateway runtime. For supervised service control use ${theme.command("openclaw gateway status")}, ${theme.command("openclaw gateway restart")}, or ${theme.command("openclaw gateway stop")}.\n\n`,
+      )
+      .addHelpText(
         "after",
         () =>
           `\n${theme.heading("Examples:")}\n${formatHelpExamples([

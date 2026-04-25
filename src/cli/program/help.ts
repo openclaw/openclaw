@@ -22,17 +22,18 @@ const ROOT_COMMANDS_HINT =
 
 const EXAMPLES = [
   ["openclaw models --help", "Show detailed help for the models command."],
-  [
-    "openclaw channels login --verbose",
-    "Link personal WhatsApp Web and show QR + connection logs.",
-  ],
+  ["openclaw channels login --channel whatsapp", "Link a WhatsApp account and show the QR flow."],
   [
     'openclaw message send --target +15555550123 --message "Hi" --json',
     "Send via your web session and print JSON result.",
   ],
-  ["openclaw gateway --port 18789", "Run the WebSocket Gateway locally."],
-  ["openclaw --dev gateway", "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001."],
-  ["openclaw gateway --force", "Kill anything bound to the default gateway port, then start it."],
+  ["openclaw gateway status", "Check gateway service status and probe reachability."],
+  ["openclaw gateway restart", "Restart the supervised gateway service."],
+  ["openclaw gateway run --port 18789", "Run the WebSocket Gateway locally in the foreground."],
+  [
+    "openclaw --dev gateway run",
+    "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001.",
+  ],
   ["openclaw gateway ...", "Gateway control via WebSocket."],
   [
     'openclaw agent --to +15555550123 --message "Run summary" --deliver',

@@ -77,6 +77,21 @@ type GatewayRunOpts = {
 
 const gatewayLog = createSubsystemLogger("gateway");
 
+function buildGatewayLockUserHint(err: unknown, port: number): string[] {
+  const message =
+    typeof err === "object" && err && "message" in err ? String(err.message) : String(err);
+  const hints = [
+    `Check gateway state with: ${formatCliCommand("openclaw gateway status")}`,
+    `If the gateway is supervised, restart it with: ${formatCliCommand("openclaw gateway restart")}`,
+  ];
+  if (/EADDRINUSE|address already in use|port .* in use/i.test(message)) {
+    hints.push(
+      `If another process owns port ${port}, run: ${formatCliCommand(`openclaw gateway run --port ${port} --force`)}`,
+    );
+  }
+  return hints;
+}
+
 const GATEWAY_RUN_VALUE_KEYS = [
   "port",
   "bind",
@@ -691,6 +706,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
       );
+      for (const hint of buildGatewayLockUserHint(err, port)) {
+        defaultRuntime.error(hint);
+      }
       try {
         const diagnostics = await inspectPortUsage(port);
         if (diagnostics.status === "busy") {
