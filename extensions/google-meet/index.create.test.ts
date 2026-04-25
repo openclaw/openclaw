@@ -1,11 +1,10 @@
 import { Command } from "commander";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
 import plugin from "./index.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig } from "./src/config.js";
 import type { GoogleMeetRuntime } from "./src/runtime.js";
+import { captureStdout, setupGoogleMeetPlugin } from "./src/test-support/plugin-harness.js";
 import { CREATE_MEET_FROM_BROWSER_SCRIPT } from "./src/transports/chrome-create.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
@@ -37,23 +36,11 @@ vi.mock("./src/voice-call-gateway.js", () => ({
   endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
 }));
 
-const noopLogger = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
-};
-
-function captureStdout() {
-  let output = "";
-  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-    output += String(chunk);
-    return true;
-  }) as typeof process.stdout.write);
-  return {
-    output: () => output,
-    restore: () => writeSpy.mockRestore(),
-  };
+function setup(
+  config?: Parameters<typeof setupGoogleMeetPlugin>[1],
+  options?: Parameters<typeof setupGoogleMeetPlugin>[2],
+) {
+  return setupGoogleMeetPlugin(plugin, config, options);
 }
 
 async function runCreateMeetBrowserScript(params: { buttonText: string }) {
@@ -87,90 +74,6 @@ async function runCreateMeetBrowserScript(params: { buttonText: string }) {
     retryAfterMs?: number;
   }>;
   return { button, result: await fn() };
-}
-
-function setup(
-  config: Record<string, unknown> = {},
-  options: {
-    nodesInvokeHandler?: (params: {
-      nodeId: string;
-      command: string;
-      params?: unknown;
-      timeoutMs?: number;
-    }) => Promise<unknown>;
-  } = {},
-) {
-  const methods = new Map<string, unknown>();
-  const tools: unknown[] = [];
-  const nodesList = vi.fn(async () => ({
-    nodes: [
-      {
-        nodeId: "node-1",
-        displayName: "parallels-macos",
-        connected: true,
-        caps: ["browser"],
-        commands: ["browser.proxy", "googlemeet.chrome"],
-      },
-    ],
-  }));
-  const nodesInvoke = vi.fn(async (params) => {
-    if (options.nodesInvokeHandler) {
-      return options.nodesInvokeHandler(params);
-    }
-    if (params.command === "browser.proxy") {
-      const proxy = params.params as { path?: string; body?: { url?: string; targetId?: string } };
-      if (proxy.path === "/tabs") {
-        return { payload: { result: { running: true, tabs: [] } } };
-      }
-      if (proxy.path === "/tabs/open") {
-        return {
-          payload: {
-            result: {
-              targetId: "tab-1",
-              title: "Meet",
-              url: proxy.body?.url ?? "https://meet.google.com/abc-defg-hij",
-            },
-          },
-        };
-      }
-      return { payload: { result: { ok: true } } };
-    }
-    return { payload: { launched: true } };
-  });
-  const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-    if (argv[0] === "/usr/sbin/system_profiler") {
-      return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
-    }
-    return { code: 0, stdout: "", stderr: "" };
-  });
-  const api = createTestPluginApi({
-    id: "google-meet",
-    name: "Google Meet",
-    description: "test",
-    version: "0",
-    source: "test",
-    config: {},
-    pluginConfig: config,
-    runtime: {
-      system: {
-        runCommandWithTimeout,
-        formatNativeDependencyHint: vi.fn(() => "Install with brew install blackhole-2ch."),
-      },
-      nodes: {
-        list: nodesList,
-        invoke: nodesInvoke,
-      },
-    } as unknown as OpenClawPluginApi["runtime"],
-    logger: noopLogger,
-    registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
-    registerTool: (tool: unknown) => tools.push(tool),
-  });
-  plugin.register(api);
-  return {
-    methods,
-    tools,
-    nodesInvoke,
-  };
 }
 
 describe("google-meet create flow", () => {
