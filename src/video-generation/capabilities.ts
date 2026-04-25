@@ -46,6 +46,8 @@ export function resolveVideoGenerationModeCapabilities(params: {
   mode: VideoGenerationMode | null;
   capabilities: VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined;
 } {
+  const inputImageCount = params.inputImageCount ?? 0;
+  const inputVideoCount = params.inputVideoCount ?? 0;
   const mode = resolveVideoGenerationMode(params);
   const capabilities = params.provider?.capabilities;
   if (!capabilities) {
@@ -64,6 +66,17 @@ export function resolveVideoGenerationModeCapabilities(params: {
     };
   }
   if (mode === "videoToVideo") {
+    return {
+      mode,
+      capabilities: capabilities.videoToVideo,
+    };
+  }
+  if (
+    inputImageCount > 0 &&
+    inputVideoCount > 0 &&
+    capabilities.videoToVideo?.enabled &&
+    (capabilities.videoToVideo.maxInputImages ?? 0) > 0
+  ) {
     return {
       mode,
       capabilities: capabilities.videoToVideo,

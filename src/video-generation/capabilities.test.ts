@@ -75,4 +75,36 @@ describe("video-generation capabilities", () => {
       capabilities: undefined,
     });
   });
+
+  it("uses explicit video-to-video capabilities for mixed reference requests", () => {
+    const provider = createProvider({
+      imageToVideo: {
+        enabled: true,
+        maxInputImages: 2,
+      },
+      videoToVideo: {
+        enabled: true,
+        maxInputImages: 2,
+        maxInputVideos: 3,
+        maxInputAudios: 1,
+      },
+    });
+
+    expect(resolveVideoGenerationMode({ inputImageCount: 1, inputVideoCount: 1 })).toBeNull();
+    expect(
+      resolveVideoGenerationModeCapabilities({
+        provider,
+        inputImageCount: 1,
+        inputVideoCount: 1,
+      }),
+    ).toEqual({
+      mode: null,
+      capabilities: {
+        enabled: true,
+        maxInputImages: 2,
+        maxInputVideos: 3,
+        maxInputAudios: 1,
+      },
+    });
+  });
 });
