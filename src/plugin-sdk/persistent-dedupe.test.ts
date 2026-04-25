@@ -15,14 +15,20 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
 }
 
 describe("createPersistentDedupe", () => {
-  it("deduplicates keys and persists across instances", async () => {
+  it("deduplicates keys, persists across instances, warms up, and checks recent keys", async () => {
     const root = await createTempDir("openclaw-dedupe-");
     const first = createDedupe(root);
     expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(true);
     expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(false);
+    expect(await first.checkAndRecord("m2", { namespace: "a" })).toBe(true);
 
     const second = createDedupe(root);
+    expect(await second.hasRecent("m1", { namespace: "a" })).toBe(true);
+    expect(await second.hasRecent("missing", { namespace: "a" })).toBe(false);
+    expect(await second.warmup("a")).toBe(2);
     expect(await second.checkAndRecord("m1", { namespace: "a" })).toBe(false);
+    expect(await second.checkAndRecord("m2", { namespace: "a" })).toBe(false);
+    expect(await second.checkAndRecord("m3", { namespace: "a" })).toBe(true);
     expect(await second.checkAndRecord("m1", { namespace: "b" })).toBe(true);
   });
 
@@ -48,31 +54,6 @@ describe("createPersistentDedupe", () => {
 
     expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(true);
     expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(false);
-  });
-
-  it("warmup loads persisted entries into memory", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const writer = createDedupe(root);
-    expect(await writer.checkAndRecord("msg-1", { namespace: "acct" })).toBe(true);
-    expect(await writer.checkAndRecord("msg-2", { namespace: "acct" })).toBe(true);
-
-    const reader = createDedupe(root);
-    const loaded = await reader.warmup("acct");
-    expect(loaded).toBe(2);
-    expect(await reader.checkAndRecord("msg-1", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("msg-2", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("msg-3", { namespace: "acct" })).toBe(true);
-  });
-
-  it("checks for recent keys without mutating the store", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const writer = createDedupe(root);
-    expect(await writer.checkAndRecord("peek-me", { namespace: "acct" })).toBe(true);
-
-    const reader = createDedupe(root);
-    expect(await reader.hasRecent("peek-me", { namespace: "acct" })).toBe(true);
-    expect(await reader.hasRecent("missing", { namespace: "acct" })).toBe(false);
-    expect(await reader.checkAndRecord("peek-me", { namespace: "acct" })).toBe(false);
   });
 
   it.each([
