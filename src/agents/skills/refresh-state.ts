@@ -6,7 +6,8 @@ export type SkillsChangeEvent = {
 
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
-let globalVersion = 0;
+// Process-local: persisted snapshots from an older gateway run should refresh once after restart.
+let globalVersion = Date.now();
 let listenerErrorHandler: ((err: unknown) => void) | undefined;
 
 function bumpVersion(current: number): number {
