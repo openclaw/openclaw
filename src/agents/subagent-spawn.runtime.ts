@@ -1,7 +1,15 @@
 export { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
-export { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
+export {
+  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+} from "../config/agent-limits.js";
 export { loadConfig } from "../config/config.js";
 export { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
+export {
+  forkSessionFromParent,
+  resolveParentForkMaxTokens,
+} from "../auto-reply/reply/session-fork.js";
+export { resolveContextEngine } from "../context-engine/registry.js";
 export { callGateway } from "../gateway/call.js";
 export { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
 export {

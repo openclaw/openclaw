@@ -7,6 +7,7 @@
       "TELNYX_PUBLIC_KEY",
       "TWILIO_ACCOUNT_SID",
       "TWILIO_AUTH_TOKEN",
+      "TWILIO_FROM_NUMBER",
       "PLIVO_AUTH_ID",
       "PLIVO_AUTH_TOKEN",
       "NGROK_AUTHTOKEN",
@@ -400,6 +401,10 @@
           },
           "instructions": {
             "type": "string"
+          },
+          "toolPolicy": {
+            "type": "string",
+            "enum": ["safe-read-only", "owner", "none"]
           },
           "tools": {
             "type": "array",

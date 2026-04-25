@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
@@ -24,6 +25,8 @@ export function resolveLlmIdleTimeoutMs(params?: {
   runTimeoutMs?: number;
 }): number {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
+  const clampImplicitTimeoutMs = (valueMs: number) =>
+    clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
   const raw = params?.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
   // 0 means explicitly disabled (no timeout).
   if (raw === 0) {
@@ -38,7 +41,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     if (runTimeoutMs >= MAX_SAFE_TIMEOUT_MS) {
       return 0;
     }
-    return clampTimeoutMs(runTimeoutMs);
+    return clampImplicitTimeoutMs(runTimeoutMs);
   }
 
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
@@ -47,7 +50,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
     Number.isFinite(agentTimeoutSeconds) &&
     agentTimeoutSeconds > 0
   ) {
-    return clampTimeoutMs(agentTimeoutSeconds * 1000);
+    return clampImplicitTimeoutMs(agentTimeoutSeconds * 1000);
   }
 
   if (params?.trigger === "cron") {
@@ -100,13 +103,14 @@ export function streamWithIdleTimeout(
             }
           };
 
-          return {
-            async next() {
+          return createStreamIteratorWrapper({
+            iterator,
+            next: async (streamIterator) => {
               clearTimer();
 
               try {
                 // Race between the actual next() and the timeout
-                const result = await Promise.race([iterator.next(), createTimeoutPromise()]);
+                const result = await Promise.race([streamIterator.next(), createTimeoutPromise()]);
 
                 if (result.done) {
                   clearTimer();
@@ -120,17 +124,15 @@ export function streamWithIdleTimeout(
                 throw error;
               }
             },
-
-            return() {
+            onReturn(streamIterator) {
               clearTimer();
-              return iterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
+              return streamIterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
             },
-
-            throw(error?: unknown) {
+            onThrow(streamIterator, error) {
               clearTimer();
-              return iterator.throw?.(error) ?? Promise.reject(error);
+              return streamIterator.throw?.(error) ?? Promise.reject(error);
             },
-          };
+          });
         };
 
       return stream;

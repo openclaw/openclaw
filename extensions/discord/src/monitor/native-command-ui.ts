@@ -1,6 +1,5 @@
 import {
   Button,
-  ChannelType,
   Container,
   Row,
   StringSelectMenu,
@@ -16,6 +15,7 @@ import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   listChatCommands,
   resolveStoredModelOverride,
   serializeCommandArgs,
@@ -34,7 +34,7 @@ import {
   normalizeOptionalString,
   withTimeout,
 } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordChannelInfo } from "./message-utils.js";
+import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import {
   readDiscordModelPickerRecentModels,
   recordDiscordModelPickerRecentModel,
@@ -51,10 +51,15 @@ import {
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
+import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
-import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+type DiscordNativeChoiceInteraction =
+  | AutocompleteInteraction
+  | CommandInteraction
+  | ButtonInteraction
+  | StringSelectMenuInteraction;
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
 
@@ -64,6 +69,7 @@ export type DiscordCommandArgContext = {
   accountId: string;
   sessionPrefix: string;
   threadBindings: ThreadBindingManager;
+  postApplySettleMs?: number;
 };
 
 export type DiscordModelPickerContext = DiscordCommandArgContext;
@@ -79,6 +85,7 @@ export type DispatchDiscordCommandInteractionParams = {
   sessionPrefix: string;
   preferFollowUp: boolean;
   threadBindings: ThreadBindingManager;
+  responseEphemeral?: boolean;
   suppressReplies?: boolean;
 };
 
@@ -235,33 +242,16 @@ async function resolveDiscordModelPickerRouteState(params: {
   enforceConfiguredBindingReadiness?: boolean;
 }) {
   const { interaction, cfg, accountId } = params;
-  const channel = interaction.channel;
-  const channelType = channel?.type;
-  const isDirectMessage = channelType === ChannelType.DM;
-  const isGroupDm = channelType === ChannelType.GroupDM;
-  const isThreadChannel =
-    channelType === ChannelType.PublicThread ||
-    channelType === ChannelType.PrivateThread ||
-    channelType === ChannelType.AnnouncementThread;
-  const rawChannelId = channel?.id ?? "unknown";
+  const { isDirectMessage, isGroupDm, isThreadChannel, rawChannelId, threadParentId } =
+    await resolveDiscordNativeInteractionChannelContext({
+      channel: interaction.channel,
+      client: interaction.client,
+      hasGuild: Boolean(interaction.guild),
+      channelIdFallback: "unknown",
+    });
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
-  let threadParentId: string | undefined;
-  if (interaction.guild && channel && isThreadChannel && rawChannelId) {
-    const channelInfo = await resolveDiscordChannelInfo(interaction.client, rawChannelId);
-    const parentInfo = await resolveDiscordThreadParentInfo({
-      client: interaction.client,
-      threadChannel: {
-        id: rawChannelId,
-        name: "name" in channel ? (channel.name as string | undefined) : undefined,
-        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
-        parent: undefined,
-      },
-      channelInfo,
-    });
-    threadParentId = parentInfo.id;
-  }
 
   const threadBinding = isThreadChannel
     ? params.threadBindings.getByThreadId(rawChannelId)
@@ -296,7 +286,7 @@ async function resolveDiscordModelPickerRoute(params: {
 }
 
 export async function resolveDiscordNativeChoiceContext(params: {
-  interaction: AutocompleteInteraction;
+  interaction: DiscordNativeChoiceInteraction;
   cfg: ReturnType<typeof loadConfig>;
   accountId: string;
   threadBindings: ThreadBindingManager;
@@ -377,6 +367,36 @@ function resolveDiscordModelPickerCurrentModel(params: {
   }
 }
 
+function resolveDiscordModelPickerCurrentRuntime(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  route: ResolvedAgentRoute;
+}): string {
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      agentId: params.route.agentId,
+    });
+    const sessionStore = loadSessionStore(storePath, { skipCache: true });
+    const sessionRuntime = normalizeOptionalString(
+      sessionStore[params.route.sessionKey]?.agentRuntimeOverride,
+    );
+    if (sessionRuntime) {
+      return sessionRuntime;
+    }
+  } catch {
+    // Fall through to configured defaults when the session store is unavailable.
+  }
+
+  const agentRuntime = normalizeOptionalString(
+    params.cfg.agents?.list?.find(
+      (entry) => normalizeOptionalString(entry.id) === params.route.agentId,
+    )?.embeddedHarness?.runtime,
+  );
+  if (agentRuntime) {
+    return agentRuntime;
+  }
+  return normalizeOptionalString(params.cfg.agents?.defaults?.embeddedHarness?.runtime) ?? "auto";
+}
+
 export async function replyWithDiscordModelPickerProviders(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   cfg: ReturnType<typeof loadConfig>;
@@ -399,6 +419,10 @@ export async function replyWithDiscordModelPickerProviders(params: {
     route,
     data,
   });
+  const currentRuntime = resolveDiscordModelPickerCurrentRuntime({
+    cfg: params.cfg,
+    route,
+  });
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope({
       interaction: params.interaction,
@@ -417,6 +441,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
     page: 1,
     providerPage: 1,
     currentModel,
+    currentRuntime,
     quickModels,
   });
   const payload = {
@@ -450,6 +475,7 @@ function resolveModelPickerSelectionValue(
 
 function buildDiscordModelPickerSelectionCommand(params: {
   modelRef: string;
+  runtime?: string;
 }): { command: ChatCommandDefinition; args: CommandArgs; prompt: string } | null {
   const commandDefinition =
     findCommandByNativeName("model", "discord") ??
@@ -457,11 +483,13 @@ function buildDiscordModelPickerSelectionCommand(params: {
   if (!commandDefinition) {
     return null;
   }
+  const runtime = normalizeOptionalString(params.runtime);
+  const raw = runtime ? `${params.modelRef} --runtime ${runtime}` : params.modelRef;
   const commandArgs: CommandArgs = {
     values: {
       model: params.modelRef,
     },
-    raw: params.modelRef,
+    raw,
   };
   return {
     command: commandDefinition,
@@ -563,6 +591,10 @@ export async function handleDiscordModelPickerInteraction(params: {
     route,
     data: pickerData,
   });
+  const currentRuntime = resolveDiscordModelPickerCurrentRuntime({
+    cfg: ctx.cfg,
+    route,
+  });
   const allowedModelRefs = buildDiscordModelPickerAllowedModelRefs(pickerData);
   const preferenceScope = resolveDiscordModelPickerPreferenceScope({
     interaction,
@@ -622,6 +654,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       page: parsed.page ?? 1,
       providerPage: parsed.providerPage ?? 1,
       currentModel: currentModelRef,
+      currentRuntime,
       quickModels,
     });
 
@@ -650,6 +683,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       page: 1,
       providerPage: parsed.providerPage ?? parsed.page,
       currentModel: currentModelRef,
+      currentRuntime,
       quickModels,
     });
 
@@ -694,8 +728,50 @@ export async function handleDiscordModelPickerInteraction(params: {
       page: parsed.page,
       providerPage: parsed.providerPage ?? 1,
       currentModel: currentModelRef,
+      currentRuntime,
       pendingModel: modelRef,
       pendingModelIndex: modelIndex,
+      pendingRuntime: parsed.runtime,
+      quickModels,
+    });
+
+    await params.safeInteractionCall("model picker update", () =>
+      interaction.update(toDiscordModelPickerMessagePayload(rendered)),
+    );
+    return;
+  }
+
+  if (parsed.action === "runtime") {
+    const selectedRuntime =
+      resolveModelPickerSelectionValue(interaction) ?? parsed.runtime ?? "auto";
+    const provider = parsed.provider;
+    if (!provider || !pickerData.byProvider.has(provider)) {
+      await params.safeInteractionCall("model picker update", () =>
+        interaction.update(
+          buildDiscordModelPickerNoticePayload("Sorry, that provider isn't available anymore."),
+        ),
+      );
+      return;
+    }
+
+    const selectedModel = resolveDiscordModelPickerModelByIndex({
+      data: pickerData,
+      provider,
+      modelIndex: parsed.modelIndex,
+    });
+    const pendingModel = selectedModel ? `${provider}/${selectedModel}` : undefined;
+    const rendered = renderDiscordModelPickerModelsView({
+      command: parsed.command,
+      userId: parsed.userId,
+      data: pickerData,
+      provider,
+      page: parsed.page,
+      providerPage: parsed.providerPage ?? 1,
+      currentModel: currentModelRef,
+      currentRuntime,
+      ...(pendingModel ? { pendingModel } : {}),
+      pendingModelIndex: parsed.modelIndex,
+      pendingRuntime: selectedRuntime,
       quickModels,
     });
 
@@ -748,8 +824,13 @@ export async function handleDiscordModelPickerInteraction(params: {
 
     const resolvedModelRef = `${parsedModelRef.provider}/${parsedModelRef.model}`;
 
+    const parsedRuntime = normalizeOptionalString(parsed.runtime);
+    const runtimeOverride =
+      parsedRuntime ??
+      (currentRuntime !== "auto" && currentRuntime !== "default" ? currentRuntime : undefined);
     const selectionCommand = buildDiscordModelPickerSelectionCommand({
       modelRef: resolvedModelRef,
+      runtime: runtimeOverride,
     });
     if (!selectionCommand) {
       await params.safeInteractionCall("model picker update", () =>
@@ -810,7 +891,10 @@ export async function handleDiscordModelPickerInteraction(params: {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    const settleMs = ctx.postApplySettleMs ?? 250;
+    if (settleMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, settleMs));
+    }
 
     const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
       cfg: ctx.cfg,
@@ -917,6 +1001,7 @@ export async function handleDiscordCommandArgInteraction(params: {
     sessionPrefix: ctx.sessionPrefix,
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
+    responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
   });
 }
 
@@ -987,8 +1072,7 @@ export function buildDiscordCommandArgMenu(params: {
     );
     return new Row(buttons);
   });
-  const content =
-    menu.title ?? `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
+  const content = formatCommandArgMenuTitle({ command, menu });
   return { content, components: rows };
 }
 

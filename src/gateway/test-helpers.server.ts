@@ -20,7 +20,7 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeMainKey,
@@ -712,11 +712,7 @@ export async function createGatewaySuiteHarness(opts?: {
   };
 }
 
-export async function startServerWithClient(
-  token?: string,
-  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
-) {
-  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+export async function startServer(token?: string, opts?: GatewayServerOptions) {
   let port = await getFreePort();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -735,19 +731,29 @@ export async function startServerWithClient(
   }
 
   const resolvedGatewayOpts: GatewayServerOptions =
-    fallbackToken && !gatewayOpts.auth
+    fallbackToken && !opts?.auth
       ? {
-          ...gatewayOpts,
+          ...opts,
           auth: { mode: "token", token: fallbackToken },
         }
-      : gatewayOpts;
+      : (opts ?? {});
 
   const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
   port = started.port;
   const server = started.server;
 
+  return { server, port, prevToken: prev, envSnapshot };
+}
+
+export async function startServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+  const started = await startServer(token, gatewayOpts);
+  const { server, port, prevToken, envSnapshot } = started;
   const ws = await openTrackedWebSocket({ port, headers: wsHeaders });
-  return { server, ws, port, prevToken: prev, envSnapshot };
+  return { server, ws, port, prevToken, envSnapshot };
 }
 
 export async function startConnectedServerWithClient(
@@ -1027,6 +1033,7 @@ export async function connectWebchatClient(params: {
   return ws;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
 export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,

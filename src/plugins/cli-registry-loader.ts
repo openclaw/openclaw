@@ -1,6 +1,7 @@
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
+import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
 import type { PluginRegistry } from "./registry.js";
@@ -108,14 +109,19 @@ export async function loadPluginCliCommandRegistryWithContext(params: {
   primaryCommand?: string;
   loaderOptions?: PluginCliLoaderOptions;
 }): Promise<PluginCliRegistryLoadResult> {
+  const onlyPluginIds = resolvePrimaryCommandPluginIds(params.context, params.primaryCommand);
   return {
     ...params.context,
     registry: loadOpenClawPlugins(
-      buildPluginCliLoaderParams(
-        params.context,
-        { primaryCommand: params.primaryCommand },
-        params.loaderOptions,
-      ),
+      buildPluginRuntimeLoadOptions(params.context, {
+        ...params.loaderOptions,
+        ...(onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+        activate: false,
+        cache: false,
+        runtimeOptions: {
+          nodes: createPluginCliGatewayNodesRuntime(),
+        },
+      }),
     ),
   };
 }

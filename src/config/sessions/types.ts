@@ -72,8 +72,10 @@ export type CliSessionBinding = {
   sessionId: string;
   authProfileId?: string;
   authEpoch?: string;
+  authEpochVersion?: number;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -174,6 +176,8 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /** Session-scoped agent runtime/harness override selected with the model picker. */
+  agentRuntimeOverride?: string;
   /**
    * Tracks whether the persisted model override came from an explicit user
    * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
@@ -220,6 +224,12 @@ export type SessionEntry = {
   modelProvider?: string;
   model?: string;
   /**
+   * Embedded agent harness selected for this session id.
+   * Prevents config/env changes from moving an existing transcript between
+   * incompatible runtime harnesses.
+   */
+  agentHarnessId?: string;
+  /**
    * Last selected/runtime model pair for which a fallback notice was emitted.
    * Used to avoid repeating the same fallback notice every turn.
    */
@@ -263,38 +273,32 @@ function isSessionPluginTraceLine(line: string): boolean {
   return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);
 }
 
-export function resolveSessionPluginStatusLines(
+function resolveSessionPluginLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+  includeLine: (line: string) => boolean,
 ): string[] {
   return Array.isArray(entry?.pluginDebugEntries)
     ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
         Array.isArray(pluginEntry?.lines)
           ? pluginEntry.lines.filter(
               (line): line is string =>
-                typeof line === "string" &&
-                line.trim().length > 0 &&
-                !isSessionPluginTraceLine(line),
+                typeof line === "string" && line.trim().length > 0 && includeLine(line),
             )
           : [],
       )
     : [];
 }
 
+export function resolveSessionPluginStatusLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return resolveSessionPluginLines(entry, (line) => !isSessionPluginTraceLine(line));
+}
+
 export function resolveSessionPluginTraceLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
 ): string[] {
-  return Array.isArray(entry?.pluginDebugEntries)
-    ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
-        Array.isArray(pluginEntry?.lines)
-          ? pluginEntry.lines.filter(
-              (line): line is string =>
-                typeof line === "string" &&
-                line.trim().length > 0 &&
-                isSessionPluginTraceLine(line),
-            )
-          : [],
-      )
-    : [];
+  return resolveSessionPluginLines(entry, isSessionPluginTraceLine);
 }
 
 export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
@@ -409,11 +413,21 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveFreshSessionTotalTokens(
+export function resolveSessionTotalTokens(
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
 ): number | undefined {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    return undefined;
+  }
+  return total;
+}
+
+export function resolveFreshSessionTotalTokens(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): number | undefined {
+  const total = resolveSessionTotalTokens(entry);
+  if (total === undefined) {
     return undefined;
   }
   if (entry?.totalTokensFresh === false) {

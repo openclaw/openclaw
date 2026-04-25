@@ -285,7 +285,11 @@ export function buildGatewayCronService(params: {
         agentId,
         requestedSessionKey: opts?.sessionKey,
       });
-      enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
+      enqueueSystemEvent(text, {
+        sessionKey,
+        contextKey: opts?.contextKey,
+        trusted: opts?.trusted,
+      });
     },
     requestHeartbeatNow: (opts) => {
       const { agentId, sessionKey } = resolveCronWakeTarget(opts);
@@ -293,6 +297,7 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
+        heartbeat: opts?.heartbeat,
       });
     },
     runHeartbeatOnce: async (opts) => {
@@ -557,6 +562,7 @@ export function buildGatewayCronService(params: {
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
             deliveryError: evt.deliveryError,
+            delivery: evt.delivery,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,
             runAtMs: evt.runAtMs,

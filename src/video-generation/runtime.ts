@@ -1,11 +1,10 @@
-import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
+  recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
@@ -261,6 +260,7 @@ export async function generateVideo(
         inputVideos: params.inputVideos,
         inputAudios: params.inputAudios,
         providerOptions: params.providerOptions,
+        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       });
       if (!Array.isArray(result.videos) || result.videos.length === 0) {
         throw new Error("Video generation provider returned no videos.");
@@ -290,14 +290,11 @@ export async function generateVideo(
       };
     } catch (err) {
       lastError = err;
-      const described = isFailoverError(err) ? describeFailoverError(err) : undefined;
-      attempts.push({
+      recordCapabilityCandidateFailure({
+        attempts,
         provider: candidate.provider,
         model: candidate.model,
-        error: described?.message ?? formatErrorMessage(err),
-        reason: described?.reason,
-        status: described?.status,
-        code: described?.code,
+        error: err,
       });
       log.debug(`video-generation candidate failed: ${candidate.provider}/${candidate.model}`);
     }

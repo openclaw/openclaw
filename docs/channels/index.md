@@ -3,13 +3,21 @@ summary: "Messaging platforms OpenClaw can connect to"
 read_when:
   - You want to choose a chat channel for OpenClaw
   - You need a quick overview of supported messaging platforms
-title: "Chat Channels"
+title: "Chat channels"
 ---
-
-# Chat Channels
 
 OpenClaw can talk to you on any chat app you already use. Each channel connects via the Gateway.
 Text is supported everywhere; media and reactions vary by channel.
+
+## Delivery notes
+
+- Telegram replies that contain markdown image syntax, such as `![alt](url)`,
+  are converted into media replies on the final outbound path when possible.
+- Slack multi-person DMs route as group chats, so group policy, mention
+  behavior, and group-session rules apply to MPIM conversations.
+- WhatsApp setup is install-on-demand: onboarding can show the setup flow before
+  Baileys runtime dependencies are staged, and the Gateway loads the WhatsApp
+  runtime only when the channel is actually active.
 
 ## Supported channels
 
@@ -34,7 +42,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (bundled plugin).
 - [Voice Call](/plugins/voice-call) — Telephony via Plivo or Twilio (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
-- [WeChat](https://www.npmjs.com/package/@tencent-weixin/openclaw-weixin) — Tencent iLink Bot plugin via QR login; private chats only.
+- [WeChat](/channels/wechat) — Tencent iLink Bot plugin via QR login; private chats only (external plugin).
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (bundled plugin).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (bundled plugin).

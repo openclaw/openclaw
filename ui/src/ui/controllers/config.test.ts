@@ -4,8 +4,10 @@ import {
   applyConfig,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
+  resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageConfigPreset,
   updateConfigFormValue,
   type ConfigState,
 } from "./config.ts";
@@ -160,6 +162,158 @@ describe("updateConfigFormValue", () => {
     expect(state.configRaw).toBe(
       '{\n  "gateway": {\n    "mode": "local",\n    "port": 18789\n  }\n}\n',
     );
+  });
+
+  it("clears dirty when a form edit returns to the original value", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      config: { gateway: { mode: "local", port: 18789 } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": {\n    "mode": "local",\n    "port": 18789\n  }\n}\n',
+    });
+
+    updateConfigFormValue(state, ["gateway", "port"], 3000);
+    expect(state.configFormDirty).toBe(true);
+
+    updateConfigFormValue(state, ["gateway", "port"], 18789);
+
+    expect(state.configFormDirty).toBe(false);
+  });
+});
+
+describe("stageConfigPreset", () => {
+  it("ignores preset staging before a config snapshot is ready", () => {
+    const state = createState();
+
+    stageConfigPreset(state, {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 50_000,
+          bootstrapTotalMaxChars: 300_000,
+          contextInjection: "always",
+        },
+      },
+    });
+
+    expect(state.configForm).toBeNull();
+    expect(state.configRaw).toBe("");
+    expect(state.configFormDirty).toBe(false);
+  });
+
+  it("stages preset changes without dropping unrelated config", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      config: {
+        agents: {
+          defaults: {
+            bootstrapMaxChars: 12_000,
+            bootstrapTotalMaxChars: 60_000,
+            contextInjection: "always",
+          },
+        },
+        gateway: { mode: "local" },
+      },
+      valid: true,
+      issues: [],
+      raw: '{\n  "agents": {\n    "defaults": {\n      "bootstrapMaxChars": 12000,\n      "bootstrapTotalMaxChars": 60000,\n      "contextInjection": "always"\n    }\n  },\n  "gateway": {\n    "mode": "local"\n  }\n}\n',
+    });
+
+    stageConfigPreset(state, {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 50_000,
+          bootstrapTotalMaxChars: 300_000,
+          contextInjection: "always",
+        },
+      },
+    });
+
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 50_000,
+          bootstrapTotalMaxChars: 300_000,
+          contextInjection: "always",
+        },
+      },
+      gateway: { mode: "local" },
+    });
+  });
+
+  it("stays clean when the staged preset already matches the saved config", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      config: {
+        agents: {
+          defaults: {
+            bootstrapMaxChars: 20_000,
+            bootstrapTotalMaxChars: 150_000,
+            contextInjection: "always",
+          },
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: '{\n  "agents": {\n    "defaults": {\n      "bootstrapMaxChars": 20000,\n      "bootstrapTotalMaxChars": 150000,\n      "contextInjection": "always"\n    }\n  }\n}\n',
+    });
+
+    stageConfigPreset(state, {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 20_000,
+          bootstrapTotalMaxChars: 150_000,
+          contextInjection: "always",
+        },
+      },
+    });
+
+    expect(state.configFormDirty).toBe(false);
+  });
+});
+
+describe("resetConfigPendingChanges", () => {
+  it("restores the original form and raw config snapshot", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "local" }\n}\n',
+    };
+    state.configFormOriginal = { gateway: { mode: "local" } };
+    state.configRawOriginal = '{\n  "gateway": { "mode": "local" }\n}\n';
+    state.configForm = { gateway: { mode: "remote", port: 3000 } };
+    state.configRaw = '{\n  "gateway": { "mode": "remote", "port": 3000 }\n}\n';
+    state.configFormDirty = true;
+
+    resetConfigPendingChanges(state);
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({ gateway: { mode: "local" } });
+    expect(state.configRaw).toBe('{\n  "gateway": { "mode": "local" }\n}\n');
+  });
+
+  it("preserves an intentionally empty original raw config", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "",
+    };
+    state.configFormOriginal = {};
+    state.configRawOriginal = "";
+    state.configForm = { gateway: { mode: "remote" } };
+    state.configRaw = '{\n  "gateway": { "mode": "remote" }\n}\n';
+    state.configFormDirty = true;
+
+    resetConfigPendingChanges(state);
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({});
+    expect(state.configRaw).toBe("");
   });
 });
 

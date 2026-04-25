@@ -1,14 +1,12 @@
 ---
-title: "Building Channel Plugins"
-sidebarTitle: "Channel Plugins"
 summary: "Step-by-step guide to building a messaging channel plugin for OpenClaw"
+title: "Building channel plugins"
+sidebarTitle: "Channel Plugins"
 read_when:
   - You are building a new messaging channel plugin
   - You want to connect OpenClaw to a messaging platform
   - You need to understand the ChannelPlugin adapter surface
 ---
-
-# Building Channel Plugins
 
 This guide walks through building a channel plugin that connects OpenClaw to a
 messaging platform. By the end you will have a working channel with DM security,
@@ -31,9 +29,16 @@ shared `message` tool in core. Your plugin owns:
 - **Session grammar** — how provider-specific conversation ids map to base chats, thread ids, and parent fallbacks
 - **Outbound** — sending text, media, and polls to the platform
 - **Threading** — how replies are threaded
+- **Heartbeat typing** — optional typing/busy signals for heartbeat delivery targets
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
+
+If your channel supports typing indicators outside inbound replies, expose
+`heartbeat.sendTyping(...)` on the channel plugin. Core calls it with the
+resolved heartbeat delivery target before the heartbeat model run starts and
+uses the shared typing keepalive/cleanup lifecycle. Add `heartbeat.clearTyping(...)`
+when the platform needs an explicit stop signal.
 
 If your channel adds message-tool params that carry media sources, expose those
 param names through `describeMessageTool(...).mediaSourceParams`. Core uses
@@ -139,6 +144,22 @@ If your channel supports env-driven setup or auth and generic startup/config
 flows should know those env names before runtime loads, declare them in the
 plugin manifest with `channelEnvVars`. Keep channel runtime `envVars` or local
 constants for operator-facing copy only.
+
+If your channel can appear in `status`, `channels list`, `channels status`, or
+SecretRef scans before the plugin runtime starts, add `openclaw.setupEntry` in
+`package.json`. That entrypoint should be safe to import in read-only command
+paths and should return the channel metadata, setup-safe config adapter, status
+adapter, and channel secret target metadata needed for those summaries. Do not
+start clients, listeners, or transport runtimes from the setup entry.
+
+Keep the main channel entry import path narrow too. Discovery can evaluate the
+entry and the channel plugin module to register capabilities without activating
+the channel. Files such as `channel-plugin-api.ts` should export the channel
+plugin object without importing setup wizards, transport clients, socket
+listeners, subprocess launchers, or service startup modules. Put those runtime
+pieces in modules loaded from `registerFull(...)`, runtime setters, or lazy
+capability adapters.
+
 `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
 `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
 `splitSetupEntries`
@@ -167,7 +188,13 @@ surfaces:
 - `openclaw/plugin-sdk/messaging-targets` for target parsing/matching
 - `openclaw/plugin-sdk/outbound-media` and
   `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
-  identity/send delegates
+  identity/send delegates and payload planning
+- `buildThreadAwareOutboundSessionRoute(...)` from
+  `openclaw/plugin-sdk/channel-core` when an outbound route should preserve an
+  explicit `replyToId`/`threadId` or recover the current `:thread:` session
+  after the base session key still matches. Provider plugins can override
+  precedence, suffix behavior, and thread id normalization when their platform
+  has native thread delivery semantics.
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 - `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
@@ -185,7 +212,9 @@ Keep inbound mention handling split in two layers:
 - plugin-owned evidence gathering
 - shared policy evaluation
 
-Use `openclaw/plugin-sdk/channel-inbound` for the shared layer.
+Use `openclaw/plugin-sdk/channel-mention-gating` for mention-policy decisions.
+Use `openclaw/plugin-sdk/channel-inbound` only when you need the broader inbound
+helper barrel.
 
 Good fit for plugin-local logic:
 
@@ -255,6 +284,11 @@ bundled channel plugins that already depend on runtime injection:
 - `implicitMentionKindWhen`
 - `resolveInboundMentionDecision`
 
+If you only need `implicitMentionKindWhen` and
+`resolveInboundMentionDecision`, import from
+`openclaw/plugin-sdk/channel-mention-gating` to avoid loading unrelated inbound
+runtime helpers.
+
 The older `resolveMentionGating*` helpers remain on
 `openclaw/plugin-sdk/channel-inbound` as compatibility exports only. New code
 should use `resolveInboundMentionDecision({ facts, policy })`.
@@ -296,9 +330,13 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
       "configSchema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-          "acme-chat": {
+        "properties": {}
+      },
+      "channelConfigs": {
+        "acme-chat": {
+          "schema": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "token": { "type": "string" },
               "allowFrom": {
@@ -306,12 +344,23 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
                 "items": { "type": "string" }
               }
             }
+          },
+          "uiHints": {
+            "token": {
+              "label": "Bot token",
+              "sensitive": true
+            }
           }
         }
       }
     }
     ```
     </CodeGroup>
+
+    `configSchema` validates `plugins.entries.acme-chat.config`. Use it for
+    plugin-owned settings that are not the channel account config. `channelConfigs`
+    validates `channels.acme-chat` and is the cold-path source used by config
+    schema, setup, and UI surfaces before the plugin runtime loads.
 
   </Step>
 
@@ -425,6 +474,14 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
 
       You can also pass raw adapter objects instead of the declarative options
       if you need full control.
+
+      Raw outbound adapters may define a `chunker(text, limit, ctx)` function.
+      The optional `ctx.formatting` carries delivery-time formatting decisions
+      such as `maxLinesPerMessage`; apply it before sending so reply threading
+      and chunk boundaries are resolved once by shared outbound delivery.
+      Send contexts also include `replyToIdSource` (`implicit` or `explicit`)
+      when a native reply target was resolved, so payload helpers can preserve
+      explicit reply tags without consuming an implicit single-use reply slot.
     </Accordion>
 
   </Step>
@@ -605,7 +662,7 @@ Write colocated tests in `src/channel.test.ts`:
   <Card title="Message tool integration" icon="puzzle" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
     describeMessageTool and action discovery
   </Card>
-  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture#channel-target-resolution">
+  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture-internals#channel-target-resolution">
     inferTargetChatType, looksLikeId, resolveTarget
   </Card>
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
@@ -626,3 +683,9 @@ surface unless you are maintaining that bundled plugin family directly.
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
 - [Plugin Manifest](/plugins/manifest) — full manifest schema
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Agent harness plugins](/plugins/sdk-agent-harness)

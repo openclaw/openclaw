@@ -2,26 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
+const securityAccountDefaults: ResolvedSynologyChatAccount = {
+  accountId: "default",
+  enabled: true,
+  token: "t",
+  incomingUrl: "https://nas/incoming",
+  nasHost: "h",
+  webhookPath: "/w",
+  webhookPathSource: "default" as const,
+  dangerouslyAllowNameMatching: false,
+  dangerouslyAllowInheritedWebhookPath: false,
+  dmPolicy: "allowlist" as const,
+  allowedUserIds: [],
+  rateLimitPerMinute: 30,
+  botName: "Bot",
+  allowInsecureSsl: false,
+};
+
 function makeSecurityAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    token: "t",
-    incomingUrl: "https://nas/incoming",
-    nasHost: "h",
-    webhookPath: "/w",
-    webhookPathSource: "default" as const,
-    dangerouslyAllowNameMatching: false,
-    dangerouslyAllowInheritedWebhookPath: false,
-    dmPolicy: "allowlist" as const,
-    allowedUserIds: [],
-    rateLimitPerMinute: 30,
-    botName: "Bot",
-    allowInsecureSsl: false,
-    ...overrides,
-  };
+  return { ...securityAccountDefaults, ...overrides };
 }
 
 const clientModule = await import("./client.js");
@@ -35,9 +36,7 @@ vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
 
-const freshChannelModulePath = "./channel.js?channel-test";
-const { createSynologyChatPlugin } = await import(freshChannelModulePath);
-const { synologyChatPlugin } = await import("./channel.js");
+const { createSynologyChatPlugin, synologyChatPlugin } = await import("./channel.js");
 const getSynologyChatSetupStatus = createPluginSetupWizardStatus(synologyChatPlugin);
 
 describe("createSynologyChatPlugin", () => {
@@ -229,6 +228,26 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("security.collectWarnings", () => {
+    function makeSharedWebhookConfig(alertsOverrides: Record<string, unknown> = {}) {
+      return {
+        channels: {
+          "synology-chat": {
+            token: "base-token",
+            webhookPath: "/webhook/shared",
+            accounts: {
+              alerts: {
+                token: "alerts-token",
+                incomingUrl: "https://nas/alerts",
+                dmPolicy: "allowlist",
+                allowedUserIds: ["123"],
+                ...alertsOverrides,
+              },
+            },
+          },
+        },
+      };
+    }
+
     it("warns when token is missing", () => {
       const plugin = createSynologyChatPlugin();
       const account = makeSecurityAccount({ token: "" });
@@ -279,22 +298,7 @@ describe("createSynologyChatPlugin", () => {
 
     it("warns when named multi-account routes inherit a shared webhookPath", () => {
       const plugin = createSynologyChatPlugin();
-      const cfg = {
-        channels: {
-          "synology-chat": {
-            token: "base-token",
-            webhookPath: "/webhook/shared",
-            accounts: {
-              alerts: {
-                token: "alerts-token",
-                incomingUrl: "https://nas/alerts",
-                dmPolicy: "allowlist",
-                allowedUserIds: ["123"],
-              },
-            },
-          },
-        },
-      };
+      const cfg = makeSharedWebhookConfig();
       const account = plugin.config.resolveAccount(cfg, "alerts");
       const warnings = plugin.security.collectWarnings({ cfg, account });
       expect(warnings.some((w: string) => w.includes("must set an explicit webhookPath"))).toBe(
@@ -304,23 +308,16 @@ describe("createSynologyChatPlugin", () => {
 
     it("warns when enabled accounts share the same exact webhookPath", () => {
       const plugin = createSynologyChatPlugin();
+      const base = makeSharedWebhookConfig({ webhookPath: "/webhook/shared" }).channels[
+        "synology-chat"
+      ];
       const cfg = {
         channels: {
           "synology-chat": {
-            token: "base-token",
+            ...base,
             incomingUrl: "https://nas/default",
-            webhookPath: "/webhook/shared",
             dmPolicy: "allowlist",
             allowedUserIds: ["123"],
-            accounts: {
-              alerts: {
-                token: "alerts-token",
-                incomingUrl: "https://nas/alerts",
-                webhookPath: "/webhook/shared",
-                dmPolicy: "allowlist",
-                allowedUserIds: ["123"],
-              },
-            },
           },
         },
       };

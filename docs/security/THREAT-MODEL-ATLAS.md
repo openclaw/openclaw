@@ -1,6 +1,6 @@
 ---
-title: "Threat Model (MITRE ATLAS)"
 summary: "OpenClaw threat model mapped to the MITRE ATLAS framework"
+title: "Threat model (MITRE ATLAS)"
 read_when:
   - Reviewing security posture or threat scenarios
   - Working on security features or audit responses
@@ -606,3 +606,8 @@ T-EXEC-002 → T-EXFIL-001 → External exfiltration
 ---
 
 _This threat model is a living document. Report security issues to security@openclaw.ai_
+
+## Related
+
+- [Formal verification](/security/formal-verification)
+- [Contributing to the threat model](/security/CONTRIBUTING-THREAT-MODEL)

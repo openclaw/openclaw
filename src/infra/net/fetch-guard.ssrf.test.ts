@@ -4,6 +4,10 @@ import {
   GUARDED_FETCH_MODE,
   retainSafeHeadersForCrossOriginRedirectHeaders,
 } from "./fetch-guard.js";
+import {
+  ensureGlobalUndiciStreamTimeouts,
+  resetGlobalUndiciStreamTimeoutsForTests,
+} from "./undici-global-dispatcher.js";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
@@ -20,6 +24,15 @@ const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
     this.options = options;
   }),
 }));
+const logWarnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../../logger.js")>("../../logger.js");
+  return {
+    ...actual,
+    logWarn: logWarnMock,
+  };
+});
 
 function createPinnedDispatcherCompatibilityError(): Error {
   const cause = Object.assign(new Error("invalid onRequestStart method"), {
@@ -120,7 +133,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     expectEnvProxy: boolean;
   }): Promise<void> {
     clearProxyEnv();
-    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("http_proxy", "http://127.0.0.1:7890");
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: agentCtor,
       EnvHttpProxyAgent: envHttpProxyAgentCtor,
@@ -161,6 +174,8 @@ describe("fetchWithSsrFGuard hardening", () => {
     agentCtor.mockClear();
     envHttpProxyAgentCtor.mockClear();
     proxyAgentCtor.mockClear();
+    logWarnMock.mockClear();
+    resetGlobalUndiciStreamTimeoutsForTests();
     Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   });
 
@@ -192,6 +207,26 @@ describe("fetchWithSsrFGuard hardening", () => {
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("logs blocked URL fetches without path/query metadata", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://127.0.0.1:8080/private/secret?token=abc#frag",
+        fetchImpl,
+        auditContext: "qa-audit",
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+    const [warning] = logWarnMock.mock.calls[0] as [string];
+    expect(warning).toContain(
+      "security: blocked URL fetch (qa-audit) targetOrigin=http://127.0.0.1:8080",
+    );
+    expect(warning).not.toContain("/private/secret");
+    expect(warning).not.toContain("token=abc");
+    expect(warning).not.toContain("#frag");
   });
 
   it("allows RFC2544 benchmark range IPv4 literal URLs when explicitly opted in", async () => {
@@ -981,6 +1016,120 @@ describe("fetchWithSsrFGuard hardening", () => {
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,
     });
+  });
+
+  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured", async () => {
+    clearProxyEnv();
+    vi.stubEnv("ALL_PROXY", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+    expect(agentCtor).toHaveBeenCalled();
+    expect(lookupFn).toHaveBeenCalledWith("public.example", { all: true });
+    await result.release();
+  });
+
+  it("keeps DNS pinning in trusted proxy mode for NO_PROXY targets", async () => {
+    clearProxyEnv();
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    vi.stubEnv("NO_PROXY", "public.example");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+    expect(agentCtor).toHaveBeenCalled();
+    expect(lookupFn).toHaveBeenCalledWith("public.example", { all: true });
+    await result.release();
+  });
+
+  it("applies explicit timeoutMs to guarded direct dispatchers", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      timeoutMs: 123_456,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(agentCtor).toHaveBeenCalledWith({
+      connect: expect.objectContaining({
+        lookup: expect.any(Function),
+      }),
+      allowH2: false,
+      bodyTimeout: 123_456,
+      headersTimeout: 123_456,
+    });
+    await result.release();
+  });
+
+  it("inherits the configured global stream timeout for guarded direct dispatchers", async () => {
+    const { getGlobalDispatcher, setGlobalDispatcher } = await import("undici");
+    const previousDispatcher = getGlobalDispatcher();
+    try {
+      ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
+      (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+        Agent: agentCtor,
+        EnvHttpProxyAgent: envHttpProxyAgentCtor,
+        ProxyAgent: proxyAgentCtor,
+        fetch: vi.fn(async () => okResponse()),
+      };
+      const fetchImpl = vi.fn(async () => okResponse());
+
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(agentCtor).toHaveBeenCalledWith({
+        connect: expect.objectContaining({
+          lookup: expect.any(Function),
+        }),
+        allowH2: false,
+        bodyTimeout: 1_900_000,
+        headersTimeout: 1_900_000,
+      });
+      await result.release();
+    } finally {
+      setGlobalDispatcher(previousDispatcher);
+      resetGlobalUndiciStreamTimeoutsForTests();
+    }
   });
 
   it("allows explicit proxy on localhost when allowPrivateProxy is true even with restrictive hostnameAllowlist", async () => {

@@ -6,6 +6,9 @@ import { pathToFileURL } from "node:url";
 import semverSatisfies from "semver/functions/satisfies.js";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
+const TRANSIENT_TEMP_REMOVE_ERROR_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+const TEMP_REMOVE_RETRY_DELAYS_MS = [10, 25, 50];
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -23,6 +26,22 @@ function readOptionalUtf8(filePath) {
 
 function removePathIfExists(targetPath) {
   fs.rmSync(targetPath, { recursive: true, force: true });
+}
+
+function isTransientTempRemoveError(error) {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    typeof error.code === "string" &&
+    TRANSIENT_TEMP_REMOVE_ERROR_CODES.has(error.code)
+  );
+}
+
+function sleepSync(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function makeTempDir(parentDir, prefix) {
@@ -190,8 +209,15 @@ const defaultStagedRuntimeDepPruneRules = new Map([
   ["@jimp/plugin-print", { paths: ["src/__image_snapshots__"] }],
   ["@jimp/plugin-quantize", { paths: ["src/__image_snapshots__"] }],
   ["@jimp/plugin-threshold", { paths: ["src/__image_snapshots__"] }],
+  // tokenjuice ships built-in rules as JSON data under `dist/rules/tests/*.json`
+  // (e.g. `bun-test.json`, `jest.json`, `pytest.json`). These are NOT test
+  // fixtures — they are the runtime-loaded rule definitions consumed by
+  // `dist/core/builtin-rules.generated.js`. The global `tests` basename prune
+  // would strip them, and the plugin then fails to load with
+  // `Cannot find module '../rules/tests/bun-test.json'`. Keep them staged.
+  ["tokenjuice", { keepDirectories: ["dist/rules/tests"] }],
 ]);
-const runtimeDepsStagingVersion = 6;
+const runtimeDepsStagingVersion = 7;
 const exactVersionSpecRe = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
 function resolveRuntimeDepPruneConfig(params = {}) {
@@ -241,12 +267,14 @@ function collectInstalledRuntimeDependencyRoots(
   rootNodeModulesDir,
   dependencySpecs,
   directDependencyPackageRoot = null,
+  optionalDependencyNames = new Set(),
 ) {
   const packageCache = new Map();
   const directRoots = [];
   const allRoots = [];
   const queue = Object.entries(dependencySpecs).map(([depName, spec]) => ({
     depName,
+    optional: optionalDependencyNames.has(depName),
     spec,
     parentPackageRoot: directDependencyPackageRoot,
     direct: true,
@@ -263,6 +291,9 @@ function collectInstalledRuntimeDependencyRoots(
       rootNodeModulesDir,
     });
     if (depRoot === null) {
+      if (current.optional) {
+        continue;
+      }
       return null;
     }
     const canonicalDepRoot = fs.realpathSync(depRoot);
@@ -285,6 +316,7 @@ function collectInstalledRuntimeDependencyRoots(
     for (const [childName, childSpec] of Object.entries(packageJson.dependencies ?? {})) {
       queue.push({
         depName: childName,
+        optional: false,
         spec: childSpec,
         parentPackageRoot: depRoot,
         direct: false,
@@ -293,6 +325,7 @@ function collectInstalledRuntimeDependencyRoots(
     for (const [childName, childSpec] of Object.entries(packageJson.optionalDependencies ?? {})) {
       queue.push({
         depName: childName,
+        optional: true,
         spec: childSpec,
         parentPackageRoot: depRoot,
         direct: false,
@@ -391,6 +424,7 @@ function resolveInstalledDirectDependencyNames(
   rootNodeModulesDir,
   dependencySpecs,
   directDependencyPackageRoot = null,
+  optionalDependencyNames = new Set(),
 ) {
   const directDependencyNames = [];
   for (const [depName, spec] of Object.entries(dependencySpecs)) {
@@ -401,6 +435,9 @@ function resolveInstalledDirectDependencyNames(
       rootNodeModulesDir,
     });
     if (depRoot === null) {
+      if (optionalDependencyNames.has(depName)) {
+        continue;
+      }
       return null;
     }
     const installedVersion = readInstalledDependencyVersionFromRoot(depRoot);
@@ -420,16 +457,17 @@ function appendDirectoryFingerprint(hash, rootDir, currentDir = rootDir) {
   for (const entry of entries) {
     const fullPath = path.join(currentDir, entry.name);
     const relativePath = path.relative(rootDir, fullPath).replace(/\\/g, "/");
-    if (entry.isSymbolicLink()) {
+    const stats = fs.lstatSync(fullPath);
+    if (stats.isSymbolicLink()) {
       hash.update(`symlink:${relativePath}->${fs.readlinkSync(fullPath).replace(/\\/g, "/")}\n`);
       continue;
     }
-    if (entry.isDirectory()) {
+    if (stats.isDirectory()) {
       hash.update(`dir:${relativePath}\n`);
       appendDirectoryFingerprint(hash, rootDir, fullPath);
       continue;
     }
-    if (!entry.isFile()) {
+    if (!stats.isFile()) {
       continue;
     }
     const stat = fs.statSync(fullPath);
@@ -463,6 +501,7 @@ function resolveInstalledRuntimeClosureFingerprint(params) {
     params.rootNodeModulesDir,
     dependencySpecs,
     params.directDependencyPackageRoot,
+    new Set(Object.keys(params.packageJson.optionalDependencies ?? {})),
   );
   if (resolution === null) {
     return null;
@@ -516,7 +555,7 @@ function isNodeModulesPackageRoot(segments, index) {
   return parent?.startsWith("@") === true && segments[index - 2] === "node_modules";
 }
 
-function pruneDependencyDirectoriesByBasename(depRoot, basenames) {
+function pruneDependencyDirectoriesByBasename(depRoot, basenames, keepDirs = new Set()) {
   if (!basenames || basenames.length === 0 || !fs.existsSync(depRoot)) {
     return;
   }
@@ -531,6 +570,15 @@ function pruneDependencyDirectoriesByBasename(depRoot, basenames) {
       const fullPath = path.join(currentDir, entry.name);
       const segments = relativePathSegments(depRoot, fullPath);
       if (basenameSet.has(entry.name) && !isNodeModulesPackageRoot(segments, segments.length - 1)) {
+        // Per-package opt-out: a pruneRule may keep specific directories that
+        // would otherwise match a global basename prune (e.g. a data/asset
+        // directory named `tests/` that is NOT test code). Descend into kept
+        // directories so their contents are still subject to suffix/pattern
+        // pruning, but do not remove the directory itself.
+        if (keepDirs.has(fullPath)) {
+          queue.push(fullPath);
+          continue;
+        }
         removePathIfExists(fullPath);
         continue;
       }
@@ -560,7 +608,12 @@ function pruneStagedInstalledDependencyCargo(nodeModulesDir, depName, pruneConfi
   for (const relativePath of pruneRule?.paths ?? []) {
     removePathIfExists(path.join(depRoot, relativePath));
   }
-  pruneDependencyDirectoriesByBasename(depRoot, pruneConfig.globalPruneDirectories);
+  // Resolve per-package keepDirectories (opt-out of global basename prune)
+  // against depRoot up front so the walk can skip them cheaply.
+  const keepDirs = new Set(
+    (pruneRule?.keepDirectories ?? []).map((relativePath) => path.resolve(depRoot, relativePath)),
+  );
+  pruneDependencyDirectoriesByBasename(depRoot, pruneConfig.globalPruneDirectories, keepDirs);
   pruneDependencyFilesByPatterns(depRoot, pruneConfig.globalPruneFilePatterns);
   pruneDependencyFilesBySuffixes(depRoot, pruneConfig.globalPruneSuffixes);
   pruneDependencyFilesBySuffixes(depRoot, pruneRule?.suffixes ?? []);
@@ -815,7 +868,13 @@ function runNpmInstall(params) {
   const npmEnv = {
     ...(params.npmRunner.env ?? process.env),
     CI: "1",
+    npm_config_audit: "false",
+    npm_config_fund: "false",
+    npm_config_legacy_peer_deps: "true",
     npm_config_loglevel: "error",
+    npm_config_package_lock: "false",
+    npm_config_progress: "false",
+    npm_config_save: "false",
     npm_config_yes: "true",
   };
   const result = spawnSync(params.npmRunner.command, params.npmRunner.args, {
@@ -834,11 +893,31 @@ function runNpmInstall(params) {
   throw new Error(output || "npm install failed");
 }
 
-function resolveRuntimeDepsStampPath(pluginDir) {
+function resolveLegacyRuntimeDepsStampPath(pluginDir) {
   return path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
 }
 
+function resolveRuntimeDepsStampPath(repoRoot, pluginId) {
+  return path.join(
+    repoRoot,
+    ".artifacts",
+    "bundled-runtime-deps-stamps",
+    `${sanitizeTempPrefixSegment(pluginId)}.json`,
+  );
+}
+
 function createRuntimeDepsFingerprint(packageJson, pruneConfig, params = {}) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        cheapFingerprint: createRuntimeDepsCheapFingerprint(packageJson, pruneConfig, params),
+        rootInstalledRuntimeFingerprint: params.rootInstalledRuntimeFingerprint ?? null,
+      }),
+    )
+    .digest("hex");
+}
+
+function createRuntimeDepsCheapFingerprint(packageJson, pruneConfig, params = {}) {
   const repoRoot = params.repoRoot;
   const lockfilePath =
     typeof repoRoot === "string" && repoRoot.length > 0
@@ -855,7 +934,6 @@ function createRuntimeDepsFingerprint(packageJson, pruneConfig, params = {}) {
         globalPruneSuffixes: pruneConfig.globalPruneSuffixes,
         packageJson,
         pruneRules: [...pruneConfig.pruneRules.entries()],
-        rootInstalledRuntimeFingerprint: params.rootInstalledRuntimeFingerprint ?? null,
         rootLockfile,
         version: runtimeDepsStagingVersion,
       }),
@@ -874,19 +952,48 @@ function readRuntimeDepsStamp(stampPath) {
   }
 }
 
+function removeStaleRuntimeDepsTempDirs(pluginDir) {
+  if (!fs.existsSync(pluginDir)) {
+    return;
+  }
+  for (const entry of fs.readdirSync(pluginDir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".openclaw-runtime-deps-")) {
+      const targetPath = path.join(pluginDir, entry.name);
+      for (let attempt = 0; attempt <= TEMP_REMOVE_RETRY_DELAYS_MS.length; attempt += 1) {
+        try {
+          removePathIfExists(targetPath);
+          break;
+        } catch (error) {
+          if (!isTransientTempRemoveError(error)) {
+            throw error;
+          }
+          const delay = TEMP_REMOVE_RETRY_DELAYS_MS[attempt];
+          if (delay === undefined) {
+            break;
+          }
+          sleepSync(delay);
+        }
+      }
+    }
+  }
+}
+
 function stageInstalledRootRuntimeDeps(params) {
   const {
     directDependencyPackageRoot = null,
+    cheapFingerprint,
     fingerprint,
     packageJson,
     pluginDir,
     pruneConfig,
     repoRoot,
+    stampPath,
   } = params;
   const dependencySpecs = {
     ...packageJson.dependencies,
     ...packageJson.optionalDependencies,
   };
+  const optionalDependencyNames = new Set(Object.keys(packageJson.optionalDependencies ?? {}));
   const rootNodeModulesDir = path.join(repoRoot, "node_modules");
   if (Object.keys(dependencySpecs).length === 0 || !fs.existsSync(rootNodeModulesDir)) {
     return false;
@@ -896,6 +1003,7 @@ function stageInstalledRootRuntimeDeps(params) {
     rootNodeModulesDir,
     dependencySpecs,
     directDependencyPackageRoot,
+    optionalDependencyNames,
   );
   if (directDependencyNames === null) {
     return false;
@@ -904,15 +1012,25 @@ function stageInstalledRootRuntimeDeps(params) {
     rootNodeModulesDir,
     dependencySpecs,
     directDependencyPackageRoot,
+    optionalDependencyNames,
   );
   if (resolution === null) {
     return false;
   }
   const rootsToCopy = selectRuntimeDependencyRootsToCopy(resolution);
+  const nodeModulesDir = path.join(pluginDir, "node_modules");
+  if (rootsToCopy.length === 0) {
+    assertPathIsNotSymlink(nodeModulesDir, "remove runtime deps");
+    removePathIfExists(nodeModulesDir);
+    writeJsonAtomically(stampPath, {
+      cheapFingerprint,
+      fingerprint,
+      generatedAt: new Date().toISOString(),
+    });
+    return true;
+  }
   const allowedRealRoots = rootsToCopy.map((record) => record.realRoot);
 
-  const nodeModulesDir = path.join(pluginDir, "node_modules");
-  const stampPath = resolveRuntimeDepsStampPath(pluginDir);
   const stagedNodeModulesDir = path.join(
     makePluginOwnedTempDir(pluginDir, "stage"),
     "node_modules",
@@ -945,6 +1063,7 @@ function stageInstalledRootRuntimeDeps(params) {
 
     replaceDirAtomically(nodeModulesDir, stagedNodeModulesDir);
     writeJsonAtomically(stampPath, {
+      cheapFingerprint,
       fingerprint,
       generatedAt: new Date().toISOString(),
     });
@@ -994,15 +1113,16 @@ function createRootRuntimeStagingError(params) {
 function installPluginRuntimeDeps(params) {
   const {
     directDependencyPackageRoot = null,
+    cheapFingerprint,
     fingerprint,
     packageJson,
     pluginDir,
     pluginId,
     pruneConfig,
     repoRoot,
+    stampPath,
   } = params;
   const nodeModulesDir = path.join(pluginDir, "node_modules");
-  const stampPath = resolveRuntimeDepsStampPath(pluginDir);
   const tempInstallDir = makePluginOwnedTempDir(pluginDir, "install");
   const pinnedGroups = resolvePinnedRuntimeDependencyGroups(packageJson, {
     directDependencyPackageRoot,
@@ -1018,14 +1138,7 @@ function installPluginRuntimeDeps(params) {
       runNpmInstall({
         cwd: tempInstallDir,
         npmRunner: resolveNpmRunner({
-          npmArgs: [
-            "install",
-            "--omit=dev",
-            "--ignore-scripts",
-            "--legacy-peer-deps",
-            "--package-lock=false",
-            "--silent",
-          ],
+          npmArgs: ["install", "--no-audit", "--no-fund", "--ignore-scripts", "--silent"],
         }),
       });
     }
@@ -1043,6 +1156,7 @@ function installPluginRuntimeDeps(params) {
       removePathIfExists(nodeModulesDir);
     }
     writeJsonAtomically(stampPath, {
+      cheapFingerprint,
       fingerprint,
       generatedAt: new Date().toISOString(),
     });
@@ -1065,12 +1179,19 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       : null;
     const packageJson = sanitizeBundledManifestForRuntimeInstall(pluginDir);
     const nodeModulesDir = path.join(pluginDir, "node_modules");
-    const stampPath = resolveRuntimeDepsStampPath(pluginDir);
+    const stampPath = resolveRuntimeDepsStampPath(repoRoot, pluginId);
+    const legacyStampPath = resolveLegacyRuntimeDepsStampPath(pluginDir);
+    removePathIfExists(legacyStampPath);
+    removeStaleRuntimeDepsTempDirs(pluginDir);
     if (!hasRuntimeDeps(packageJson) || !shouldStageRuntimeDeps(packageJson)) {
       removePathIfExists(nodeModulesDir);
       removePathIfExists(stampPath);
       continue;
     }
+    const cheapFingerprint = createRuntimeDepsCheapFingerprint(packageJson, pruneConfig, {
+      repoRoot,
+    });
+    const stamp = readRuntimeDepsStamp(stampPath);
     const rootInstalledRuntimeFingerprint = resolveInstalledRuntimeClosureFingerprint({
       directDependencyPackageRoot,
       packageJson,
@@ -1080,7 +1201,6 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       repoRoot,
       rootInstalledRuntimeFingerprint,
     });
-    const stamp = readRuntimeDepsStamp(stampPath);
     if (fs.existsSync(nodeModulesDir) && stamp?.fingerprint === fingerprint) {
       continue;
     }
@@ -1088,10 +1208,12 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       stageInstalledRootRuntimeDeps({
         directDependencyPackageRoot,
         fingerprint,
+        cheapFingerprint,
         packageJson,
         pluginDir,
         pruneConfig,
         repoRoot,
+        stampPath,
       })
     ) {
       continue;
@@ -1103,11 +1225,13 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
         installParams: {
           directDependencyPackageRoot,
           fingerprint,
+          cheapFingerprint,
           packageJson,
           pluginDir,
           pluginId,
           pruneConfig,
           repoRoot,
+          stampPath,
         },
       });
     } catch (error) {

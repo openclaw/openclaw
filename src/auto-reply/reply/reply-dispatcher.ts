@@ -1,7 +1,15 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
+import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  resolveSilentReplyRewriteText,
+  type SilentReplyConversationType,
+} from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
@@ -23,8 +31,14 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
 
+export type ReplyDispatchBeforeDeliver = (
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind },
+) => Promise<ReplyPayload | null> | ReplyPayload | null;
+
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
@@ -44,6 +58,12 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
 
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
+  silentReplyContext?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    surface?: string;
+    conversationType?: SilentReplyConversationType;
+  };
   responsePrefix?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   /** Static context for response prefix template interpolation. */
@@ -58,6 +78,7 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  beforeDeliver?: ReplyDispatchBeforeDeliver;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -103,6 +124,58 @@ function normalizeReplyPayloadInternal(
   });
 }
 
+function resolveSilentFinalPayload(params: {
+  kind: ReplyDispatchKind;
+  payload: ReplyPayload;
+  silentReplyContext?: ReplyDispatcherOptions["silentReplyContext"];
+}): ReplyPayload | null | undefined {
+  if (params.kind !== "final") {
+    return undefined;
+  }
+  if (!isSilentReplyText(params.payload.text, SILENT_REPLY_TOKEN)) {
+    return undefined;
+  }
+  const context = params.silentReplyContext;
+  if (!context) {
+    return undefined;
+  }
+  const resolvedSettings = resolveSilentReplySettings({
+    cfg: context.cfg,
+    sessionKey: context.sessionKey,
+    surface: context.surface,
+    conversationType: context.conversationType,
+  });
+  if (resolvedSettings.policy === "allow") {
+    return undefined;
+  }
+  if (resolvedSettings.rewrite) {
+    silentReplyLogger.debug("rewriting exact NO_REPLY final payload before delivery", {
+      hasSessionKey: Boolean(context.sessionKey),
+      surface: context.surface,
+      conversationType: context.conversationType,
+      resolvedPolicy: resolvedSettings.policy,
+    });
+    return {
+      ...params.payload,
+      text: resolveSilentReplyRewriteText({
+        seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${params.payload.text ?? ""}`,
+      }),
+    };
+  }
+  if (!resolvedSettings.rewrite) {
+    silentReplyLogger.debug("preserving exact NO_REPLY final payload before normalization", {
+      hasSessionKey: Boolean(context.sessionKey),
+      surface: context.surface,
+      conversationType: context.conversationType,
+      resolvedPolicy: resolvedSettings.policy,
+    });
+  }
+  return {
+    ...params.payload,
+    text: params.payload.text?.trim() || SILENT_REPLY_TOKEN,
+  };
+}
+
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
@@ -123,6 +196,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const cancelledCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -131,15 +209,30 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
-    const normalized = normalizeReplyPayloadInternal(payload, {
-      responsePrefix: options.responsePrefix,
-      responsePrefixContext: options.responsePrefixContext,
-      responsePrefixContextProvider: options.responsePrefixContextProvider,
-      transformReplyPayload: options.transformReplyPayload,
-      onHeartbeatStrip: options.onHeartbeatStrip,
-      onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+    const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
+    const silentFinalPayload = resolveSilentFinalPayload({
+      kind,
+      payload,
+      silentReplyContext: options.silentReplyContext,
     });
+    const normalized =
+      silentFinalPayload ??
+      normalizeReplyPayloadInternal(payload, {
+        responsePrefix: options.responsePrefix,
+        responsePrefixContext: options.responsePrefixContext,
+        responsePrefixContextProvider: options.responsePrefixContextProvider,
+        transformReplyPayload: options.transformReplyPayload,
+        onHeartbeatStrip: options.onHeartbeatStrip,
+        onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+      });
     if (!normalized) {
+      if (kind === "final" && originalWasExactSilent) {
+        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
+          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
+          surface: options.silentReplyContext?.surface,
+          conversationType: options.silentReplyContext?.conversationType,
+        });
+      }
       return false;
     }
     queuedCounts[kind] += 1;
@@ -160,9 +253,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        let deliverPayload: ReplyPayload | null = normalized;
+        if (options.beforeDeliver) {
+          deliverPayload = await options.beforeDeliver(normalized, { kind });
+          if (!deliverPayload) {
+            cancelledCounts[kind] += 1;
+            return;
+          }
+        }
+        await options.deliver(deliverPayload, { kind });
       })
       .catch((err) => {
         failedCounts[kind] += 1;
@@ -212,6 +311,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getCancelledCounts: () => ({ ...cancelledCounts }),
     getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
   };

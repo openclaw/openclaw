@@ -16,8 +16,8 @@ import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
-  handleAutoCompactionEnd,
-  handleAutoCompactionStart,
+  handleCompactionEnd,
+  handleCompactionStart,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
@@ -192,11 +192,26 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   };
 
   let lifecycleTerminalEmitted = false;
-  const emitLifecycleTerminalOnce = () => {
+  const emitLifecycleTerminalOnce = (): void | Promise<void> => {
     if (lifecycleTerminalEmitted) {
       return;
     }
     lifecycleTerminalEmitted = true;
+    let beforeLifecycleTerminal: void | Promise<void> = undefined;
+    try {
+      beforeLifecycleTerminal = ctx.params.onBeforeLifecycleTerminal?.();
+    } catch (err) {
+      ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
+    }
+    if (isPromiseLike<void>(beforeLifecycleTerminal)) {
+      return Promise.resolve(beforeLifecycleTerminal)
+        .catch((err) => {
+          ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
+        })
+        .then(() => {
+          emitLifecycleTerminal();
+        });
+    }
     emitLifecycleTerminal();
   };
 
@@ -208,15 +223,28 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       : flushPendingMediaAndChannel();
 
     if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
-      return Promise.resolve(flushPendingMediaAndChannelResult).finally(() => {
-        emitLifecycleTerminalOnce();
-      });
+      return Promise.resolve(flushPendingMediaAndChannelResult).then(
+        () => emitLifecycleTerminalOnce(),
+        (error) => {
+          const emitted = emitLifecycleTerminalOnce();
+          if (isPromiseLike<void>(emitted)) {
+            return Promise.resolve(emitted).then(() => {
+              throw error;
+            });
+          }
+          throw error;
+        },
+      );
     }
   } catch (error) {
-    emitLifecycleTerminalOnce();
+    const emitted = emitLifecycleTerminalOnce();
+    if (isPromiseLike<void>(emitted)) {
+      return Promise.resolve(emitted).then(() => {
+        throw error;
+      });
+    }
     throw error;
   }
 
-  emitLifecycleTerminalOnce();
-  return undefined;
+  return emitLifecycleTerminalOnce();
 }

@@ -24,6 +24,36 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
+vi.mock("../../agents/auth-profiles/store.js", () => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: () => {
+      authProfilesStoreMock.profiles = {};
+    },
+    ensureAuthProfileStore: store,
+    ensureAuthProfileStoreForLocalUpdate: store,
+    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
+    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+    loadAuthProfileStore: store,
+    loadAuthProfileStoreForRuntime: store,
+    loadAuthProfileStoreForSecretsRuntime: store,
+    loadAuthProfileStoreWithoutExternalProfiles: store,
+    replaceRuntimeAuthProfileStoreSnapshots: (
+      snapshots: Array<{
+        store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
+      }>,
+    ) => {
+      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
+    },
+    saveAuthProfileStore: vi.fn(),
+    updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
+  };
+});
+
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -33,6 +63,9 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 import type { ElevatedLevel } from "../thinking.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import {
@@ -54,6 +87,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
+  resolveAgentModelFallbacksOverride: vi.fn(() => undefined),
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
@@ -110,7 +144,18 @@ function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   };
 }
 
+function setDirectiveTestProviders(providers: ProviderPlugin[]): void {
+  const registry = createEmptyPluginRegistry();
+  registry.providers = providers.map((provider) => ({
+    pluginId: "test",
+    provider,
+    source: "test",
+  }));
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
+  setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
   replaceRuntimeAuthProfileStoreSnapshots([
     {
@@ -126,6 +171,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
@@ -288,6 +334,16 @@ describe("/model chat UX", () => {
 
     expect(reply?.text).toContain("Current:");
     expect(reply?.text).toContain("Browse: /models");
+    expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("treats /model list as a models browser alias, not a model id", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model list"),
+    });
+
+    expect(reply?.text).toContain("Providers:");
+    expect(reply?.text).toContain("Use: /models <provider>");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
@@ -494,7 +550,7 @@ describe("/model chat UX", () => {
       isDefault: false,
     });
     expect(resolved.profileOverride).toBeUndefined();
-  });
+  }, 240_000);
 
   it("persists inferred numeric auth-profile overrides for mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
@@ -506,6 +562,60 @@ describe("/model chat UX", () => {
     expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
+  });
+
+  it("persists provider-compatible runtime overrides for mixed-content messages", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+    });
+
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("canonicalizes legacy Codex app-server runtime overrides during persistence", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime codex-app-server hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("clears runtime overrides when the model directive asks for default runtime", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime default hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "codex" }),
+      provider: "openai",
+      model: "gpt-4o",
+      initialModelLabel: "openai/gpt-4o",
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("ignores runtime overrides that do not belong to the selected provider", async () => {
+    vi.mocked(enqueueSystemEvent).mockClear();
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime claude-cli hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "pi" }),
+      provider: "openai",
+      model: "gpt-4o",
+      initialModelLabel: "openai/gpt-4o",
+    });
+
+    expect(sessionEntry.agentRuntimeOverride).toBe("pi");
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Ignored unsupported runtime claude-cli for openai.",
+      {
+        sessionKey: "agent:main:dm:1",
+        contextKey: "model-runtime:openai:claude-cli",
+      },
+    );
   });
 
   it("persists alias-based numeric auth-profile overrides for mixed-content messages", async () => {
@@ -650,6 +760,23 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
+  it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      sessionEntry,
+    });
+
+    expect(sessionEntry.thinkingLevel).toBe("medium");
+    expect(persisted.thinkingRemap).toEqual({
+      from: "adaptive",
+      to: "medium",
+      provider: "openai",
+      model: "gpt-4o",
+    });
+  });
+
   it("does not request a live restart when /model mutates an active session", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();
@@ -773,6 +900,24 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("reports current thinking status", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "adaptive" },
+            { id: "high" },
+          ],
+        }),
+      },
+    ]);
+
     const result = await handleDirectiveOnly(
       createHandleParams({
         directives: parseInlineDirectives("/think"),
@@ -781,7 +926,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain("Options: off, minimal, low, medium, high, adaptive.");
+    expect(result?.text).toContain("Options: off, minimal, low, medium, adaptive, high.");
   });
 
   it("persists verbose on and off directives", async () => {
@@ -1027,7 +1172,7 @@ describe("persistInlineDirectives internal exec scope gate", () => {
   it("treats internal provider context as authoritative over external surface metadata", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
       messageProvider: "webchat",
-      surface: "telegram",
+      surface: "forum",
     });
 
     expect(sessionEntry.verboseLevel).toBeUndefined();

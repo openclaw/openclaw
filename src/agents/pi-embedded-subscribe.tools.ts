@@ -105,14 +105,14 @@ export function sanitizeToolResult(result: unknown): unknown {
     const entry = item as Record<string, unknown>;
     const type = readStringValue(entry.type);
     if (type === "text" && typeof entry.text === "string") {
-      return { ...entry, text: truncateToolText(entry.text) };
+      return Object.assign({}, entry, { text: truncateToolText(entry.text) });
     }
     if (type === "image") {
       const data = readStringValue(entry.data);
       const bytes = data ? data.length : undefined;
       const cleaned = { ...entry };
       delete cleaned.data;
-      return { ...cleaned, bytes, omitted: true };
+      return Object.assign({}, cleaned, { bytes, omitted: true });
     }
     return entry;
   });
@@ -249,6 +249,7 @@ export function filterToolResultMediaUrls(
 export type ToolResultMediaArtifact = {
   mediaUrls: string[];
   audioAsVoice?: boolean;
+  trustedLocalMedia?: boolean;
 };
 
 function readToolResultDetailsMedia(
@@ -292,6 +293,7 @@ export function extractToolResultMediaArtifact(
       return {
         mediaUrls,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       };
     }
   }
@@ -305,6 +307,7 @@ export function extractToolResultMediaArtifact(
   // parser so directive matching and validation stay in sync with outbound
   // reply parsing.
   const paths: string[] = [];
+  let audioAsVoice = false;
   let hasImageContent = false;
   for (const item of content) {
     if (!item || typeof item !== "object") {
@@ -317,6 +320,9 @@ export function extractToolResultMediaArtifact(
     }
     if (entry.type === "text" && typeof entry.text === "string") {
       const parsed = splitMediaFromOutput(entry.text);
+      if (parsed.audioAsVoice) {
+        audioAsVoice = true;
+      }
       if (parsed.mediaUrls?.length) {
         paths.push(...parsed.mediaUrls);
       }
@@ -324,7 +330,10 @@ export function extractToolResultMediaArtifact(
   }
 
   if (paths.length > 0) {
-    return { mediaUrls: paths };
+    return {
+      mediaUrls: paths,
+      ...(audioAsVoice ? { audioAsVoice: true } : {}),
+    };
   }
 
   // Fall back to legacy details.path when image content exists but no

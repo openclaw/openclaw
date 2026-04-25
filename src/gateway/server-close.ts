@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -14,6 +15,7 @@ const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
+const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -64,6 +66,15 @@ export async function runGatewayClosePrelude(params: {
   await params.closeMcpServer?.().catch(() => {});
 }
 
+function isServerNotRunningError(err: unknown): boolean {
+  return Boolean(
+    err &&
+    typeof err === "object" &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ERR_SERVER_NOT_RUNNING",
+  );
+}
+
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
   tailscaleCleanup: (() => Promise<void>) | null;
@@ -72,6 +83,7 @@ export function createGatewayCloseHandler(params: {
   releasePluginRouteRegistry?: (() => void) | null;
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
+  disposeSessionMcpRuntimes?: () => Promise<void>;
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
@@ -129,6 +141,17 @@ export function createGatewayCloseHandler(params: {
         await params.stopChannel(plugin.id);
       }
       await disposeRegisteredAgentHarnesses();
+      const disposeMcpRuntimes = params.disposeSessionMcpRuntimes ?? disposeAllSessionMcpRuntimes;
+      const mcpDisposePromise = disposeMcpRuntimes().catch((err: unknown) => {
+        shutdownLog.warn(`bundle-mcp runtime disposal failed during shutdown: ${String(err)}`);
+      });
+      const mcpDisposeTimeout = createTimeoutRace(MCP_RUNTIME_CLOSE_GRACE_MS, () => {
+        shutdownLog.warn(
+          `bundle-mcp runtime disposal exceeded ${MCP_RUNTIME_CLOSE_GRACE_MS}ms; continuing shutdown`,
+        );
+      });
+      await Promise.race([mcpDisposePromise, mcpDisposeTimeout.promise]);
+      mcpDisposeTimeout.clear();
       if (params.pluginServices) {
         await params.pluginServices.stop().catch(() => {});
       }
@@ -240,7 +263,13 @@ export function createGatewayCloseHandler(params: {
           httpServer.closeIdleConnections();
         }
         const closePromise = new Promise<void>((resolve, reject) =>
-          httpServer.close((err) => (err ? reject(err) : resolve())),
+          httpServer.close((err) => {
+            if (!err || isServerNotRunningError(err)) {
+              resolve();
+              return;
+            }
+            reject(err);
+          }),
         );
         const httpGraceTimeout = createTimeoutRace(HTTP_CLOSE_GRACE_MS, () => false as const);
         const closedWithinGrace = await Promise.race([
