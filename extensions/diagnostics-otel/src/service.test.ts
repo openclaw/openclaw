@@ -1449,6 +1449,50 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("does not self-parent trusted diagnostic lifecycle spans without parent ids", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      outcome: "completed",
+      durationMs: 100,
+      trace: {
+        traceId: TRACE_ID,
+        spanId: CHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      trace: {
+        traceId: TRACE_ID,
+        spanId: GRANDCHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    const parentBySpanName = Object.fromEntries(
+      telemetryState.tracer.startSpan.mock.calls.map((call) => [call[0], call[2]]),
+    );
+    expect(parentBySpanName).toMatchObject({
+      "openclaw.run": undefined,
+      "openclaw.model.call": undefined,
+    });
+    await service.stop?.(ctx);
+  });
+
   test("does not parent untrusted diagnostic lifecycle spans from injected trace ids", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
