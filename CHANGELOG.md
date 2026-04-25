@@ -83,6 +83,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Anthropic/Bedrock: preserve stripped thinking-only assistant replay
   turns with non-empty omitted-reasoning text so provider adapters keep strict
   user/assistant turn shape. Thanks @wujiaming88.
+- ACP/Codex: pass `sessions_spawn(runtime="acp")` model and thinking overrides into Codex ACP startup, normalize `openai-codex/*` refs and slash reasoning suffixes, and recognize managed Codex ACP wrapper commands without blocking current `gpt-5.5` sessions. Fixes #40393. (#71643) Thanks @91wan.
 - Browser/CDP: make readiness diagnostics use the same discovery-first fallback as reachability for bare `ws://` Browserless and Browserbase CDP URLs. Fixes #69532.
 - Browser/CDP: explain that loopback Browserless or other externally managed CDP services need `attachOnly: true` and matching Browserless `EXTERNAL` endpoint when reporting local port ownership conflicts, and fall back to the configured bare WebSocket root when a discovered Browserless endpoint rejects CDP. Fixes #49815.
 - Gateway/reload: preserve indefinite `gateway.reload.deferralTimeoutMs: 0` semantics for channel hot reload deferrals so active agent runs are not interrupted by a forced channel restart. (#71637) Thanks @Poo-Squirry.

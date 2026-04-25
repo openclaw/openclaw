@@ -36,6 +36,8 @@ export type AcpRuntimeEnsureInput = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
+  /** Optional runtime model override that must be available during session creation. */
+  model?: string;
   cwd?: string;
   env?: Record<string, string>;
 };
