@@ -512,10 +512,58 @@ async function pruneHeartbeatTranscript(params: {
   try {
     const stat = await fs.stat(params.transcriptPath);
     if (stat.size > params.preReplySize) {
+      const canPrune = await isHeartbeatTranscriptTailPrunable({
+        transcriptPath: params.transcriptPath,
+        preReplySize: params.preReplySize,
+        currentSize: stat.size,
+      });
+      if (!canPrune) {
+        return;
+      }
       await fs.truncate(params.transcriptPath, params.preReplySize);
     }
   } catch {
     // Best-effort cleanup only.
+  }
+}
+
+const MAX_HEARTBEAT_TRANSCRIPT_PRUNE_TAIL_BYTES = 1024 * 1024;
+
+async function isHeartbeatTranscriptTailPrunable(params: {
+  transcriptPath: string;
+  preReplySize: number;
+  currentSize: number;
+}): Promise<boolean> {
+  const tailBytes = params.currentSize - params.preReplySize;
+  if (tailBytes <= 0 || tailBytes > MAX_HEARTBEAT_TRANSCRIPT_PRUNE_TAIL_BYTES) {
+    return false;
+  }
+
+  const handle = await fs.open(params.transcriptPath, "r");
+  try {
+    const buffer = Buffer.alloc(tailBytes);
+    const { bytesRead } = await handle.read(buffer, 0, tailBytes, params.preReplySize);
+    if (bytesRead !== tailBytes) {
+      return false;
+    }
+    const tail = buffer.toString("utf-8");
+    const lines = tail.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    if (lines.length === 0) {
+      return false;
+    }
+    return lines.every((line) => {
+      try {
+        const entry = JSON.parse(line) as { type?: unknown; message?: { role?: unknown }; role?: unknown };
+        if (entry.type === "message") {
+          return entry.message?.role === "assistant";
+        }
+        return entry.role === "assistant";
+      } catch {
+        return false;
+      }
+    });
+  } finally {
+    await handle.close();
   }
 }
 
