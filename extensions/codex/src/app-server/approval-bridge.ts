@@ -274,7 +274,7 @@ function commandApprovalDecision(
       return amendmentDecision;
     }
   }
-  return "accept";
+  return hasAvailableDecision(requestParams, "accept") ? "accept" : "decline";
 }
 
 function fileChangeApprovalDecision(outcome: AppServerApprovalOutcome): JsonValue {
