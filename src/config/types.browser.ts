@@ -92,4 +92,12 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /**
+   * Enable the Hyprland grim fallback for headed local-managed viewport screenshots.
+   * When true and a Hyprland session is detected, a headless fake-output is created via
+   * hyprctl and the browser window is moved to it before each capture with grim (~20–170ms
+   * vs 10s+ CDP timeout). Disabled by default because it mutates desktop state.
+   * Requires hyprctl and grim in PATH.
+   */
+  hyprlandViewportCapture?: boolean;
 };

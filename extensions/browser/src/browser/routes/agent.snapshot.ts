@@ -485,7 +485,9 @@ export function registerBrowserAgentSnapshotRoutes(
             buffer = snap.buffer;
           } else {
             const browserPid =
-              !fullPage && !ctx.state().resolved.headless
+              !fullPage &&
+              !ctx.state().resolved.headless &&
+              ctx.state().resolved.hyprlandViewportCapture
                 ? (ctx.state().profiles.get(profileCtx.profile.name)?.running?.pid ?? null)
                 : null;
             const hyprlandPng =

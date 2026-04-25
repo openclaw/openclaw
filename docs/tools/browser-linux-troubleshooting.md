@@ -166,6 +166,39 @@ Notes:
   Use HTTP(S) for `/json/version` discovery, or WS(S) when your browser
   service gives you a direct DevTools socket URL.
 
+## Problem: Viewport screenshots time out on Hyprland/Omarchy/Wayland
+
+`Page.captureScreenshot` times out (~10s) on certain pages in headed local-managed mode on Hyprland, even though the page loaded successfully.
+
+### Root Cause
+
+Hyprland does not render windows without an assigned physical output. The CDP raster path never receives a frame, causing the timeout.
+
+### Solution: enable native Hyprland capture
+
+```json
+{
+  "browser": {
+    "hyprlandViewportCapture": true
+  }
+}
+```
+
+This creates a headless fake-output via `hyprctl`, moves the managed browser window onto it, and captures with `grim` (~20–170ms). Disabled by default because it mutates desktop state.
+
+Prerequisites — verify `hyprctl` and `grim` are in PATH:
+
+```bash
+which hyprctl grim
+```
+
+Notes:
+
+- Always returns PNG regardless of the requested `type` (JPEG not supported on this path).
+- Only applies to normal viewport screenshots. Full-page, element, and label captures are unaffected.
+- The fake-output is cleaned up automatically on gateway exit.
+- Has no effect in headless mode or outside a Hyprland session.
+
 ## Related
 
 - [Browser](/tools/browser)

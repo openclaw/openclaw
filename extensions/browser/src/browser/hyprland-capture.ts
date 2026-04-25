@@ -422,6 +422,33 @@ let cachedCapture: HeadedBrowserViewportCapture | null = null;
 let cachedPid: number | null = null;
 let setupLock: Promise<void> | null = null;
 
+function syncTeardown(): void {
+  if (cachedCapture) {
+    runHyprctlText(cachedCapture.session, ["output", "remove", cachedCapture.outputName]).catch(
+      () => {},
+    );
+    cachedCapture = null;
+    cachedPid = null;
+  }
+}
+
+process.on("exit", syncTeardown);
+process.on("SIGTERM", () => {
+  syncTeardown();
+  process.exit(0);
+});
+process.on("SIGINT", () => {
+  syncTeardown();
+  process.exit(0);
+});
+
+/** Visible for tests: reset singleton cache state. */
+export function _resetCaptureState(): void {
+  cachedCapture = null;
+  cachedPid = null;
+  setupLock = null;
+}
+
 export async function tryHyprlandViewportCapture(params: {
   browserPid: number;
   timeoutMs?: number;

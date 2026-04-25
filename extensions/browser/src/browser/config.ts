@@ -87,6 +87,7 @@ export type ResolvedBrowserConfig = {
   tabCleanup: ResolvedBrowserTabCleanupConfig;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  hyprlandViewportCapture: boolean;
 };
 
 export type ResolvedBrowserTabCleanupConfig = {
@@ -452,6 +453,7 @@ export function resolveBrowserConfig(
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),
     ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
     extraArgs,
+    hyprlandViewportCapture: cfg?.hyprlandViewportCapture === true,
   };
 }
 
