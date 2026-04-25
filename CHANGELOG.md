@@ -71,6 +71,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Dashboard/security: avoid writing tokenized Control UI URLs or SSH hints to runtime logs, keeping gateway bearer fragments out of console-captured logs readable through `logs.tail`. (#70029) Thanks @Ziy1-Tan.
 - Discord/cron: deliver text-only isolated cron and heartbeat announce output from the canonical final assistant text once, avoiding duplicate Discord posts when streamed block payloads and the final answer contain the same content. Fixes #71406. Thanks @alexgross21.
 - macOS Gateway: wait for launchd to reload the exited Gateway LaunchAgent before bootstrapping repair fallback, preventing config-triggered restarts from leaving the service not loaded. Fixes #45178. Thanks @vincentkoc.
 - TTS/hooks: preserve audio-only TTS transcripts for `message_sending` and `message_sent` hooks without rendering the transcript as a media caption. Thanks @zqchris.
