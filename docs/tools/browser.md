@@ -547,6 +547,28 @@ Notes:
   browser node. If Chrome lives elsewhere and no browser node is connected, use
   remote CDP or a node host instead.
 
+### Custom Chrome MCP launch
+
+Override the spawned Chrome DevTools MCP server per profile when the default
+`npx chrome-devtools-mcp@latest` flow is not what you want (offline hosts,
+pinned versions, vendored binaries):
+
+| Field        | What it does                                                                                                               |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                          |
+| `mcpArgs`    | Argument array passed verbatim to `mcpCommand`. Replaces the default `chrome-devtools-mcp@latest --autoConnect` arguments. |
+
+When `cdpUrl` is set on an existing-session profile, OpenClaw skips
+`--autoConnect` and forwards the endpoint to Chrome MCP automatically:
+
+- `http(s)://...` → `--browserUrl <url>` (DevTools HTTP discovery endpoint).
+- `ws(s)://...` → `--wsEndpoint <url>` (direct CDP WebSocket).
+
+Endpoint flags and `userDataDir` cannot be combined: when `cdpUrl` is set,
+`userDataDir` is ignored for Chrome MCP launch, since Chrome MCP attaches to
+the running browser behind the endpoint rather than opening a profile
+directory.
+
 <Accordion title="Existing-session feature limitations">
 
 Compared to the managed `openclaw` profile, existing-session drivers are more constrained:
