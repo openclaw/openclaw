@@ -1037,6 +1037,79 @@ describe("QmdMemoryManager", () => {
     );
   });
 
+  it("rebinds path conflicts when qmd add reports the conflicting collection name", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const removed: string[] = [];
+    const added: string[] = [];
+    let firstAdd = true;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        // This mirrors qmd builds that expose names and patterns, but no paths.
+        emitAndClose(
+          child,
+          "stdout",
+          [
+            "Collections (1):",
+            "",
+            "workspace-legacy (qmd://workspace-legacy/)",
+            "  Pattern:  **/*.md",
+          ].join("\n"),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        removed.push(args[2] ?? "");
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        added.push(name);
+        if (firstAdd) {
+          firstAdd = false;
+          emitAndClose(
+            child,
+            "stderr",
+            [
+              "A collection already exists for this path and pattern:",
+              "  Name: workspace-legacy (qmd://workspace-legacy/)",
+              "  Pattern: **/*.md",
+            ].join("\n"),
+            1,
+          );
+          return child;
+        }
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    expect(removed).toContain("workspace-legacy");
+    expect(added).toEqual(["workspace-main", "workspace-main"]);
+    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("rebinding"));
+    expect(logWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("qmd collection add skipped for workspace-main"),
+    );
+  });
+
   it("recreates a managed collection when list fails but add reports the same name exists", async () => {
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# canonical root");
     cfg = {
