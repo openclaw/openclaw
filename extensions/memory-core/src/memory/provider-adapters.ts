@@ -55,7 +55,7 @@ function formatLocalSetupError(err: unknown): string {
     "To enable local embeddings:",
     "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.14+, remains supported)",
     missing
-      ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
+      ? "2) Install optional local embedding runtime next to OpenClaw: npm i -g node-llama-cpp@3.18.1"
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
     ...listRemoteEmbeddingSetupHints(),
