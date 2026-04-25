@@ -101,12 +101,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     clearSupervisorHints();
     setPlatform("darwin");
     process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    // Even if the scheduled-task relaunch *would* fail, launchd path must not call it.
-    relaunchGatewayScheduledTaskMock.mockReturnValue({
-      ok: false,
-      method: "schtasks",
-      detail: "mocked failure",
-    });
+    // On darwin under launchd, the scheduled-task relaunch path must not be reached.
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(result.mode).not.toBe("failed");
