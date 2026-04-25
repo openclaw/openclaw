@@ -180,7 +180,9 @@ describe("google video generation provider", () => {
       durationSeconds: 3,
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [[downloadUrl]] = fetchMock.mock.calls as unknown as [[string, RequestInit?]];
+    expect(downloadUrl).toBe(
       "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media&key=google-key",
     );
     expect(downloadMock).not.toHaveBeenCalled();
