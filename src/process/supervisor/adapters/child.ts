@@ -287,7 +287,11 @@ export async function createChildAdapter(params: {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
-        killProcessTree(pid);
+        // Pass through whether we actually spawned the child detached. Without
+        // this, `killProcessTree` group-kills via `-pid` and (in service-managed
+        // mode where useDetached === false) takes out the gateway's own
+        // process group along with the child. (#71662)
+        killProcessTree(pid, { detached: useDetached });
       }
       try {
         child.kill("SIGKILL");
