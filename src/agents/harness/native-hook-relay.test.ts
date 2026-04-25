@@ -470,6 +470,65 @@ describe("native hook relay registry", () => {
     );
   });
 
+  it("lets security-style plugins block native MCP calls by scanning tool params", async () => {
+    const beforeToolCall = vi.fn(async (event: unknown) => {
+      const hookEvent = event as { params?: unknown; toolName?: string };
+      const serializedParams = JSON.stringify(hookEvent.params ?? {});
+      if (hookEvent.toolName?.startsWith("mcp__") && serializedParams.includes("rm -rf")) {
+        return {
+          block: true,
+          blockReason: "Blocked by security policy: destructive MCP command detected",
+        };
+      }
+      return undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__shell__run_command",
+        tool_use_id: "mcp-call-security",
+        tool_input: {
+          command: "rm -rf /tmp/openclaw-important-state",
+        },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Blocked by security policy: destructive MCP command detected",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "mcp__shell__run_command",
+        params: {
+          command: "rm -rf /tmp/openclaw-important-state",
+        },
+        toolCallId: "mcp-call-security",
+      }),
+      expect.objectContaining({
+        toolName: "mcp__shell__run_command",
+        toolCallId: "mcp-call-security",
+      }),
+    );
+  });
+
   it("maps Codex MCP PostToolUse to OpenClaw after_tool_call observation", async () => {
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
