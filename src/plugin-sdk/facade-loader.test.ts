@@ -108,7 +108,7 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedFacadeRuntimeIds()).toEqual(["demo"]);
   });
 
-  it("keeps Windows dist facade loads off Jiti native import", () => {
+  it("uses native Jiti import for Windows dist facade loads", () => {
     const dir = createTempDirSync("openclaw-facade-loader-windows-dist-");
     const bundledPluginsDir = path.join(dir, "dist");
     fs.mkdirSync(path.join(bundledPluginsDir, "demo"), { recursive: true });
@@ -139,7 +139,7 @@ describe("plugin-sdk facade loader", () => {
       expect(createJitiCalls[0]?.[0]).toEqual(expect.any(String));
       expect(createJitiCalls[0]?.[1]).toEqual(
         expect.objectContaining({
-          tryNative: false,
+          tryNative: true,
         }),
       );
     } finally {

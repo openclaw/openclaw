@@ -158,7 +158,7 @@ describe("setup-registry getJiti", () => {
     clearPluginSetupRegistryCache();
   });
 
-  it("disables native jiti loading on Windows for setup-api modules", () => {
+  it("uses native jiti loading on Windows for setup-api modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -180,7 +180,7 @@ describe("setup-registry getJiti", () => {
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: false,
+        tryNative: true,
       }),
     );
   });

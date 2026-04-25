@@ -120,6 +120,7 @@ import {
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
   resolvePluginSdkScopedAliasMap,
+  normalizeJitiAliasTargetPath,
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
@@ -257,7 +258,7 @@ export function clearPluginLoaderCache(): void {
   inFlightPluginRegistryLoads.clear();
   openAllowlistWarningCache.clear();
   clearBundledRuntimeDependencyNodePaths();
-  registeredBundledRuntimeDepMirrorRoots.clear();
+  bundledRuntimeDependencyJitiAliases.clear();
   clearAgentHarnesses();
   clearPluginCommands();
   clearCompactionProviders();
@@ -457,16 +458,133 @@ function toSafeImportPath(specifier: string): string {
   return specifier;
 }
 
+type RuntimeDependencyPackageJson = {
+  dependencies?: Record<string, unknown>;
+  optionalDependencies?: Record<string, unknown>;
+  peerDependencies?: Record<string, unknown>;
+  exports?: unknown;
+  module?: string;
+  main?: string;
+};
+
+const bundledRuntimeDependencyJitiAliases = new Map<string, string>();
+
+function readRuntimeDependencyPackageJson(
+  packageJsonPath: string,
+): RuntimeDependencyPackageJson | null {
+  try {
+    return JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as RuntimeDependencyPackageJson;
+  } catch {
+    return null;
+  }
+}
+
+function collectRuntimeDependencyNames(pkg: RuntimeDependencyPackageJson): string[] {
+  return [
+    ...Object.keys(pkg.dependencies ?? {}),
+    ...Object.keys(pkg.optionalDependencies ?? {}),
+    ...Object.keys(pkg.peerDependencies ?? {}),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveRuntimePackageImportTarget(exportsField: unknown): string | null {
+  if (typeof exportsField === "string") {
+    return exportsField;
+  }
+  if (Array.isArray(exportsField)) {
+    for (const entry of exportsField) {
+      const resolved = resolveRuntimePackageImportTarget(entry);
+      if (resolved) {
+        return resolved;
+      }
+    }
+    return null;
+  }
+  if (!exportsField || typeof exportsField !== "object" || Array.isArray(exportsField)) {
+    return null;
+  }
+  const record = exportsField as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(record, ".")) {
+    return resolveRuntimePackageImportTarget(record["."]);
+  }
+  for (const condition of ["import", "node", "default"] as const) {
+    const resolved = resolveRuntimePackageImportTarget(record[condition]);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
+function registerBundledRuntimeDependencyJitiAliases(rootDir: string): void {
+  const rootPackageJson = readRuntimeDependencyPackageJson(path.join(rootDir, "package.json"));
+  if (!rootPackageJson) {
+    return;
+  }
+  for (const dependencyName of collectRuntimeDependencyNames(rootPackageJson)) {
+    const dependencyPackageJsonPath = path.join(
+      rootDir,
+      "node_modules",
+      ...dependencyName.split("/"),
+      "package.json",
+    );
+    const dependencyPackageJson = readRuntimeDependencyPackageJson(dependencyPackageJsonPath);
+    if (!dependencyPackageJson) {
+      continue;
+    }
+    const entry =
+      resolveRuntimePackageImportTarget(dependencyPackageJson.exports) ??
+      dependencyPackageJson.module ??
+      dependencyPackageJson.main;
+    if (!entry || entry.startsWith("#")) {
+      continue;
+    }
+    const dependencyRoot = path.dirname(dependencyPackageJsonPath);
+    const targetPath = path.resolve(dependencyRoot, entry);
+    if (!isPathInside(dependencyRoot, targetPath) || !fs.existsSync(targetPath)) {
+      continue;
+    }
+    bundledRuntimeDependencyJitiAliases.set(
+      dependencyName,
+      normalizeJitiAliasTargetPath(targetPath),
+    );
+  }
+}
+
+function resolveBundledRuntimeDependencyJitiAliasMap(): Record<string, string> | undefined {
+  if (bundledRuntimeDependencyJitiAliases.size === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    [...bundledRuntimeDependencyJitiAliases.entries()].toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  );
+}
+
 function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const jitiLoaders: PluginJitiLoaderCache = new Map();
   return (modulePath: string) => {
-    const tryNative =
-      shouldPreferNativeJiti(modulePath) && !isBundledRuntimeDependencyMirrorPath(modulePath);
+    const tryNative = shouldPreferNativeJiti(modulePath);
+    const runtimeAliasMap = resolveBundledRuntimeDependencyJitiAliasMap();
     return getCachedPluginJitiLoader({
       cache: jitiLoaders,
       modulePath,
       importerUrl: import.meta.url,
       jitiFilename: modulePath,
+      ...(runtimeAliasMap
+        ? {
+            aliasMap: {
+              ...buildPluginLoaderAliasMap(
+                modulePath,
+                process.argv[1],
+                import.meta.url,
+                options.pluginSdkResolution,
+              ),
+              ...runtimeAliasMap,
+            },
+          }
+        : {}),
       pluginSdkResolution: options.pluginSdkResolution,
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
       // after build. Disable native loading for source entries so Jiti rewrites
@@ -485,25 +603,6 @@ function resolveCanonicalDistRuntimeSource(source: string): string {
   }
   const candidate = `${source.slice(0, index)}${path.sep}dist${path.sep}extensions${path.sep}${source.slice(index + marker.length)}`;
   return fs.existsSync(candidate) ? candidate : source;
-}
-
-const registeredBundledRuntimeDepMirrorRoots = new Set<string>();
-
-function isBundledRuntimeDependencyMirrorPath(modulePath: string): boolean {
-  const resolvedModulePath = path.resolve(modulePath);
-  for (const installRoot of registeredBundledRuntimeDepMirrorRoots) {
-    if (
-      resolvedModulePath === installRoot ||
-      resolvedModulePath.startsWith(`${installRoot}${path.sep}`)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function registerBundledRuntimeDependencyMirrorRoot(installRoot: string): void {
-  registeredBundledRuntimeDepMirrorRoots.add(path.resolve(installRoot));
 }
 
 function mirrorBundledPluginRuntimeRoot(params: {
@@ -551,6 +650,7 @@ function prepareBundledPluginRuntimeDistMirror(params: {
   const mirrorDistRoot = path.join(params.installRoot, sourceDistRootName);
   const mirrorExtensionsRoot = path.join(mirrorDistRoot, "extensions");
   fs.mkdirSync(mirrorExtensionsRoot, { recursive: true, mode: 0o755 });
+  ensureBundledRuntimeDistPackageJson(mirrorDistRoot);
   for (const entry of fs.readdirSync(sourceDistRoot, { withFileTypes: true })) {
     if (entry.name === "extensions") {
       continue;
@@ -590,6 +690,14 @@ function prepareBundledPluginRuntimeDistMirror(params: {
   }
   ensureOpenClawPluginSdkAlias(mirrorDistRoot);
   return mirrorExtensionsRoot;
+}
+
+function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
+  const packageJsonPath = path.join(mirrorDistRoot, "package.json");
+  if (fs.existsSync(packageJsonPath)) {
+    return;
+  }
+  writeRuntimeJsonFile(packageJsonPath, { type: "module" });
 }
 
 function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: string): void {
@@ -2358,9 +2466,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             const packageRoot = resolveBundledRuntimeDependencyPackageRoot(pluginRoot);
             if (packageRoot) {
               registerBundledRuntimeDependencyNodePath(packageRoot);
+              registerBundledRuntimeDependencyJitiAliases(packageRoot);
             }
             registerBundledRuntimeDependencyNodePath(installRoot);
-            registerBundledRuntimeDependencyMirrorRoot(installRoot);
+            registerBundledRuntimeDependencyJitiAliases(installRoot);
             runtimePluginRoot = mirrorBundledPluginRuntimeRoot({
               pluginId: record.id,
               pluginRoot,

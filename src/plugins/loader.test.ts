@@ -1582,7 +1582,11 @@ module.exports = {
         name: "root-support",
         version: "1.0.0",
         type: "module",
-        exports: "./index.js",
+        exports: {
+          ".": {
+            import: "./index.js",
+          },
+        },
       }),
       "utf-8",
     );
@@ -1602,10 +1606,11 @@ module.exports = {
       path.join(pluginRoot, "index.js"),
       [
         `import { marker } from "../../manifest-support.js";`,
+        `import externalRuntime from "external-runtime";`,
         `export default {`,
         `  id: "alpha",`,
         `  register(api) {`,
-        `    api.registerCommand({ name: "root-support", handler: () => marker });`,
+        `    api.registerCommand({ name: "root-support", handler: () => [marker, externalRuntime.marker].join(":") });`,
         `  },`,
         `};`,
         "",
@@ -1619,6 +1624,9 @@ module.exports = {
           name: "@openclaw/alpha",
           version: "1.0.0",
           type: "module",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
           openclaw: { extensions: ["./index.js"] },
         },
         null,
@@ -1650,6 +1658,29 @@ module.exports = {
       registry = loadOpenClawPlugins({
         cache: false,
         config: { plugins: { enabled: true } },
+        bundledRuntimeDepsInstaller: ({ installRoot }) => {
+          const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+          fs.mkdirSync(depRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(depRoot, "package.json"),
+            JSON.stringify({
+              name: "external-runtime",
+              version: "1.0.0",
+              type: "module",
+              exports: {
+                ".": {
+                  import: "./index.js",
+                },
+              },
+            }),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(depRoot, "index.js"),
+            "export default { marker: 'external-ok' };\n",
+            "utf-8",
+          );
+        },
       });
     } finally {
       symlinkSync.mockRestore();

@@ -870,7 +870,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("disables native Jiti loads on Windows even for built JavaScript entries", () => {
+  it("prefers native Jiti loads on Windows for built JavaScript entries", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -878,9 +878,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
       expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
-        false,
+        true,
       );
     } finally {
       Object.defineProperty(process, "platform", {
@@ -890,7 +890,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("keeps plugin loader dist shortcuts off on Windows", () => {
+  it("keeps plugin loader dist shortcuts native on Windows", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -902,7 +902,7 @@ describe("plugin sdk alias helpers", () => {
         resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
           preferBuiltDist: true,
         }),
-      ).toBe(false);
+      ).toBe(true);
       expect(
         resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
           preferBuiltDist: true,
@@ -918,7 +918,7 @@ describe("plugin sdk alias helpers", () => {
 
   it("prefers native jiti for bundled plugin dist .js modules, keeps .ts on aliased path", () => {
     // Built .js/.mjs/.cjs files under dist/extensions/ should now delegate
-    // to shouldPreferNativeJiti() — which returns true on Linux/macOS for
+    // to shouldPreferNativeJiti() — which returns true on Node for
     // compiled artifacts, avoiding the slow jiti transform path.
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
