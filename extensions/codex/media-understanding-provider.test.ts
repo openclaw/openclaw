@@ -35,7 +35,7 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.118.0",
+      cliVersion: "0.125.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,

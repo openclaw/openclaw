@@ -125,7 +125,7 @@ describe("plugin install ledger store", () => {
   it("updates and removes records without mutating caller state", async () => {
     const records: Record<string, PluginInstallRecord> = {
       keep: {
-        source: "npm",
+        source: "npm" as const,
         spec: "keep@1.0.0",
       },
     } satisfies Record<string, PluginInstallRecord>;

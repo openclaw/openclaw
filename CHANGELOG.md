@@ -56,6 +56,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Local CLI TTS: add a bundled local command speech provider with file/stdout input, voice-note Opus conversion, and telephony PCM output. (#56239) Thanks @solar2ain.
 - Android/Talk Mode: expose Talk Mode in the Voice tab with runtime-owned voice capture modes and microphone foreground-service escalation. Thanks @alex-latitude.
 - Providers/LiteLLM: register `litellm` as an image-generation provider so `image_generate model=litellm/...` calls and `agents.defaults.imageGenerationModel.fallbacks` entries resolve through the LiteLLM proxy. Thanks @zqchris.
+- Codex harness: require Codex app-server `0.125.0` or newer and cover native MCP `PreToolUse`, `PostToolUse`, and `PermissionRequest` payloads through the OpenClaw hook relay.
 
 ### Fixes
 
