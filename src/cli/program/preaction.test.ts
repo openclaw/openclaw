@@ -393,8 +393,8 @@ describe("registerPreActionHooks", () => {
 
   it("routes logs to stderr in --json mode so stdout stays clean", async () => {
     await runPreAction({
-      parseArgv: ["agents", "list"],
-      processArgv: ["node", "openclaw", "agents", "list", "--json"],
+      parseArgv: ["message", "send"],
+      processArgv: ["node", "openclaw", "message", "send", "--json"],
     });
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
@@ -418,6 +418,16 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+  });
+
+  it("does not preload plugins for agents list JSON output", async () => {
+    await runPreAction({
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config validate", async () => {

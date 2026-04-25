@@ -101,23 +101,24 @@ export async function agentsListCommand(
 
   // `buildProviderStatusIndex` triggers on-demand plugin loads and is only
   // used for human text output (`summary.providers` is rendered in the text
-  // formatter). JSON callers (dashboards, monitors, IDE plugins) poll this
-  // command and don't need provider enrichment, so skip the plugin load when
-  // emitting JSON — combined with `loadPlugins: "text-only"` in the catalog
-  // entry, this drops `agents list --json` cold time from ~9s to sub-second.
-  // (#71739)
-  const providerStatus = opts.json ? null : await buildProviderStatusIndex(cfg);
+  // formatter). JSON callers (dashboards, monitors, IDE plugins) poll the
+  // config-derived fields, so skip the plugin load unless they explicitly ask
+  // for binding/provider enrichment with --bindings. Combined with
+  // `loadPlugins: "text-only"` in the catalog entry, this keeps
+  // `agents list --json` on the config-only path. (#71739)
+  const includeProviderDetails = !opts.json || opts.bindings === true;
+  const providerStatus = includeProviderDetails ? await buildProviderStatusIndex(cfg) : null;
 
   for (const summary of summaries) {
     const bindings = bindingMap.get(summary.id) ?? [];
-    const routes = summarizeBindings(cfg, bindings);
-    if (routes.length > 0) {
-      summary.routes = routes;
-    } else if (summary.isDefault) {
-      summary.routes = ["default (no explicit rules)"];
-    }
+    if (includeProviderDetails && providerStatus) {
+      const routes = summarizeBindings(cfg, bindings);
+      if (routes.length > 0) {
+        summary.routes = routes;
+      } else if (summary.isDefault) {
+        summary.routes = ["default (no explicit rules)"];
+      }
 
-    if (providerStatus) {
       const providerLines = listProvidersForAgent({
         summaryIsDefault: summary.isDefault,
         cfg,
