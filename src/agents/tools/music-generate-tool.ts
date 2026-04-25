@@ -25,6 +25,7 @@ import type {
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -64,6 +65,7 @@ import {
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
 const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
+const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
 
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -238,6 +240,7 @@ async function loadReferenceImages(params: {
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
   ssrfPolicy?: SsrFPolicy;
+  timeoutMs?: number;
 }): Promise<
   Array<{
     sourceImage: MusicGenerationSourceImage;
@@ -303,10 +306,20 @@ async function loadReferenceImages(params: {
             sandboxValidated: true,
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
           })
-        : await loadWebMedia(resolvedPath ?? resolvedInput, {
-            localRoots,
-            ssrfPolicy: params.ssrfPolicy,
-          });
+        : await (async () => {
+            const { signal, cleanup } = buildTimeoutAbortSignal({
+              timeoutMs: params.timeoutMs ?? DEFAULT_REFERENCE_FETCH_TIMEOUT_MS,
+            });
+            try {
+              return await loadWebMedia(resolvedPath ?? resolvedInput, {
+                localRoots,
+                requestInit: signal ? { signal } : undefined,
+                ssrfPolicy: params.ssrfPolicy,
+              });
+            } finally {
+              cleanup();
+            }
+          })();
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
     }
@@ -549,6 +562,7 @@ export function createMusicGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
+        timeoutMs,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,
