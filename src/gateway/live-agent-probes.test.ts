@@ -19,7 +19,13 @@ describe("live-agent-probes", () => {
 
   it("accepts only cat for the shared image probe reply", () => {
     expect(() => assertLiveImageProbeReply("cat")).not.toThrow();
+    expect(() =>
+      assertLiveImageProbeReply(
+        "model metadata for `gpt-5.5` not found. defaulting to fallback metadata; this can degrade performance and cause issues.cat",
+      ),
+    ).not.toThrow();
     expect(() => assertLiveImageProbeReply("horse")).toThrow("image probe expected 'cat'");
+    expect(() => assertLiveImageProbeReply("caterpillar")).toThrow("image probe expected 'cat'");
   });
 
   it("builds a retryable cron prompt with provider-specific fallback wording", () => {
