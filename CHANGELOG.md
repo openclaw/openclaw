@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/setup: include `setup.providers[].envVars` in generic provider auth/env lookups and warn non-bundled plugins that still rely on deprecated `providerAuthEnvVars` compatibility metadata. Thanks @vincentkoc.
 - Plugins/setup: derive generic provider setup choices from descriptor-safe `setup.providers[].authMethods` before falling back to setup runtime. Thanks @vincentkoc.
 - Plugins/setup: surface manifest provider auth choices directly in provider setup flow before falling back to setup runtime or install-catalog choices. Thanks @vincentkoc.
+- Plugins/manifest: add a `modelCatalog` contract for provider-owned model rows, aliases, suppression rules, and discovery mode metadata without loading plugin runtime. (#71342) Thanks @shakkernerd.
 - Plugins/setup: warn when descriptor-only setup plugins still ship ignored setup runtime entries, keeping `setup.requiresRuntime: false` semantics explicit without breaking existing metadata. Thanks @vincentkoc.
 - Plugins/channels: use manifest `channelConfigs` for read-only external channel discovery when no setup entry is available or setup descriptors declare runtime unnecessary. Thanks @vincentkoc.
 - TUI/dependencies: remove direct `cli-highlight` usage from the OpenClaw TUI code-block renderer, keeping themed code coloring without the extra root dependency. Thanks @vincentkoc.
