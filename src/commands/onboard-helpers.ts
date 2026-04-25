@@ -220,6 +220,8 @@ export function formatControlUiSshHint(params: {
     "Then open:",
     localUrl,
     authedUrl,
+    "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
+    "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
@@ -462,6 +464,8 @@ export function resolveControlUiLinks(params: {
   customBindHost?: string;
   basePath?: string;
 }): { httpUrl: string; wsUrl: string } {
+  // Current BYOH truth: lan, tailnet, and custom bind resolve over IPv4-only helpers.
+  // If the host is IPv6-only, use an IPv4 sidecar or proxy and point customBindHost at that IPv4 endpoint.
   const port = params.port;
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();

@@ -37,18 +37,21 @@ Notes:
 
 - By default, the Gateway refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs.
 - Binding beyond loopback without auth is blocked (safety guardrail).
+- `lan`, `tailnet`, and `custom` are currently IPv4-only on the BYOH seam.
+- IPv6-only BYOH is not natively supported on this seam today. Use an IPv4 sidecar or proxy if the host itself is IPv6-only.
 - `SIGUSR1` triggers an in-process restart when authorized (`commands.restart` is enabled by default; set `commands.restart: false` to block manual restart, while gateway tool/config apply/update remain allowed).
 - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don’t restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
 
 ### Options
 
 - `--port <port>`: WebSocket port (default comes from config/env; usually `18789`).
-- `--bind <loopback|lan|tailnet|auto|custom>`: listener bind mode.
+- `--bind <loopback|lan|tailnet|auto|custom>`: listener bind mode. `lan`, `tailnet`, and `custom` currently resolve over IPv4-only paths.
 - `--auth <token|password>`: auth mode override.
 - `--token <token>`: token override (also sets `OPENCLAW_GATEWAY_TOKEN` for the process).
 - `--password <password>`: password override (also sets `OPENCLAW_GATEWAY_PASSWORD` for the process).
 - `--tailscale <off|serve|funnel>`: expose the Gateway via Tailscale.
 - `--tailscale-reset-on-exit`: reset Tailscale serve/funnel config on shutdown.
+- `--bind custom` + `gateway.customBindHost`: expects an IPv4 address today. For IPv6-only BYOH, place an IPv4 sidecar or proxy in front of the gateway and point OpenClaw at that IPv4 endpoint.
 - `--allow-unconfigured`: allow gateway start without `gateway.mode=local` in config.
 - `--dev`: create a dev config + workspace if missing (skips BOOTSTRAP.md).
 - `--reset`: reset dev config + credentials + sessions + workspace (requires `--dev`).

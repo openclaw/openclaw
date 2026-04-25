@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  formatControlUiSshHint,
   normalizeGatewayTokenInput,
   openUrl,
   resolveBrowserOpenCommand,
@@ -69,6 +70,16 @@ describe("resolveBrowserOpenCommand", () => {
     expect(resolved.argv).toEqual(["cmd", "/c", "start", ""]);
     expect(resolved.quoteUrl).toBe(true);
     platformSpy.mockRestore();
+  });
+});
+
+describe("formatControlUiSshHint", () => {
+  it("includes the IPv4-only BYOH note and workaround", () => {
+    const hint = formatControlUiSshHint({ port: 18789 });
+    expect(hint).toContain("BYOH note: lan, tailnet, and custom bind are currently IPv4-only.");
+    expect(hint).toContain(
+      "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
+    );
   });
 });
 
