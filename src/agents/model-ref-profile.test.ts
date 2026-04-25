@@ -71,11 +71,18 @@ describe("splitTrailingAuthProfile", () => {
     expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b-it@q8_0")).toEqual({
       model: "lmstudio-mb-pro/gemma-4-31b-it@q8_0",
     });
+    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq3_xxs")).toEqual({
+      model: "lmstudio/qwen3.6-27b@iq3_xxs",
+    });
   });
 
   it("supports auth profiles after @q* quant suffixes", () => {
     expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b-it@q8_0@work")).toEqual({
       model: "lmstudio-mb-pro/gemma-4-31b-it@q8_0",
+      profile: "work",
+    });
+    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq4_xs@work")).toEqual({
+      model: "lmstudio/qwen3.6-27b@iq4_xs",
       profile: "work",
     });
   });

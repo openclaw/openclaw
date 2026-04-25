@@ -883,6 +883,17 @@ describe("model-selection", () => {
       });
     });
 
+    it("preserves LM Studio IQ quant suffixes in model ids", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "lmstudio/qwen3.6-27b@iq3_xxs",
+        defaultProvider: "openai",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "lmstudio",
+        model: "qwen3.6-27b@iq3_xxs",
+      });
+    });
+
     it("splits trailing profile suffix after OpenRouter preset paths", () => {
       const resolved = resolveModelRefFromString({
         raw: "openrouter/@preset/kimi-2-5@work",
