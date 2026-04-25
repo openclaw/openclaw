@@ -1396,10 +1396,10 @@ export function startHeartbeatRunner(opts: {
     const rawDelay = Math.max(0, nextDue - now);
     if (rawDelay > HEARTBEAT_MAX_TIMEOUT_MS && !heartbeatTimeoutOverflowWarned) {
       heartbeatTimeoutOverflowWarned = true;
-      log.warn(
-        "heartbeat: scheduled delay exceeds Node setTimeout cap; clamping to ~24.85d",
-        { rawDelayMs: rawDelay, clampedMs: HEARTBEAT_MAX_TIMEOUT_MS },
-      );
+      log.warn("heartbeat: scheduled delay exceeds Node setTimeout cap; clamping to ~24.85d", {
+        rawDelayMs: rawDelay,
+        clampedMs: HEARTBEAT_MAX_TIMEOUT_MS,
+      });
     }
     const delay = Math.min(rawDelay, HEARTBEAT_MAX_TIMEOUT_MS);
     state.timer = setTimeout(() => {
