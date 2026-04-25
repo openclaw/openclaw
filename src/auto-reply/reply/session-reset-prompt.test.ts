@@ -15,9 +15,17 @@ describe("buildBareSessionResetPrompt", () => {
     expect(prompt).toContain("read the required files before responding to the user");
     expect(prompt).toContain("If BOOTSTRAP.md exists in the provided Project Context");
     expect(prompt).toContain("read it and follow its instructions first");
+    expect(prompt).toContain("Do not use a generic assistant greeting");
+    expect(prompt).toContain("Re-enter the room like the configured persona already belongs there");
+    expect(prompt).toContain("casual groups can use a short social re-entry line");
+    expect(prompt).toContain("direct chats can be warm and normal");
+    expect(prompt).toContain("professional rooms should stay composed");
+    expect(prompt).toContain("instead of asking a scripted");
     expect(prompt).toContain(
       "Do not mention current or default model identity unless the user asked",
     );
+    expect(prompt).not.toContain("Then greet the user in your configured persona");
+    expect(prompt).not.toContain("ask what they want to do");
     expect(prompt).not.toContain(
       "If runtime-provided startup context is included for this first turn",
     );
