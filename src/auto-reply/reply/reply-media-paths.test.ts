@@ -282,6 +282,10 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("keeps managed generated media under the shared media root", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
     vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
