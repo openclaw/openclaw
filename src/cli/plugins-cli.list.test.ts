@@ -3,7 +3,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
-  buildPluginSnapshotReport,
+  buildPluginRegistrySnapshotReport,
   inspectPluginRegistry,
   resetPluginsCliTestState,
   refreshPluginRegistry,
@@ -17,8 +17,10 @@ describe("plugins cli list", () => {
   });
 
   it("includes imported state in JSON output", async () => {
-    buildPluginSnapshotReport.mockReturnValue({
+    buildPluginRegistrySnapshotReport.mockReturnValue({
       workspaceDir: "/workspace",
+      registrySource: "persisted",
+      registryDiagnostics: [],
       plugins: [
         createPluginRecord({
           id: "demo",
@@ -32,8 +34,9 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
-    expect(buildPluginSnapshotReport).toHaveBeenCalledWith(
+    expect(buildPluginRegistrySnapshotReport).toHaveBeenCalledWith(
       expect.objectContaining({
+        config: {},
         logger: expect.objectContaining({
           info: expect.any(Function),
           warn: expect.any(Function),
@@ -44,6 +47,10 @@ describe("plugins cli list", () => {
 
     expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
       workspaceDir: "/workspace",
+      registry: {
+        source: "persisted",
+        diagnostics: [],
+      },
       plugins: [
         expect.objectContaining({
           id: "demo",

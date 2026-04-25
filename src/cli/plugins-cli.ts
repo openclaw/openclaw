@@ -15,7 +15,7 @@ import {
   buildPluginDiagnosticsReport,
   buildPluginCompatibilityNotices,
   buildPluginInspectReport,
-  buildPluginSnapshotReport,
+  buildPluginRegistrySnapshotReport,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
@@ -174,9 +174,11 @@ export function registerPluginsCli(program: Command) {
     .option("--enabled", "Only show enabled plugins", false)
     .option("--verbose", "Show detailed entries", false)
     .action((opts: PluginsListOptions) => {
-      const report = buildPluginSnapshotReport(
-        opts.json ? { logger: quietPluginJsonLogger } : undefined,
-      );
+      const cfg = loadConfig();
+      const report = buildPluginRegistrySnapshotReport({
+        config: cfg,
+        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+      });
       const list = opts.enabled
         ? report.plugins.filter((p) => p.status === "loaded")
         : report.plugins;
@@ -184,6 +186,10 @@ export function registerPluginsCli(program: Command) {
       if (opts.json) {
         const payload = {
           workspaceDir: report.workspaceDir,
+          registry: {
+            source: report.registrySource,
+            diagnostics: report.registryDiagnostics,
+          },
           plugins: list,
           diagnostics: report.diagnostics,
         };

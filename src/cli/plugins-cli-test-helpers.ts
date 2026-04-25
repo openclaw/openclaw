@@ -35,6 +35,7 @@ export const recordPluginInstall: UnknownMock = vi.fn();
 export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
+export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
 export const buildPluginInspectReport: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 export const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
@@ -169,6 +170,18 @@ vi.mock("../plugins/status.js", () => ({
       buildPluginSnapshotReport,
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildPluginSnapshotReport"],
+  buildPluginRegistrySnapshotReport: ((
+    ...args: Parameters<
+      (typeof import("../plugins/status.js"))["buildPluginRegistrySnapshotReport"]
+    >
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/status.js"))["buildPluginRegistrySnapshotReport"]>,
+      ReturnType<(typeof import("../plugins/status.js"))["buildPluginRegistrySnapshotReport"]>
+    >(
+      buildPluginRegistrySnapshotReport,
+      ...args,
+    )) as (typeof import("../plugins/status.js"))["buildPluginRegistrySnapshotReport"],
   buildPluginInspectReport: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginInspectReport"]>
   ) =>
@@ -414,6 +427,7 @@ export function resetPluginsCliTestState() {
   clearPluginManifestRegistryCache.mockReset();
   loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
+  buildPluginRegistrySnapshotReport.mockReset();
   buildPluginInspectReport.mockReset();
   buildPluginDiagnosticsReport.mockReset();
   buildPluginCompatibilityNotices.mockReset();
@@ -477,6 +491,11 @@ export function resetPluginsCliTestState() {
     diagnostics: [],
   };
   buildPluginSnapshotReport.mockReturnValue(defaultPluginReport);
+  buildPluginRegistrySnapshotReport.mockReturnValue({
+    ...defaultPluginReport,
+    registrySource: "derived",
+    registryDiagnostics: [],
+  });
   buildPluginDiagnosticsReport.mockReturnValue(defaultPluginReport);
   buildPluginCompatibilityNotices.mockReturnValue([]);
   const defaultRegistryIndex = {

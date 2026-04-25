@@ -19,8 +19,13 @@ import {
 } from "./inspect-shape.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import {
+  loadPluginRegistrySnapshotWithMetadata,
+  type PluginRegistrySnapshotDiagnostic,
+  type PluginRegistrySnapshotSource,
+} from "./plugin-registry.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
-import type { PluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -31,6 +36,11 @@ import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
+};
+
+export type PluginRegistryStatusReport = PluginStatusReport & {
+  registrySource: PluginRegistrySnapshotSource;
+  registryDiagnostics: readonly PluginRegistrySnapshotDiagnostic[];
 };
 
 export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
@@ -142,6 +152,66 @@ type PluginReportParams = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
 };
+
+function buildPluginRecordFromInstalledIndex(
+  plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,
+): PluginRecord {
+  return {
+    id: plugin.pluginId,
+    name: plugin.pluginId,
+    ...(plugin.packageVersion ? { version: plugin.packageVersion } : {}),
+    format: "openclaw",
+    source: plugin.manifestPath,
+    rootDir: plugin.rootDir,
+    origin: plugin.origin,
+    enabled: plugin.enabled,
+    status: plugin.enabled ? "loaded" : "disabled",
+    toolNames: [],
+    hookNames: [],
+    channelIds: [...plugin.contributions.channels],
+    cliBackendIds: [...plugin.contributions.cliBackends],
+    providerIds: [...plugin.contributions.providers],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServiceIds: [],
+    commands: [...plugin.contributions.commandAliases],
+    httpRoutes: 0,
+    hookCount: 0,
+    configSchema: false,
+    contracts: {},
+  };
+}
+
+export function buildPluginRegistrySnapshotReport(
+  params?: PluginReportParams,
+): PluginRegistryStatusReport {
+  const config = params?.config ?? loadConfig();
+  const result = loadPluginRegistrySnapshotWithMetadata({
+    config,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+  });
+  return {
+    workspaceDir: params?.workspaceDir,
+    ...createEmptyPluginRegistry(),
+    plugins: result.snapshot.plugins.map(buildPluginRecordFromInstalledIndex),
+    diagnostics: [...result.snapshot.diagnostics],
+    registrySource: result.source,
+    registryDiagnostics: result.diagnostics,
+  };
+}
 
 function buildPluginReport(
   params: PluginReportParams | undefined,
