@@ -228,7 +228,7 @@ export class MultiplexControlChannel {
     }
     this.framesReceived++;
 
-    let parsed: unknown;
+    let parsed: Record<string, unknown> | null = null;
     try {
       parsed = JSON.parse(frame.payload.toString("utf8"));
     } catch (err) {
@@ -249,7 +249,7 @@ export class MultiplexControlChannel {
       return;
     }
 
-    const obj = parsed as Record<string, unknown>;
+    const obj: Record<string, unknown> = parsed;
     const type = typeof obj.type === "string" ? obj.type : undefined;
     switch (type) {
       case "backpressure": {

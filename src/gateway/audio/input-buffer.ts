@@ -183,7 +183,7 @@ export class RealtimeInputBuffer {
    */
   commit(): CommitResult {
     const audio =
-      this.chunks.length === 1 ? this.chunks[0]! : Buffer.concat(this.chunks, this.bufferedBytes);
+      this.chunks.length === 1 ? this.chunks[0] : Buffer.concat(this.chunks, this.bufferedBytes);
     const durationMs = pcm16BytesToMs(audio.length, this.format.sampleRate);
     this.clearInternal();
     return {
@@ -213,7 +213,7 @@ export class RealtimeInputBuffer {
   private evictOverflow(): void {
     const maxBytes = Math.ceil((this.maxBufferedMs * this.format.sampleRate) / 1000) * PCM16_BYTES_PER_SAMPLE;
     while (this.bufferedBytes > maxBytes && this.chunks.length > 0) {
-      const head = this.chunks[0]!;
+      const head = this.chunks[0];
       const overflow = this.bufferedBytes - maxBytes;
       if (head.length <= overflow) {
         this.chunks.shift();

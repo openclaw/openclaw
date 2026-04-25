@@ -143,7 +143,7 @@ export class RealtimeOutputBuffer {
 
     // Drop trailing chunks whose start is at/after the cutoff.
     while (this.chunks.length > 0) {
-      const last = this.chunks[this.chunks.length - 1]!;
+      const last = this.chunks[this.chunks.length - 1];
       if (last.startMs >= cutoff) {
         this.chunks.pop();
         chunksDropped++;
