@@ -37,7 +37,8 @@ Other common Linux launch failures:
   `WAYLAND_DISPLAY` are both unset. If you set `OPENCLAW_BROWSER_HEADLESS=0`,
   `browser.headless: false`, or `browser.profiles.<name>.headless: false`,
   remove that headed override, set `OPENCLAW_BROWSER_HEADLESS=1`, start `Xvfb`,
-  or run OpenClaw in a real desktop session.
+  run `openclaw browser start --headless` for a one-shot managed launch, or run
+  OpenClaw in a real desktop session.
 
 ### Solution 1: Install Google Chrome (Recommended)
 

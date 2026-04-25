@@ -28,7 +28,10 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 - State: `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
-All endpoints accept `?profile=<name>`.
+All endpoints accept `?profile=<name>`. `POST /start?headless=true` requests a
+one-shot headless launch for local managed profiles without changing persisted
+browser config; attach-only, remote CDP, and existing-session profiles reject
+that override because OpenClaw does not launch those browser processes.
 
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
@@ -122,6 +125,7 @@ All commands accept `--browser-profile <name>` to target a specific profile, and
 ```bash
 openclaw browser status
 openclaw browser start
+openclaw browser start --headless # one-shot local managed headless launch
 openclaw browser stop            # also clears emulation on attach-only/remote CDP
 openclaw browser tabs
 openclaw browser tab             # shortcut for current tab
