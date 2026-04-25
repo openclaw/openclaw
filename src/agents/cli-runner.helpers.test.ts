@@ -144,6 +144,47 @@ describe("buildCliArgs", () => {
     ).toEqual(["-p", "--append-system-prompt", "Stable prefix\nDynamic suffix"]);
   });
 
+  it("passes Claude CLI system prompts via --append-system-prompt-file to avoid Windows argv overflow (#71600)", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptArg: "--append-system-prompt",
+          systemPromptFileArg: "--append-system-prompt-file",
+        },
+        baseArgs: ["-p", "--output-format", "stream-json"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "Stable prefix",
+        systemPromptFilePath: "/tmp/openclaw/system-prompt.md",
+        useResume: false,
+      }),
+    ).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--append-system-prompt-file",
+      "/tmp/openclaw/system-prompt.md",
+    ]);
+  });
+
+  it("falls back to inline systemPromptArg when systemPromptFileArg is set but no file path is provided", () => {
+    // Defensive: writeCliSystemPromptFile failures or upstream code paths that
+    // omit systemPromptFilePath should not leave the system prompt unset.
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptArg: "--append-system-prompt",
+          systemPromptFileArg: "--append-system-prompt-file",
+        },
+        baseArgs: ["-p"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "Stable prefix",
+        useResume: false,
+      }),
+    ).toEqual(["-p", "--append-system-prompt", "Stable prefix"]);
+  });
+
   it("passes Codex system prompts via a model instructions file config override", () => {
     expect(
       buildCliArgs({
@@ -453,6 +494,33 @@ describe("writeCliSystemPromptFile", () => {
       await written.cleanup();
     }
     await expect(fs.access(written.filePath ?? "")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("writes a temp file when systemPromptFileArg is set (Claude CLI #71600 path)", async () => {
+    const written = await writeCliSystemPromptFile({
+      backend: {
+        command: "claude",
+        systemPromptFileArg: "--append-system-prompt-file",
+      },
+      systemPrompt: "Stable prefix",
+    });
+
+    try {
+      expect(written.filePath).toContain("openclaw-cli-system-prompt-");
+      await expect(fs.readFile(written.filePath ?? "", "utf-8")).resolves.toBe("Stable prefix");
+    } finally {
+      await written.cleanup();
+    }
+  });
+
+  it("returns no file path when neither file mechanism is configured", async () => {
+    const written = await writeCliSystemPromptFile({
+      backend: { command: "gemini", systemPromptArg: "--system" },
+      systemPrompt: "Stable prefix",
+    });
+
+    expect(written.filePath).toBeUndefined();
+    await written.cleanup();
   });
 });
 

@@ -292,7 +292,14 @@ export async function writeCliSystemPromptFile(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
 }): Promise<{ filePath?: string; cleanup: () => Promise<void> }> {
-  if (!params.backend.systemPromptFileConfigKey?.trim()) {
+  // Write a temp file when either path-based mechanism is configured:
+  //   - `systemPromptFileArg` (Claude CLI: `--append-system-prompt-file <path>`)
+  //   - `systemPromptFileConfigKey` (Codex CLI: `-c model_instructions_file="..."`)
+  // Otherwise the backend uses inline `systemPromptArg` and no temp file is needed.
+  if (
+    !params.backend.systemPromptFileArg?.trim() &&
+    !params.backend.systemPromptFileConfigKey?.trim()
+  ) {
     return { cleanup: async () => {} };
   }
   const tempDir = await fs.mkdtemp(
@@ -369,6 +376,18 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
+    !params.useResume &&
+    params.systemPrompt &&
+    params.systemPromptFilePath &&
+    params.backend.systemPromptFileArg
+  ) {
+    // File-arg path: e.g. Claude CLI's `--append-system-prompt-file <path>`.
+    // Preferred over inline `systemPromptArg` because passing the prompt as a
+    // file path avoids Windows' ~32,767-character argv limit (#71600). Each
+    // workspace context easily exceeds that — see issue for spawn
+    // ENAMETOOLONG repro at ~41k chars.
+    args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
+  } else if (
     !params.useResume &&
     params.systemPrompt &&
     params.systemPromptFilePath &&

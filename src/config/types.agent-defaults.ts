@@ -127,6 +127,16 @@ export type CliBackendConfig = {
   sessionIdFields?: string[];
   /** Flag used to pass system prompt. */
   systemPromptArg?: string;
+  /**
+   * Flag used to pass a system prompt file path directly (e.g.
+   * `--append-system-prompt-file <path>` for Claude CLI). Preferred over
+   * `systemPromptArg` when set, because passing the prompt as a file path
+   * avoids Windows' ~32,767-character command-line argument limit
+   * (`spawn ENAMETOOLONG`) — see #71600. Distinct from
+   * `systemPromptFileConfigKey` which uses a TOML-style config override
+   * (`-c key="path"`).
+   */
+  systemPromptFileArg?: string;
   /** Config override flag used to pass a system prompt file (e.g. -c). */
   systemPromptFileConfigArg?: string;
   /** Config override key used to pass a system prompt file. */

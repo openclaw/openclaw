@@ -63,6 +63,12 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       sessionMode: "always",
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptArg: "--append-system-prompt",
+      // Pass the system prompt as a file path to avoid Windows' ~32,767-char
+      // argv limit causing spawn ENAMETOOLONG when the workspace context
+      // pushes the inline prompt past that bound. Claude Code CLI 2.x
+      // accepts `--append-system-prompt-file <path>` as the file-based
+      // counterpart to `--append-system-prompt`. (#71600)
+      systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
       systemPromptWhen: "first",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
