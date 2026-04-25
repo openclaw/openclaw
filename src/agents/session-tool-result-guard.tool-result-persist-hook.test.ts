@@ -88,6 +88,14 @@ function expectPersistedToolResultTextCapped(sm: ReturnType<typeof SessionManage
   expect(text).toContain("truncated");
 }
 
+function expectPersistedToolResultDetailsCapped(sm: ReturnType<typeof SessionManager.inMemory>) {
+  const toolResult = getPersistedToolResult(sm);
+  const details = toolResult.details as Record<string, unknown>;
+  expect(details.persistedDetailsTruncated).toBe(true);
+  expect(details.aggregated).toBeUndefined();
+  expect(Buffer.byteLength(JSON.stringify(details), "utf-8")).toBeLessThan(8_192);
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
   if (originalBundledPluginsDir === undefined) {
@@ -107,6 +115,43 @@ describe("tool_result_persist hook", () => {
     const toolResult = getPersistedToolResult(sm);
     expect(toolResult).toBeTruthy();
     expect(toolResult.details).toBeTruthy();
+  });
+
+  it("caps oversized toolResult details before persistence", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+    } as AgentMessage);
+    appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      isError: false,
+      content: [{ type: "text", text: "visible output stays small" }],
+      details: {
+        status: "completed",
+        sessionId: "exec-1",
+        aggregated: "x".repeat(120_000),
+        tail: "t".repeat(6_000),
+        sessions: [
+          {
+            sessionId: "proc-1",
+            status: "completed",
+            command: "node noisy-script.js ".repeat(2_000),
+            aggregated: "a".repeat(80_000),
+            tail: "z".repeat(8_000),
+          },
+        ],
+      },
+    } as any);
+
+    const toolResult = getPersistedToolResult(sm);
+    expect(toolResult.content[0]?.text).toBe("visible output stays small");
+    expectPersistedToolResultDetailsCapped(sm);
   });
 
   it("loads tool_result_persist hooks without breaking persistence", () => {
@@ -188,6 +233,35 @@ describe("tool_result_persist hook", () => {
 
     appendToolCallAndResult(sm);
     expectPersistedToolResultTextCapped(sm);
+  });
+
+  it("reapplies the details cap after tool_result_persist expands details", () => {
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-toolpersist-details-expand-",
+      id: "persist-details-expand",
+      body: `export default { id: "persist-details-expand", register(api) {
+  api.on("tool_result_persist", (event) => {
+    return {
+      message: {
+        ...event.message,
+        details: {
+          status: "completed",
+          aggregated: "x".repeat(150000),
+          sessions: [{ sessionId: "proc-1", command: "y".repeat(50000), tail: "z".repeat(10000) }],
+        },
+      },
+    };
+  }, { priority: 10 });
+} };`,
+    });
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+
+    appendToolCallAndResult(sm);
+    expectPersistedToolResultDetailsCapped(sm);
   });
 });
 

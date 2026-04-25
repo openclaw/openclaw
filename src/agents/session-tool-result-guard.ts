@@ -38,6 +38,134 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
   return Math.max(1, opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
 }
 
+const MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES = 8_192;
+const MAX_PERSISTED_DETAIL_STRING_CHARS = 2_000;
+const MAX_PERSISTED_DETAIL_SESSION_COUNT = 10;
+
+function jsonByteLength(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf-8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function truncatePersistedDetailString(
+  value: string,
+  maxChars = MAX_PERSISTED_DETAIL_STRING_CHARS,
+): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, maxChars)}\n\n[OpenClaw persisted detail truncated: ${
+    value.length - maxChars
+  } chars omitted]`;
+}
+
+function sanitizePersistedSessionDetail(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const src = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of [
+    "sessionId",
+    "status",
+    "pid",
+    "startedAt",
+    "endedAt",
+    "runtimeMs",
+    "cwd",
+    "name",
+    "truncated",
+    "exitCode",
+    "exitSignal",
+  ]) {
+    const field = src[key];
+    if (field !== undefined) {
+      out[key] = typeof field === "string" ? truncatePersistedDetailString(field, 500) : field;
+    }
+  }
+  if (typeof src.command === "string") {
+    out.command = truncatePersistedDetailString(src.command, 500);
+  }
+  return out;
+}
+
+function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
+  if (details === undefined || details === null) {
+    return details;
+  }
+  const originalBytes = jsonByteLength(details);
+  if (originalBytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
+    return details;
+  }
+  if (typeof details !== "object") {
+    return {
+      persistedDetailsTruncated: true,
+      originalDetailsBytes: originalBytes,
+      valueType: typeof details,
+    };
+  }
+  const src = details as Record<string, unknown>;
+  const out: Record<string, unknown> = {
+    persistedDetailsTruncated: true,
+    originalDetailsBytes: originalBytes,
+    originalDetailKeys: Object.keys(src).slice(0, 40),
+  };
+  for (const key of [
+    "status",
+    "sessionId",
+    "pid",
+    "startedAt",
+    "endedAt",
+    "cwd",
+    "name",
+    "exitCode",
+    "exitSignal",
+    "retryInMs",
+    "total",
+    "totalLines",
+    "totalChars",
+    "truncated",
+    "fullOutputPath",
+    "truncation",
+  ]) {
+    const field = src[key];
+    if (field !== undefined) {
+      out[key] = typeof field === "string" ? truncatePersistedDetailString(field) : field;
+    }
+  }
+  if (typeof src.tail === "string") {
+    out.tail = truncatePersistedDetailString(src.tail);
+  }
+  if (Array.isArray(src.sessions)) {
+    out.sessions = src.sessions
+      .slice(0, MAX_PERSISTED_DETAIL_SESSION_COUNT)
+      .map(sanitizePersistedSessionDetail);
+    if (src.sessions.length > MAX_PERSISTED_DETAIL_SESSION_COUNT) {
+      out.sessionsTruncated = src.sessions.length - MAX_PERSISTED_DETAIL_SESSION_COUNT;
+    }
+  }
+  return out;
+}
+
+function capToolResultDetails(msg: AgentMessage): AgentMessage {
+  if ((msg as { role?: string }).role !== "toolResult") {
+    return msg;
+  }
+  const details = (msg as { details?: unknown }).details;
+  const sanitizedDetails = sanitizeToolResultDetailsForPersistence(details);
+  if (sanitizedDetails === details) {
+    return msg;
+  }
+  return { ...msg, details: sanitizedDetails };
+}
+
+function capToolResultForPersistence(msg: AgentMessage, maxChars: number): AgentMessage {
+  return capToolResultDetails(capToolResultSize(msg, maxChars));
+}
+
 function normalizePersistedToolResultName(
   message: AgentMessage,
   fallbackName?: string,
@@ -169,7 +297,7 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          originalAppend(capToolResultSize(flushed, maxToolResultChars) as never);
+          originalAppend(capToolResultForPersistence(flushed, maxToolResultChars) as never);
         }
       }
     }
@@ -206,7 +334,10 @@ export function installSessionToolResultGuard(
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(persistMessage(normalizedToolResult), maxToolResultChars);
+      const capped = capToolResultForPersistence(
+        persistMessage(normalizedToolResult),
+        maxToolResultChars,
+      );
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
@@ -217,7 +348,7 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(capToolResultSize(persisted, maxToolResultChars) as never);
+      return originalAppend(capToolResultForPersistence(persisted, maxToolResultChars) as never);
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.
