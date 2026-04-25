@@ -98,6 +98,10 @@ describe("scripts/changed-lanes", () => {
       PATH: "/usr/bin",
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
     });
+    expect(plan.commands.find((command) => command.args[0] === "lint:core")?.env).toMatchObject({
+      PATH: "/usr/bin",
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+    });
   });
 
   it("reenables local-check policy for changed typecheck commands", () => {
