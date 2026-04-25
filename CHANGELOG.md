@@ -2,6 +2,15 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+### Fixes
+
+- CI/release-checks: pass workflow inputs and matrix values through step environment variables instead of embedding them directly into `run:` shell commands, reducing template-injection surface in the cross-OS release-check workflow. (#66884) Thanks @alexlomt.
+- fix(ci): harden release checks workflow inputs (#66884). Thanks @alexlomt
+
 ## 2026.4.24 (Unreleased)
 
 ### Breaking
