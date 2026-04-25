@@ -24,6 +24,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveConnectChallengeTimeoutMs } from "./handshake-timeouts.js";
@@ -210,7 +211,7 @@ export class GatewayClient {
     };
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
-        ? Math.max(1, Math.min(Math.floor(opts.requestTimeoutMs), 2_147_483_647))
+        ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs)
         : 30_000;
   }
 
@@ -931,7 +932,7 @@ export class GatewayClient {
       opts?.timeoutMs === null
         ? null
         : typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-          ? Math.max(1, Math.min(Math.floor(opts.timeoutMs), 2_147_483_647))
+          ? resolveSafeTimeoutDelayMs(opts.timeoutMs)
           : expectFinal
             ? null
             : this.requestTimeoutMs;

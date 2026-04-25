@@ -1,4 +1,5 @@
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { setSafeTimeout } from "../../utils/timer-delay.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 /**
@@ -254,8 +255,7 @@ export async function waitForAgentJob(params: {
     ) => {
       clearPendingErrorTimer();
       clearPendingTimeoutTimer();
-      const effectiveDelay = Math.max(1, Math.min(Math.floor(delayMs), 2_147_483_647));
-      const timerRef = setTimeout(() => {
+      const timerRef = setSafeTimeout(() => {
         const latest = ignoreCachedSnapshot ? undefined : getCachedAgentRun(runId);
         if (latest) {
           finish(latest);
@@ -263,7 +263,7 @@ export async function waitForAgentJob(params: {
         }
         recordAgentRunSnapshot(snapshot);
         finish(snapshot);
-      }, effectiveDelay);
+      }, delayMs);
       timerRef.unref?.();
       if (kind === "error") {
         pendingErrorTimer = timerRef;
@@ -335,8 +335,7 @@ export async function waitForAgentJob(params: {
       finish(snapshot);
     });
 
-    const timerDelayMs = Math.max(1, Math.min(Math.floor(timeoutMs), 2_147_483_647));
-    const timer = setTimeout(() => finish(null), timerDelayMs);
+    const timer = setSafeTimeout(() => finish(null), timeoutMs);
     onAbort = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
