@@ -635,6 +635,10 @@ openclaw googlemeet artifacts --meeting https://meet.google.com/abc-defg-hij
 openclaw googlemeet attendance --meeting https://meet.google.com/abc-defg-hij
 ```
 
+With `--meeting`, `artifacts` and `attendance` use the latest conference record
+by default. Pass `--all-conference-records` when you want every retained record
+for that meeting.
+
 If you already know the conference record id, address it directly:
 
 ```bash

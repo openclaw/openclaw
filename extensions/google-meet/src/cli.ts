@@ -55,6 +55,7 @@ type MeetArtifactOptions = ResolveSpaceOptions & {
   conferenceRecord?: string;
   pageSize?: string;
   transcriptEntries?: boolean;
+  allConferenceRecords?: boolean;
   format?: "summary" | "markdown";
   output?: string;
 };
@@ -445,6 +446,7 @@ function resolveArtifactTokenOptions(
   expiresAt?: number;
   pageSize?: number;
   includeTranscriptEntries?: boolean;
+  allConferenceRecords?: boolean;
 } {
   const meeting = options.meeting?.trim() || config.defaults.meeting;
   const conferenceRecord = options.conferenceRecord?.trim();
@@ -463,6 +465,7 @@ function resolveArtifactTokenOptions(
     expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
     pageSize: parseOptionalNumber(options.pageSize),
     includeTranscriptEntries: options.transcriptEntries !== false,
+    allConferenceRecords: Boolean(options.allConferenceRecords),
   };
 }
 
@@ -1030,6 +1033,7 @@ export function registerGoogleMeetCli(params: {
     .option("--client-secret <secret>", "OAuth client secret override")
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
     .option("--page-size <n>", "Max resources per Meet API page")
+    .option("--all-conference-records", "Fetch every conference record for --meeting")
     .option("--no-transcript-entries", "Skip structured transcript entry lookup")
     .option("--format <format>", "Output format: summary or markdown", "summary")
     .option("--output <path>", "Write output to a file instead of stdout")
@@ -1043,6 +1047,7 @@ export function registerGoogleMeetCli(params: {
         conferenceRecord: resolved.conferenceRecord,
         pageSize: resolved.pageSize,
         includeTranscriptEntries: resolved.includeTranscriptEntries,
+        allConferenceRecords: resolved.allConferenceRecords,
       });
       if (options.json) {
         await writeCliOutput(
@@ -1083,6 +1088,7 @@ export function registerGoogleMeetCli(params: {
     .option("--client-secret <secret>", "OAuth client secret override")
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
     .option("--page-size <n>", "Max resources per Meet API page")
+    .option("--all-conference-records", "Fetch every conference record for --meeting")
     .option("--format <format>", "Output format: summary or markdown", "summary")
     .option("--output <path>", "Write output to a file instead of stdout")
     .option("--json", "Print JSON output", false)
@@ -1094,6 +1100,7 @@ export function registerGoogleMeetCli(params: {
         meeting: resolved.meeting,
         conferenceRecord: resolved.conferenceRecord,
         pageSize: resolved.pageSize,
+        allConferenceRecords: resolved.allConferenceRecords,
       });
       if (options.json) {
         await writeCliOutput(
