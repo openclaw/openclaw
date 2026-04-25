@@ -123,14 +123,14 @@ export const directoryHandlers: GatewayRequestHandlers = {
     try {
       const cfg = await loadAutoEnabledConfig();
       const { plugin, channelId } = resolved;
-      const fn = plugin.directory?.listPeersLive ?? plugin.directory?.listPeers;
+      const fn = plugin.directory?.listPeers ?? plugin.directory?.listPeersLive;
       if (!fn) {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `channel ${channelId} does not support directory peers list`,
+            `channel ${channelId} does not support directory.peers.list`,
           ),
         );
         return;
@@ -159,7 +159,7 @@ export const directoryHandlers: GatewayRequestHandlers = {
     try {
       const cfg = await loadAutoEnabledConfig();
       const { plugin, channelId } = resolved;
-      const fn = plugin.directory?.listGroupsLive ?? plugin.directory?.listGroups;
+      const fn = plugin.directory?.listGroups ?? plugin.directory?.listGroupsLive;
       if (!fn) {
         respond(
           false,
