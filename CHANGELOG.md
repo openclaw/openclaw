@@ -54,6 +54,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/Voice Call: treat missing provider credentials as setup-incomplete
+  during Gateway startup and log the missing keys as a warning instead of a
+  runtime startup error, while keeping explicit command/tool errors when used. Thanks
+  @steipete.
 - Tooling/check:changed: pass parent heavy-check lock markers to lint lanes so
   `pnpm check:changed` no longer waits on its own `lint:extensions` child.
   Thanks @steipete.
