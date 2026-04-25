@@ -91,6 +91,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const OPENCLAW_TRANSPORT_TO_BUNDLE_TYPE: Record<string, string> = {
+  "streamable-http": "http",
+  http: "http",
+  sse: "sse",
+  stdio: "stdio",
+};
+
+/**
+ * Translate the OpenClaw `transport` field on an MCP server entry into the
+ * `type` field expected by downstream CLI runners (Claude, Gemini). The
+ * OpenClaw config schema (`McpServerConfig.transport`) accepts
+ * `"sse" | "streamable-http"`, while Claude Code and Gemini expect
+ * `type: "http" | "sse" | "stdio"`. Without this translation, user-defined
+ * HTTP MCP servers from `mcp.servers` are written into the bundled CLI config
+ * with an unrecognized `transport` key and rejected (or silently treated as
+ * stdio) by the downstream CLI.
+ *
+ * If both `transport` and `type` are set, `type` wins (explicit downstream
+ * override). The `transport` key is removed from the result either way so it
+ * does not leak into the downstream CLI config.
+ */
+function translateOpenClawTransportToBundleType(
+  server: BundleMcpServerConfig,
+): BundleMcpServerConfig {
+  const next = { ...server } as Record<string, unknown>;
+  const rawTransport = next.transport;
+  delete next.transport;
+  if (typeof next.type === "string") {
+    return next as BundleMcpServerConfig;
+  }
+  if (typeof rawTransport === "string") {
+    const mapped = OPENCLAW_TRANSPORT_TO_BUNDLE_TYPE[rawTransport];
+    if (mapped) {
+      next.type = mapped;
+    }
+  }
+  return next as BundleMcpServerConfig;
+}
+
 function normalizeStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string")
     ? [...value]
@@ -418,10 +457,18 @@ export async function prepareCliBundleMcpConfig(params: {
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
   const configuredMcp = normalizeConfiguredMcpServers(params.config?.mcp?.servers);
   if (Object.keys(configuredMcp).length > 0) {
+    const translatedConfiguredMcp = Object.fromEntries(
+      Object.entries(configuredMcp).map(([name, server]) => [
+        name,
+        translateOpenClawTransportToBundleType(server as BundleMcpServerConfig),
+      ]),
+    ) as BundleMcpConfig["mcpServers"];
     const existingMcpServers = mergedConfig.mcpServers;
     mergedConfig = {
       ...mergedConfig,
-      mcpServers: existingMcpServers ? { ...existingMcpServers, ...configuredMcp } : configuredMcp,
+      mcpServers: existingMcpServers
+        ? { ...existingMcpServers, ...translatedConfiguredMcp }
+        : translatedConfiguredMcp,
     } satisfies BundleMcpConfig;
   }
   if (params.additionalConfig) {

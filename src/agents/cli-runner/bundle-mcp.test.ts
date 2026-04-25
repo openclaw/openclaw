@@ -227,6 +227,93 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
+  it("translates OpenClaw transport field on user mcp.servers into Claude type", async () => {
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-user-servers-transport-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            context7: {
+              transport: "streamable-http",
+              url: "https://mcp.context7.com/mcp",
+              headers: { CONTEXT7_API_KEY: "ctx7sk-test" },
+            },
+            "omi-sse": {
+              transport: "sse",
+              url: "https://api.omi.me/v1/mcp/sse",
+            },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { type?: string; transport?: string; url?: string }>;
+    };
+
+    expect(raw.mcpServers?.context7?.type).toBe("http");
+    expect(raw.mcpServers?.context7?.url).toBe("https://mcp.context7.com/mcp");
+    expect(raw.mcpServers?.context7?.transport).toBeUndefined();
+
+    expect(raw.mcpServers?.["omi-sse"]?.type).toBe("sse");
+    expect(raw.mcpServers?.["omi-sse"]?.transport).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
+  it("preserves explicit type and still strips transport on user mcp.servers", async () => {
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-user-servers-transport-explicit-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            mixed: {
+              type: "http",
+              transport: "sse",
+              url: "https://mcp.example.com/mcp",
+            },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { type?: string; transport?: string }>;
+    };
+
+    expect(raw.mcpServers?.mixed?.type).toBe("http");
+    expect(raw.mcpServers?.mixed?.transport).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
   it("user mcp.servers do not override the loopback additionalConfig", async () => {
     const workspaceDir = await tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-loopback-",
