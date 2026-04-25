@@ -4,7 +4,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolvePathFromInput, toRelativeWorkspacePath } from "../../agents/path-policy.js";
 import {
   assertMediaNotDataUrl,
-  isAllowedManagedMediaPath,
+  resolveAllowedManagedMediaPath,
   resolveSandboxedMediaSource,
 } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
@@ -120,8 +120,9 @@ export function createReplyMediaPathNormalizer(params: {
     if (!isLikelyLocalMediaSource(media)) {
       return media;
     }
-    if (isAllowedManagedMediaPath(media)) {
-      return media;
+    const managedMediaPath = await resolveAllowedManagedMediaPath(media);
+    if (managedMediaPath) {
+      return managedMediaPath;
     }
     const cached = persistedMediaBySource.get(media);
     if (cached) {
