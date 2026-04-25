@@ -953,6 +953,32 @@ describe("TelegramPollingSession", () => {
     expect(transport2.close).toHaveBeenCalledTimes(1);
   });
 
+  it("logs an actionable duplicate-poller hint for getUpdates conflicts", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    const conflictError = Object.assign(
+      new Error("Conflict: terminated by other getUpdates request"),
+      {
+        error_code: 409,
+        method: "getUpdates",
+      },
+    );
+    createTelegramBotMock.mockReturnValueOnce(makeBot()).mockReturnValueOnce(makeBot());
+    isRecoverableTelegramNetworkErrorMock.mockReturnValue(false);
+    mockRestartAfterPollingError(conflictError, abort);
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    await session.runUntilAbort();
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Another OpenClaw gateway, script, or Telegram poller"),
+    );
+  });
+
   it("closes the transport once when runUntilAbort exits normally", async () => {
     const abort = new AbortController();
     const transport = makeTelegramTransport();
