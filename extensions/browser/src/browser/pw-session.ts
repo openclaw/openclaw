@@ -818,6 +818,18 @@ export async function assertPageNavigationCompletedSafely(
   }
 }
 
+async function continueRouteSafely(route: Route): Promise<void> {
+  try {
+    await route.continue();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("Route is already handled")) {
+      return;
+    }
+    throw err;
+  }
+}
+
 export async function gotoPageWithNavigationGuard(
   opts: {
     cdpUrl: string;
@@ -841,7 +853,7 @@ export async function gotoPageWithNavigationGuard(
     const isSubframeDocument =
       !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
     if (!isTopLevel && !isSubframeDocument) {
-      await route.continue();
+      await continueRouteSafely(route);
       return;
     }
     try {
@@ -859,7 +871,7 @@ export async function gotoPageWithNavigationGuard(
       }
       throw err;
     }
-    await route.continue();
+    await continueRouteSafely(route);
   };
 
   await opts.page.route("**", handler);
