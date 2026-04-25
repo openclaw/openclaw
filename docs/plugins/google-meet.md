@@ -645,6 +645,7 @@ Meet artifacts:
 
 ```bash
 openclaw googlemeet latest --today
+openclaw googlemeet calendar-events --today --json
 openclaw googlemeet artifacts --event "Weekly sync"
 openclaw googlemeet attendance --today --format csv --output attendance.csv
 ```
@@ -653,6 +654,8 @@ openclaw googlemeet attendance --today --format csv --output attendance.csv
 Google Meet link. Use `--event <query>` to search matching event text, and
 `--calendar <id>` for a non-primary calendar. Calendar lookup requires a fresh
 OAuth login that includes the Calendar events readonly scope.
+`calendar-events` previews the matching Meet events and marks the event that
+`latest`, `artifacts`, `attendance`, or `export` will choose.
 
 If you already know the conference record id, address it directly:
 
@@ -671,6 +674,8 @@ openclaw googlemeet attendance --conference-record conferenceRecords/abc123 \
   --format markdown --output meet-attendance.md
 openclaw googlemeet attendance --conference-record conferenceRecords/abc123 \
   --format csv --output meet-attendance.csv
+openclaw googlemeet export --conference-record conferenceRecords/abc123 \
+  --include-doc-bodies --zip --output meet-export
 ```
 
 `artifacts` returns conference record metadata plus participant, recording,
@@ -684,10 +689,20 @@ resources separate, `--late-after-minutes` to tune late detection, and
 `--early-before-minutes` to tune early-leave detection.
 
 `export` writes a folder containing `summary.md`, `attendance.csv`,
-`transcript.md`, `artifacts.json`, and `attendance.json`. These commands use the
-Meet REST API only for Meet resources; Google Docs/Drive document body download
-is intentionally out of scope because that requires separate Google Docs/Drive
-access.
+`transcript.md`, `artifacts.json`, and `attendance.json`. Pass `--zip` to also
+write a portable archive next to the folder. Pass `--include-doc-bodies` to
+export linked transcript and smart-note Google Docs text through Google Drive
+`files.export`; this requires a fresh OAuth login that includes the Drive Meet
+readonly scope. Without `--include-doc-bodies`, exports include Meet metadata
+and structured transcript entries only.
+
+Run the guarded live smoke against a real retained meeting:
+
+```bash
+OPENCLAW_LIVE_TEST=1 \
+OPENCLAW_GOOGLE_MEET_LIVE_MEETING=https://meet.google.com/abc-defg-hij \
+pnpm test:live -- extensions/google-meet/google-meet.live.test.ts
+```
 
 Create a fresh Meet space:
 
