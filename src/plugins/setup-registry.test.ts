@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withoutProcessVersionsBunForTest } from "../test-utils/process-versions.js";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -184,7 +184,6 @@ describe("setup-registry getJiti", () => {
       plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
       diagnostics: [],
     });
-    const restoreProcessVersions = withoutProcessVersionsBunForTest();
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
 
@@ -196,14 +195,13 @@ describe("setup-registry getJiti", () => {
     } finally {
       restoreVersions();
       platformSpy.mockRestore();
-      restoreProcessVersions();
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: true,
+        tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
       }),
     );
   });

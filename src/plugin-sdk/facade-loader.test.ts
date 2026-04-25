@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withoutProcessVersionsBunForTest } from "../test-utils/process-versions.js";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -145,7 +145,6 @@ describe("plugin-sdk facade loader", () => {
         marker: "windows-dist-ok",
       })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
     }) as FacadeLoaderJitiFactory);
-    const restoreProcessVersions = withoutProcessVersionsBunForTest();
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
 
@@ -160,13 +159,12 @@ describe("plugin-sdk facade loader", () => {
       expect(createJitiCalls[0]?.[0]).toEqual(expect.any(String));
       expect(createJitiCalls[0]?.[1]).toEqual(
         expect.objectContaining({
-          tryNative: true,
+          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
         }),
       );
     } finally {
       restoreVersions();
       platformSpy.mockRestore();
-      restoreProcessVersions();
     }
   });
 

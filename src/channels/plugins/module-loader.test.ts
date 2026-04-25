@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
-import { withoutProcessVersionsBunForTest } from "../../test-utils/process-versions.js";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../../test-utils/jiti-runtime.js";
 import {
   isJavaScriptModulePath,
   resolveCompiledBundledModulePath,
@@ -98,7 +98,6 @@ describe("channel plugin module loader helpers", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
-    const restoreProcessVersions = withoutProcessVersionsBunForTest();
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     try {
@@ -121,12 +120,11 @@ describe("channel plugin module loader helpers", () => {
       expect(createJiti).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          tryNative: true,
+          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
         }),
       );
     } finally {
       platformSpy.mockRestore();
-      restoreProcessVersions();
     }
   });
 });
