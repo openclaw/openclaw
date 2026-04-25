@@ -326,7 +326,7 @@ const REPLAY_INVALID_RE =
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
 const CLOUDFLARE_CHALLENGE_RE =
-  /\bcf-browser-verification\b|challenges\.cloudflare\.com|\b_cf_chl_|\bjust a moment\b|\bray id:/i;
+  /\bcf-browser-verification\b|challenges\.cloudflare\.com|\b_cf_chl_/i;
 
 function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();

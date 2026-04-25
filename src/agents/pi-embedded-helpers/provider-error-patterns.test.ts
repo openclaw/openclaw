@@ -254,6 +254,30 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     );
   });
 
+  it("does not classify 403 HTML with only 'just a moment' as cloudflare_challenge", () => {
+    const genericWait403 =
+      "403 <!doctype html><html><head><title>403 Forbidden</title></head>" +
+      "<body><p>Please wait just a moment while we process your request.</p>" +
+      "<p>Ray ID: 8a1b2c3d4e5f6789</p></body></html>";
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: genericWait403 })).toBe(
+      "auth_html_403",
+    );
+  });
+
+  it("does not classify Cloudflare WAF block page as cloudflare_challenge", () => {
+    const cfWafBlock =
+      "403 <!doctype html><html><head><title>Access denied | example.com</title></head>" +
+      "<body><h1>Sorry, you have been blocked</h1>" +
+      "<p>You are unable to access example.com</p>" +
+      "<p>Ray ID: 8a1b2c3d4e5f6789 &bull; 2026-04-25</p>" +
+      "</body></html>";
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: cfWafBlock })).toBe(
+      "auth_html_403",
+    );
+  });
+
   it("formats Cloudflare challenge error with TLS fingerprint guidance", () => {
     const cfChallenge403 =
       '403 <!doctype html><html><body><div id="cf-browser-verification"></div></body></html>';
