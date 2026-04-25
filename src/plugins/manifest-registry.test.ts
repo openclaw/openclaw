@@ -498,6 +498,7 @@ describe("loadPluginManifestRegistry", () => {
                 input: ["text", "image", "bogus"],
                 reasoning: true,
                 contextWindow: 256000,
+                contextTokens: 200000,
                 maxTokens: 128000,
                 cost: {
                   input: 0.6,
@@ -513,17 +514,25 @@ describe("loadPluginManifestRegistry", () => {
                 },
                 compat: {
                   supportsTools: true,
+                  supportsStore: "yes",
+                  unknownFlag: true,
                 },
                 status: "available",
                 tags: ["default"],
               },
             ],
           },
+          openai: {
+            models: [{ id: "gpt-5.4" }],
+          },
         },
         aliases: {
           kimi: {
             provider: "moonshot",
             api: "openai-responses",
+          },
+          openai: {
+            provider: "openai",
           },
         },
         suppressions: [
@@ -535,6 +544,7 @@ describe("loadPluginManifestRegistry", () => {
         ],
         discovery: {
           moonshot: "static",
+          openai: "static",
           ignored: "unknown",
         },
       },
@@ -562,6 +572,7 @@ describe("loadPluginManifestRegistry", () => {
               input: ["text", "image"],
               reasoning: true,
               contextWindow: 256000,
+              contextTokens: 200000,
               maxTokens: 128000,
               cost: {
                 input: 0.6,

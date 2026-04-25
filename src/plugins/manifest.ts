@@ -696,6 +696,14 @@ function normalizeModelCatalogNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function normalizeModelCatalogPositiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function normalizeModelCatalogPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
 function normalizeModelCatalogTieredCost(
   value: unknown,
 ): PluginManifestModelCatalogTieredCost[] | undefined {
@@ -756,6 +764,72 @@ function normalizeModelCatalogCost(value: unknown): PluginManifestModelCatalogCo
   return Object.keys(cost).length > 0 ? cost : undefined;
 }
 
+function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const compat: Record<string, unknown> = {};
+  const booleanFields = [
+    "supportsStore",
+    "supportsPromptCacheKey",
+    "supportsDeveloperRole",
+    "supportsReasoningEffort",
+    "supportsUsageInStreaming",
+    "supportsTools",
+    "supportsStrictMode",
+    "requiresStringContent",
+    "requiresToolResultName",
+    "requiresAssistantAfterToolResult",
+    "requiresThinkingAsText",
+    "nativeWebSearchTool",
+    "requiresMistralToolIds",
+    "requiresOpenAiAnthropicToolPayload",
+  ] as const;
+  for (const field of booleanFields) {
+    if (typeof value[field] === "boolean") {
+      compat[field] = value[field];
+    }
+  }
+
+  const stringFields = ["toolSchemaProfile", "toolCallArgumentsEncoding"] as const;
+  for (const field of stringFields) {
+    const normalized = normalizeOptionalString(value[field]) ?? "";
+    if (normalized) {
+      compat[field] = normalized;
+    }
+  }
+
+  const stringListFields = [
+    "visibleReasoningDetailTypes",
+    "unsupportedToolSchemaKeywords",
+  ] as const;
+  for (const field of stringListFields) {
+    const normalized = normalizeTrimmedStringList(value[field]);
+    if (normalized.length > 0) {
+      compat[field] = normalized;
+    }
+  }
+
+  const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";
+  if (maxTokensField === "max_completion_tokens" || maxTokensField === "max_tokens") {
+    compat.maxTokensField = maxTokensField;
+  }
+
+  const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
+  if (
+    thinkingFormat === "openai" ||
+    thinkingFormat === "openrouter" ||
+    thinkingFormat === "deepseek" ||
+    thinkingFormat === "zai" ||
+    thinkingFormat === "qwen" ||
+    thinkingFormat === "qwen-chat-template"
+  ) {
+    compat.thinkingFormat = thinkingFormat;
+  }
+
+  return Object.keys(compat).length > 0 ? (compat as ModelCompatConfig) : undefined;
+}
+
 function normalizeModelCatalogStatus(value: unknown): PluginManifestModelCatalogStatus | undefined {
   const status = normalizeOptionalString(value) ?? "";
   return MODEL_CATALOG_STATUSES.has(status)
@@ -777,11 +851,11 @@ function normalizeModelCatalogModel(value: unknown): PluginManifestModelCatalogM
   const headers = normalizeStringMap(value.headers);
   const input = normalizeModelCatalogInputs(value.input);
   const reasoning = typeof value.reasoning === "boolean" ? value.reasoning : undefined;
-  const contextWindow = normalizeModelCatalogNumber(value.contextWindow);
-  const contextTokens = normalizeModelCatalogNumber(value.contextTokens);
-  const maxTokens = normalizeModelCatalogNumber(value.maxTokens);
+  const contextWindow = normalizeModelCatalogPositiveNumber(value.contextWindow);
+  const contextTokens = normalizeModelCatalogPositiveInteger(value.contextTokens);
+  const maxTokens = normalizeModelCatalogPositiveNumber(value.maxTokens);
   const cost = normalizeModelCatalogCost(value.cost);
-  const compat = isRecord(value.compat) ? (value.compat as ModelCompatConfig) : undefined;
+  const compat = normalizeModelCatalogCompat(value.compat);
   const status = normalizeModelCatalogStatus(value.status);
   const statusReason = normalizeOptionalString(value.statusReason) ?? "";
   const replaces = normalizeTrimmedStringList(value.replaces);
@@ -810,6 +884,7 @@ function normalizeModelCatalogModel(value: unknown): PluginManifestModelCatalogM
 
 function normalizeModelCatalogProviders(
   value: unknown,
+  ownedProviders: ReadonlySet<string>,
 ): Record<string, PluginManifestModelCatalogProvider> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -817,7 +892,7 @@ function normalizeModelCatalogProviders(
   const providers: Record<string, PluginManifestModelCatalogProvider> = {};
   for (const [rawProviderId, rawProvider] of Object.entries(value)) {
     const providerId = normalizeSafeRecordKey(rawProviderId);
-    if (!providerId || !isRecord(rawProvider)) {
+    if (!providerId || !ownedProviders.has(providerId) || !isRecord(rawProvider)) {
       continue;
     }
     const models = Array.isArray(rawProvider.models)
@@ -843,6 +918,7 @@ function normalizeModelCatalogProviders(
 
 function normalizeModelCatalogAliases(
   value: unknown,
+  ownedProviders: ReadonlySet<string>,
 ): Record<string, PluginManifestModelCatalogAlias> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -854,7 +930,7 @@ function normalizeModelCatalogAliases(
       continue;
     }
     const provider = normalizeOptionalString(rawTarget.provider) ?? "";
-    if (!provider) {
+    if (!provider || !ownedProviders.has(provider)) {
       continue;
     }
     const api = normalizeModelCatalogApi(rawTarget.api);
@@ -896,6 +972,7 @@ function normalizeModelCatalogSuppressions(
 
 function normalizeModelCatalogDiscovery(
   value: unknown,
+  ownedProviders: ReadonlySet<string>,
 ): Record<string, PluginManifestModelCatalogDiscovery> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -904,21 +981,24 @@ function normalizeModelCatalogDiscovery(
   for (const [rawProviderId, rawMode] of Object.entries(value)) {
     const providerId = normalizeSafeRecordKey(rawProviderId);
     const mode = normalizeOptionalString(rawMode) ?? "";
-    if (providerId && MODEL_CATALOG_DISCOVERY_MODES.has(mode)) {
+    if (providerId && ownedProviders.has(providerId) && MODEL_CATALOG_DISCOVERY_MODES.has(mode)) {
       discovery[providerId] = mode as PluginManifestModelCatalogDiscovery;
     }
   }
   return Object.keys(discovery).length > 0 ? discovery : undefined;
 }
 
-function normalizeManifestModelCatalog(value: unknown): PluginManifestModelCatalog | undefined {
+function normalizeManifestModelCatalog(
+  value: unknown,
+  ownedProviders: ReadonlySet<string>,
+): PluginManifestModelCatalog | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const providers = normalizeModelCatalogProviders(value.providers);
-  const aliases = normalizeModelCatalogAliases(value.aliases);
+  const providers = normalizeModelCatalogProviders(value.providers, ownedProviders);
+  const aliases = normalizeModelCatalogAliases(value.aliases, ownedProviders);
   const suppressions = normalizeModelCatalogSuppressions(value.suppressions);
-  const discovery = normalizeModelCatalogDiscovery(value.discovery);
+  const discovery = normalizeModelCatalogDiscovery(value.discovery, ownedProviders);
   const modelCatalog = {
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
@@ -1237,7 +1317,7 @@ export function loadPluginManifest(
   const providers = normalizeTrimmedStringList(raw.providers);
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
-  const modelCatalog = normalizeManifestModelCatalog(raw.modelCatalog);
+  const modelCatalog = normalizeManifestModelCatalog(raw.modelCatalog, new Set(providers));
   const providerEndpoints = normalizeManifestProviderEndpoints(raw.providerEndpoints);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);

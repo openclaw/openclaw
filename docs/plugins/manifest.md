@@ -594,24 +594,24 @@ is required.
 
 ```json
 {
-  "providers": ["moonshot"],
+  "providers": ["openai"],
   "modelCatalog": {
     "providers": {
-      "moonshot": {
-        "baseUrl": "https://api.moonshot.ai/v1",
+      "openai": {
+        "baseUrl": "https://api.openai.com/v1",
         "api": "openai-responses",
         "models": [
           {
-            "id": "kimi-k2.6",
-            "name": "Kimi K2.6",
+            "id": "gpt-5.4",
+            "name": "GPT-5.4",
             "input": ["text", "image"],
             "reasoning": true,
             "contextWindow": 256000,
             "maxTokens": 128000,
             "cost": {
-              "input": 0.6,
-              "output": 2.5,
-              "cacheRead": 0.15
+              "input": 1.25,
+              "output": 10,
+              "cacheRead": 0.125
             },
             "status": "available",
             "tags": ["default"]
@@ -627,13 +627,13 @@ is required.
     },
     "suppressions": [
       {
-        "provider": "openai",
+        "provider": "azure-openai-responses",
         "model": "gpt-5.3-codex-spark",
         "reason": "not available on Azure OpenAI Responses"
       }
     ],
     "discovery": {
-      "moonshot": "static"
+      "openai": "static"
     }
   }
 }
