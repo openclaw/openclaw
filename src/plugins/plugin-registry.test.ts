@@ -2,13 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
+  DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
   getPluginRecord,
   inspectPluginRegistry,
   isPluginEnabled,
   listPluginContributionIds,
   listPluginRecords,
   loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata,
   refreshPluginRegistry,
   resolveChannelOwners,
   resolveCliBackendOwners,
@@ -85,6 +89,39 @@ function createCandidate(rootDir: string): PluginCandidate {
   };
 }
 
+function createIndex(pluginId = "demo"): InstalledPluginIndex {
+  return {
+    version: 1,
+    hostContractVersion: "2026.4.25",
+    compatRegistryVersion: "compat-v1",
+    migrationVersion: 1,
+    policyHash: "policy-v1",
+    generatedAtMs: 1777118400000,
+    plugins: [
+      {
+        pluginId,
+        manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
+        manifestHash: "manifest-hash",
+        rootDir: `/plugins/${pluginId}`,
+        origin: "global",
+        enabled: true,
+        contributions: {
+          providers: [pluginId],
+          channels: [],
+          channelConfigs: [],
+          setupProviders: [],
+          cliBackends: [],
+          modelCatalogProviders: [],
+          commandAliases: [],
+          contracts: [],
+        },
+        compat: [],
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
 describe("plugin registry facade", () => {
   it("resolves cold plugin records and contribution owners without loading runtime", () => {
     const rootDir = makeTempDir();
@@ -92,6 +129,7 @@ describe("plugin registry facade", () => {
     const index = loadPluginRegistrySnapshot({
       candidates: [candidate],
       env: hermeticEnv(),
+      preferPersisted: false,
     });
 
     expect(listPluginRecords({ index }).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
@@ -129,6 +167,7 @@ describe("plugin registry facade", () => {
         },
       },
       env: hermeticEnv(),
+      preferPersisted: false,
     });
 
     expect(getPluginRecord({ index, pluginId: "demo" })).toMatchObject({
@@ -149,6 +188,66 @@ describe("plugin registry facade", () => {
     expect(
       resolveProviderOwners({ index, providerId: "demo", config, includeDisabled: true }),
     ).toEqual(["demo"]);
+  });
+
+  it("reads the persisted registry before deriving from discovered candidates", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    const candidate = createCandidate(rootDir);
+    await writePersistedInstalledPluginIndex(createIndex("persisted"), { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      env: hermeticEnv(),
+    });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toEqual([]);
+    expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
+      "persisted",
+    ]);
+  });
+
+  it("falls back to the derived registry when the persisted registry is missing", () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    const candidate = createCandidate(rootDir);
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      env: hermeticEnv(),
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "persisted-registry-missing" }),
+    ]);
+    expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
+      "demo",
+    ]);
+  });
+
+  it("falls back to the derived registry when persisted reads are disabled", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    const candidate = createCandidate(rootDir);
+    await writePersistedInstalledPluginIndex(createIndex("persisted"), { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      env: hermeticEnv({ [DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV]: "1" }),
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "persisted-registry-disabled" }),
+    ]);
+    expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
+      "demo",
+    ]);
   });
 
   it("exposes explicit persisted registry inspect and refresh operations", async () => {

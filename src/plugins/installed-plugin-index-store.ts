@@ -1,7 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
-import { readJsonFile, writeJsonAtomic } from "../infra/json-files.js";
+import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import {
   diffInstalledPluginIndexInvalidationReasons,
@@ -114,6 +114,13 @@ export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
   const parsed = await readJsonFile<unknown>(resolveInstalledPluginIndexStorePath(options));
+  return parseInstalledPluginIndex(parsed);
+}
+
+export function readPersistedInstalledPluginIndexSync(
+  options: InstalledPluginIndexStoreOptions = {},
+): InstalledPluginIndex | null {
+  const parsed = readJsonFileSync<unknown>(resolveInstalledPluginIndexStorePath(options));
   return parseInstalledPluginIndex(parsed);
 }
 

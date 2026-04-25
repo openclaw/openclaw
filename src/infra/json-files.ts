@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -29,6 +30,15 @@ async function replaceFileWithWindowsFallback(tempPath: string, filePath: string
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function readJsonFileSync<T>(filePath: string): T | null {
+  try {
+    const raw = readFileSync(filePath, "utf8");
     return JSON.parse(raw) as T;
   } catch {
     return null;

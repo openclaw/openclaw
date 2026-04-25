@@ -1,7 +1,8 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import type {
-  InstalledPluginIndexStoreInspection,
-  InstalledPluginIndexStoreOptions,
+import {
+  readPersistedInstalledPluginIndexSync,
+  type InstalledPluginIndexStoreInspection,
+  type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
 import {
   getInstalledPluginRecord,
@@ -20,10 +21,30 @@ import {
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
 export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
+export type PluginRegistrySnapshotSource = "provided" | "persisted" | "derived";
+export type PluginRegistrySnapshotDiagnosticCode =
+  | "persisted-registry-disabled"
+  | "persisted-registry-missing";
 
-export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams & {
-  index?: PluginRegistrySnapshot;
+export type PluginRegistrySnapshotDiagnostic = {
+  level: "info" | "warn";
+  code: PluginRegistrySnapshotDiagnosticCode;
+  message: string;
 };
+
+export type PluginRegistrySnapshotResult = {
+  snapshot: PluginRegistrySnapshot;
+  source: PluginRegistrySnapshotSource;
+  diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
+};
+
+export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+
+export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
+  InstalledPluginIndexStoreOptions & {
+    index?: PluginRegistrySnapshot;
+    preferPersisted?: boolean;
+  };
 
 export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
@@ -62,8 +83,60 @@ function normalizeContributionId(value: string): string {
   return value.trim();
 }
 
+function hasEnvFlag(env: NodeJS.ProcessEnv, name: string): boolean {
+  const value = env[name]?.trim().toLowerCase();
+  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
+}
+
+export function loadPluginRegistrySnapshotWithMetadata(
+  params: LoadPluginRegistryParams = {},
+): PluginRegistrySnapshotResult {
+  if (params.index) {
+    return {
+      snapshot: params.index,
+      source: "provided",
+      diagnostics: [],
+    };
+  }
+
+  const env = params.env ?? process.env;
+  const diagnostics: PluginRegistrySnapshotDiagnostic[] = [];
+  const disabledByCaller = params.preferPersisted === false;
+  const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
+  const persistedReadsEnabled = !disabledByCaller && !disabledByEnv;
+  if (persistedReadsEnabled) {
+    const persisted = readPersistedInstalledPluginIndexSync(params);
+    if (persisted) {
+      return {
+        snapshot: persisted,
+        source: "persisted",
+        diagnostics,
+      };
+    }
+    diagnostics.push({
+      level: "info",
+      code: "persisted-registry-missing",
+      message: "Persisted plugin registry is missing or invalid; using derived plugin index.",
+    });
+  } else {
+    diagnostics.push({
+      level: "warn",
+      code: "persisted-registry-disabled",
+      message: disabledByEnv
+        ? `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is set; using legacy derived plugin index.`
+        : "Persisted plugin registry reads are disabled by the caller; using derived plugin index.",
+    });
+  }
+
+  return {
+    snapshot: loadInstalledPluginIndex(params),
+    source: "derived",
+    diagnostics,
+  };
+}
+
 function resolveSnapshot(params: LoadPluginRegistryParams = {}): PluginRegistrySnapshot {
-  return params.index ?? loadInstalledPluginIndex(params);
+  return loadPluginRegistrySnapshotWithMetadata(params).snapshot;
 }
 
 export function loadPluginRegistrySnapshot(
