@@ -57,8 +57,10 @@ Common commands
 - Sheets metadata: `gog sheets metadata <sheetId> --json`
 - Docs export: `gog docs export <docId> --format txt --out /tmp/doc.txt`
 - Docs cat: `gog docs cat <docId>`
-- Docs write markdown: `gog docs write <docId> --markdown-file ./notes.md`
+- Docs write markdown: `gog docs write <docId> --file ./notes.md --markdown --replace`
 - Docs find/replace: `gog docs edit <docId> "Old text" "New text"`
+- Docs list comments: `gog docs comments list <docId> --json`
+- Docs reply to comment: `gog docs comments reply <docId> <commentId> "Thanks, fixed"`
 - Tasks list tasklists: `gog tasks lists list --json`
 - Tasks create tasklist: `gog tasks lists create "Sprint Inbox" --json`
 - Tasks list: `gog tasks list <tasklistId> --json`
