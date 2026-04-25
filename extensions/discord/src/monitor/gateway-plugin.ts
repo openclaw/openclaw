@@ -304,7 +304,7 @@ function createGatewayPlugin(params: {
         clearInterval(this.heartbeatInterval);
         this.heartbeatInterval = undefined;
       }
-      const heartbeatState = this as CarbonGatewayRegistrationState;
+      const heartbeatState = this as unknown as CarbonGatewayRegistrationState;
       if (heartbeatState.firstHeartbeatTimeout !== undefined) {
         clearTimeout(heartbeatState.firstHeartbeatTimeout);
         heartbeatState.firstHeartbeatTimeout = undefined;
