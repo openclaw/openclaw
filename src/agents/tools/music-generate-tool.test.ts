@@ -571,6 +571,7 @@ describe("createMusicGenerateTool", () => {
     expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
       "http://198.18.0.153/reference.png",
       expect.objectContaining({
+        requestInit: expect.objectContaining({ signal: expect.any(AbortSignal) }),
         ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       }),
     );
