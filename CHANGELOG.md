@@ -38,6 +38,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/startup: remove ownerless bundled runtime-dependency install locks
+  after a short grace window and include lock owner details when startup times
+  out waiting for a plugin runtime-deps lock. Thanks @steipete.
 - Agents/replies: forward sanitized underlying agent failure details on external
   channels instead of replacing unknown failures with a generic retry message.
   Thanks @steipete.
