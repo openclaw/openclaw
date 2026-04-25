@@ -4,6 +4,8 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { generateVoiceResponse } from "./response-generator.js";
 
 function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
+  const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
+  const saveSessionStore = vi.fn(async () => {});
   const runEmbeddedPiAgent = vi.fn(async () => ({
     payloads,
     meta: { durationMs: 12, aborted: false },
@@ -23,13 +25,13 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     runEmbeddedPiAgent,
     session: {
       resolveStorePath: () => "/tmp/openclaw/sessions.json",
-      loadSessionStore: () => ({}),
-      saveSessionStore: async () => {},
+      loadSessionStore: () => sessionStore,
+      saveSessionStore,
       resolveSessionFilePath: () => "/tmp/openclaw/sessions/session.jsonl",
     },
   } as unknown as CoreAgentDeps;
 
-  return { runtime, runEmbeddedPiAgent };
+  return { runtime, runEmbeddedPiAgent, saveSessionStore, sessionStore };
 }
 
 function requireEmbeddedAgentArgs(runEmbeddedPiAgent: ReturnType<typeof vi.fn>) {
@@ -125,5 +127,40 @@ describe("generateVoiceResponse", () => {
     ]);
 
     expect(result.text).toBe("Absolutely. Tell me what you want to do next.");
+  });
+
+  it("pins the voice session to responseModel before running the embedded agent", async () => {
+    const { runtime, runEmbeddedPiAgent, saveSessionStore, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Pinned model works."}' },
+    ]);
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      responseModel: "openai/gpt-4.1-nano",
+      responseTimeoutMs: 5000,
+    });
+
+    const result = await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      from: "+15550001111",
+      transcript: [{ speaker: "user", text: "hello there" }],
+      userMessage: "hello there",
+    });
+
+    expect(result.text).toBe("Pinned model works.");
+    expect(sessionStore["voice:15550001111"]).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1-nano",
+      modelOverrideSource: "auto",
+    });
+    expect(saveSessionStore).toHaveBeenCalledWith("/tmp/openclaw/sessions.json", sessionStore);
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4.1-nano",
+        sessionKey: "voice:15550001111",
+      }),
+    );
   });
 });
