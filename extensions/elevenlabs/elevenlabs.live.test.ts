@@ -25,14 +25,14 @@ const registerElevenLabsPlugin = () =>
   });
 
 describeLive("elevenlabs plugin live", () => {
-  it("synthesizes speech through the registered provider", async () => {
+  it("synthesizes speech through the registered provider with eleven_v3", async () => {
     const { speechProviders } = await registerElevenLabsPlugin();
     const provider = requireRegisteredProvider(speechProviders, "elevenlabs");
 
     const audioFile = await provider.synthesize({
-      text: "OpenClaw ElevenLabs text to speech integration test OK.",
+      text: "OpenClaw ElevenLabs eleven v three text to speech integration test OK.",
       cfg: { plugins: { enabled: true } } as never,
-      providerConfig: { apiKey: ELEVENLABS_KEY },
+      providerConfig: { apiKey: ELEVENLABS_KEY, modelId: "eleven_v3" },
       target: "audio-file",
       timeoutMs: 45_000,
     });
