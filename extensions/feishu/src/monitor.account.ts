@@ -183,43 +183,44 @@ function parseFeishuBotRemovedChatId(value: unknown): string | null {
   return readString(value.chat_id) ?? null;
 }
 
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const stringValue = readString(value);
+    const trimmed = stringValue?.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
 function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
   if (!isRecord(value)) {
     return null;
   }
-  const operator = value.operator;
+  const operator = isRecord(value.operator) ? value.operator : {};
   const action = value.action;
-  const context = value.context;
-  if (!isRecord(operator) || !isRecord(action) || !isRecord(context)) {
+  const context = isRecord(value.context) ? value.context : {};
+  if (!isRecord(action)) {
     return null;
   }
   const token = readString(value.token);
-  const openId = readString(operator.open_id);
-  const userId = readString(operator.user_id);
-  const unionId = readString(operator.union_id);
+  const openId = firstString(operator.open_id, value.open_id, context.open_id);
+  const userId = firstString(operator.user_id, value.user_id, context.user_id);
+  const unionId = firstString(operator.union_id);
   const tag = readString(action.tag);
   const actionValue = action.value;
-  const contextOpenId = readString(context.open_id);
-  const contextUserId = readString(context.user_id);
-  const chatId = readString(context.chat_id);
-  if (
-    !token ||
-    !openId ||
-    !userId ||
-    !unionId ||
-    !tag ||
-    !isRecord(actionValue) ||
-    !contextOpenId ||
-    !contextUserId ||
-    !chatId
-  ) {
+  const contextOpenId = firstString(context.open_id, openId);
+  const contextUserId = firstString(context.user_id, userId);
+  const chatId = firstString(context.chat_id, context.open_chat_id);
+  if (!token || !openId || !tag || !isRecord(actionValue)) {
     return null;
   }
   return {
     operator: {
       open_id: openId,
-      user_id: userId,
-      union_id: unionId,
+      ...(userId ? { user_id: userId } : {}),
+      ...(unionId ? { union_id: unionId } : {}),
     },
     token,
     action: {
@@ -227,9 +228,9 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
       tag,
     },
     context: {
-      open_id: contextOpenId,
-      user_id: contextUserId,
-      chat_id: chatId,
+      ...(contextOpenId ? { open_id: contextOpenId } : {}),
+      ...(contextUserId ? { user_id: contextUserId } : {}),
+      ...(chatId ? { chat_id: chatId } : {}),
     },
   };
 }

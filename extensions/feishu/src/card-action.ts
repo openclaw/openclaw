@@ -14,8 +14,8 @@ import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 export type FeishuCardActionEvent = {
   operator: {
     open_id: string;
-    user_id: string;
-    union_id: string;
+    user_id?: string;
+    union_id?: string;
   };
   token: string;
   action: {
@@ -23,9 +23,9 @@ export type FeishuCardActionEvent = {
     tag: string;
   };
   context: {
-    open_id: string;
-    user_id: string;
-    chat_id: string;
+    open_id?: string;
+    user_id?: string;
+    chat_id?: string;
   };
 };
 
