@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
@@ -28,6 +29,7 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 1_000, interval: 2 } as const;
+const UPDATE_WAIT_OPTS = { timeout: 5_000, interval: 10 } as const;
 
 let ws: WebSocket;
 let port: number;
@@ -242,11 +244,14 @@ describe("gateway update.run", () => {
   test("uses configured update channel", async () => {
     const sigusr1 = vi.fn();
     process.on("SIGUSR1", sigusr1);
+    const configPath = getGatewayTestConfigPath();
+    const originalConfigRaw = await fs.readFile(configPath, "utf-8").catch(() => null);
 
     try {
-      const configPath = getGatewayTestConfigPath();
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, JSON.stringify({ update: { channel: "beta" } }, null, 2));
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
       const updateMock = vi.mocked(runGatewayUpdate);
       updateMock.mockClear();
 
@@ -265,8 +270,16 @@ describe("gateway update.run", () => {
       expect(res.ok).toBe(true);
       await vi.waitFor(() => {
         expect(updateMock).toHaveBeenCalledOnce();
-      }, FAST_WAIT_OPTS);
+      }, UPDATE_WAIT_OPTS);
+      expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({ channel: "beta" }));
     } finally {
+      if (originalConfigRaw === null) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, originalConfigRaw);
+      }
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
       process.off("SIGUSR1", sigusr1);
     }
   });
