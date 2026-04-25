@@ -4,6 +4,15 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildToolCardSidebarContent, extractToolCards, renderToolCard } from "./tool-cards.ts";
 
+vi.mock("../icons.ts", () => ({
+  icons: new Proxy(
+    {},
+    {
+      get: () => "",
+    },
+  ),
+}));
+
 describe("tool-cards", () => {
   it("pretty-prints structured args and pairs tool output onto the same card", () => {
     const cards = extractToolCards(

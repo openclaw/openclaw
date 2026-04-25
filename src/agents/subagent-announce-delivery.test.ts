@@ -76,6 +76,95 @@ async function deliverSlackThreadAnnouncement(params: {
   });
 }
 
+async function deliverDiscordDirectMessageCompletion(params: {
+  callGateway: typeof runtimeCallGateway;
+  sendMessage?: typeof runtimeSendMessage;
+  internalEvents?: AgentInternalEvent[];
+}) {
+  const origin = {
+    channel: "discord",
+    to: "dm:U123",
+    accountId: "acct-1",
+  };
+  __testing.setDepsForTest({
+    callGateway: params.callGateway,
+    getRequesterSessionActivity: () => ({
+      sessionId: "requester-session-dm",
+      isActive: false,
+    }),
+    loadConfig: () => ({}) as never,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
+  });
+
+  return deliverSubagentAnnouncement({
+    requesterSessionKey: "agent:main:discord:dm:U123",
+    targetRequesterSessionKey: "agent:main:discord:dm:U123",
+    triggerMessage: "child done",
+    steerMessage: "child done",
+    requesterOrigin: origin,
+    requesterSessionOrigin: origin,
+    completionDirectOrigin: origin,
+    directOrigin: origin,
+    requesterIsSubagent: false,
+    expectsCompletionMessage: true,
+    bestEffortDeliver: true,
+    directIdempotencyKey: "announce-dm-fallback-empty",
+    internalEvents: params.internalEvents,
+  });
+}
+
+async function deliverSlackChannelAnnouncement(params: {
+  callGateway: typeof runtimeCallGateway;
+  isActive: boolean;
+  sessionId: string;
+  expectsCompletionMessage: boolean;
+  directIdempotencyKey: string;
+  completionDirectOrigin?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
+  sendMessage?: typeof runtimeSendMessage;
+  internalEvents?: AgentInternalEvent[];
+}) {
+  const origin = {
+    channel: "slack",
+    to: "channel:C123",
+    accountId: "acct-1",
+  } as const;
+
+  __testing.setDepsForTest({
+    callGateway: params.callGateway,
+    getRequesterSessionActivity: () => ({
+      sessionId: params.sessionId,
+      isActive: params.isActive,
+    }),
+    loadConfig: () => ({}) as never,
+    ...(params.queueEmbeddedPiMessage
+      ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
+      : {}),
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
+  });
+
+  return deliverSubagentAnnouncement({
+    requesterSessionKey: "agent:main:slack:channel:C123",
+    targetRequesterSessionKey: "agent:main:slack:channel:C123",
+    triggerMessage: "child done",
+    steerMessage: "child done",
+    requesterOrigin: origin,
+    requesterSessionOrigin: origin,
+    completionDirectOrigin: params.completionDirectOrigin ?? origin,
+    directOrigin: origin,
+    requesterIsSubagent: false,
+    expectsCompletionMessage: params.expectsCompletionMessage,
+    bestEffortDeliver: true,
+    directIdempotencyKey: params.directIdempotencyKey,
+    internalEvents: params.internalEvents,
+  });
+}
+
 describe("resolveAnnounceOrigin threaded route targets", () => {
   it("preserves stored thread ids when requester origin omits one for the same chat", () => {
     expect(
@@ -328,6 +417,165 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect.objectContaining({
         content: "child completion output",
         idempotencyKey: "announce-thread-fallback-empty",
+      }),
+    );
+  });
+
+  it("uses direct fallback for completion DMs without a thread id when announce-agent returns no visible output", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-fallback",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          deliver: true,
+          channel: "discord",
+          accountId: "acct-1",
+          to: "dm:U123",
+          threadId: undefined,
+        }),
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "acct-1",
+        to: "dm:U123",
+        threadId: undefined,
+        content: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        requesterSessionKey: "agent:main:discord:dm:U123",
+        bestEffort: true,
+        idempotencyKey: "announce-dm-fallback-empty",
+      }),
+    );
+  });
+
+  it("uses a direct channel fallback when announce-agent returns no visible output", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-fallback-empty",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "channel completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-fallback",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: undefined,
+        content: "child completion output",
+        requesterSessionKey: "agent:main:slack:channel:C123",
+        bestEffort: true,
+        idempotencyKey: "announce-channel-fallback-empty",
+      }),
+    );
+  });
+
+  it("falls back to the external requester route when completion origin is internal", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child completion output" }],
+      },
+    });
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-internal-origin",
+      completionDirectOrigin: {
+        channel: "webchat",
+      },
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "channel completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          deliver: true,
+          channel: "slack",
+          accountId: "acct-1",
+          to: "channel:C123",
+        }),
       }),
     );
   });

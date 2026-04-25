@@ -1,14 +1,105 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
-import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { extractCrestodianRescueMessage, runCrestodianRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+
+type TestConfig = Record<string, unknown>;
+
+const mockConfig = vi.hoisted(() => {
+  const state = {
+    path: "/tmp/openclaw.json",
+    config: {} as TestConfig,
+    hash: "mock-hash-0" as string | undefined,
+  };
+  const cloneConfig = () => structuredClone(state.config);
+  const snapshot = () => {
+    const config = cloneConfig();
+    return {
+      path: state.path,
+      exists: true,
+      raw: `${JSON.stringify(config)}\n`,
+      parsed: config,
+      sourceConfig: config,
+      resolved: config,
+      valid: true,
+      runtimeConfig: config,
+      config,
+      hash: state.hash,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+  };
+  return {
+    reset() {
+      state.path = "/tmp/openclaw.json";
+      state.config = {};
+      state.hash = "mock-hash-0";
+    },
+    currentConfig() {
+      return cloneConfig();
+    },
+    readConfigFileSnapshot: vi.fn(async () => snapshot()),
+    mutateConfigFile: vi.fn(
+      async (params: {
+        mutate: (
+          draft: TestConfig,
+          context: { snapshot: ReturnType<typeof snapshot> },
+        ) => Promise<void> | void;
+      }) => {
+        const before = snapshot();
+        const draft = cloneConfig();
+        await params.mutate(draft, { snapshot: before });
+        state.config = draft;
+        state.hash = "mock-hash-1";
+        return {
+          path: state.path,
+          previousHash: before.hash ?? null,
+          snapshot: before,
+          nextConfig: cloneConfig(),
+          result: undefined,
+        };
+      },
+    ),
+  };
+});
+
+vi.mock("../config/config.js", () => ({
+  clearConfigCache: vi.fn(),
+  mutateConfigFile: mockConfig.mutateConfigFile,
+  readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
+}));
+
+vi.mock("../commands/models/shared.js", () => ({
+  applyDefaultModelPrimaryUpdate: ({
+    cfg,
+    modelRaw,
+    field,
+  }: {
+    cfg: TestConfig;
+    modelRaw: string;
+    field: "model" | "imageModel";
+  }) => ({
+    ...cfg,
+    agents: {
+      ...(cfg.agents as TestConfig | undefined),
+      defaults: {
+        ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
+        [field]: { primary: modelRaw },
+      },
+    },
+  }),
+}));
+
+vi.mock("../config/model-input.js", () => ({
+  resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
+    typeof model === "string" ? model : model?.primary,
+}));
 
 function commandContext(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -43,17 +134,15 @@ async function runRescue(
 }
 
 describe("Crestodian rescue message", () => {
+  beforeEach(() => {
+    mockConfig.reset();
+  });
+
   afterEach(() => {
-    clearConfigCache();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
-    if (originalConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
     }
   });
 
@@ -91,20 +180,7 @@ describe("Crestodian rescue message", () => {
 
   it("queues and applies persistent writes through conversational approval", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-rescue-"));
-    const configPath = path.join(tempDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          meta: { lastTouchedVersion: "test", lastTouchedAt: new Date(0).toISOString() },
-          agents: { defaults: {} },
-        },
-        null,
-        2,
-      ),
-    );
 
     const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
     await expect(runRescue("/crestodian set default model openai/gpt-5.2", cfg)).resolves.toContain(
@@ -114,8 +190,9 @@ describe("Crestodian rescue message", () => {
       "Default model: openai/gpt-5.2",
     );
 
-    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-    expect(config.agents?.defaults?.model).toMatchObject({ primary: "openai/gpt-5.2" });
+    expect(mockConfig.currentConfig()).toMatchObject({
+      agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+    });
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
     expect(audit.details).toMatchObject({
@@ -167,6 +244,15 @@ describe("Crestodian rescue message", () => {
     );
 
     expect(deps.runAgentsAdd).toHaveBeenCalledTimes(1);
+    expect(deps.runAgentsAdd).toHaveBeenCalledWith(
+      {
+        name: "work",
+        workspace: "/tmp/work",
+        nonInteractive: true,
+      },
+      expect.any(Object),
+      { hasFlags: true },
+    );
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
     expect(audit).toMatchObject({

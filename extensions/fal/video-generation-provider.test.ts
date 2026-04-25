@@ -138,6 +138,7 @@ describe("fal video generation provider", () => {
     );
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
+    expect(result.videos[0]?.url).toBe("https://fal.run/files/video.mp4");
     expect(result.metadata).toEqual({
       requestId: "req-123",
     });

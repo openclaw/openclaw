@@ -527,6 +527,24 @@ describe("scripts/test-projects local heavy-check lock", () => {
     ).toBe(true);
   });
 
+  it("skips the lock when a parent changed gate already holds it", () => {
+    expect(
+      shouldAcquireLocalHeavyCheckLock(
+        [
+          {
+            config: "test/vitest/vitest.unit.config.ts",
+            includePatterns: ["src/infra/vitest-config.test.ts"],
+            watchMode: false,
+          },
+        ],
+        {
+          ...process.env,
+          OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("allows forcing the lock back on", () => {
     expect(
       shouldAcquireLocalHeavyCheckLock(

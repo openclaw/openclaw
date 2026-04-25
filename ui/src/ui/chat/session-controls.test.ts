@@ -12,6 +12,21 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import { renderChatSessionSelect } from "./session-controls.ts";
 
+const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
+  vi.fn(async (state: AppViewState) => {
+    const agentId = state.agentsSelectedId ?? "main";
+    const sessionKey = state.sessionKey;
+    await state.client?.request("tools.effective", { agentId, sessionKey });
+    const override = state.chatModelOverrides[sessionKey];
+    state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override?.value ?? "(default)"}`;
+    state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
+  }),
+);
+
+vi.mock("../controllers/agents.ts", () => ({
+  refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
+}));
+
 function createChatHeaderState(
   overrides: {
     model?: string | null;
@@ -193,12 +208,16 @@ describe("chat session controls", () => {
 
     modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
+    await vi.waitFor(
+      () => {
+        expect(request).toHaveBeenCalledWith("tools.effective", {
+          agentId: "main",
+          sessionKey: "main",
+        });
+      },
+      { interval: 1, timeout: 100 },
+    );
 
-    expect(request).toHaveBeenCalledWith("tools.effective", {
-      agentId: "main",
-      sessionKey: "main",
-    });
     expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });

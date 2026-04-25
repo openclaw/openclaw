@@ -5,6 +5,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../ui-types.ts";
 import { cleanupChatModuleState, renderChat, type ChatProps } from "./chat.ts";
 
+vi.mock("../markdown.ts", () => ({
+  toSanitizedMarkdownHtml: (value: string) => value,
+}));
+
+vi.mock("../icons.ts", () => ({
+  icons: new Proxy(
+    {},
+    {
+      get: () => "",
+    },
+  ),
+}));
+
+vi.mock("../tool-display.ts", () => ({
+  formatToolDetail: () => undefined,
+  resolveToolDisplay: ({ name }: { name: string }) => ({
+    name,
+    label: name,
+    icon: "zap",
+  }),
+}));
+
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   return {
     sessionKey: "agent:main:main",
@@ -169,5 +191,53 @@ describe("renderChat", () => {
     expect(avatar?.tagName).toBe("DIV");
     expect(avatar?.textContent).toContain("VC");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
+  });
+
+  it("renders configured assistant image avatars in transcript groups", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Val",
+          assistantAvatar: "avatars/val.png",
+          assistantAvatarUrl: "blob:identity-avatar",
+          messages: [{ role: "assistant", content: "hello", timestamp: 1000 }],
+          stream: null,
+          streamStartedAt: null,
+        }),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(
+      ".chat-group.assistant img.chat-avatar",
+    );
+    expect(avatar).not.toBeNull();
+    expect(avatar?.getAttribute("src")).toBe("blob:identity-avatar");
+    expect(avatar?.getAttribute("alt")).toBe("Val");
+  });
+
+  it("uses the Molty png as the welcome fallback assistant avatar", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Val",
+          assistantAvatar: null,
+          assistantAvatarUrl: null,
+          messages: [],
+          stream: null,
+          streamStartedAt: null,
+        }),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(".agent-chat__avatar--logo img");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
+    expect(avatar?.getAttribute("alt")).toBe("Val");
   });
 });
