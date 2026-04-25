@@ -31,6 +31,7 @@ const SLACK_UPLOAD_SSRF_POLICY = {
 };
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const slackDmChannelCache = new Map<string, string>();
+const slackSendQueues = new Map<string, Promise<void>>();
 
 type SlackRecipient =
   | {
@@ -179,6 +180,36 @@ function parseRecipient(raw: string): SlackRecipient {
   return { kind: target.kind, id: target.id };
 }
 
+function createSlackSendQueueKey(params: {
+  accountId: string;
+  token: string;
+  recipient: SlackRecipient;
+  threadTs?: string;
+}): string {
+  const isUserId = params.recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(params.recipient.id);
+  const recipientKey = `${isUserId ? "user" : params.recipient.kind}:${params.recipient.id}`;
+  return `${params.accountId}:${params.token}:${recipientKey}:${params.threadTs ?? ""}`;
+}
+
+async function runQueuedSlackSend<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = slackSendQueues.get(key) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queuedCurrent = previous.catch(() => undefined).then(() => current);
+  slackSendQueues.set(key, queuedCurrent);
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    releaseCurrent();
+    if (slackSendQueues.get(key) === queuedCurrent) {
+      slackSendQueues.delete(key);
+    }
+  }
+}
+
 function createSlackDmCacheKey(params: {
   accountId?: string;
   token: string;
@@ -234,6 +265,10 @@ async function resolveChannelId(
 
 export function clearSlackDmChannelCache(): void {
   slackDmChannelCache.clear();
+}
+
+export function clearSlackSendQueuesForTest(): void {
+  slackSendQueues.clear();
 }
 
 async function uploadSlackFile(params: {
@@ -332,8 +367,37 @@ export async function sendMessageSlack(
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = opts.client ?? createSlackWriteClient(token);
   const recipient = parseRecipient(to);
+  const queueKey = createSlackSendQueueKey({
+    accountId: account.accountId,
+    token,
+    recipient,
+    threadTs: opts.threadTs,
+  });
+  return await runQueuedSlackSend(queueKey, () =>
+    sendMessageSlackQueued({
+      trimmedMessage,
+      opts,
+      cfg,
+      account,
+      token,
+      recipient,
+      blocks,
+    }),
+  );
+}
+
+async function sendMessageSlackQueued(params: {
+  trimmedMessage: string;
+  opts: SlackSendOpts;
+  cfg: OpenClawConfig;
+  account: ReturnType<typeof resolveSlackAccount>;
+  token: string;
+  recipient: SlackRecipient;
+  blocks?: (Block | KnownBlock)[];
+}): Promise<SlackSendResult> {
+  const { opts, cfg, account, token, recipient, blocks, trimmedMessage } = params;
+  const client = opts.client ?? createSlackWriteClient(token);
   const { channelId } = await resolveChannelId(client, recipient, {
     accountId: account.accountId,
     token,

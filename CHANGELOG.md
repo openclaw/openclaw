@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/messages: serialize write-client requests and whole outbound sends per target so rapid multi-message Slack replies preserve send order. Fixes #69101. (#69105) Thanks @nightq and @ztexydt-cqh.
 - Slack/exec approvals: resolve native approval button clicks over the Gateway instead of delivering `/approve ...` as plain agent text, preserving retry buttons if Gateway resolution fails. Fixes #71023. (#71025) Thanks @marusan03.
 - Slack/files: return non-image `download-file` results as local file paths instead of image payloads, and include Slack file IDs in inbound file placeholders so agents can call `download-file`. Fixes #71212. Thanks @teamrazo.
 - Browser control: scope standalone loopback auth to the resolved active gateway credential and fail closed when password mode lacks a resolved password, so inactive tokens or passwords no longer authorize browser routes. Fixes #65626. (#65639) Thanks @coygeek.

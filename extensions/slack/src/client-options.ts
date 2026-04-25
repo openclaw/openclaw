@@ -91,5 +91,6 @@ export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): 
     ...options,
     agent: options.agent ?? resolveSlackProxyAgent(),
     retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,
+    maxRequestConcurrency: options.maxRequestConcurrency ?? 1,
   };
 }
