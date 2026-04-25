@@ -86,6 +86,7 @@ async function main() {
         },
       },
       tools: {
+        profile: "coding",
         subagents: {
           tools: {
             alsoAllow: ["bundle-mcp"],

@@ -21,6 +21,7 @@ echo "Running in-container cron/subagent MCP cleanup smoke..."
 set +e
 docker run --rm \
   --name "$CONTAINER_NAME" \
+  -e "OPENCLAW_TEST_FAST=1" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_SKIP_CHANNELS=1" \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
