@@ -21,6 +21,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
+patchedDependencies:
+  '@homebridge/ciao@1.3.5':
+    hash: af447fe8d0b060406e8dbdd36ee169c01e3cc5ded5a353a8a2de1ad97867eaa9
+    path: patches/@homebridge__ciao@1.3.5.patch
+
 importers:
 
   .:
@@ -48,7 +53,7 @@ importers:
         version: 1.2.1(grammy@1.41.1)
       '@homebridge/ciao':
         specifier: ^1.3.5
-        version: 1.3.5
+        version: 1.3.5(patch_hash=af447fe8d0b060406e8dbdd36ee169c01e3cc5ded5a353a8a2de1ad97867eaa9)
       '@larksuiteoapi/node-sdk':
         specifier: ^1.59.0
         version: 1.59.0
@@ -8686,7 +8691,7 @@ snapshots:
 
   '@hapi/hoek@9.3.0': {}
 
-  '@homebridge/ciao@1.3.5':
+  '@homebridge/ciao@1.3.5(patch_hash=af447fe8d0b060406e8dbdd36ee169c01e3cc5ded5a353a8a2de1ad97867eaa9)':
     dependencies:
       debug: 4.4.3
       fast-deep-equal: 3.1.3
@@ -13506,7 +13511,7 @@ snapshots:
       '@discordjs/voice': 0.19.1(@discordjs/opus@0.10.0)(opusscript@0.1.1)
       '@grammyjs/runner': 2.0.3(grammy@1.41.1)
       '@grammyjs/transformer-throttler': 1.2.1(grammy@1.41.1)
-      '@homebridge/ciao': 1.3.5
+      '@homebridge/ciao': 1.3.5(patch_hash=af447fe8d0b060406e8dbdd36ee169c01e3cc5ded5a353a8a2de1ad97867eaa9)
       '@larksuiteoapi/node-sdk': 1.59.0
       '@line/bot-sdk': 10.6.0
       '@lydell/node-pty': 1.2.0-beta.3
