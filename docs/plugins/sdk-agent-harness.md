@@ -146,15 +146,15 @@ OpenClaw only runs against the protocol surface it has been tested with.
 
 ### Tool-result middleware
 
-Plugins can attach harness-neutral tool-result middleware through
+Bundled plugins can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
-targeted harness ids in `contracts.agentToolResultMiddleware`. This is the seam
-for async tool-result transforms that must run before PI or Codex feeds tool
-output back into the model.
+targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
+seam is for async tool-result transforms that must run before PI or Codex feeds
+tool output back into the model.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
-middleware, but new result transforms should use the harness-neutral API.
+middleware, but new result transforms should use the runtime-neutral API.
 The Pi-only `api.registerEmbeddedExtensionFactory(...)` hook is deprecated for
 tool-result transforms; keep it only for bundled compatibility code that still
 needs direct Pi embedded-runner events.

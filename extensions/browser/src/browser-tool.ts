@@ -15,6 +15,7 @@ import {
   browserArmDialog,
   browserArmFileChooser,
   browserCloseTab,
+  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -48,6 +49,7 @@ const browserToolDeps = {
   browserArmDialog,
   browserArmFileChooser,
   browserCloseTab,
+  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -72,6 +74,7 @@ export const __testing = {
       browserArmDialog: typeof browserArmDialog;
       browserArmFileChooser: typeof browserArmFileChooser;
       browserCloseTab: typeof browserCloseTab;
+      browserDoctor: typeof browserDoctor;
       browserFocusTab: typeof browserFocusTab;
       browserNavigate: typeof browserNavigate;
       browserOpenTab: typeof browserOpenTab;
@@ -94,6 +97,7 @@ export const __testing = {
     browserToolDeps.browserArmFileChooser =
       overrides?.browserArmFileChooser ?? browserArmFileChooser;
     browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
+    browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
     browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
     browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
     browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
@@ -384,7 +388,8 @@ export function createBrowserTool(opts?: {
       'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
       'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
+      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
+      "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
@@ -465,6 +470,17 @@ export function createBrowserTool(opts?: {
         : null;
 
       switch (action) {
+        case "doctor":
+          if (proxyRequest) {
+            return jsonResult(
+              await proxyRequest({
+                method: "GET",
+                path: "/doctor",
+                profile,
+              }),
+            );
+          }
+          return jsonResult(await browserToolDeps.browserDoctor(baseUrl, { profile }));
         case "status":
           if (proxyRequest) {
             return jsonResult(
@@ -523,16 +539,20 @@ export function createBrowserTool(opts?: {
           return await executeTabsAction({ baseUrl, profile, proxyRequest });
         case "open": {
           const targetUrl = readTargetUrlParam(params);
+          const label = normalizeOptionalString(params.label);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
               path: "/tabs/open",
               profile,
-              body: { url: targetUrl },
+              body: { url: targetUrl, ...(label ? { label } : {}) },
             });
             return jsonResult(result);
           }
-          const opened = await browserToolDeps.browserOpenTab(baseUrl, targetUrl, { profile });
+          const opened = await browserToolDeps.browserOpenTab(baseUrl, targetUrl, {
+            profile,
+            label,
+          });
           browserToolDeps.trackSessionBrowserTab({
             sessionKey: opts?.agentSessionKey,
             targetId: opened.targetId,
@@ -599,6 +619,7 @@ export function createBrowserTool(opts?: {
           const fullPage = Boolean(params.fullPage);
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
+          const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const type = params.type === "jpeg" ? "jpeg" : "png";
           const result = proxyRequest
             ? ((await proxyRequest({
@@ -611,6 +632,7 @@ export function createBrowserTool(opts?: {
                   ref,
                   element,
                   type,
+                  labels,
                 },
               })) as Awaited<ReturnType<typeof browserScreenshotAction>>)
             : await browserToolDeps.browserScreenshotAction(baseUrl, {
@@ -619,6 +641,7 @@ export function createBrowserTool(opts?: {
                 ref,
                 element,
                 type,
+                labels,
                 profile,
               });
           return await browserToolDeps.imageResultFromFile({

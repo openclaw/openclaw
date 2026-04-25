@@ -4,6 +4,7 @@ import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
@@ -194,7 +195,13 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
-  /** Cheap provider-auth env lookup without booting plugin runtime. */
+  /**
+   * Cheap provider-auth env lookup without booting plugin runtime.
+   *
+   * @deprecated Prefer setup.providers[].envVars for generic setup/status env
+   * metadata. This field remains supported through the provider env-var
+   * compatibility adapter during the deprecation window.
+   */
   providerAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;
@@ -245,9 +252,11 @@ export type PluginManifestContracts = {
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
+  documentExtractors?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
   musicGenerationProviders?: string[];
+  webContentExtractors?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   tools?: string[];
@@ -304,10 +313,10 @@ function normalizeStringListRecord(value: unknown): Record<string, string[]> | u
   if (!isRecord(value)) {
     return undefined;
   }
-  const normalized: Record<string, string[]> = {};
+  const normalized: Record<string, string[]> = Object.create(null);
   for (const [key, rawValues] of Object.entries(value)) {
     const providerId = normalizeOptionalString(key) ?? "";
-    if (!providerId) {
+    if (!providerId || isBlockedObjectKey(providerId)) {
       continue;
     }
     const values = normalizeTrimmedStringList(rawValues);
@@ -323,11 +332,11 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
   if (!isRecord(value)) {
     return undefined;
   }
-  const normalized: Record<string, string> = {};
+  const normalized: Record<string, string> = Object.create(null);
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeOptionalString(rawKey) ?? "";
     const value = normalizeOptionalString(rawValue) ?? "";
-    if (!key || !value) {
+    if (!key || isBlockedObjectKey(key) || !value) {
       continue;
     }
     normalized[key] = value;
@@ -396,10 +405,11 @@ function normalizeMediaUnderstandingProviderMetadata(
   if (!isRecord(value)) {
     return undefined;
   }
-  const normalized: Record<string, PluginManifestMediaUnderstandingProviderMetadata> = {};
+  const normalized: Record<string, PluginManifestMediaUnderstandingProviderMetadata> =
+    Object.create(null);
   for (const [rawProviderId, rawMetadata] of Object.entries(value)) {
     const providerId = normalizeOptionalString(rawProviderId) ?? "";
-    if (!providerId || !isRecord(rawMetadata)) {
+    if (!providerId || isBlockedObjectKey(providerId) || !isRecord(rawMetadata)) {
       continue;
     }
     const capabilities = normalizeMediaUnderstandingCapabilities(rawMetadata.capabilities);
@@ -436,9 +446,11 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
   const musicGenerationProviders = normalizeTrimmedStringList(value.musicGenerationProviders);
+  const webContentExtractors = normalizeTrimmedStringList(value.webContentExtractors);
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const tools = normalizeTrimmedStringList(value.tools);
@@ -451,9 +463,11 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
     ...(musicGenerationProviders.length > 0 ? { musicGenerationProviders } : {}),
+    ...(webContentExtractors.length > 0 ? { webContentExtractors } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),
@@ -757,10 +771,10 @@ function normalizeChannelConfigs(
   if (!isRecord(value)) {
     return undefined;
   }
-  const normalized: Record<string, PluginManifestChannelConfig> = {};
+  const normalized: Record<string, PluginManifestChannelConfig> = Object.create(null);
   for (const [key, rawEntry] of Object.entries(value)) {
     const channelId = normalizeOptionalString(key) ?? "";
-    if (!channelId || !isRecord(rawEntry)) {
+    if (!channelId || isBlockedObjectKey(channelId) || !isRecord(rawEntry)) {
       continue;
     }
     const schema = isRecord(rawEntry.schema) ? rawEntry.schema : null;

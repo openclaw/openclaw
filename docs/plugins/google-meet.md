@@ -2,6 +2,7 @@
 summary: "Google Meet plugin: join explicit Meet URLs through Chrome or Twilio with realtime voice defaults"
 read_when:
   - You want an OpenClaw agent to join a Google Meet call
+  - You want an OpenClaw agent to create a new Google Meet call
   - You are configuring Chrome, Chrome node, or Twilio as a Google Meet transport
 title: "Google Meet plugin"
 ---
@@ -9,6 +10,8 @@ title: "Google Meet plugin"
 Google Meet participant support for OpenClaw — the plugin is explicit by design:
 
 - It only joins an explicit `https://meet.google.com/...` URL.
+- It can create a new Meet space through the Google Meet API, then join the
+  returned URL.
 - `realtime` voice is the default mode.
 - Realtime voice can call back into the full OpenClaw agent when deeper
   reasoning or tools are needed.
@@ -75,6 +78,7 @@ The setup output is meant to be agent-readable. It reports Chrome profile,
 audio bridge, node pinning, delayed realtime intro, and, when Twilio delegation
 is configured, whether the `voice-call` plugin and Twilio credentials are ready.
 Treat any `ok: false` check as a blocker before asking an agent to join.
+Use `openclaw googlemeet setup --json` for scripts or machine-readable output.
 
 Join a meeting:
 
@@ -88,6 +92,46 @@ Or let an agent join through the `google_meet` tool:
 {
   "action": "join",
   "url": "https://meet.google.com/abc-defg-hij",
+  "transport": "chrome-node",
+  "mode": "realtime"
+}
+```
+
+Create a new meeting and join it:
+
+```bash
+openclaw googlemeet create --transport chrome-node --mode realtime
+```
+
+Create only the URL without joining:
+
+```bash
+openclaw googlemeet create --no-join
+```
+
+`googlemeet create` has two paths:
+
+- API create: used when Google Meet OAuth credentials are configured. This is
+  the most deterministic path and does not depend on browser UI state.
+- Browser fallback: used when OAuth credentials are absent. OpenClaw uses the
+  pinned Chrome node, opens `https://meet.google.com/new`, waits for Google to
+  redirect to a real meeting-code URL, then returns that URL. This path requires
+  the OpenClaw Chrome profile on the node to already be signed in to Google.
+  Browser automation handles Meet's own first-run microphone prompt; that prompt
+  is not treated as a Google login failure.
+
+The command/tool output includes a `source` field (`api` or `browser`) so agents
+can explain which path was used. `create` joins the new meeting by default and
+returns `joined: true` plus the join session. To only mint the URL, use
+`create --no-join` on the CLI or pass `"join": false` to the tool.
+
+Or tell an agent: "Create a Google Meet, join it with realtime voice, and send
+me the link." The agent should call `google_meet` with `action: "create"` and
+then share the returned `meetingUri`.
+
+```json
+{
+  "action": "create",
   "transport": "chrome-node",
   "mode": "realtime"
 }
@@ -228,11 +272,17 @@ phrase, and prints session health:
 openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
 ```
 
-If the browser profile is not signed in, Meet is waiting for host admission, or
-Chrome needs microphone/camera permission, the join/test-speech result reports
+During join, OpenClaw browser automation fills the guest name, clicks Join/Ask
+to join, and accepts Meet's first-run "Use microphone" choice when that prompt
+appears. During browser-only meeting creation, it can also continue past the
+same prompt without microphone if Meet does not expose the use-microphone button.
+If the browser profile is not signed in, Meet is waiting for host
+admission, Chrome needs microphone/camera permission, or Meet is stuck on a
+prompt automation could not resolve, the join/test-speech result reports
 `manualActionRequired: true` with `manualActionReason` and
-`manualActionMessage`. Agents should stop retrying the join, report that message
-to the operator, and retry only after the manual browser action is complete.
+`manualActionMessage`. Agents should stop retrying the join, report that exact
+message plus the current `browserUrl`/`browserTitle`, and retry only after the
+manual browser action is complete.
 
 If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one
 connected node advertises both `googlemeet.chrome` and browser control. If
@@ -254,7 +304,9 @@ Common failure checks:
   config points at the profile you want, for example
   `browser.defaultProfile: "user"` or a named existing-session profile.
 - Duplicate Meet tabs: leave `chrome.reuseExistingTab: true` enabled. OpenClaw
-  activates an existing tab for the same Meet URL before opening a new one.
+  activates an existing tab for the same Meet URL before opening a new one, and
+  browser meeting creation reuses an in-progress `https://meet.google.com/new`
+  or Google account prompt tab before opening another one.
 - No audio: in Meet, route microphone/speaker through the virtual audio device
   path used by OpenClaw; use separate virtual devices or Loopback-style routing
   for clean duplex audio.
@@ -369,7 +421,11 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij \
 
 ## OAuth and preflight
 
-Google Meet Media API access uses a personal OAuth client first. Configure
+OAuth is optional for creating a Meet link because `googlemeet create` can fall
+back to browser automation. Configure OAuth when you want official API create,
+space resolution, or Meet Media API preflight checks.
+
+Google Meet API access uses a personal OAuth client first. Configure
 `oauth.clientId` and optionally `oauth.clientSecret`, then run:
 
 ```bash
@@ -379,6 +435,15 @@ openclaw googlemeet auth login --json
 The command prints an `oauth` config block with a refresh token. It uses PKCE,
 localhost callback on `http://localhost:8085/oauth2callback`, and a manual
 copy/paste flow with `--manual`.
+
+The OAuth consent includes Meet space creation, Meet space read access, and Meet
+conference media read access. If you authenticated before meeting creation
+support existed, rerun `openclaw googlemeet auth login --json` so the refresh
+token has the `meetings.space.created` scope.
+
+No OAuth credentials are needed for the browser fallback. In that mode, Google
+auth comes from the signed-in Chrome profile on the selected node, not from
+OpenClaw config.
 
 These environment variables are accepted as fallbacks:
 
@@ -402,6 +467,65 @@ Run preflight before media work:
 ```bash
 openclaw googlemeet preflight --meeting https://meet.google.com/abc-defg-hij
 ```
+
+Create a fresh Meet space:
+
+```bash
+openclaw googlemeet create
+```
+
+The command prints the new `meeting uri`, source, and join session. With OAuth
+credentials it uses the official Google Meet API. Without OAuth credentials it
+uses the pinned Chrome node's signed-in browser profile as a fallback. Agents can
+use the `google_meet` tool with `action: "create"` to create and join in one
+step. For URL-only creation, pass `"join": false`.
+
+Example JSON output from the browser fallback:
+
+```json
+{
+  "source": "browser",
+  "meetingUri": "https://meet.google.com/abc-defg-hij",
+  "joined": true,
+  "browser": {
+    "nodeId": "ba0f4e4bc...",
+    "targetId": "tab-1"
+  },
+  "join": {
+    "session": {
+      "id": "meet_...",
+      "url": "https://meet.google.com/abc-defg-hij"
+    }
+  }
+}
+```
+
+Example JSON output from API create:
+
+```json
+{
+  "source": "api",
+  "meetingUri": "https://meet.google.com/abc-defg-hij",
+  "joined": true,
+  "space": {
+    "name": "spaces/abc-defg-hij",
+    "meetingCode": "abc-defg-hij",
+    "meetingUri": "https://meet.google.com/abc-defg-hij"
+  },
+  "join": {
+    "session": {
+      "id": "meet_...",
+      "url": "https://meet.google.com/abc-defg-hij"
+    }
+  }
+}
+```
+
+Creating a Meet joins by default. The Chrome or Chrome-node transport still
+needs a signed-in Google Chrome profile to join through the browser. If the
+profile is signed out, OpenClaw reports `manualActionRequired: true` or a
+browser fallback error and asks the operator to finish Google login before
+retrying.
 
 Set `preview.enrollmentAcknowledged: true` only after confirming your Cloud
 project, OAuth principal, and meeting participants are enrolled in the Google
@@ -561,6 +685,7 @@ OpenClaw tools, it can call `openclaw_agent_consult`.
 The consult tool runs the regular OpenClaw agent behind the scenes with recent
 meeting transcript context and returns a concise spoken answer to the realtime
 voice session. The voice model can then speak that answer back into the meeting.
+It uses the same shared realtime consult tool as Voice Call.
 
 `realtime.toolPolicy` controls the consult run:
 
@@ -683,8 +808,41 @@ Common manual actions:
 
 - Sign in to the Chrome profile.
 - Admit the guest from the Meet host account.
-- Grant Chrome microphone/camera permissions.
+- Grant Chrome microphone/camera permissions when Chrome's native permission
+  prompt appears.
 - Close or repair a stuck Meet permission dialog.
+
+Do not report "not signed in" just because Meet shows "Do you want people to
+hear you in the meeting?" That is Meet's audio-choice interstitial; OpenClaw
+clicks **Use microphone** through browser automation when available and keeps
+waiting for the real meeting state. For create-only browser fallback, OpenClaw
+may click **Continue without microphone** because creating the URL does not need
+the realtime audio path.
+
+### Meeting creation fails
+
+`googlemeet create` first uses the Google Meet API `spaces.create` endpoint
+when OAuth credentials are configured. Without OAuth credentials it falls back
+to the pinned Chrome node browser. Confirm:
+
+- For API creation: `oauth.clientId` and `oauth.refreshToken` are configured,
+  or matching `OPENCLAW_GOOGLE_MEET_*` environment variables are present.
+- For API creation: the refresh token was minted after create support was
+  added. Older tokens may be missing the `meetings.space.created` scope; rerun
+  `openclaw googlemeet auth login --json` and update plugin config.
+- For browser fallback: `defaultTransport: "chrome-node"` and
+  `chromeNode.node` point at a connected node with `browser.proxy` and
+  `googlemeet.chrome`.
+- For browser fallback: the OpenClaw Chrome profile on that node is signed in
+  to Google and can open `https://meet.google.com/new`.
+- For browser fallback: retries reuse an existing `https://meet.google.com/new`
+  or Google account prompt tab before opening a new tab. If an agent times out,
+  retry the tool call rather than manually opening another Meet tab.
+- For browser fallback: if Meet shows "Do you want people to hear you in the
+  meeting?", leave the tab open. OpenClaw should click **Use microphone** or, for
+  create-only fallback, **Continue without microphone** through browser
+  automation and continue waiting for the generated Meet URL. If it cannot, the
+  error should mention `meet-audio-choice-required`, not `google-login-required`.
 
 ### Agent joins but does not talk
 

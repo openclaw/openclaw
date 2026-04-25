@@ -35,6 +35,12 @@ prefer `openclaw/plugin-sdk/channel-core`; keep `openclaw/plugin-sdk/core` for
 the broader umbrella surface and shared helpers such as
 `buildChannelConfigSchema`.
 
+For channel config, publish the channel-owned JSON Schema through
+`openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
+subpath is for shared schema primitives and the generic builder. Any
+bundled-channel-named schema exports on that subpath are legacy compatibility
+exports, not a pattern for new plugins.
+
 <Warning>
   Do not import provider- or channel-branded convenience seams (for example
   `openclaw/plugin-sdk/slack`, `.../discord`, `.../signal`, `.../whatsapp`).
@@ -99,7 +105,7 @@ methods:
 | `api.registerCli(registrar, opts?)`             | CLI subcommand                          |
 | `api.registerService(service)`                  | Background service                      |
 | `api.registerInteractiveHandler(registration)`  | Interactive handler                     |
-| `api.registerAgentToolResultMiddleware(...)`    | Harness tool-result middleware          |
+| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware          |
 | `api.registerEmbeddedExtensionFactory(factory)` | Deprecated PI extension factory         |
 | `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus      |
@@ -112,14 +118,15 @@ methods:
 </Note>
 
 <Accordion title="When to use tool-result middleware">
-  Use `api.registerAgentToolResultMiddleware(...)` when a plugin needs to
-  rewrite a tool result after execution and before the harness feeds that
-  result back into the model. This is the harness-neutral seam for async output
-  reducers such as tokenjuice.
+  Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when
+  they need to rewrite a tool result after execution and before the runtime
+  feeds that result back into the model. This is the trusted runtime-neutral
+  seam for async output reducers such as tokenjuice.
 
-Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
-harness, for example `["pi", "codex-app-server"]`. Keep normal OpenClaw
-plugin hooks for work that does not need pre-model tool-result timing.
+Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
+targeted runtime, for example `["pi", "codex"]`. External plugins
+cannot register this middleware; keep normal OpenClaw plugin hooks for work
+that does not need pre-model tool-result timing.
 </Accordion>
 
 <Accordion title="Legacy Pi extension factories">

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -10,6 +11,10 @@ const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendDiscordTextMock = vi.hoisted(() => vi.fn());
+const messageHookRunner = vi.hoisted(() => ({
+  hasHooks: vi.fn<(name: string) => boolean>(() => false),
+  runMessageSending: vi.fn(),
+}));
 const buildDiscordSendErrorMock = vi.hoisted(() =>
   vi.fn<(err: unknown, ctx?: unknown) => Promise<unknown>>(async (err: unknown) => err),
 );
@@ -64,6 +69,10 @@ vi.mock("openclaw/plugin-sdk/retry-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner: () => messageHookRunner,
+}));
+
 let deliverDiscordReply: typeof import("./reply-delivery.js").deliverDiscordReply;
 
 describe("deliverDiscordReply", () => {
@@ -100,6 +109,7 @@ describe("deliverDiscordReply", () => {
     }> = {},
   ) => {
     const threadBindings = createThreadBindingManager({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -141,6 +151,8 @@ describe("deliverDiscordReply", () => {
     });
     buildDiscordSendErrorMock.mockClear().mockImplementation(async (err: unknown) => err);
     retryAsyncMock.mockClear();
+    messageHookRunner.hasHooks.mockReset().mockReturnValue(false);
+    messageHookRunner.runMessageSending.mockReset();
     threadBindingTesting.resetThreadBindingsForTests();
   });
 
@@ -665,5 +677,202 @@ describe("deliverDiscordReply", () => {
       "Parent channel delivery",
       expect.objectContaining({ token: "token", accountId: "default" }),
     );
+  });
+
+  it("replaces reply text with message_sending hook content", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "filtered text" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "raw secret" }],
+      target: "channel:hook-1",
+      token: "token",
+      accountId: "acc-1",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "hook-1",
+        content: "raw secret",
+        metadata: expect.objectContaining({ channel: "discord" }),
+      }),
+      expect.objectContaining({
+        channelId: "discord",
+        accountId: "acc-1",
+        conversationId: "hook-1",
+      }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:hook-1",
+      "filtered text",
+      expect.anything(),
+    );
+  });
+
+  it("uses the raw Discord target as hook destination for DMs", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "dm filtered" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "dm raw" }],
+      target: "user:U123",
+      token: "token",
+      accountId: "acc-1",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "user:U123",
+        content: "dm raw",
+      }),
+      expect.objectContaining({
+        channelId: "discord",
+        accountId: "acc-1",
+        conversationId: "user:U123",
+      }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "user:U123",
+      "dm filtered",
+      expect.anything(),
+    );
+  });
+
+  it("reports replyToId to hooks only while a single-use fallback reply is still available", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({});
+
+    await deliverDiscordReply({
+      replies: [{ text: "first" }, { text: "second" }],
+      target: "channel:hook-thread",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledTimes(2);
+    expect(messageHookRunner.runMessageSending.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ replyToId: "reply-1" }),
+    );
+    expect(messageHookRunner.runMessageSending.mock.calls[1]?.[0]).toEqual(
+      expect.not.objectContaining({ replyToId: expect.anything() }),
+    );
+    expect(sendMessageDiscordMock.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ replyTo: "reply-1" }),
+    );
+    expect(sendMessageDiscordMock.mock.calls[1]?.[2]).toEqual(
+      expect.not.objectContaining({ replyTo: expect.anything() }),
+    );
+  });
+
+  it("reports explicit payload reply targets to hooks when replyToMode is off", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({});
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "explicit",
+          replyToId: "reply-explicit-1",
+          replyToTag: true,
+        },
+      ],
+      target: "channel:hook-explicit",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToMode: "off",
+    });
+
+    expect(messageHookRunner.runMessageSending.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ replyToId: "reply-explicit-1" }),
+    );
+    expect(sendMessageDiscordMock.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ replyTo: "reply-explicit-1" }),
+    );
+  });
+
+  it("skips delivery when message_sending hook cancels the payload", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ cancel: true });
+
+    await deliverDiscordReply({
+      replies: [{ text: "should not send" }],
+      target: "channel:hook-2",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it("skips delivery when hook blanks out a text-only reply", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "   " });
+
+    await deliverDiscordReply({
+      replies: [{ text: "hello" }],
+      target: "channel:hook-3",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it("continues delivery when message_sending hook throws", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockRejectedValue(new Error("plugin exploded"));
+    const errorRuntime = { error: vi.fn() } as unknown as RuntimeEnv;
+
+    await deliverDiscordReply({
+      replies: [{ text: "should still send" }],
+      target: "channel:hook-4",
+      token: "token",
+      runtime: errorRuntime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:hook-4",
+      "should still send",
+      expect.anything(),
+    );
+    expect((errorRuntime.error as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatch(
+      /plugin exploded/,
+    );
+  });
+
+  it("skips hook resolution when no message_sending hooks are registered", async () => {
+    messageHookRunner.hasHooks.mockReturnValue(false);
+
+    await deliverDiscordReply({
+      replies: [{ text: "no hook path" }],
+      target: "channel:hook-5",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(messageHookRunner.runMessageSending).not.toHaveBeenCalled();
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
   });
 });

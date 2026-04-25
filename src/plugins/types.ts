@@ -153,6 +153,7 @@ export type {
   AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
+  AgentToolResultMiddlewareRuntime,
   OpenClawAgentToolResult,
 } from "./agent-tool-result-middleware-types.js";
 export type {
@@ -2000,7 +2001,25 @@ export type OpenClawPluginDefinition = {
 
 export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPluginApi) => void);
 
-export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
+/**
+ * Public label exposed to plugin `register(api)` calls.
+ *
+ * Keep this as a compatibility signal for plugin authors. Loader internals
+ * should derive explicit capability booleans from the mode instead of branching
+ * on raw strings throughout the code path.
+ *
+ * - `full`: live runtime activation; long-lived side effects may start.
+ * - `discovery`: read-only capability discovery; skip sockets/workers/clients.
+ * - `setup-only`: lightweight channel setup entry only.
+ * - `setup-runtime`: setup flow that also needs the runtime channel entry.
+ * - `cli-metadata`: CLI command metadata collection.
+ */
+export type PluginRegistrationMode =
+  | "full"
+  | "discovery"
+  | "setup-only"
+  | "setup-runtime"
+  | "cli-metadata";
 
 export type PluginConfigMigration = (config: OpenClawConfig) =>
   | {
@@ -2137,12 +2156,12 @@ export type OpenClawPluginApi = {
    *
    * @deprecated This is a bundled compatibility seam. New tool-result transforms
    * should use `registerAgentToolResultMiddleware(...)` and declare
-   * `contracts.agentToolResultMiddleware` for the targeted harnesses.
+   * `contracts.agentToolResultMiddleware` for the targeted runtimes.
    */
   registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
   /** Register a Codex app-server extension factory for Codex harness tool-result middleware. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"codex-app-server"`. */
   registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
-  /** Register harness-neutral tool-result middleware. Declare `contracts.agentToolResultMiddleware` for every targeted harness. */
+  /** Register runtime-neutral tool-result middleware. Declare `contracts.agentToolResultMiddleware` for every targeted runtime. */
   registerAgentToolResultMiddleware: (
     handler: AgentToolResultMiddleware,
     options?: AgentToolResultMiddlewareOptions,

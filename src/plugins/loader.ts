@@ -34,10 +34,15 @@ import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   ensureBundledPluginRuntimeDeps,
+  installBundledRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRoot,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
-import { clearPluginCommands } from "./command-registry-state.js";
+import {
+  clearPluginCommands,
+  listRegisteredPluginCommands,
+  restorePluginCommands,
+} from "./command-registry-state.js";
 import {
   clearCompactionProviders,
   listRegisteredCompactionProviders,
@@ -55,10 +60,14 @@ import {
   type PluginActivationState,
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
-import { initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
+import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
+import {
+  clearPluginInteractiveHandlers,
+  listPluginInteractiveHandlers,
+  restorePluginInteractiveHandlers,
+} from "./interactive-registry.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
 import {
@@ -116,6 +125,7 @@ import type {
   OpenClawPluginDefinition,
   OpenClawPluginModule,
   PluginLogger,
+  PluginRegistrationMode,
 } from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
@@ -205,6 +215,8 @@ export class PluginLoadReentryError extends Error {
 type CachedPluginState = {
   registry: PluginRegistry;
   detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
+  commands?: ReturnType<typeof listRegisteredPluginCommands>;
+  interactiveHandlers?: ReturnType<typeof listPluginInteractiveHandlers>;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
@@ -243,8 +255,10 @@ export function clearPluginLoaderCache(): void {
   openAllowlistWarningCache.clear();
   clearBundledRuntimeDependencyNodePaths();
   clearAgentHarnesses();
+  clearPluginCommands();
   clearCompactionProviders();
   clearDetachedTaskLifecycleRuntimeRegistration();
+  clearPluginInteractiveHandlers();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
 }
@@ -796,6 +810,7 @@ function buildCacheKey(params: {
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
+  activate?: boolean;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
@@ -833,12 +848,13 @@ function buildCacheKey(params: {
     params.installBundledRuntimeDeps === false ? "skip-runtime-deps" : "install-runtime-deps";
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
+  const activationMode = params.activate === false ? "snapshot" : "active";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${bundledRuntimeDepsMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${bundledRuntimeDepsMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -921,6 +937,87 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
   );
 }
 
+type PluginRegistrationPlan = {
+  /** Public compatibility label passed to plugin register(api). */
+  mode: PluginRegistrationMode;
+  /** Load a setup entry instead of the normal runtime entry. */
+  loadSetupEntry: boolean;
+  /** Setup flow also needs the runtime channel entry for runtime setters/plugin shape. */
+  loadSetupRuntimeEntry: boolean;
+  /** Apply runtime capability policy such as memory-slot selection. */
+  runRuntimeCapabilityPolicy: boolean;
+  /** Register metadata that only belongs to live activation, not discovery snapshots. */
+  runFullActivationOnlyRegistrations: boolean;
+};
+
+/**
+ * Convert loader intent into explicit behavior flags.
+ *
+ * Registration modes are plugin-facing labels; this plan is the internal source
+ * of truth for which entrypoint to load and which activation-only policies run.
+ */
+function resolvePluginRegistrationPlan(params: {
+  canLoadScopedSetupOnlyChannelPlugin: boolean;
+  scopedSetupOnlyChannelPluginRequested: boolean;
+  requireSetupEntryForSetupOnlyChannelPlugins: boolean;
+  enableStateEnabled: boolean;
+  shouldLoadModules: boolean;
+  validateOnly: boolean;
+  shouldActivate: boolean;
+  manifestRecord: PluginManifestRecord;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  preferSetupRuntimeForChannelPlugins: boolean;
+}): PluginRegistrationPlan | null {
+  if (params.canLoadScopedSetupOnlyChannelPlugin) {
+    return {
+      mode: "setup-only",
+      loadSetupEntry: true,
+      loadSetupRuntimeEntry: false,
+      runRuntimeCapabilityPolicy: false,
+      runFullActivationOnlyRegistrations: false,
+    };
+  }
+  if (
+    params.scopedSetupOnlyChannelPluginRequested &&
+    params.requireSetupEntryForSetupOnlyChannelPlugins
+  ) {
+    return null;
+  }
+  if (!params.enableStateEnabled) {
+    return null;
+  }
+  const loadSetupRuntimeEntry =
+    params.shouldLoadModules &&
+    !params.validateOnly &&
+    shouldLoadChannelPluginInSetupRuntime({
+      manifestChannels: params.manifestRecord.channels,
+      setupSource: params.manifestRecord.setupSource,
+      startupDeferConfiguredChannelFullLoadUntilAfterListen:
+        params.manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
+      cfg: params.cfg,
+      env: params.env,
+      preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    });
+  if (loadSetupRuntimeEntry) {
+    return {
+      mode: "setup-runtime",
+      loadSetupEntry: true,
+      loadSetupRuntimeEntry: true,
+      runRuntimeCapabilityPolicy: false,
+      runFullActivationOnlyRegistrations: false,
+    };
+  }
+  const mode = params.shouldActivate ? "full" : "discovery";
+  return {
+    mode,
+    loadSetupEntry: false,
+    loadSetupRuntimeEntry: false,
+    runRuntimeCapabilityPolicy: true,
+    runFullActivationOnlyRegistrations: mode === "full",
+  };
+}
+
 function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const env = options.env ?? process.env;
   const cfg = applyTestPluginDefaults(options.config ?? {}, env);
@@ -964,6 +1061,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeSubagentMode,
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
+    activate: options.activate,
   });
   return {
     env,
@@ -1041,6 +1139,15 @@ function getCompatibleActivePluginRegistry(
   if (loadContext.cacheKey === activeCacheKey) {
     return activeRegistry;
   }
+  if (!loadContext.shouldActivate) {
+    const activatingCacheKey = resolvePluginLoadCacheContext({
+      ...options,
+      activate: true,
+    }).cacheKey;
+    if (activatingCacheKey === activeCacheKey) {
+      return activeRegistry;
+    }
+  }
   if (
     loadContext.runtimeSubagentMode === "default" &&
     getActivePluginRuntimeSubagentMode() === "gateway-bindable"
@@ -1054,6 +1161,19 @@ function getCompatibleActivePluginRegistry(
     }).cacheKey;
     if (gatewayBindableCacheKey === activeCacheKey) {
       return activeRegistry;
+    }
+    if (!loadContext.shouldActivate) {
+      const activatingGatewayBindableCacheKey = resolvePluginLoadCacheContext({
+        ...options,
+        activate: true,
+        runtimeOptions: {
+          ...options.runtimeOptions,
+          allowGatewaySubagentBinding: true,
+        },
+      }).cacheKey;
+      if (activatingGatewayBindableCacheKey === activeCacheKey) {
+        return activeRegistry;
+      }
     }
   }
   return undefined;
@@ -1834,18 +1954,17 @@ function activatePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
 ): void {
+  const preserveGatewayHookRunner =
+    runtimeSubagentMode === "default" &&
+    getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
+    getGlobalHookRunner() !== null;
   setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
-  initializeGlobalHookRunner(registry);
+  if (!preserveGatewayHookRunner) {
+    initializeGlobalHookRunner(registry);
+  }
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
-  // Snapshot (non-activating) loads must disable the cache to avoid storing a registry
-  // whose commands were never globally registered.
-  if (options.activate === false && options.cache !== false) {
-    throw new Error(
-      "loadOpenClawPlugins: activate:false requires cache:false to prevent command registry divergence",
-    );
-  }
   const {
     env,
     cfg,
@@ -1870,19 +1989,21 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
-      restoreRegisteredAgentHarnesses(cached.agentHarnesses);
-      restoreRegisteredCompactionProviders(cached.compactionProviders);
-      restoreDetachedTaskLifecycleRuntimeRegistration(cached.detachedTaskRuntimeRegistration);
-      restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
-      restoreMemoryPluginState({
-        capability: cached.memoryCapability,
-        corpusSupplements: cached.memoryCorpusSupplements,
-        promptBuilder: cached.memoryPromptBuilder,
-        promptSupplements: cached.memoryPromptSupplements,
-        flushPlanResolver: cached.memoryFlushPlanResolver,
-        runtime: cached.memoryRuntime,
-      });
       if (shouldActivate) {
+        restoreRegisteredAgentHarnesses(cached.agentHarnesses);
+        restorePluginCommands(cached.commands ?? []);
+        restoreRegisteredCompactionProviders(cached.compactionProviders);
+        restoreDetachedTaskLifecycleRuntimeRegistration(cached.detachedTaskRuntimeRegistration);
+        restorePluginInteractiveHandlers(cached.interactiveHandlers ?? []);
+        restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
+        restoreMemoryPluginState({
+          capability: cached.memoryCapability,
+          corpusSupplements: cached.memoryCorpusSupplements,
+          promptBuilder: cached.memoryPromptBuilder,
+          promptSupplements: cached.memoryPromptSupplements,
+          flushPlanResolver: cached.memoryFlushPlanResolver,
+          runtime: cached.memoryRuntime,
+        });
         activatePluginRegistry(
           cached.registry,
           cacheKey,
@@ -2164,33 +2285,27 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const scopedSetupOnlyChannelPluginRequested =
         includeSetupOnlyChannelPlugins &&
         !validateOnly &&
-        onlyPluginIdSet &&
+        Boolean(onlyPluginIdSet) &&
         manifestRecord.channels.length > 0 &&
         (!enableState.enabled || forceSetupOnlyChannelPlugins);
       const canLoadScopedSetupOnlyChannelPlugin =
         scopedSetupOnlyChannelPluginRequested &&
         (!requireSetupEntryForSetupOnlyChannelPlugins || Boolean(manifestRecord.setupSource));
-      const registrationMode = canLoadScopedSetupOnlyChannelPlugin
-        ? "setup-only"
-        : scopedSetupOnlyChannelPluginRequested && requireSetupEntryForSetupOnlyChannelPlugins
-          ? null
-          : enableState.enabled
-            ? shouldLoadModules &&
-              !validateOnly &&
-              shouldLoadChannelPluginInSetupRuntime({
-                manifestChannels: manifestRecord.channels,
-                setupSource: manifestRecord.setupSource,
-                startupDeferConfiguredChannelFullLoadUntilAfterListen:
-                  manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
-                cfg,
-                env,
-                preferSetupRuntimeForChannelPlugins,
-              })
-              ? "setup-runtime"
-              : "full"
-            : null;
+      const registrationPlan = resolvePluginRegistrationPlan({
+        canLoadScopedSetupOnlyChannelPlugin,
+        scopedSetupOnlyChannelPluginRequested,
+        requireSetupEntryForSetupOnlyChannelPlugins,
+        enableStateEnabled: enableState.enabled,
+        shouldLoadModules,
+        validateOnly,
+        shouldActivate,
+        manifestRecord,
+        cfg,
+        env,
+        preferSetupRuntimeForChannelPlugins,
+      });
 
-      if (!registrationMode) {
+      if (!registrationPlan) {
         record.status = "disabled";
         record.error = enableState.reason;
         markPluginActivationDisabled(record, enableState.reason);
@@ -2198,6 +2313,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         seenIds.set(pluginId, candidate.origin);
         continue;
       }
+      const registrationMode = registrationPlan.mode;
       if (!enableState.enabled) {
         record.status = "disabled";
         record.error = enableState.reason;
@@ -2210,6 +2326,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         candidate.origin === "bundled" &&
         enableState.enabled
       ) {
+        let runtimeDepsInstallStartedAt: number | null = null;
+        let runtimeDepsInstallSpecs: string[] = [];
         try {
           const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
           const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
@@ -2219,7 +2337,26 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             env,
             config: cfg,
             retainSpecs,
-            installDeps: options.bundledRuntimeDepsInstaller,
+            installDeps: (installParams) => {
+              const installSpecs = installParams.installSpecs ?? installParams.missingSpecs;
+              runtimeDepsInstallStartedAt = Date.now();
+              runtimeDepsInstallSpecs = installParams.missingSpecs;
+              if (shouldActivate) {
+                logger.info(
+                  `[plugins] ${record.id} staging bundled runtime deps (${installParams.missingSpecs.length} missing, ${installSpecs.length} install specs): ${installParams.missingSpecs.join(", ")}`,
+                );
+              }
+              const installer =
+                options.bundledRuntimeDepsInstaller ??
+                ((params: BundledRuntimeDepsInstallParams) =>
+                  installBundledRuntimeDeps({
+                    installRoot: params.installRoot,
+                    installExecutionRoot: params.installExecutionRoot,
+                    missingSpecs: params.installSpecs ?? params.missingSpecs,
+                    env,
+                  }));
+              installer(installParams);
+            },
           });
           if (depsInstallResult.installedSpecs.length > 0) {
             bundledRuntimeDepsRetainSpecsByInstallRoot.set(
@@ -2229,8 +2366,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               ),
             );
             if (shouldActivate) {
+              const elapsed =
+                runtimeDepsInstallStartedAt === null
+                  ? ""
+                  : ` in ${Date.now() - runtimeDepsInstallStartedAt}ms`;
               logger.info(
-                `[plugins] ${record.id} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
+                `[plugins] ${record.id} installed bundled runtime deps${elapsed}: ${depsInstallResult.installedSpecs.join(", ")}`,
               );
             }
           }
@@ -2256,6 +2397,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(pluginRoot)));
           }
         } catch (error) {
+          if (shouldActivate && runtimeDepsInstallStartedAt !== null) {
+            logger.error(
+              `[plugins] ${record.id} failed to stage bundled runtime deps after ${Date.now() - runtimeDepsInstallStartedAt}ms: ${runtimeDepsInstallSpecs.join(", ")}`,
+            );
+          }
           pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);
           continue;
         }
@@ -2326,7 +2472,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // Exception: the dreaming engine (memory-core by default) must load alongside the
       // selected memory slot plugin so dreaming can run even when lancedb holds the slot.
       if (
-        registrationMode === "full" &&
+        registrationPlan.runRuntimeCapabilityPolicy &&
         candidate.origin === "bundled" &&
         hasKind(manifestRecord.kind, "memory")
       ) {
@@ -2354,7 +2500,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      if (!shouldLoadModules && registrationMode === "full") {
+      if (!shouldLoadModules && registrationPlan.runRuntimeCapabilityPolicy) {
         const memoryDecision = resolveMemorySlotDecision({
           id: record.id,
           kind: record.kind,
@@ -2400,8 +2546,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       const loadSource =
-        (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
-        runtimeSetupSource
+        registrationPlan.loadSetupEntry && runtimeSetupSource
           ? runtimeSetupSource
           : runtimeCandidateSource;
       const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadSource);
@@ -2447,10 +2592,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      if (
-        (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
-        manifestRecord.setupSource
-      ) {
+      if (registrationPlan.loadSetupEntry && manifestRecord.setupSource) {
         const setupRegistration = resolveSetupChannelRegistration(mod, {
           installRuntimeDeps:
             shouldInstallBundledRuntimeDeps &&
@@ -2493,7 +2635,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           let mergedSetupRegistration = setupRegistration;
           let runtimeSetterApplied = false;
           if (
-            registrationMode === "setup-runtime" &&
+            registrationPlan.loadSetupRuntimeEntry &&
             setupRegistration.usesBundledSetupContract &&
             runtimeCandidateSource !== safeSource
           ) {
@@ -2671,7 +2813,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         memorySlotMatched = true;
       }
 
-      if (registrationMode === "full") {
+      if (registrationPlan.runRuntimeCapabilityPolicy) {
         if (pluginId !== dreamingEngineId) {
           const memoryDecision = resolveMemorySlotDecision({
             id: record.id,
@@ -2697,7 +2839,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         }
       }
 
-      if (registrationMode === "full") {
+      if (registrationPlan.runFullActivationOnlyRegistrations) {
         if (definition?.reload) {
           registerReload(record, definition.reload);
         }
@@ -2825,7 +2967,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (cacheEnabled) {
       setCachedPluginRegistry(cacheKey, {
+        commands: listRegisteredPluginCommands(),
         detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
+        interactiveHandlers: listPluginInteractiveHandlers(),
         memoryCapability: getMemoryCapabilityRegistration(),
         memoryCorpusSupplements: listMemoryCorpusSupplements(),
         registry,

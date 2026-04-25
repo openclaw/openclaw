@@ -4,7 +4,7 @@ title: "Codex harness"
 read_when:
   - You want to use the bundled Codex app-server harness
   - You need Codex harness config examples
-  - You want to disable PI fallback for Codex-only deployments
+  - You want Codex-only deployments to fail instead of falling back to PI
 ---
 
 The bundled `codex` plugin lets OpenClaw run embedded agent turns through the
@@ -25,7 +25,7 @@ These are in-process OpenClaw hooks, not Codex `hooks.json` command hooks:
 - `before_message_write` for mirrored transcript records
 - `agent_end`
 
-Plugins can also register harness-neutral tool-result middleware to rewrite
+Plugins can also register runtime-neutral tool-result middleware to rewrite
 OpenClaw dynamic tool results after OpenClaw executes the tool and before the
 result is returned to Codex. This is separate from the public
 `tool_result_persist` plugin hook, which transforms OpenClaw-owned transcript
@@ -35,8 +35,8 @@ The harness is off by default. New configs should keep OpenAI model refs
 canonical as `openai/gpt-*` and explicitly force
 `embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex` when they
 want native app-server execution. Legacy `codex/*` model refs still auto-select
-the harness for compatibility, but they are not shown as normal model/provider
-choices.
+the harness for compatibility, but runtime-backed legacy provider prefixes are
+not shown as normal model/provider choices.
 
 ## Pick the right model prefix
 
@@ -56,10 +56,12 @@ app-server harness. Direct API-key access for `openai/gpt-5.5` is supported
 once OpenAI enables GPT-5.5 on the public API.
 
 Legacy `codex/gpt-*` refs remain accepted as compatibility aliases. Doctor
-compatibility migration rewrites legacy primary `codex/*` refs to `openai/*`
-and records the Codex harness policy separately. New PI Codex OAuth configs
-should use `openai-codex/gpt-*`; new native app-server harness configs should
-use `openai/gpt-*` plus `embeddedHarness.runtime: "codex"`.
+compatibility migration rewrites legacy primary runtime refs to canonical model
+refs and records the runtime policy separately, while fallback-only legacy refs
+are left unchanged because runtime is configured for the whole agent container.
+New PI Codex OAuth configs should use `openai-codex/gpt-*`; new native
+app-server harness configs should use `openai/gpt-*` plus
+`embeddedHarness.runtime: "codex"`.
 
 `agents.defaults.imageModel` follows the same prefix split. Use
 `openai-codex/gpt-*` when image understanding should run through the OpenAI
@@ -86,9 +88,9 @@ Legacy sessions created before harness pins are treated as PI-pinned once they
 have transcript history. Use `/new` or `/reset` to opt that conversation into
 Codex after changing config.
 
-`/status` shows the effective non-PI harness next to `Fast`, for example
-`Fast · codex`. The default PI harness remains `Runner: pi (embedded)` and does
-not add a separate harness badge.
+`/status` shows the effective model runtime. The default PI harness appears as
+`Runtime: OpenClaw Pi Default`, and the Codex app-server harness appears as
+`Runtime: OpenAI Codex`.
 
 ## Requirements
 
@@ -190,8 +192,9 @@ With this shape:
 
 ## Codex-only deployments
 
-Disable PI fallback when you need to prove that every embedded agent turn uses
-the Codex harness:
+Force the Codex harness when you need to prove that every embedded agent turn
+uses Codex. Explicit plugin runtimes default to no PI fallback, so
+`fallback: "none"` is optional but often useful as documentation:
 
 ```json5
 {
@@ -210,13 +213,13 @@ the Codex harness:
 Environment override:
 
 ```bash
-OPENCLAW_AGENT_RUNTIME=codex \
-OPENCLAW_AGENT_HARNESS_FALLBACK=none \
-openclaw gateway run
+OPENCLAW_AGENT_RUNTIME=codex openclaw gateway run
 ```
 
-With fallback disabled, OpenClaw fails early if the Codex plugin is disabled,
-the app-server is too old, or the app-server cannot start.
+With Codex forced, OpenClaw fails early if the Codex plugin is disabled, the
+app-server is too old, or the app-server cannot start. Set
+`OPENCLAW_AGENT_HARNESS_FALLBACK=pi` only if you intentionally want PI to handle
+missing harness selection.
 
 ## Per-agent Codex
 
@@ -581,12 +584,12 @@ understanding continue to use the matching provider/model settings such as
 select an `openai/gpt-*` model with `embeddedHarness.runtime: "codex"` (or a
 legacy `codex/*` ref), and check whether `plugins.allow` excludes `codex`.
 
-**OpenClaw uses PI instead of Codex:** if no Codex harness claims the run,
-OpenClaw may use PI as the compatibility backend. Set
-`embeddedHarness.runtime: "codex"` to force Codex selection while testing, or
-`embeddedHarness.fallback: "none"` to fail when no plugin harness matches. Once
-Codex app-server is selected, its failures surface directly without extra
-fallback config.
+**OpenClaw uses PI instead of Codex:** `runtime: "auto"` can still use PI as the
+compatibility backend when no Codex harness claims the run. Set
+`embeddedHarness.runtime: "codex"` to force Codex selection while testing. A
+forced Codex runtime now fails instead of falling back to PI unless you
+explicitly set `embeddedHarness.fallback: "pi"`. Once Codex app-server is
+selected, its failures surface directly without extra fallback config.
 
 **The app-server is rejected:** upgrade Codex so the app-server handshake
 reports version `0.118.0` or newer.
