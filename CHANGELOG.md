@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/registry: preserve explicit disabled plugin records during registry migration without persisting every unused bundled plugin discovered on disk. Thanks @shakkernerd.
 - Windows/native: keep CLI startup and bundled provider plugin loading off
   Windows ESM raw-path failure paths, fixing native onboarding/install smoke on
   Node 24. Thanks @steipete.
