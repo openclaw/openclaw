@@ -23125,7 +23125,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             title: "Plugin Install Records",
             description:
-              "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
+              "Deprecated compatibility fallback for legacy CLI-managed install metadata. New plugin installs use the state-managed `plugins/installs.json` ledger.",
           },
         },
         additionalProperties: false,
@@ -27610,7 +27610,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "plugins.installs": {
       label: "Plugin Install Records",
-      help: "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
+      help: "Deprecated compatibility fallback for legacy CLI-managed install metadata. New plugin installs use the state-managed `plugins/installs.json` ledger.",
       tags: ["advanced"],
     },
     "plugins.installs.*.source": {

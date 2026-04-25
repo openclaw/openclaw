@@ -6,6 +6,14 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import {
+  loadPluginInstallRecords,
+  PLUGIN_INSTALLS_CONFIG_PATH,
+  removePluginInstallRecordFromRecords,
+  withoutPluginInstallRecords,
+  writePersistedPluginInstallLedger,
+  withPluginInstallRecords,
+} from "../plugins/install-ledger-store.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";
 import { inspectPluginRegistry, refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
@@ -280,8 +288,9 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin id")
     .option("--all", "Inspect all plugins")
     .option("--json", "Print JSON")
-    .action((id: string | undefined, opts: PluginInspectOptions) => {
+    .action(async (id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
+      const installRecords = await loadPluginInstallRecords({ config: cfg });
       const report = buildPluginDiagnosticsReport({
         config: cfg,
         ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
@@ -298,7 +307,7 @@ export function registerPluginsCli(program: Command) {
         });
         const inspectAllWithInstall = inspectAll.map((inspect) => ({
           ...inspect,
-          install: cfg.plugins?.installs?.[inspect.plugin.id],
+          install: installRecords[inspect.plugin.id],
         }));
 
         if (opts.json) {
@@ -369,7 +378,7 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.error(`Plugin not found: ${id}`);
         return defaultRuntime.exit(1);
       }
-      const install = cfg.plugins?.installs?.[inspect.plugin.id];
+      const install = installRecords[inspect.plugin.id];
 
       if (opts.json) {
         defaultRuntime.writeJson({
@@ -574,7 +583,9 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
       const snapshot = await readConfigFileSnapshot();
-      const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+      const sourceConfig = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+      const installRecords = await loadPluginInstallRecords({ config: sourceConfig });
+      const cfg = withPluginInstallRecords(sourceConfig, installRecords);
       const report = buildPluginDiagnosticsReport({ config: cfg });
       const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
       const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
@@ -680,12 +691,16 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(theme.warn(warning));
       }
 
+      await writePersistedPluginInstallLedger(
+        removePluginInstallRecordFromRecords(installRecords, pluginId),
+      );
       await replaceConfigFile({
-        nextConfig: result.config,
+        nextConfig: withoutPluginInstallRecords(result.config),
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+        writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] },
       });
       await refreshPluginRegistryAfterConfigMutation({
-        config: result.config,
+        config: withoutPluginInstallRecords(result.config),
         reason: "source-changed",
         logger: {
           warn: (message) => defaultRuntime.log(theme.warn(message)),

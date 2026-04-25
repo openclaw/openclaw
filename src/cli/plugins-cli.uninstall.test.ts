@@ -12,6 +12,7 @@ import {
   runtimeLogs,
   uninstallPlugin,
   writeConfigFile,
+  writePersistedPluginInstallLedger,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -102,9 +103,18 @@ describe("plugins cli uninstall", () => {
         deleteFiles: false,
       }),
     );
-    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(writePersistedPluginInstallLedger).toHaveBeenCalledWith({});
+    expect(writeConfigFile).toHaveBeenCalledWith({
+      plugins: {
+        entries: {},
+      },
+    });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: nextConfig,
+      config: {
+        plugins: {
+          entries: {},
+        },
+      },
       reason: "source-changed",
     });
   });

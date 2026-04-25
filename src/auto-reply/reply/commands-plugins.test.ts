@@ -55,6 +55,10 @@ vi.mock("../../plugins/install.js", () => ({
   installPluginFromPath: vi.fn(),
 }));
 
+vi.mock("../../plugins/install-ledger-store.js", () => ({
+  loadPluginInstallRecords: vi.fn(async ({ config }) => config?.plugins?.installs ?? {}),
+}));
+
 vi.mock("../../plugins/manifest-registry.js", () => ({
   clearPluginManifestRegistryCache: vi.fn(),
 }));

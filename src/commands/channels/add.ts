@@ -6,6 +6,11 @@ import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-typ
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import {
+  PLUGIN_INSTALLS_CONFIG_PATH,
+  withoutPluginInstallRecords,
+  writePersistedPluginInstallLedger,
+} from "../../plugins/install-ledger-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -237,13 +242,25 @@ export async function channelsAddCommand(
       }
     }
 
+    const shouldMovePluginInstalls = Boolean(
+      nextConfig.plugins?.installs && Object.keys(nextConfig.plugins.installs).length > 0,
+    );
+    const writtenConfig = shouldMovePluginInstalls
+      ? withoutPluginInstallRecords(nextConfig)
+      : nextConfig;
+    if (shouldMovePluginInstalls) {
+      await writePersistedPluginInstallLedger(nextConfig.plugins?.installs ?? {});
+    }
     await replaceConfigFile({
-      nextConfig,
+      nextConfig: writtenConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
+      ...(shouldMovePluginInstalls
+        ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
+        : {}),
     });
     await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
-      cfg: nextConfig,
+      cfg: writtenConfig,
       runtime,
     });
     await prompter.outro("Channels updated.");
@@ -368,9 +385,21 @@ export async function channelsAddCommand(
     runtime,
   });
 
+  const shouldMovePluginInstalls = Boolean(
+    nextConfig.plugins?.installs && Object.keys(nextConfig.plugins.installs).length > 0,
+  );
+  const writtenConfig = shouldMovePluginInstalls
+    ? withoutPluginInstallRecords(nextConfig)
+    : nextConfig;
+  if (shouldMovePluginInstalls) {
+    await writePersistedPluginInstallLedger(nextConfig.plugins?.installs ?? {});
+  }
   await replaceConfigFile({
-    nextConfig,
+    nextConfig: writtenConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
+    ...(shouldMovePluginInstalls
+      ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
+      : {}),
   });
   runtime.log(`Added ${plugin.meta.label ?? channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;

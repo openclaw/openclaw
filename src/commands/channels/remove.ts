@@ -5,6 +5,11 @@ import {
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
+import {
+  PLUGIN_INSTALLS_CONFIG_PATH,
+  withoutPluginInstallRecords,
+  writePersistedPluginInstallLedger,
+} from "../../plugins/install-ledger-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -171,9 +176,19 @@ export async function channelsRemoveCommand(
     });
   }
 
+  const shouldMovePluginInstalls = Boolean(
+    next.plugins?.installs && Object.keys(next.plugins.installs).length > 0,
+  );
+  if (shouldMovePluginInstalls) {
+    await writePersistedPluginInstallLedger(next.plugins?.installs ?? {});
+    next = withoutPluginInstallRecords(next);
+  }
   await replaceConfigFile({
     nextConfig: next,
     ...(baseHash !== undefined ? { baseHash } : {}),
+    ...(shouldMovePluginInstalls
+      ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
+      : {}),
   });
   if (useWizard && prompter) {
     await prompter.outro(

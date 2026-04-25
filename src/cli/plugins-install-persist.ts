@@ -2,7 +2,14 @@ import { replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { type PluginInstallUpdate, recordPluginInstall } from "../plugins/installs.js";
+import {
+  loadPluginInstallRecords,
+  PLUGIN_INSTALLS_CONFIG_PATH,
+  recordPluginInstallInRecords,
+  withoutPluginInstallRecords,
+  writePersistedPluginInstallLedger,
+} from "../plugins/install-ledger-store.js";
+import type { PluginInstallUpdate } from "../plugins/installs.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import {
@@ -39,15 +46,18 @@ export async function persistPluginInstall(params: {
     addInstalledPluginToAllowlist(params.config, params.pluginId),
     params.pluginId,
   ).config;
-  next = recordPluginInstall(next, {
+  const installRecords = await loadPluginInstallRecords({ config: params.config });
+  const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,
     ...params.install,
   });
   const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
-  next = slotResult.config;
+  next = withoutPluginInstallRecords(slotResult.config);
+  await writePersistedPluginInstallLedger(nextInstallRecords);
   await replaceConfigFile({
     nextConfig: next,
     ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+    writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,

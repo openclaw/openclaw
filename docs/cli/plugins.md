@@ -231,7 +231,19 @@ openclaw plugins install -l ./my-plugin
 source path instead of copying over a managed install target.
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
-`plugins.installs` while keeping the default behavior unpinned.
+the managed install ledger while keeping the default behavior unpinned.
+
+### Install Ledger
+
+Plugin install metadata is machine-managed state, not user config. New installs
+and updates write it to `plugins/installs.json` under the active OpenClaw state
+directory. The file includes a do-not-edit warning and is used by
+`openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
+
+Legacy `plugins.installs` entries in `openclaw.json` remain readable as a
+deprecated compatibility fallback. When install/update/uninstall paths rewrite
+plugin install state, OpenClaw writes the ledger file and removes
+`plugins.installs` from the persisted config payload.
 
 ### Uninstall
 
@@ -241,8 +253,9 @@ openclaw plugins uninstall <id> --dry-run
 openclaw plugins uninstall <id> --keep-files
 ```
 
-`uninstall` removes plugin records from `plugins.entries`, `plugins.installs`,
-the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
+`uninstall` removes plugin records from `plugins.entries`, the managed install
+ledger, the plugin allowlist, and linked `plugins.load.paths` entries when
+applicable.
 For active memory plugins, the memory slot resets to `memory-core`.
 
 By default, uninstall also removes the plugin install directory under the active
@@ -261,8 +274,8 @@ openclaw plugins update @openclaw/voice-call@beta
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
-Updates apply to tracked installs in `plugins.installs` and tracked hook-pack
-installs in `hooks.internal.installs`.
+Updates apply to tracked plugin installs in the managed install ledger and
+tracked hook-pack installs in `hooks.internal.installs`.
 
 When you pass a plugin id, OpenClaw reuses the recorded install spec for that
 plugin. That means previously stored dist-tags such as `@beta` and exact pinned
