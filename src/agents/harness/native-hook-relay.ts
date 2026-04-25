@@ -116,6 +116,8 @@ const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
 const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;
 const MAX_NATIVE_HOOK_RELAY_STRING_LENGTH = 1_000_000;
 const MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH = 4_000_000;
+const MAX_PERMISSION_FALLBACK_KEYS = 200;
+const MAX_PERMISSION_FALLBACK_KEY_CHARS = 240;
 const MAX_APPROVAL_TITLE_LENGTH = 80;
 const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
@@ -484,8 +486,25 @@ function permissionRequestFallbackKey(request: NativeHookRelayPermissionApproval
   if (command) {
     return `${request.toolName}:command:${truncateText(command, 240)}`;
   }
-  const keys = Object.keys(request.toolInput).toSorted().join(",");
-  return `${request.toolName}:keys:${truncateText(keys, 240)}`;
+  return `${request.toolName}:keys:${permissionRequestToolInputKeyFingerprint(request.toolInput)}`;
+}
+
+function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unknown>): string {
+  let fingerprint = "";
+  let processed = 0;
+  for (const key of Object.keys(toolInput).toSorted()) {
+    if (processed >= MAX_PERMISSION_FALLBACK_KEYS) {
+      break;
+    }
+    const separator = fingerprint ? "," : "";
+    const remaining = MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length - separator.length;
+    if (remaining <= 0) {
+      break;
+    }
+    fingerprint += `${separator}${key.slice(0, remaining)}`;
+    processed += 1;
+  }
+  return fingerprint || "none";
 }
 
 function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now()): boolean {
@@ -846,8 +865,18 @@ function isJsonValue(value: unknown): value is JsonValue {
       return false;
     }
     try {
-      for (const item of Object.values(current.value)) {
-        stack.push({ value: item, depth: current.depth + 1 });
+      for (const key in current.value) {
+        if (!Object.prototype.hasOwnProperty.call(current.value, key)) {
+          continue;
+        }
+        if (key.length > MAX_NATIVE_HOOK_RELAY_STRING_LENGTH) {
+          return false;
+        }
+        totalStringLength += key.length;
+        if (totalStringLength > MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH) {
+          return false;
+        }
+        stack.push({ value: current.value[key], depth: current.depth + 1 });
       }
     } catch {
       return false;

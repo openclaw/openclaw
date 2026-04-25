@@ -242,6 +242,30 @@ describe("native hook relay registry", () => {
     ).rejects.toThrow("JSON-compatible");
   });
 
+  it("rejects payloads beyond the relay object key budget", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["permission_request"],
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "permission_request",
+        rawPayload: {
+          hook_event_name: "PermissionRequest",
+          tool_name: "mcp__shell__run_command",
+          tool_input: {
+            ["x".repeat(1_000_001)]: "value",
+          },
+        },
+      }),
+    ).rejects.toThrow("JSON-compatible");
+  });
+
   it("rejects expired relay ids", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-24T12:00:00Z"));
