@@ -174,6 +174,8 @@ export class OpenClawApp extends LitElement {
   @state() assistantAvatarSource = bootAssistantIdentity.avatarSource ?? null;
   @state() assistantAvatarStatus = bootAssistantIdentity.avatarStatus ?? null;
   @state() assistantAvatarReason = bootAssistantIdentity.avatarReason ?? null;
+  @state() assistantAvatarUploadBusy = false;
+  @state() assistantAvatarUploadError: string | null = null;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
   @state() userName = bootLocalUserIdentity.name;
   @state() userAvatar = bootLocalUserIdentity.avatar;

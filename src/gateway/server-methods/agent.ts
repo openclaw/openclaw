@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
+import {
+  resolveAgentAvatar,
+  resolvePublicAgentAvatarSource,
+} from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -1081,7 +1084,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       {
         ...identity,
         avatar: avatarValue,
-        avatarSource: avatarResolution.source,
+        avatarSource: resolvePublicAgentAvatarSource(avatarResolution),
         avatarStatus: avatarResolution.kind,
         avatarReason: avatarResolution.kind === "none" ? avatarResolution.reason : undefined,
       },

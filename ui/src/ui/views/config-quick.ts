@@ -16,7 +16,11 @@ import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
 } from "../user-identity.ts";
-import { assistantAvatarFallbackUrl, resolveAssistantTextAvatar } from "./agents-utils.ts";
+import {
+  assistantAvatarFallbackUrl,
+  resolveChatAvatarRenderUrl,
+  resolveAssistantTextAvatar,
+} from "./agents-utils.ts";
 import {
   CONFIG_PRESETS,
   detectActivePreset,
@@ -105,6 +109,11 @@ export type QuickSettingsProps = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
+  assistantAvatarOverride?: string | null;
+  assistantAvatarUploadBusy?: boolean;
+  assistantAvatarUploadError?: string | null;
+  onAssistantAvatarOverrideChange?: (dataUrl: string) => void | Promise<void>;
+  onAssistantAvatarClearOverride?: () => void | Promise<void>;
   basePath?: string | null;
   version: string;
 };
@@ -131,6 +140,7 @@ const LOCAL_USER_LABEL = "You";
 // Keep raw uploads comfortably below the 2 MB persisted data URL limit after
 // base64 expansion and a small MIME/header prefix are added.
 const MAX_LOCAL_USER_AVATAR_FILE_BYTES = 1_500_000;
+const MAX_ASSISTANT_AVATAR_UPLOAD_BYTES = MAX_LOCAL_USER_AVATAR_FILE_BYTES;
 
 function renderDefaultUserAvatar() {
   return html`
@@ -160,9 +170,16 @@ function renderLocalUserAvatarPreview(avatar: string | null | undefined) {
   `;
 }
 
-function isRenderableAssistantPreviewUrl(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("blob:") || /^data:image\//i.test(trimmed);
+function resolveAssistantPreviewAvatarUrl(props: QuickSettingsProps): string | null {
+  if (props.assistantAvatarStatus === "none" && props.assistantAvatarReason === "missing") {
+    return null;
+  }
+  return resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
+    identity: {
+      avatar: props.assistantAvatar ?? undefined,
+      avatarUrl: props.assistantAvatarUrl ?? undefined,
+    },
+  });
 }
 
 function formatAssistantAvatarSource(value: string | null | undefined): string | null {
@@ -202,8 +219,8 @@ function formatAssistantAvatarIssue(
 
 function renderAssistantAvatarPreview(props: QuickSettingsProps) {
   const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
-  const assistantAvatarUrl = normalizeOptionalString(props.assistantAvatarUrl);
-  if (assistantAvatarUrl && isRenderableAssistantPreviewUrl(assistantAvatarUrl)) {
+  const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
+  if (assistantAvatarUrl) {
     return html`<img class="qs-assistant-avatar" src=${assistantAvatarUrl} alt=${assistantName} />`;
   }
   const assistantAvatarText = resolveAssistantTextAvatar(props.assistantAvatar);
@@ -244,6 +261,29 @@ function handleLocalUserAvatarFileSelect(e: Event, props: QuickSettingsProps) {
   reader.addEventListener("load", () => {
     onUserAvatarChange(typeof reader.result === "string" ? reader.result : null);
   });
+  reader.readAsDataURL(file);
+  input.value = "";
+}
+
+function handleAssistantAvatarFileSelect(e: Event, props: QuickSettingsProps) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  const onAssistantAvatarOverrideChange = props.onAssistantAvatarOverrideChange;
+  if (!file || !onAssistantAvatarOverrideChange) {
+    input.value = "";
+    return;
+  }
+  if (file.size > MAX_ASSISTANT_AVATAR_UPLOAD_BYTES) {
+    input.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const result = typeof reader.result === "string" ? reader.result : "";
+    if (result) {
+      void onAssistantAvatarOverrideChange(result);
+    }
+  };
   reader.readAsDataURL(file);
   input.value = "";
 }
@@ -568,10 +608,9 @@ function renderPersonalCard(props: QuickSettingsProps) {
   });
   const avatarText = resolveLocalUserAvatarText(identity) ?? "";
   const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
-  const assistantAvatarUrl = normalizeOptionalString(props.assistantAvatarUrl);
+  const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
   const assistantAvatarRendered = Boolean(
-    (assistantAvatarUrl && isRenderableAssistantPreviewUrl(assistantAvatarUrl)) ||
-    resolveAssistantTextAvatar(props.assistantAvatar),
+    assistantAvatarUrl || resolveAssistantTextAvatar(props.assistantAvatar),
   );
   const assistantAvatarSource = formatAssistantAvatarSource(props.assistantAvatarSource);
   const assistantAvatarIssue = formatAssistantAvatarIssue(
@@ -579,13 +618,18 @@ function renderPersonalCard(props: QuickSettingsProps) {
     props.assistantAvatarReason,
     assistantAvatarRendered,
   );
-  const assistantAvatarSubtitle = assistantAvatarIssue
-    ? "Fallback avatar"
-    : assistantAvatarRendered
-      ? "From IDENTITY.md"
-      : "Fallback logo";
+  const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
+  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "IDENTITY.md";
+  const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
+  const assistantAvatarSubtitle = assistantAvatarOverride
+    ? "Override from settings"
+    : assistantAvatarIssue
+      ? "Fallback avatar"
+      : assistantAvatarRendered
+        ? "From IDENTITY.md"
+        : "Fallback logo";
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--personal">
       ${renderCardHeader(icons.image, "Personal")}
       <div class="qs-card__body">
         <div class="qs-identity-grid">
@@ -612,13 +656,55 @@ function renderPersonalCard(props: QuickSettingsProps) {
                       class="qs-identity-card__source"
                       title=${props.assistantAvatarSource ?? ""}
                     >
-                      <span>IDENTITY.md</span>
+                      <span>${assistantAvatarSourceLabel}</span>
                       <code>${assistantAvatarSource}</code>
                     </div>
                   `
                 : nothing}
               ${assistantAvatarIssue
                 ? html`<div class="qs-identity-card__issue">${assistantAvatarIssue}</div>`
+                : nothing}
+              ${canOverrideAssistantAvatar
+                ? html`
+                    <div class="qs-identity-card__repair">
+                      <label class="btn btn--sm">
+                        ${props.assistantAvatarUploadBusy
+                          ? "Saving..."
+                          : assistantAvatarOverride
+                            ? "Replace image"
+                            : "Choose image"}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          hidden
+                          ?disabled=${props.assistantAvatarUploadBusy === true}
+                          @change=${(e: Event) => handleAssistantAvatarFileSelect(e, props)}
+                        />
+                      </label>
+                      ${assistantAvatarOverride
+                        ? html`
+                            <button
+                              type="button"
+                              class="btn btn--sm btn--ghost"
+                              ?disabled=${props.assistantAvatarUploadBusy === true}
+                              @click=${() => {
+                                void props.onAssistantAvatarClearOverride?.();
+                              }}
+                            >
+                              Clear override
+                            </button>
+                          `
+                        : nothing}
+                      <div class="muted">
+                        Stores a Control UI override. Clear it to return to IDENTITY.md.
+                      </div>
+                    </div>
+                  `
+                : nothing}
+              ${props.assistantAvatarUploadError
+                ? html`<div class="qs-identity-card__error">
+                    ${props.assistantAvatarUploadError}
+                  </div>`
                 : nothing}
             </div>
           </section>
@@ -891,6 +977,10 @@ function renderStack(...cards: TemplateResult[]) {
   return html`<div class="qs-stack">${cards}</div>`;
 }
 
+function renderWideStack(...cards: TemplateResult[]) {
+  return html`<div class="qs-stack qs-stack--wide">${cards}</div>`;
+}
+
 // ── Main render ──
 
 export function renderQuickSettings(props: QuickSettingsProps) {
@@ -905,9 +995,9 @@ export function renderQuickSettings(props: QuickSettingsProps) {
 
       <div class="qs-grid">
         ${renderStack(renderModelCard(props), renderSecurityCard(props))}
+        ${renderPersonalCard(props)}
         ${renderStack(renderChannelsCard(props), renderAutomationsCard(props))}
-        ${renderStack(renderAppearanceCard(props))} ${renderStack(renderPersonalCard(props))}
-        ${renderPresetsCard(props)}
+        ${renderWideStack(renderAppearanceCard(props))} ${renderPresetsCard(props)}
       </div>
 
       ${renderConnectionFooter(props)}

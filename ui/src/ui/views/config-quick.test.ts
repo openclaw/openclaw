@@ -50,6 +50,11 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     assistantAvatarSource: null,
     assistantAvatarStatus: null,
     assistantAvatarReason: null,
+    assistantAvatarOverride: null,
+    assistantAvatarUploadBusy: false,
+    assistantAvatarUploadError: null,
+    onAssistantAvatarOverrideChange: vi.fn(),
+    onAssistantAvatarClearOverride: vi.fn(),
     basePath: "",
     version: "2026.4.22",
     ...overrides,
@@ -62,7 +67,8 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelectorAll(".qs-stack")).toHaveLength(4);
+    expect(container.querySelectorAll(".qs-stack")).toHaveLength(3);
+    expect(container.querySelector(".qs-card--personal")).not.toBeNull();
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
 
@@ -94,6 +100,27 @@ describe("renderQuickSettings", () => {
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe("blob:nova");
   });
 
+  it("renders same-origin assistant avatar routes from IDENTITY.md", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: "/avatar/main",
+          assistantAvatarSource: "assets/avatars/nova-portrait.png",
+          assistantAvatarStatus: "local",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
+      "/avatar/main",
+    );
+  });
+
   it("shows the IDENTITY.md avatar source when the assistant falls back to the logo", () => {
     const container = document.createElement("div");
 
@@ -120,6 +147,95 @@ describe("renderQuickSettings", () => {
     expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
       "File not found",
     );
+    expect(
+      Array.from(container.querySelectorAll("label.btn")).some(
+        (label) => label.textContent?.trim() === "Choose image",
+      ),
+    ).toBe(true);
+  });
+
+  it("reads assistant image imports into an override", () => {
+    const onAssistantAvatarOverrideChange = vi.fn();
+    const readAsDataURL = vi.fn(function (this: FileReader) {
+      Object.defineProperty(this, "result", {
+        configurable: true,
+        value: "data:image/png;base64,YXZhdGFy",
+      });
+      this.onload?.(new Event("load") as ProgressEvent<FileReader>);
+    });
+    class MockFileReader {
+      result: string | null = null;
+      onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+      readAsDataURL = readAsDataURL;
+    }
+    vi.stubGlobal("FileReader", MockFileReader);
+
+    try {
+      const container = document.createElement("div");
+      render(
+        renderQuickSettings(
+          createProps({
+            assistantAvatarSource: "assets/avatars/nova-portrait.png",
+            assistantAvatarStatus: "none",
+            assistantAvatarReason: "missing",
+            onAssistantAvatarOverrideChange,
+          }),
+        ),
+        container,
+      );
+
+      const inputs = Array.from(container.querySelectorAll('input[type="file"]'));
+      const input = inputs.find((node) =>
+        node.closest(".qs-identity-card--assistant"),
+      ) as HTMLInputElement | null;
+      expect(input).not.toBeNull();
+      if (!input) {
+        return;
+      }
+
+      Object.defineProperty(input, "files", {
+        configurable: true,
+        value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
+      });
+      input.dispatchEvent(new Event("change"));
+
+      expect(readAsDataURL).toHaveBeenCalledTimes(1);
+      expect(onAssistantAvatarOverrideChange).toHaveBeenCalledWith(
+        "data:image/png;base64,YXZhdGFy",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("can clear an assistant avatar override back to IDENTITY.md", () => {
+    const onAssistantAvatarClearOverride = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantAvatar: "data:image/png;base64,b3ZlcnJpZGU=",
+          assistantAvatarUrl: "data:image/png;base64,b3ZlcnJpZGU=",
+          assistantAvatarSource: "data:image/png;base64,...",
+          assistantAvatarStatus: "data",
+          assistantAvatarOverride: "data:image/png;base64,b3ZlcnJpZGU=",
+          onAssistantAvatarClearOverride,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
+      "UI override",
+    );
+    const clear = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Clear override",
+    );
+    expect(clear).not.toBeUndefined();
+    clear?.dispatchEvent(new Event("click"));
+
+    expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
   });
 
   it("rejects oversized avatar uploads before reading them", () => {
@@ -131,7 +247,9 @@ describe("renderQuickSettings", () => {
       const container = document.createElement("div");
       render(renderQuickSettings(createProps({ onUserAvatarChange })), container);
 
-      const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+      const input = Array.from(container.querySelectorAll('input[type="file"]')).find(
+        (node) => !node.closest(".qs-identity-card--assistant"),
+      ) as HTMLInputElement | null;
       expect(input).not.toBeNull();
       if (!input) {
         return;

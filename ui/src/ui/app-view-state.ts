@@ -74,6 +74,8 @@ export type AppViewState = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
+  assistantAvatarUploadBusy: boolean;
+  assistantAvatarUploadError: string | null;
   assistantAgentId: string | null;
   userName?: string | null;
   userAvatar?: string | null;

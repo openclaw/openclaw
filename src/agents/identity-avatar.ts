@@ -3,8 +3,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   AVATAR_MAX_BYTES,
+  hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
+  isWindowsAbsolutePath,
   isPathWithinRoot,
   isSupportedLocalAvatarExtension,
 } from "../shared/avatar-policy.js";
@@ -19,6 +21,14 @@ export type AgentAvatarResolution =
   | { kind: "local"; filePath: string; source: string }
   | { kind: "remote"; url: string; source: string }
   | { kind: "data"; url: string; source: string };
+
+type AgentAvatarPublicSourceInput = {
+  kind: AgentAvatarResolution["kind"];
+  source?: string | null;
+};
+
+const PUBLIC_AVATAR_SOURCE_MAX_CHARS = 256;
+const PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS = 64;
 
 function resolveAvatarSource(
   cfg: OpenClawConfig,
@@ -78,6 +88,42 @@ function resolveLocalAvatarPath(params: {
     return { ok: false, reason: "missing" };
   }
   return { ok: true, filePath: realPath };
+}
+
+function isSafeRelativeAvatarSource(source: string): boolean {
+  if (
+    source.length > PUBLIC_AVATAR_SOURCE_MAX_CHARS ||
+    source.startsWith("~") ||
+    path.isAbsolute(source) ||
+    isWindowsAbsolutePath(source) ||
+    (hasAvatarUriScheme(source) && !isWindowsAbsolutePath(source)) ||
+    source.includes("\0")
+  ) {
+    return false;
+  }
+  const parts = source.replace(/\\/g, "/").split("/");
+  return parts.every((part) => part !== "..");
+}
+
+export function resolvePublicAgentAvatarSource(
+  resolved: AgentAvatarPublicSourceInput,
+): string | undefined {
+  const source = normalizeOptionalString(resolved.source) ?? null;
+  if (!source) {
+    return undefined;
+  }
+  if (isAvatarDataUrl(source)) {
+    const commaIndex = source.indexOf(",");
+    const header =
+      commaIndex > 0
+        ? source.slice(0, Math.min(commaIndex, PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS))
+        : source.slice(0, PUBLIC_DATA_AVATAR_HEADER_MAX_CHARS);
+    return `${header},...`;
+  }
+  if (isAvatarHttpUrl(source)) {
+    return "remote URL";
+  }
+  return isSafeRelativeAvatarSource(source) ? source : undefined;
 }
 
 export function resolveAgentAvatar(

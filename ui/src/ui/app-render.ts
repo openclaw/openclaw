@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { refreshChat } from "./app-chat.ts";
+import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -28,6 +28,7 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession,
   saveAgentsConfig,
 } from "./controllers/agents.ts";
+import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -122,6 +123,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import { normalizeOptionalString } from "./string-coerce.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -425,6 +427,27 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   return undefined;
 }
 
+function resolveAssistantAvatarOverride(config: unknown): string | null {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return null;
+  }
+  const ui = (config as { ui?: unknown }).ui;
+  if (!ui || typeof ui !== "object" || Array.isArray(ui)) {
+    return null;
+  }
+  const assistant = (ui as { assistant?: unknown }).assistant;
+  if (!assistant || typeof assistant !== "object" || Array.isArray(assistant)) {
+    return null;
+  }
+  return normalizeOptionalString((assistant as { avatar?: unknown }).avatar) ?? null;
+}
+
+function buildAssistantAvatarRoute(basePathValue: string | null | undefined, agentId: string) {
+  const basePath = normalizeBasePath(basePathValue ?? "");
+  const encoded = encodeURIComponent(agentId);
+  return basePath ? `${basePath}/avatar/${encoded}` : `/avatar/${encoded}`;
+}
+
 // ── Quick Settings data extraction helpers ──
 
 const KNOWN_CHANNEL_IDS = [
@@ -633,7 +656,27 @@ export function renderApp(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
-  const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
+  const chatAssistantAvatarStatus = state.chatAvatarStatus ?? state.assistantAvatarStatus ?? null;
+  const chatAssistantAvatarReason = state.chatAvatarReason ?? state.assistantAvatarReason ?? null;
+  const chatAssistantAvatarMissing =
+    chatAssistantAvatarStatus === "none" && chatAssistantAvatarReason === "missing";
+  const effectiveAssistantAvatar = chatAssistantAvatarMissing ? null : state.assistantAvatar;
+  const chatAvatarUrl =
+    state.chatAvatarUrl ?? (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
+  const configAssistantAvatarStatus = state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null;
+  const configAssistantAvatarReason = state.assistantAvatarReason ?? state.chatAvatarReason ?? null;
+  const configAssistantAvatarSource = state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
+  const configAssistantAvatarMissing =
+    configAssistantAvatarStatus === "none" && configAssistantAvatarReason === "missing";
+  const configAssistantAvatar =
+    configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
+      ? null
+      : state.assistantAvatar;
+  const configAssistantAvatarUrl =
+    configAssistantAvatarStatus === "local" && state.assistantAgentId
+      ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
+      : (state.chatAvatarUrl ??
+        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null)));
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const configuredDreaming = resolveConfiguredDreaming(configValue);
@@ -898,6 +941,7 @@ export function renderApp(state: AppViewState) {
         // Quick Settings mode — opinionated card layout
         if (state.configSettingsMode === "quick") {
           const configObj = state.configForm ?? state.configSnapshot?.config ?? {};
+          const assistantAvatarOverride = resolveAssistantAvatarOverride(configObj);
           const agentsDefaults = ((configObj.agents as Record<string, unknown> | undefined)
             ?.defaults ?? {}) as Record<string, unknown>;
           const activeSession = resolveQuickSettingsSessionRow(state);
@@ -986,11 +1030,58 @@ export function renderApp(state: AppViewState) {
             setBorderRadius: (value) => state.setBorderRadius(value),
             userAvatar: state.userAvatar ?? null,
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
-            assistantAvatar: state.assistantAvatar,
-            assistantAvatarUrl: chatAvatarUrl,
-            assistantAvatarSource: state.assistantAvatarSource ?? state.chatAvatarSource,
-            assistantAvatarStatus: state.assistantAvatarStatus ?? state.chatAvatarStatus,
-            assistantAvatarReason: state.assistantAvatarReason ?? state.chatAvatarReason,
+            assistantAvatar: configAssistantAvatar,
+            assistantAvatarUrl: configAssistantAvatarUrl,
+            assistantAvatarSource: configAssistantAvatarSource,
+            assistantAvatarStatus: configAssistantAvatarStatus,
+            assistantAvatarReason: configAssistantAvatarReason,
+            assistantAvatarOverride,
+            assistantAvatarUploadBusy: state.assistantAvatarUploadBusy,
+            assistantAvatarUploadError: state.assistantAvatarUploadError,
+            onAssistantAvatarOverrideChange: async (dataUrl) => {
+              state.assistantAvatarUploadBusy = true;
+              state.assistantAvatarUploadError = null;
+              requestHostUpdate?.();
+              try {
+                await setAssistantAvatarOverride(state, dataUrl);
+                state.assistantAvatar = dataUrl;
+                state.assistantAvatarSource = dataUrl;
+                state.assistantAvatarStatus = "data";
+                state.assistantAvatarReason = null;
+                state.chatAvatarUrl = dataUrl;
+                state.chatAvatarSource = dataUrl;
+                state.chatAvatarStatus = "data";
+                state.chatAvatarReason = null;
+                await loadConfig(state);
+                await state.loadAssistantIdentity();
+                await refreshChatAvatar(state);
+              } catch (err) {
+                state.assistantAvatarUploadError = err instanceof Error ? err.message : String(err);
+              } finally {
+                state.assistantAvatarUploadBusy = false;
+                requestHostUpdate?.();
+              }
+            },
+            onAssistantAvatarClearOverride: async () => {
+              state.assistantAvatarUploadBusy = true;
+              state.assistantAvatarUploadError = null;
+              requestHostUpdate?.();
+              try {
+                await setAssistantAvatarOverride(state, null);
+                state.chatAvatarUrl = null;
+                state.chatAvatarSource = null;
+                state.chatAvatarStatus = null;
+                state.chatAvatarReason = null;
+                await loadConfig(state);
+                await state.loadAssistantIdentity();
+                await refreshChatAvatar(state);
+              } catch (err) {
+                state.assistantAvatarUploadError = err instanceof Error ? err.message : String(err);
+              } finally {
+                state.assistantAvatarUploadBusy = false;
+                requestHostUpdate?.();
+              }
+            },
             basePath: state.basePath ?? "",
             configObject: configObj,
             savedConfigObject:
@@ -2310,7 +2401,7 @@ export function renderApp(state: AppViewState) {
               onCloseSidebar: () => state.handleCloseSidebar(),
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
-              assistantAvatar: state.assistantAvatar,
+              assistantAvatar: effectiveAssistantAvatar,
               userName: state.userName ?? null,
               userAvatar: state.userAvatar ?? null,
               localMediaPreviewRoots: state.localMediaPreviewRoots,

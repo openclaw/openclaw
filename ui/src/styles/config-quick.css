@@ -44,7 +44,7 @@
 
 .qs-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
   gap: 14px;
 }
@@ -54,6 +54,10 @@
   align-content: start;
   gap: 14px;
   min-width: 0;
+}
+
+.qs-stack--wide {
+  grid-column: span 2;
 }
 
 /* ── Card ── */
@@ -76,6 +80,10 @@
 
 .qs-card--span-all {
   grid-column: 1 / -1;
+}
+
+.qs-card--personal {
+  grid-column: span 2;
 }
 
 .qs-card__header {
@@ -216,14 +224,16 @@
 
 .qs-identity-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 10px;
   padding: 14px 16px 10px;
 }
 
 .qs-identity-card {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-content: start;
+  align-items: start;
   gap: 10px;
   min-width: 0;
   padding: 12px;
@@ -262,13 +272,11 @@
 }
 
 .qs-identity-card__title {
-  overflow: hidden;
   color: var(--text-strong);
   font-size: 0.95rem;
   font-weight: 650;
   line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .qs-identity-card__sub {
@@ -291,15 +299,13 @@
 }
 
 .qs-identity-card__source code {
-  overflow: hidden;
   color: var(--text);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.68rem;
   font-weight: 650;
   letter-spacing: normal;
-  text-overflow: ellipsis;
   text-transform: none;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .qs-identity-card__issue {
@@ -315,6 +321,28 @@
   font-size: 0.68rem;
   font-weight: 650;
   line-height: 1.2;
+}
+
+.qs-identity-card__repair {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.qs-identity-card__repair .btn {
+  width: fit-content;
+}
+
+.qs-identity-card__repair .muted {
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.qs-identity-card__error {
+  margin-top: 8px;
+  color: var(--danger, #ff6b78);
+  font-size: 0.7rem;
+  line-height: 1.35;
 }
 
 .qs-user-avatar,
@@ -1022,21 +1050,25 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 
-@media (max-width: 1380px) {
-  .qs-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 1100px) {
   .qs-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .qs-card--personal,
+  .qs-stack--wide {
+    grid-column: span 1;
   }
 }
 
 @media (max-width: 760px) {
   .qs-grid {
     grid-template-columns: 1fr;
+  }
+
+  .qs-card--personal,
+  .qs-stack--wide {
+    grid-column: 1 / -1;
   }
 }
 

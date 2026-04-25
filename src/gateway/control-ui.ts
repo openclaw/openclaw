@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { resolveAgentAvatar } from "../agents/identity-avatar.js";
+import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
@@ -156,7 +156,7 @@ function controlUiAvatarResolutionMeta(resolved: ControlUiAvatarResolution | nul
     return { avatarSource: null, avatarStatus: null, avatarReason: null };
   }
   return {
-    avatarSource: resolved.source ?? null,
+    avatarSource: resolvePublicAgentAvatarSource(resolved) ?? null,
     avatarStatus: resolved.kind,
     avatarReason: resolved.kind === "none" ? resolved.reason : null,
   };
@@ -270,6 +270,7 @@ async function authorizeControlUiReadRequest(
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
     allowQueryToken?: boolean;
+    requiredOperatorMethod?: string;
   },
 ): Promise<boolean> {
   if (!opts?.auth) {
@@ -332,7 +333,10 @@ async function authorizeControlUiReadRequest(
   const requestedScopes = resolveTrustedHttpOperatorScopes(req, {
     trustDeclaredOperatorScopes,
   });
-  const scopeAuth = authorizeOperatorScopesForMethod("assistant.media.get", requestedScopes);
+  const scopeAuth = authorizeOperatorScopesForMethod(
+    opts.requiredOperatorMethod ?? "assistant.media.get",
+    requestedScopes,
+  );
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {
       ok: false,
@@ -569,6 +573,13 @@ export async function handleControlUiAvatarRequest(
   }
 
   applyControlUiSecurityHeaders(res);
+  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
+  const agentId = agentIdParts[0] ?? "";
+  if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+
   if (
     !(await authorizeControlUiReadRequest(req, res, {
       auth: opts.auth,
@@ -577,13 +588,6 @@ export async function handleControlUiAvatarRequest(
       rateLimiter: opts.rateLimiter,
     }))
   ) {
-    return true;
-  }
-
-  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
-  const agentId = agentIdParts[0] ?? "";
-  if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
-    respondControlUiNotFound(res);
     return true;
   }
 
