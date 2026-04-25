@@ -1,5 +1,6 @@
 import {
   type AgentApprovalEventData,
+  formatApprovalDisplayPath,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -431,15 +432,10 @@ function sanitizePermissionHostValue(value: string): string {
 }
 
 function sanitizePermissionPathValue(value: string): string {
-  const normalized = sanitizePermissionScalar(value);
-  const homeCompacted = normalized
-    .replace(/^\/home\/(?!\.{1,2}(?=\/|$))[^/]+(?=\/|$)/, "~")
-    .replace(/^\/Users\/(?!\.{1,2}(?=\/|$))[^/]+(?=\/|$)/, "~")
-    .replace(/^[A-Za-z]:[\\/]Users[\\/](?!\.{1,2}(?=[\\/]|$))[^\\/]+(?=[\\/]|$)/i, "~");
-  const displayPath = homeCompacted.startsWith("~")
-    ? homeCompacted.replace(/\\/g, "/")
-    : homeCompacted;
-  return truncate(displayPath, PERMISSION_VALUE_MAX_LENGTH);
+  return truncate(
+    formatApprovalDisplayPath(sanitizePermissionScalar(value)),
+    PERMISSION_VALUE_MAX_LENGTH,
+  );
 }
 
 function sanitizePermissionScalar(value: string): string {
