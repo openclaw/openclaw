@@ -67,6 +67,16 @@ const ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT = "archive entry count exceeds lim
 const ERROR_ARCHIVE_ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT =
   "archive entry extracted size exceeds limit";
 const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size exceeds limit";
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP64_EOCD_SIGNATURE = 0x06064b50;
+const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50;
+const ZIP_EOCD_MIN_BYTES = 22;
+const ZIP_EOCD_MAX_COMMENT_BYTES = 0xffff;
+const ZIP_EOCD_TOTAL_ENTRIES_OFFSET = 10;
+const ZIP_EOCD_COMMENT_LENGTH_OFFSET = 20;
+const ZIP64_EOCD_LOCATOR_BYTES = 20;
+const ZIP64_EOCD_OFFSET_OFFSET = 8;
+const ZIP64_EOCD_TOTAL_ENTRIES_OFFSET = 32;
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
 const OPEN_WRITE_CREATE_FLAGS =
   fsConstants.O_WRONLY |
@@ -190,6 +200,86 @@ function assertArchiveEntryCountWithinLimit(
   if (entryCount > limits.maxEntries) {
     throw new Error(ERROR_ARCHIVE_ENTRY_COUNT_EXCEEDS_LIMIT);
   }
+}
+
+function asBufferView(buffer: Buffer | Uint8Array): Buffer {
+  if (Buffer.isBuffer(buffer)) {
+    return buffer;
+  }
+  return Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
+function readSafeUInt64LE(buffer: Buffer, offset: number): number {
+  const value = buffer.readBigUInt64LE(offset);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Number(value);
+}
+
+function findZipEndOfCentralDirectory(buffer: Buffer): number {
+  if (buffer.byteLength < ZIP_EOCD_MIN_BYTES) {
+    return -1;
+  }
+  const minOffset = Math.max(
+    0,
+    buffer.byteLength - ZIP_EOCD_MIN_BYTES - ZIP_EOCD_MAX_COMMENT_BYTES,
+  );
+  for (let offset = buffer.byteLength - ZIP_EOCD_MIN_BYTES; offset >= minOffset; offset -= 1) {
+    if (buffer.readUInt32LE(offset) !== ZIP_EOCD_SIGNATURE) {
+      continue;
+    }
+    const commentLength = buffer.readUInt16LE(offset + ZIP_EOCD_COMMENT_LENGTH_OFFSET);
+    if (offset + ZIP_EOCD_MIN_BYTES + commentLength === buffer.byteLength) {
+      return offset;
+    }
+  }
+  return -1;
+}
+
+function readZip64CentralDirectoryEntryCount(buffer: Buffer, eocdOffset: number): number | null {
+  const locatorOffset = eocdOffset - ZIP64_EOCD_LOCATOR_BYTES;
+  if (locatorOffset < 0 || buffer.readUInt32LE(locatorOffset) !== ZIP64_EOCD_LOCATOR_SIGNATURE) {
+    return null;
+  }
+  const zip64EocdOffset = readSafeUInt64LE(buffer, locatorOffset + ZIP64_EOCD_OFFSET_OFFSET);
+  if (
+    zip64EocdOffset < 0 ||
+    zip64EocdOffset + ZIP64_EOCD_TOTAL_ENTRIES_OFFSET + 8 > buffer.byteLength ||
+    buffer.readUInt32LE(zip64EocdOffset) !== ZIP64_EOCD_SIGNATURE
+  ) {
+    return null;
+  }
+  return readSafeUInt64LE(buffer, zip64EocdOffset + ZIP64_EOCD_TOTAL_ENTRIES_OFFSET);
+}
+
+/** @internal */
+export function readZipCentralDirectoryEntryCount(buffer: Buffer | Uint8Array): number | null {
+  const view = asBufferView(buffer);
+  const eocdOffset = findZipEndOfCentralDirectory(view);
+  if (eocdOffset < 0) {
+    return null;
+  }
+  const entryCount = view.readUInt16LE(eocdOffset + ZIP_EOCD_TOTAL_ENTRIES_OFFSET);
+  if (entryCount !== ZIP_EOCD_MAX_COMMENT_BYTES) {
+    return entryCount;
+  }
+  return readZip64CentralDirectoryEntryCount(view, eocdOffset) ?? entryCount;
+}
+
+export async function loadZipArchiveWithPreflight(
+  buffer: Buffer | Uint8Array,
+  limits?: ArchiveExtractLimits,
+): Promise<JSZip> {
+  const resolvedLimits = resolveExtractLimits(limits);
+  if (buffer.byteLength > resolvedLimits.maxArchiveBytes) {
+    throw new Error(ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT);
+  }
+  const entryCount = readZipCentralDirectoryEntryCount(buffer);
+  if (entryCount !== null) {
+    assertArchiveEntryCountWithinLimit(entryCount, resolvedLimits);
+  }
+  return await JSZip.loadAsync(buffer);
 }
 
 function createByteBudgetTracker(limits: ResolvedArchiveExtractLimits): {
@@ -466,7 +556,7 @@ async function extractZip(params: {
   }
 
   const buffer = await fs.readFile(params.archivePath);
-  const zip = await JSZip.loadAsync(buffer);
+  const zip = await loadZipArchiveWithPreflight(buffer, limits);
   const entries = Object.values(zip.files) as ZipEntry[];
   const strip = Math.max(0, Math.floor(params.stripComponents ?? 0));
 

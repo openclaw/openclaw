@@ -6,7 +6,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import type { ArchiveSecurityError } from "./archive.js";
-import { extractArchive, resolvePackedRootDir } from "./archive.js";
+import {
+  extractArchive,
+  readZipCentralDirectoryEntryCount,
+  resolvePackedRootDir,
+} from "./archive.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-archive-" });
 const directorySymlinkType = process.platform === "win32" ? "junction" : undefined;
@@ -69,6 +73,14 @@ async function expectExtractedSizeBudgetExceeded(params: {
       limits: { maxExtractedBytes: params.maxExtractedBytes },
     }),
   ).rejects.toThrow("archive extracted size exceeds limit");
+}
+
+function createZipEndOfCentralDirectory(entryCount: number): Buffer {
+  const buffer = Buffer.alloc(22);
+  buffer.writeUInt32LE(0x06054b50, 0);
+  buffer.writeUInt16LE(Math.min(entryCount, 0xffff), 8);
+  buffer.writeUInt16LE(Math.min(entryCount, 0xffff), 10);
+  return buffer;
 }
 
 beforeAll(async () => {
@@ -345,6 +357,23 @@ describe("archive utils", () => {
       });
     },
   );
+
+  it("rejects zip archives whose central directory exceeds the entry limit before parsing", async () => {
+    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+      const archiveBytes = createZipEndOfCentralDirectory(2);
+      await fs.writeFile(archivePath, archiveBytes);
+
+      expect(readZipCentralDirectoryEntryCount(archiveBytes)).toBe(2);
+      await expect(
+        extractArchive({
+          archivePath,
+          destDir: extractDir,
+          timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+          limits: { maxEntries: 1 },
+        }),
+      ).rejects.toThrow("archive entry count exceeds limit");
+    });
+  });
 
   it("rejects tar entries with absolute extraction paths", async () => {
     await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {

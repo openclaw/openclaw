@@ -97,6 +97,14 @@ function createLoggerSpies() {
   };
 }
 
+function createZipEndOfCentralDirectory(entryCount: number): Buffer {
+  const buffer = Buffer.alloc(22);
+  buffer.writeUInt32LE(0x06054b50, 0);
+  buffer.writeUInt16LE(Math.min(entryCount, 0xffff), 8);
+  buffer.writeUInt16LE(Math.min(entryCount, 0xffff), 10);
+  return buffer;
+}
+
 function expectClawHubInstallFlow(params: {
   baseUrl: string;
   version: string;
@@ -1060,6 +1068,50 @@ describe("installPluginFromClawHub", () => {
       code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
       error: "ClawHub archive fallback verification exceeded the archive entry limit.",
     });
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects fallback verification when the ZIP central directory exceeds the entry limit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
+    tempDirs.push(dir);
+    const archivePath = path.join(dir, "archive.zip");
+    await fs.writeFile(archivePath, createZipEndOfCentralDirectory(50_001));
+    const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync");
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        files: [
+          {
+            path: "openclaw.plugin.json",
+            size: 13,
+            sha256: sha256Hex('{"id":"demo"}'),
+          },
+        ],
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      archivePath,
+      integrity: "sha256-not-used-in-fallback",
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+    });
+
+    loadAsyncSpy.mockRestore();
+    expect(result).toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      error: "ClawHub archive fallback verification exceeded the archive entry limit.",
+    });
+    expect(loadAsyncSpy).not.toHaveBeenCalled();
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
   });
 
