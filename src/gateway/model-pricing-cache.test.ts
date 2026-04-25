@@ -25,6 +25,7 @@ import {
 describe("model-pricing-cache", () => {
   beforeEach(() => {
     __resetGatewayModelPricingCacheForTest();
+    normalizeProviderModelIdWithPluginMock.mockClear();
   });
 
   afterEach(() => {
@@ -211,6 +212,42 @@ describe("model-pricing-cache", () => {
       cacheRead: 0,
       cacheWrite: 0,
     });
+  });
+
+  it("does not invoke provider hooks for every OpenRouter catalog entry", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const openRouterEntries = Array.from({ length: 1000 }, (_, index) => ({
+      id: `anthropic/claude-catalog-${index}.0`,
+      pricing: {
+        prompt: "0.000001",
+        completion: "0.000002",
+      },
+    }));
+
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(JSON.stringify({ data: openRouterEntries }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(normalizeProviderModelIdWithPluginMock.mock.calls.length).toBeLessThan(10);
   });
 
   it("does not recurse forever for native openrouter auto refs", async () => {
