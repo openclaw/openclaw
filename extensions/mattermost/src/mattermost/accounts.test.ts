@@ -109,6 +109,39 @@ describe("resolveMattermostReplyToMode", () => {
     expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
   });
 
+  it("defaults previewStreamMode to partial when streaming is unset", () => {
+    const account = resolveMattermostAccount({ cfg: {}, accountId: "default" });
+    expect(account.previewStreamMode).toBe("partial");
+  });
+
+  it("resolves previewStreamMode off when streaming is off", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: "off",
+          },
+        },
+      },
+      accountId: "default",
+    });
+    expect(account.previewStreamMode).toBe("off");
+  });
+
+  it("resolves previewStreamMode partial when streaming is partial", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: "partial",
+          },
+        },
+      },
+      accountId: "default",
+    });
+    expect(account.previewStreamMode).toBe("partial");
+  });
+
   it("preserves shared commands config when an account overrides one commands field", () => {
     const account = resolveMattermostAccount({
       cfg: {

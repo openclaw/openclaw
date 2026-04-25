@@ -1619,14 +1619,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           },
         });
-        const draftStream = createMattermostDraftStream({
-          client,
-          channelId,
-          rootId: effectiveReplyToId,
-          throttleMs: 1200,
-          log: logVerboseMessage,
-          warn: logVerboseMessage,
-        });
+        const previewEnabled = account.previewStreamMode !== "off";
+        const draftStream = previewEnabled
+          ? createMattermostDraftStream({
+              client,
+              channelId,
+              rootId: effectiveReplyToId,
+              throttleMs: 1200,
+              log: logVerboseMessage,
+              warn: logVerboseMessage,
+            })
+          : undefined;
         let lastPartialText = "";
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
@@ -1668,6 +1671,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         };
 
         const updateDraftFromPartial = (text?: string) => {
+          if (!draftStream) {
+            return;
+          }
           const cleaned = text?.trim();
           if (!cleaned) {
             return;
@@ -1692,34 +1698,56 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             typingCallbacks,
             deliver: async (payload: ReplyPayload, info) => {
-              await deliverMattermostReplyWithDraftPreview({
-                payload,
-                info,
-                client,
-                draftStream,
-                effectiveReplyToId,
-                resolvePreviewFinalText,
-                previewState,
-                logVerboseMessage,
-                deliverFinal: async () => {
-                  await deliverMattermostReplyPayload({
-                    core,
-                    cfg,
-                    payload,
-                    to,
-                    accountId: account.accountId,
-                    agentId: route.agentId,
-                    replyToId: resolveMattermostReplyRootId({
-                      threadRootId: effectiveReplyToId,
-                      replyToId: payload.replyToId,
-                    }),
-                    textLimit,
-                    tableMode,
-                    sendMessage: sendMessageMattermost,
-                  });
-                  runtime.log?.(`delivered reply to ${to}`);
-                },
-              });
+              if (draftStream) {
+                await deliverMattermostReplyWithDraftPreview({
+                  payload,
+                  info,
+                  client,
+                  draftStream,
+                  effectiveReplyToId,
+                  resolvePreviewFinalText,
+                  previewState,
+                  logVerboseMessage,
+                  deliverFinal: async () => {
+                    await deliverMattermostReplyPayload({
+                      core,
+                      cfg,
+                      payload,
+                      to,
+                      accountId: account.accountId,
+                      agentId: route.agentId,
+                      replyToId: resolveMattermostReplyRootId({
+                        threadRootId: effectiveReplyToId,
+                        replyToId: payload.replyToId,
+                      }),
+                      textLimit,
+                      tableMode,
+                      sendMessage: sendMessageMattermost,
+                    });
+                    runtime.log?.(`delivered reply to ${to}`);
+                  },
+                });
+              } else {
+                if (payload.isReasoning) {
+                  return;
+                }
+                await deliverMattermostReplyPayload({
+                  core,
+                  cfg,
+                  payload,
+                  to,
+                  accountId: account.accountId,
+                  agentId: route.agentId,
+                  replyToId: resolveMattermostReplyRootId({
+                    threadRootId: effectiveReplyToId,
+                    replyToId: payload.replyToId,
+                  }),
+                  textLimit,
+                  tableMode,
+                  sendMessage: sendMessageMattermost,
+                });
+                runtime.log?.(`delivered reply to ${to}`);
+              }
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
@@ -1750,22 +1778,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   onReasoningEnd: () => {
                     lastPartialText = "";
                   },
-                  onReasoningStream: async () => {
-                    if (!lastPartialText) {
-                      draftStream.update("Thinking…");
-                    }
-                  },
-                  onToolStart: async (payload) => {
-                    draftStream.update(buildMattermostToolStatusText(payload));
-                  },
+                  onReasoningStream: draftStream
+                    ? async () => {
+                        if (!lastPartialText) {
+                          draftStream.update("Thinking…");
+                        }
+                      }
+                    : undefined,
+                  onToolStart: draftStream
+                    ? async (payload) => {
+                        draftStream.update(buildMattermostToolStatusText(payload));
+                      }
+                    : undefined,
                 },
               }),
           });
         } finally {
-          try {
-            await draftStream.stop();
-          } catch (err) {
-            logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`);
+          if (draftStream) {
+            try {
+              await draftStream.stop();
+            } catch (err) {
+              logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`);
+            }
           }
           markRunComplete();
         }

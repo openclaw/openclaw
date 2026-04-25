@@ -2,6 +2,7 @@ import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
+  resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
@@ -36,6 +37,7 @@ export type ResolvedMattermostAccount = {
   chunkMode?: MattermostAccountConfig["chunkMode"];
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
+  previewStreamMode: "off" | "partial" | "block";
 };
 
 const mattermostAccountHelpers = createAccountListHelpers("mattermost");
@@ -123,6 +125,7 @@ export function resolveMattermostAccount(params: {
     blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
     blockStreamingCoalesce:
       resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
+    previewStreamMode: resolveChannelPreviewStreamMode(merged, "partial"),
   };
 }
 
