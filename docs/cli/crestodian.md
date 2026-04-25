@@ -304,6 +304,10 @@ Fresh configless setup through Crestodian is covered by:
 pnpm test:docker:crestodian-first-run
 ```
 
+That lane starts with an empty state dir, routes bare `openclaw` to Crestodian,
+sets the default model, creates an additional agent, configures Discord through
+a token SecretRef, validates config, and checks the audit log.
+
 ## Related
 
 - [CLI reference](/cli)

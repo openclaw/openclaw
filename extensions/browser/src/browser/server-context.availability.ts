@@ -191,7 +191,8 @@ export function createProfileAvailability({
   const waitForCdpReadyAfterLaunch = async (): Promise<void> => {
     // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
     // If a follow-up call races ahead, we can hit PortInUseError trying to launch again on the same port.
-    const deadlineMs = Date.now() + CDP_READY_AFTER_LAUNCH_WINDOW_MS;
+    const deadlineMs =
+      Date.now() + (state().resolved.localCdpReadyTimeoutMs ?? CDP_READY_AFTER_LAUNCH_WINDOW_MS);
     while (Date.now() < deadlineMs) {
       const remainingMs = Math.max(0, deadlineMs - Date.now());
       // Keep each attempt short; loopback profiles derive a WS timeout from this value.

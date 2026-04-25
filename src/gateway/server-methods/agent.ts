@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  resolveAgentAvatar,
+  resolvePublicAgentAvatarSource,
+} from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -1074,7 +1078,18 @@ export const agentHandlers: GatewayRequestHandlers = {
         agentId: identity.agentId,
         basePath: cfg.gateway?.controlUi?.basePath,
       }) ?? identity.avatar;
-    respond(true, { ...identity, avatar: avatarValue }, undefined);
+    const avatarResolution = resolveAgentAvatar(cfg, identity.agentId, { includeUiOverride: true });
+    respond(
+      true,
+      {
+        ...identity,
+        avatar: avatarValue,
+        avatarSource: resolvePublicAgentAvatarSource(avatarResolution),
+        avatarStatus: avatarResolution.kind,
+        avatarReason: avatarResolution.kind === "none" ? avatarResolution.reason : undefined,
+      },
+      undefined,
+    );
   },
   "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {

@@ -1636,7 +1636,6 @@
     "osc-progress": "^0.3.0",
     "proxy-agent": "^8.0.1",
     "semver": "7.7.4",
-    "sharp": "^0.34.5",
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",

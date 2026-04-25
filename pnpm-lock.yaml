@@ -117,9 +117,6 @@ importers:
       semver:
         specifier: 7.7.4
         version: 7.7.4
-      sharp:
-        specifier: ^0.34.5
-        version: 0.34.5
       sqlite-vec:
         specifier: 0.1.9
         version: 0.1.9
@@ -799,6 +796,10 @@ importers:
         version: link:../..
 
   extensions/media-understanding-core:
+    dependencies:
+      sharp:
+        specifier: ^0.34.5
+        version: 0.34.5
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

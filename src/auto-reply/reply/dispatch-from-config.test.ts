@@ -3241,6 +3241,37 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
 
+  it("forwards generated-media block replies in WhatsApp group sessions", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      ChatType: "group",
+      From: "whatsapp:120363111111111@g.us",
+      To: "whatsapp:120363111111111@g.us",
+      SessionKey: "agent:main:whatsapp:group:120363111111111@g.us",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({
+        text: "generated",
+        mediaUrls: ["https://example.com/generated.png"],
+      });
+      return { text: "NO_REPLY" };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "generated",
+      mediaUrls: ["https://example.com/generated.png"],
+    });
+  });
+
   it("signals block boundaries before async block delivery is queued", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

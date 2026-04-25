@@ -4,10 +4,7 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import { isUsageCountedSessionTranscriptFileName } from "../../../../src/config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 import { redactSensitiveText } from "../../../../src/logging/redact.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { hashText } from "./internal.js";
-
-const log = createSubsystemLogger("memory");
+import { hashText } from "./hash.js";
 
 export type SessionFileEntry = {
   path: string;
@@ -60,6 +57,11 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
 
 export function sessionPathForFile(absPath: string): string {
   return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
+}
+
+async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
+  const { createSubsystemLogger } = await import("../../../../src/logging/subsystem.js");
+  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
 }
 
 function normalizeSessionText(value: string): string {
@@ -174,7 +176,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     };
   } catch (err) {
-    log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
+    void logSessionFileReadFailure(absPath, err);
     return null;
   }
 }

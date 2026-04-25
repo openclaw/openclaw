@@ -520,7 +520,8 @@ export async function launchOpenClawChrome(
     proc.stderr?.on("data", onStderr);
 
     try {
-      const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
+      const readyDeadline =
+        Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
       while (Date.now() < readyDeadline) {
         if (await isChromeReachable(profile.cdpUrl)) {
           break;
