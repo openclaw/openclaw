@@ -137,6 +137,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toBeNull();
   });
 
+  it("routes precise plugin contract helpers without broad-running every shard", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/helpers/plugins/tts-contract-suites.ts",
+      ]),
+    ).toEqual([
+      "src/plugins/contracts/core-extension-facade-boundary.test.ts",
+      "src/plugins/contracts/tts.contract.test.ts",
+    ]);
+  });
+
   it("keeps the broad changed run for unknown root surfaces", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [

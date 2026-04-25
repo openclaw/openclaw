@@ -215,6 +215,15 @@ const BROAD_CHANGED_RERUN_PATTERNS = [
   /^test\/vitest\/vitest\.(?:config|shared\.config|scoped-config|performance-config)\.ts$/u,
   /^test\/helpers\//u,
 ];
+const PRECISE_SOURCE_TEST_TARGETS = new Map([
+  [
+    "test/helpers/plugins/tts-contract-suites.ts",
+    [
+      "src/plugins/contracts/core-extension-facade-boundary.test.ts",
+      "src/plugins/contracts/tts.contract.test.ts",
+    ],
+  ],
+]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
@@ -239,6 +248,7 @@ const TOOLING_TEST_TARGETS = new Map([
   ],
 ]);
 const SOURCE_TEST_TARGETS = new Map([
+  ...PRECISE_SOURCE_TEST_TARGETS,
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
   [
     "src/auto-reply/reply/dispatch-from-config.ts",
@@ -487,21 +497,26 @@ function stripChangedArgs(args) {
 
 function shouldKeepBroadChangedRun(changedPaths) {
   return changedPaths.some((changedPath) =>
-    BROAD_CHANGED_RERUN_PATTERNS.some((pattern) => pattern.test(changedPath)),
+    PRECISE_SOURCE_TEST_TARGETS.has(changedPath)
+      ? false
+      : BROAD_CHANGED_RERUN_PATTERNS.some((pattern) => pattern.test(changedPath)),
   );
 }
 
 function resolveToolingChangedTestTargets(changedPaths) {
   const targets = [];
   for (const changedPath of changedPaths) {
-    const testTargets =
-      TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
+    const testTargets = resolveToolingTestTargets(changedPath);
     if (!testTargets) {
       return null;
     }
     targets.push(...testTargets);
   }
   return [...new Set(targets)];
+}
+
+function resolveToolingTestTargets(changedPath) {
+  return TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
 }
 
 function isRoutableChangedTarget(changedPath) {
@@ -530,7 +545,8 @@ export function resolveChangedTestTargetPlan(changedPaths) {
     return { mode: "broad", targets: [] };
   }
   const targets = changedPaths.flatMap((changedPath) => {
-    const mappedTargets = SOURCE_TEST_TARGETS.get(changedPath);
+    const mappedTargets =
+      resolveToolingTestTargets(changedPath) ?? SOURCE_TEST_TARGETS.get(changedPath);
     if (mappedTargets) {
       return mappedTargets;
     }
