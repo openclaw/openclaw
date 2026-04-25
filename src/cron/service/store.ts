@@ -7,6 +7,25 @@ import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
 
+function didSchedulingInputsChange(previous: CronJob, next: CronJob): boolean {
+  if (previous.enabled !== next.enabled) {
+    return true;
+  }
+  return JSON.stringify(previous.schedule) !== JSON.stringify(next.schedule);
+}
+
+function invalidateStaleNextRunOnScheduleChange(params: {
+  previousJobsById: ReadonlyMap<string, CronJob>;
+  hydrated: CronJob;
+}) {
+  const previousJob = params.previousJobsById.get(params.hydrated.id);
+  if (!previousJob || !didSchedulingInputsChange(previousJob, params.hydrated)) {
+    return;
+  }
+  params.hydrated.state ??= {};
+  params.hydrated.state.nextRunAtMs = undefined;
+}
+
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
     const stats = await fs.promises.stat(path);
@@ -29,6 +48,11 @@ export async function ensureLoaded(
   // trust the in-memory copy to avoid a stat syscall on every operation.
   if (state.store && !opts?.forceReload) {
     return;
+  }
+
+  const previousJobsById = new Map<string, CronJob>();
+  for (const job of state.store?.jobs ?? []) {
+    previousJobsById.set(job.id, job);
   }
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.
@@ -54,6 +78,7 @@ export async function ensureLoaded(
     }
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
+    invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
     jobs[index] = hydrated;
     if (legacyJobIdIssue) {
       const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;

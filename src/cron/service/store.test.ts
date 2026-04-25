@@ -189,4 +189,45 @@ describe("cron service store seam coverage", () => {
       expect.stringContaining("invalid persisted sessionTarget"),
     );
   });
+
+  it("clears stale nextRunAtMs after force reload when cron schedule expression changes", async () => {
+    const { storePath } = await makeStorePath();
+    const jobId = "reload-cron-expr-job";
+    const jobName = "reload cron expr job";
+    const createdAtMs = STORE_TEST_NOW - 60_000;
+    const baseJob = {
+      id: jobId,
+      name: jobName,
+      enabled: true,
+      createdAtMs,
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" as const },
+    };
+    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
+
+    await writeSingleJobStore(storePath, {
+      ...baseJob,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
+      state: { nextRunAtMs: staleNextRunAtMs },
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBe(staleNextRunAtMs);
+
+    await writeSingleJobStore(storePath, {
+      ...baseJob,
+      updatedAtMs: STORE_TEST_NOW - 30_000,
+      schedule: { kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" },
+      state: { nextRunAtMs: staleNextRunAtMs },
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    const reloadedJob = findJobOrThrow(state, jobId);
+    expect(reloadedJob.schedule).toEqual({ kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" });
+    expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
+  });
 });
