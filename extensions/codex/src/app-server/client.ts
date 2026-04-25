@@ -1,6 +1,7 @@
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
@@ -22,7 +23,7 @@ import {
   type CodexAppServerTransport,
 } from "./transport.js";
 
-export const MIN_CODEX_APP_SERVER_VERSION = "0.125.0";
+export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 
 type PendingRequest = {
@@ -99,6 +100,9 @@ export class CodexAppServerClient {
       ...options,
       headers: options?.headers ?? defaults.headers,
     };
+    if (startOptions.transport === "stdio" && startOptions.commandSource === "managed") {
+      throw new Error("Managed Codex app-server start options must be resolved before spawn.");
+    }
     if (startOptions.transport === "websocket") {
       return new CodexAppServerClient(createWebSocketTransport(startOptions));
     }
@@ -407,12 +411,12 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
   if (!detectedVersion) {
     throw new Error(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Upgrade Codex CLI and retry.`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
   if (compareVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
     throw new Error(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Upgrade Codex CLI and retry.`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
 }
