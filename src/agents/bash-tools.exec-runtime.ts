@@ -291,6 +291,9 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
+  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
+    return;
+  }
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
@@ -783,7 +786,7 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(session, exit.exitCode, exit.exitSignal, outcome.status);
+      markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
