@@ -7,7 +7,7 @@ read_when:
 title: "Text-to-speech"
 ---
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Microsoft, MiniMax, OpenAI, Vydra, or xAI.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Microsoft, MiniMax, OpenAI, Vydra, xAI, or Xiaomi MiMo.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
@@ -20,6 +20,7 @@ It works anywhere OpenClaw can send audio.
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Vydra** (primary or fallback provider; shared image, video, and speech provider)
 - **xAI** (primary or fallback provider; uses the xAI TTS API)
+- **Xiaomi MiMo** (primary or fallback provider; uses MiMo TTS through Xiaomi chat completions)
 
 ### Microsoft speech notes
 
@@ -36,7 +37,7 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want OpenAI, ElevenLabs, Google Gemini, Gradium, MiniMax, Vydra, or xAI:
+If you want OpenAI, ElevenLabs, Google Gemini, Gradium, MiniMax, Vydra, xAI, or Xiaomi MiMo:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
@@ -45,6 +46,7 @@ If you want OpenAI, ElevenLabs, Google Gemini, Gradium, MiniMax, Vydra, or xAI:
 - `OPENAI_API_KEY`
 - `VYDRA_API_KEY`
 - `XAI_API_KEY`
+- `XIAOMI_API_KEY`
 
 Microsoft speech does **not** require an API key.
 
@@ -60,6 +62,7 @@ so that provider must also be authenticated if you enable summaries.
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [Gradium](/providers/gradium)
 - [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
+- [Xiaomi MiMo speech synthesis](/providers/xiaomi#text-to-speech)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 - [xAI Text to Speech](https://docs.x.ai/developers/rest-api-reference/inference/voice#text-to-speech-rest)
@@ -231,6 +234,34 @@ Resolution order is `messages.tts.providers.xai.apiKey` -> `XAI_API_KEY`.
 Current live voices are `ara`, `eve`, `leo`, `rex`, `sal`, and `una`; `eve` is
 the default. `language` accepts a BCP-47 tag or `auto`.
 
+### Xiaomi MiMo primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "xiaomi",
+      providers: {
+        xiaomi: {
+          apiKey: "xiaomi_api_key",
+          baseUrl: "https://api.xiaomimimo.com/v1",
+          model: "mimo-v2.5-tts",
+          voice: "mimo_default",
+          format: "mp3",
+          style: "Bright, natural, conversational tone.",
+        },
+      },
+    },
+  },
+}
+```
+
+Xiaomi MiMo TTS uses the same `XIAOMI_API_KEY` path as the bundled Xiaomi model
+provider. The speech provider id is `xiaomi`; `mimo` is accepted as an alias.
+The target text is sent as the assistant message, matching Xiaomi's TTS
+contract. Optional `style` is sent as a user instruction and is not spoken.
+
 ### OpenRouter primary
 
 ```json5
@@ -345,7 +376,7 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts:key=value]]` directives or a `[[tts:text]]...[[/tts:text]]` block.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: speech provider id such as `"elevenlabs"`, `"google"`, `"gradium"`, `"microsoft"`, `"minimax"`, `"openai"`, `"vydra"`, or `"xai"` (fallback is automatic).
+- `provider`: speech provider id such as `"elevenlabs"`, `"google"`, `"gradium"`, `"microsoft"`, `"minimax"`, `"openai"`, `"vydra"`, `"xai"`, or `"xiaomi"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw uses the first configured speech provider in registry auto-select order.
 - Legacy `provider: "edge"` config is repaired by `openclaw doctor --fix` and
   rewritten to `provider: "microsoft"`.
@@ -359,7 +390,7 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `GRADIUM_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `GRADIUM_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`, `VYDRA_API_KEY`, `XAI_API_KEY`, `XIAOMI_API_KEY`).
 - `providers.elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `providers.openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.providers.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
@@ -391,6 +422,12 @@ Then run:
 - `providers.xai.language`: BCP-47 language code or `auto` (default `en`).
 - `providers.xai.responseFormat`: `mp3`, `wav`, `pcm`, `mulaw`, or `alaw` (default `mp3`).
 - `providers.xai.speed`: provider-native speed override.
+- `providers.xiaomi.apiKey`: Xiaomi MiMo API key (env: `XIAOMI_API_KEY`).
+- `providers.xiaomi.baseUrl`: override the Xiaomi MiMo API base URL (default `https://api.xiaomimimo.com/v1`, env: `XIAOMI_BASE_URL`).
+- `providers.xiaomi.model`: TTS model (default `mimo-v2.5-tts`, env: `XIAOMI_TTS_MODEL`; `mimo-v2-tts` is also supported).
+- `providers.xiaomi.voice`: MiMo voice id (default `mimo_default`, env: `XIAOMI_TTS_VOICE`).
+- `providers.xiaomi.format`: `mp3` or `wav` (default `mp3`, env: `XIAOMI_TTS_FORMAT`).
+- `providers.xiaomi.style`: optional natural-language style instruction sent as the user message; it is not spoken.
 - `providers.openrouter.apiKey`: OpenRouter API key (env: `OPENROUTER_API_KEY`; can reuse `models.providers.openrouter.apiKey`).
 - `providers.openrouter.baseUrl`: override the OpenRouter TTS base URL (default `https://openrouter.ai/api/v1`; legacy `https://openrouter.ai/v1` is normalized).
 - `providers.openrouter.model`: OpenRouter TTS model id (default `hexgrad/kokoro-82m`; `modelId` is also accepted).
@@ -432,9 +469,9 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `google`, `gradium`, `minimax`, `microsoft`, `vydra`, or `xai`; requires `allowProvider: true`)
-- `voice` (OpenAI or Gradium voice), `voiceName` / `voice_name` / `google_voice` (Google voice), or `voiceId` (ElevenLabs / Gradium / MiniMax / xAI)
-- `model` (OpenAI TTS model, ElevenLabs model id, or MiniMax model) or `google_model` (Google TTS model)
+- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `google`, `gradium`, `minimax`, `microsoft`, `vydra`, `xai`, or `xiaomi`; requires `allowProvider: true`)
+- `voice` (OpenAI, Gradium, or Xiaomi voice), `voiceName` / `voice_name` / `google_voice` (Google voice), or `voiceId` (ElevenLabs / Gradium / MiniMax / xAI)
+- `model` (OpenAI TTS model, ElevenLabs model id, MiniMax model, or Xiaomi MiMo TTS model) or `google_model` (Google TTS model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0-10)
 - `pitch` (MiniMax integer pitch, -12 to 12; fractional values are truncated before the MiniMax request)
@@ -498,6 +535,7 @@ These override `messages.tts.*` for that host.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate) for normal audio attachments. For voice-note targets such as Feishu and Telegram, OpenClaw transcodes the MiniMax MP3 to 48kHz Opus with `ffmpeg` before delivery.
+- **Xiaomi MiMo**: MP3 by default, or WAV when configured. For voice-note targets such as Feishu and Telegram, OpenClaw transcodes Xiaomi output to 48kHz Opus with `ffmpeg` before delivery.
 - **Google Gemini**: Gemini API TTS returns raw 24kHz PCM. OpenClaw wraps it as WAV for audio attachments and returns PCM directly for Talk/telephony. Native Opus voice-note format is not supported by this path.
 - **Gradium**: WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
 - **xAI**: MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. OpenClaw uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported by this path.

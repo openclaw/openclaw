@@ -28,13 +28,6 @@ export type QuickSettingsChannel = {
   detail?: string;
 };
 
-export type QuickSettingsApiKey = {
-  provider: string;
-  label: string;
-  masked?: string;
-  isSet: boolean;
-};
-
 export type QuickSettingsAutomation = {
   cronJobCount: number;
   skillCount: number;
@@ -59,10 +52,6 @@ export type QuickSettingsProps = {
   // Channels
   channels: QuickSettingsChannel[];
   onChannelConfigure?: (channelId: string) => void;
-
-  // API Keys
-  apiKeys: QuickSettingsApiKey[];
-  onApiKeyChange?: (provider: string) => void;
 
   // Automations
   automation: QuickSettingsAutomation;
@@ -267,43 +256,6 @@ function renderChannelsCard(props: QuickSettingsProps) {
                           @click=${() => props.onChannelConfigure?.(ch.id)}
                         >
                           Connect →
-                        </button>`}
-                  </span>
-                </div>
-              `,
-            )}
-      </div>
-    </div>
-  `;
-}
-
-function renderApiKeysCard(props: QuickSettingsProps) {
-  return html`
-    <div class="qs-card">
-      ${renderCardHeader(icons.plug, "API Keys")}
-      <div class="qs-card__body">
-        ${props.apiKeys.length === 0
-          ? html`<div class="qs-empty muted">No API keys configured</div>`
-          : props.apiKeys.map(
-              (key) => html`
-                <div class="qs-row">
-                  <span class="qs-row__label">${key.label}</span>
-                  <span class="qs-row__value">
-                    ${key.isSet
-                      ? html`
-                          <code class="qs-masked">${key.masked ?? "••••••••"}</code>
-                          <button
-                            class="qs-link-btn"
-                            @click=${() => props.onApiKeyChange?.(key.provider)}
-                          >
-                            Change
-                          </button>
-                        `
-                      : html`<button
-                          class="qs-link-btn"
-                          @click=${() => props.onApiKeyChange?.(key.provider)}
-                        >
-                          Add →
                         </button>`}
                   </span>
                 </div>
@@ -589,8 +541,8 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       <div class="qs-grid">
         ${renderStack(renderModelCard(props), renderSecurityCard(props))}
         ${renderStack(renderChannelsCard(props), renderAutomationsCard(props))}
-        ${renderStack(renderApiKeysCard(props), renderAppearanceCard(props))}
-        ${renderStack(renderPersonalCard(props))} ${renderPresetsCard(props)}
+        ${renderStack(renderAppearanceCard(props))} ${renderStack(renderPersonalCard(props))}
+        ${renderPresetsCard(props)}
       </div>
 
       ${renderConnectionFooter(props)}
