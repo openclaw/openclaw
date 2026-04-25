@@ -90,7 +90,7 @@ function createBundledChannelEntry(params: {
 }
 
 describe("defineBundledChannelEntry", () => {
-  it("keeps runtime sidecars out of discovery registration", () => {
+  it("loads runtime sidecars during discovery registration", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-entry-runtime-"));
     tempDirs.push(tempRoot);
     const runtimeMarker = path.join(tempRoot, "runtime-loaded");
@@ -115,7 +115,7 @@ describe("defineBundledChannelEntry", () => {
     expect(api.registerChannel).toHaveBeenCalledTimes(1);
     expect(registerCliMetadata).toHaveBeenCalledWith(api);
     expect(registerFull).not.toHaveBeenCalled();
-    expect(fs.existsSync(runtimeMarker)).toBe(false);
+    expect(fs.existsSync(runtimeMarker)).toBe(true);
   });
 
   it("keeps setup-runtime and full registration wired to runtime sidecars", () => {
