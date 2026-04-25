@@ -95,7 +95,21 @@ describe("fal video generation provider", () => {
   });
 
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildFalVideoGenerationProvider());
+    const provider = buildFalVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.capabilities.imageToVideo?.maxInputImages).toBe(1);
+    expect(
+      provider.capabilities.imageToVideo?.maxInputImagesByModel?.[
+        "bytedance/seedance-2.0/fast/reference-to-video"
+      ],
+    ).toBe(9);
+    expect(provider.capabilities.videoToVideo?.maxInputVideos).toBe(0);
+    expect(
+      Object.keys(provider.capabilities.videoToVideo?.supportedDurationSecondsByModel ?? {}),
+    ).toEqual([
+      "bytedance/seedance-2.0/fast/reference-to-video",
+      "bytedance/seedance-2.0/reference-to-video",
+    ]);
   });
 
   it("submits fal video jobs through the queue API and downloads the completed result", async () => {

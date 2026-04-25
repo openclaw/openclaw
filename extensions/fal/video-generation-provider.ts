@@ -472,7 +472,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         maxInputVideosByModel: SEEDANCE_REFERENCE_MAX_VIDEOS_BY_MODEL,
         maxInputAudiosByModel: SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL,
         supportedDurationSecondsByModel: Object.fromEntries(
-          SEEDANCE_2_VIDEO_MODELS.map((model) => [model, SEEDANCE_2_DURATION_SECONDS]),
+          SEEDANCE_2_REFERENCE_VIDEO_MODELS.map((model) => [model, SEEDANCE_2_DURATION_SECONDS]),
         ),
         supportsAspectRatio: true,
         supportsResolution: true,
