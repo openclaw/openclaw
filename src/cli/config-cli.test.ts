@@ -273,7 +273,7 @@ describe("config cli", () => {
       });
     });
 
-    it("dry-runs nested plugin install updates without dropping sibling fields", async () => {
+    it("rejects plugin install record config updates", async () => {
       const resolved = {
         plugins: {
           installs: {
@@ -294,18 +294,19 @@ describe("config cli", () => {
       } as unknown as OpenClawConfig;
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand([
-        "config",
-        "set",
-        'plugins.installs["openclaw-web-search"].spec',
-        '"@ollama/openclaw-web-search@0.2.2"',
-        "--strict-json",
-        "--dry-run",
-      ]);
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          'plugins.installs["openclaw-web-search"].spec',
+          '"@ollama/openclaw-web-search@0.2.2"',
+          "--strict-json",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).not.toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Dry run successful"));
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Unrecognized key"));
     });
 
     it("rejects protected model map replacement unless explicitly requested", async () => {

@@ -56,11 +56,11 @@ import {
   collectChangedPaths,
   createMergePatch,
   formatConfigValidationFailure,
+  applyUnsetPathsForWrite,
   projectSourceOntoRuntimeShape,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
-  unsetPathForWrite,
 } from "./io.write-prepare.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
@@ -1655,6 +1655,11 @@ export function createConfigIO(
       }
     }
 
+    persistCandidate = applyUnsetPathsForWrite(
+      persistCandidate as OpenClawConfig,
+      options.unsetPaths,
+    );
+
     const validated = validateConfigObjectRawWithPlugins(persistCandidate, { env: deps.env });
     if (!validated.ok) {
       const issue = validated.issues[0];
@@ -1715,18 +1720,7 @@ export function createConfigIO(
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
         : cfgToWrite;
-    let outputConfig = outputConfigBase;
-    if (options.unsetPaths?.length) {
-      for (const unsetPath of options.unsetPaths) {
-        if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
-          continue;
-        }
-        const unsetResult = unsetPathForWrite(outputConfig, unsetPath);
-        if (unsetResult.changed) {
-          outputConfig = unsetResult.next;
-        }
-      }
-    }
+    const outputConfig = applyUnsetPathsForWrite(outputConfigBase, options.unsetPaths);
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);

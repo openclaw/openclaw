@@ -320,6 +320,23 @@ export function unsetPathForWrite(
   return { changed: false, next: root };
 }
 
+export function applyUnsetPathsForWrite(
+  root: OpenClawConfig,
+  unsetPaths: readonly string[][] | undefined,
+): OpenClawConfig {
+  let next = root;
+  for (const unsetPath of unsetPaths ?? []) {
+    if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
+      continue;
+    }
+    const unsetResult = unsetPathForWrite(next, unsetPath);
+    if (unsetResult.changed) {
+      next = unsetResult.next;
+    }
+  }
+  return next;
+}
+
 export function collectChangedPaths(
   base: unknown,
   target: unknown,
