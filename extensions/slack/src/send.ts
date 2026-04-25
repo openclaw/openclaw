@@ -19,7 +19,7 @@ import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { getSlackWriteClient } from "./client.js";
+import { createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
@@ -188,7 +188,9 @@ function createSlackSendQueueKey(params: {
 }): string {
   const isUserId = params.recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(params.recipient.id);
   const recipientKey = `${isUserId ? "user" : params.recipient.kind}:${params.recipient.id}`;
-  return `${params.accountId}:${params.token}:${recipientKey}:${params.threadTs ?? ""}`;
+  return `${params.accountId}:${createSlackTokenCacheKey(params.token)}:${recipientKey}:${
+    params.threadTs ?? ""
+  }`;
 }
 
 async function runQueuedSlackSend<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -215,7 +217,9 @@ function createSlackDmCacheKey(params: {
   token: string;
   recipientId: string;
 }): string {
-  return `${params.accountId ?? "default"}:${params.token}:${params.recipientId}`;
+  return `${params.accountId ?? "default"}:${createSlackTokenCacheKey(params.token)}:${
+    params.recipientId
+  }`;
 }
 
 function setSlackDmChannelCache(key: string, channelId: string): void {
