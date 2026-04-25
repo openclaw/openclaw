@@ -1,8 +1,10 @@
-import path from "node:path";
 import { z } from "zod";
-import { resolveStateDir } from "../config/paths.js";
 import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
+import {
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
 import {
   diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
@@ -16,14 +18,11 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-
-export const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installs.json");
-
-export type InstalledPluginIndexStoreOptions = {
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  filePath?: string;
-};
+export {
+  INSTALLED_PLUGIN_INDEX_STORE_PATH,
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
 
 export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 
@@ -110,17 +109,6 @@ const InstalledPluginIndexSchema = z
 
 function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
   return safeParseWithSchema(InstalledPluginIndexSchema, value) as InstalledPluginIndex | null;
-}
-
-export function resolveInstalledPluginIndexStorePath(
-  options: InstalledPluginIndexStoreOptions = {},
-): string {
-  if (options.filePath) {
-    return options.filePath;
-  }
-  const env = options.env ?? process.env;
-  const stateDir = options.stateDir ?? resolveStateDir(env);
-  return path.join(stateDir, INSTALLED_PLUGIN_INDEX_STORE_PATH);
 }
 
 export async function readPersistedInstalledPluginIndex(

@@ -1,16 +1,22 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
-  readPersistedInstalledPluginIndex,
-  readPersistedInstalledPluginIndexSync,
-  refreshPersistedInstalledPluginIndex,
-  resolveInstalledPluginIndexStorePath,
-} from "./installed-plugin-index-store.js";
-import {
-  extractPluginInstallRecordsFromInstalledPluginIndex,
-  type RefreshInstalledPluginIndexParams,
-} from "./installed-plugin-index.js";
+  loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+  readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsSync,
+} from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { type RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
 import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
+
+export {
+  loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+  readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsSync,
+};
 
 export const PLUGIN_INSTALLS_CONFIG_PATH = ["plugins", "installs"] as const;
 
@@ -25,37 +31,10 @@ type InstalledPluginIndexRecordRefreshOptions = InstalledPluginIndexRecordStoreO
     now?: () => Date;
   };
 
-function toInstallRecords(
-  index: Awaited<ReturnType<typeof readPersistedInstalledPluginIndex>>,
-): Record<string, PluginInstallRecord> | null {
-  if (!index) {
-    return null;
-  }
-  return extractPluginInstallRecordsFromInstalledPluginIndex(index);
-}
-
-function cloneInstallRecords(
-  records: Record<string, PluginInstallRecord> | undefined,
-): Record<string, PluginInstallRecord> {
-  return structuredClone(records ?? {});
-}
-
 export function resolveInstalledPluginIndexRecordsStorePath(
   options: InstalledPluginIndexRecordStoreOptions = {},
 ): string {
   return resolveInstalledPluginIndexStorePath(options);
-}
-
-export async function readPersistedInstalledPluginIndexInstallRecords(
-  options: InstalledPluginIndexRecordStoreOptions = {},
-): Promise<Record<string, PluginInstallRecord> | null> {
-  return toInstallRecords(await readPersistedInstalledPluginIndex(options));
-}
-
-export function readPersistedInstalledPluginIndexInstallRecordsSync(
-  options: InstalledPluginIndexRecordStoreOptions = {},
-): Record<string, PluginInstallRecord> | null {
-  return toInstallRecords(readPersistedInstalledPluginIndexSync(options));
 }
 
 export async function writePersistedInstalledPluginIndexInstallRecords(
@@ -68,18 +47,6 @@ export async function writePersistedInstalledPluginIndexInstallRecords(
     installRecords: records,
   });
   return resolveInstalledPluginIndexRecordsStorePath(options);
-}
-
-export async function loadInstalledPluginIndexInstallRecords(
-  params: InstalledPluginIndexRecordStoreOptions = {},
-): Promise<Record<string, PluginInstallRecord>> {
-  return cloneInstallRecords((await readPersistedInstalledPluginIndexInstallRecords(params)) ?? {});
-}
-
-export function loadInstalledPluginIndexInstallRecordsSync(
-  params: InstalledPluginIndexRecordStoreOptions = {},
-): Record<string, PluginInstallRecord> {
-  return cloneInstallRecords(readPersistedInstalledPluginIndexInstallRecordsSync(params) ?? {});
 }
 
 export function withPluginInstallRecords(
