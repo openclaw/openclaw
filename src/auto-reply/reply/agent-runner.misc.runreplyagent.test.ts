@@ -239,8 +239,12 @@ describe("runReplyAgent auto-compaction token update", () => {
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
 
-  it("updates totalTokens from lastCallUsage even without compaction", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-last-"));
+  async function runBaseReplyWithAgentMeta(params: {
+    agentMeta: Record<string, unknown>;
+    collectDiagnostics?: boolean;
+    tmpPrefix: string;
+  }) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tmpPrefix));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -254,76 +258,16 @@ describe("runReplyAgent auto-compaction token update", () => {
     runEmbeddedPiAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {
-        agentMeta: {
-          // Tool-use loop: accumulated input is higher than last call's input
-          usage: { input: 75_000, output: 5_000, total: 80_000 },
-          lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
-        },
-      },
-    });
-
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath,
-      sessionEntry,
-    });
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    // totalTokens should use lastCallUsage (55k), not accumulated (75k)
-    expect(stored[sessionKey].totalTokens).toBe(55_000);
-  });
-
-  it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-diagnostic-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 50_000,
-    };
-
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-    runEmbeddedPiAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
-          lastCallUsage: { input: 55_000, output: 2_000, cacheRead: 25_000, total: 82_000 },
-          promptTokens: 44_000,
-        },
+        agentMeta: params.agentMeta,
       },
     });
 
     const diagnostics: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      diagnostics.push(event);
-    });
+    const unsubscribe = params.collectDiagnostics
+      ? onInternalDiagnosticEvent((event) => {
+          diagnostics.push(event);
+        })
+      : undefined;
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
@@ -355,10 +299,39 @@ describe("runReplyAgent auto-compaction token update", () => {
         typingMode: "instant",
       });
     } finally {
-      unsubscribe();
+      unsubscribe?.();
     }
 
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     const usageEvent = diagnostics.find((event) => event.type === "model.usage");
+    return { sessionKey, stored, usageEvent };
+  }
+
+  it("updates totalTokens from lastCallUsage even without compaction", async () => {
+    const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-usage-last-",
+      agentMeta: {
+        // Tool-use loop: accumulated input is higher than last call's input
+        usage: { input: 75_000, output: 5_000, total: 80_000 },
+        lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
+      },
+    });
+
+    // totalTokens should use lastCallUsage (55k), not accumulated (75k)
+    expect(stored[sessionKey].totalTokens).toBe(55_000);
+  });
+
+  it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
+    const { usageEvent } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-usage-diagnostic-",
+      collectDiagnostics: true,
+      agentMeta: {
+        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
+        lastCallUsage: { input: 55_000, output: 2_000, cacheRead: 25_000, total: 82_000 },
+        promptTokens: 44_000,
+      },
+    });
+
     expect(usageEvent).toMatchObject({
       type: "model.usage",
       usage: {
@@ -376,72 +349,21 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("falls back to last-call prompt usage for live diagnostic context", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-diagnostic-last-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 50_000,
-    };
-
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-    runEmbeddedPiAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
-          lastCallUsage: {
-            input: 55_000,
-            output: 2_000,
-            cacheRead: 25_000,
-            cacheWrite: 1_000,
-            total: 83_000,
-          },
+    const { usageEvent } = await runBaseReplyWithAgentMeta({
+      tmpPrefix: "openclaw-usage-diagnostic-last-",
+      collectDiagnostics: true,
+      agentMeta: {
+        usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
+        lastCallUsage: {
+          input: 55_000,
+          output: 2_000,
+          cacheRead: 25_000,
+          cacheWrite: 1_000,
+          total: 83_000,
         },
       },
     });
 
-    const diagnostics: DiagnosticEventPayload[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      diagnostics.push(event);
-    });
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath,
-      sessionEntry,
-    });
-
-    try {
-      await runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-        storePath,
-        defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 200_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
-      });
-    } finally {
-      unsubscribe();
-    }
-
-    const usageEvent = diagnostics.find((event) => event.type === "model.usage");
     expect(usageEvent).toMatchObject({
       type: "model.usage",
       usage: {
