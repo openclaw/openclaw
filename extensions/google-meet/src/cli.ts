@@ -54,6 +54,13 @@ type CreateOptions = {
   clientId?: string;
   clientSecret?: string;
   expiresAt?: string;
+  join?: boolean;
+  transport?: GoogleMeetTransport;
+  mode?: GoogleMeetMode;
+  message?: string;
+  dialInNumber?: string;
+  pin?: string;
+  dtmfSequence?: string;
   json?: boolean;
 };
 
@@ -233,14 +240,38 @@ export function registerGoogleMeetCli(params: {
     .option("--client-id <id>", "OAuth client id override")
     .option("--client-secret <secret>", "OAuth client secret override")
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--no-join", "Only create the meeting URL; do not join it")
+    .option("--transport <transport>", "Join transport: chrome, chrome-node, or twilio")
+    .option(
+      "--mode <mode>",
+      "Join mode: realtime for live talk-back, transcribe for observe/control",
+    )
+    .option("--message <text>", "Realtime speech to trigger after join")
+    .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
+    .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
+    .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
     .option("--json", "Print JSON output", false)
     .action(async (options: CreateOptions) => {
       if (!hasCreateOAuth(params.config, options)) {
         const rt = await params.ensureRuntime();
         const result = await rt.createViaBrowser();
+        const join =
+          options.join !== false
+            ? await rt.join({
+                url: result.meetingUri,
+                transport: options.transport,
+                mode: options.mode,
+                message: options.message,
+                dialInNumber: options.dialInNumber,
+                pin: options.pin,
+                dtmfSequence: options.dtmfSequence,
+              })
+            : undefined;
         const payload = {
           source: result.source,
           meetingUri: result.meetingUri,
+          joined: Boolean(join),
+          ...(join ? { join } : {}),
           browser: {
             nodeId: result.nodeId,
             targetId: result.targetId,
@@ -255,16 +286,37 @@ export function registerGoogleMeetCli(params: {
         writeStdoutLine("meeting uri: %s", result.meetingUri);
         writeStdoutLine("source: browser");
         writeStdoutLine("node: %s", result.nodeId);
+        if (join) {
+          writeStdoutLine("joined: %s", join.session.id);
+        } else {
+          writeStdoutLine("joined: no (run `openclaw googlemeet join %s`)", result.meetingUri);
+        }
         return;
       }
       const token = await resolveGoogleMeetAccessToken(
         resolveCreateTokenOptions(params.config, options),
       );
       const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
+      const join =
+        options.join !== false
+          ? await (
+              await params.ensureRuntime()
+            ).join({
+              url: result.meetingUri,
+              transport: options.transport,
+              mode: options.mode,
+              message: options.message,
+              dialInNumber: options.dialInNumber,
+              pin: options.pin,
+              dtmfSequence: options.dtmfSequence,
+            })
+          : undefined;
       if (options.json) {
         writeStdoutJson({
           ...result,
           tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+          joined: Boolean(join),
+          ...(join ? { join } : {}),
         });
         return;
       }
@@ -277,6 +329,11 @@ export function registerGoogleMeetCli(params: {
         "token source: %s",
         token.refreshed ? "refresh-token" : "cached-access-token",
       );
+      if (join) {
+        writeStdoutLine("joined: %s", join.session.id);
+      } else {
+        writeStdoutLine("joined: no (run `openclaw googlemeet join %s`)", result.meetingUri);
+      }
     });
 
   root

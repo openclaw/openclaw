@@ -148,8 +148,14 @@ const GoogleMeetToolSchema = Type.Object({
       "speak",
       "test_speech",
     ],
-    description: "Google Meet action to run",
+    description:
+      "Google Meet action to run. create creates a meeting and joins it by default; pass join=false to only mint a meeting URL.",
   }),
+  join: Type.Optional(
+    Type.Boolean({
+      description: "For action=create, set false to create the URL without joining.",
+    }),
+  ),
   url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
   transport: Type.Optional(
     Type.String({ enum: ["chrome", "chrome-node", "twilio"], description: "Join transport" }),
@@ -240,6 +246,10 @@ function hasGoogleMeetOAuth(config: GoogleMeetConfig, raw: Record<string, unknow
   );
 }
 
+function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
+  return raw.join !== false && raw.join !== "false";
+}
+
 async function createMeetFromParams(params: {
   config: GoogleMeetConfig;
   runtime: OpenClawPluginApi["runtime"];
@@ -247,7 +257,12 @@ async function createMeetFromParams(params: {
 }) {
   if (hasGoogleMeetOAuth(params.config, params.raw)) {
     const { token: _token, ...result } = await createSpaceFromParams(params.config, params.raw);
-    return result;
+    return {
+      ...result,
+      joined: false,
+      nextAction:
+        "URL-only creation was requested. Call google_meet with action=join and url=meetingUri to enter the meeting.",
+    };
   }
   const browser = await createMeetWithBrowserProxyOnNode({
     runtime: params.runtime,
@@ -256,6 +271,9 @@ async function createMeetFromParams(params: {
   return {
     source: browser.source,
     meetingUri: browser.meetingUri,
+    joined: false,
+    nextAction:
+      "URL-only creation was requested. Call google_meet with action=join and url=meetingUri to enter the meeting.",
     space: {
       name: `browser/${browser.meetingUri.split("/").pop()}`,
       meetingUri: browser.meetingUri,
@@ -267,6 +285,31 @@ async function createMeetFromParams(params: {
       browserTitle: browser.browserTitle,
       notes: browser.notes,
     },
+  };
+}
+
+async function createAndJoinMeetFromParams(params: {
+  config: GoogleMeetConfig;
+  runtime: OpenClawPluginApi["runtime"];
+  raw: Record<string, unknown>;
+  ensureRuntime: () => Promise<GoogleMeetRuntime>;
+}) {
+  const created = await createMeetFromParams(params);
+  const rt = await params.ensureRuntime();
+  const join = await rt.join({
+    url: created.meetingUri,
+    transport: normalizeTransport(params.raw.transport),
+    mode: normalizeMode(params.raw.mode),
+    dialInNumber: normalizeOptionalString(params.raw.dialInNumber),
+    pin: normalizeOptionalString(params.raw.pin),
+    dtmfSequence: normalizeOptionalString(params.raw.dtmfSequence),
+    message: normalizeOptionalString(params.raw.message),
+  });
+  return {
+    ...created,
+    joined: true,
+    nextAction: "Share meetingUri with participants; the OpenClaw agent has started the join flow.",
+    join,
   };
 }
 
@@ -324,7 +367,17 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const raw = asParamRecord(params);
-          respond(true, await createMeetFromParams({ config, runtime: api.runtime, raw }));
+          respond(
+            true,
+            shouldJoinCreatedMeet(raw)
+              ? await createAndJoinMeetFromParams({
+                  config,
+                  runtime: api.runtime,
+                  raw,
+                  ensureRuntime,
+                })
+              : await createMeetFromParams({ config, runtime: api.runtime, raw }),
+          );
         } catch (err) {
           sendError(respond, err);
         }
@@ -434,7 +487,16 @@ export default definePluginEntry({
               );
             }
             case "create": {
-              return json(await createMeetFromParams({ config, runtime: api.runtime, raw }));
+              return json(
+                shouldJoinCreatedMeet(raw)
+                  ? await createAndJoinMeetFromParams({
+                      config,
+                      runtime: api.runtime,
+                      raw,
+                      ensureRuntime,
+                    })
+                  : await createMeetFromParams({ config, runtime: api.runtime, raw }),
+              );
             }
             case "test_speech": {
               const rt = await ensureRuntime();
