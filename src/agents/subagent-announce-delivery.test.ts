@@ -76,6 +76,43 @@ async function deliverSlackThreadAnnouncement(params: {
   });
 }
 
+async function deliverDiscordDirectMessageCompletion(params: {
+  callGateway: typeof runtimeCallGateway;
+  sendMessage?: typeof runtimeSendMessage;
+  internalEvents?: AgentInternalEvent[];
+}) {
+  const origin = {
+    channel: "discord",
+    to: "dm:U123",
+    accountId: "acct-1",
+  };
+  __testing.setDepsForTest({
+    callGateway: params.callGateway,
+    getRequesterSessionActivity: () => ({
+      sessionId: "requester-session-dm",
+      isActive: false,
+    }),
+    loadConfig: () => ({}) as never,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
+  });
+
+  return deliverSubagentAnnouncement({
+    requesterSessionKey: "agent:main:discord:dm:U123",
+    targetRequesterSessionKey: "agent:main:discord:dm:U123",
+    triggerMessage: "child done",
+    steerMessage: "child done",
+    requesterOrigin: origin,
+    requesterSessionOrigin: origin,
+    completionDirectOrigin: origin,
+    directOrigin: origin,
+    requesterIsSubagent: false,
+    expectsCompletionMessage: true,
+    bestEffortDeliver: true,
+    directIdempotencyKey: "announce-dm-fallback-empty",
+    internalEvents: params.internalEvents,
+  });
+}
+
 describe("resolveAnnounceOrigin threaded route targets", () => {
   it("preserves stored thread ids when requester origin omits one for the same chat", () => {
     expect(
@@ -328,6 +365,65 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect.objectContaining({
         content: "child completion output",
         idempotencyKey: "announce-thread-fallback-empty",
+      }),
+    );
+  });
+
+  it("uses direct fallback for completion DMs without a thread id when announce-agent returns no visible output", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          deliver: true,
+          channel: "discord",
+          accountId: "acct-1",
+          to: "dm:U123",
+          threadId: undefined,
+        }),
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "acct-1",
+        to: "dm:U123",
+        threadId: undefined,
+        content: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        requesterSessionKey: "agent:main:discord:dm:U123",
+        bestEffort: true,
+        idempotencyKey: "announce-dm-fallback-empty",
       }),
     );
   });

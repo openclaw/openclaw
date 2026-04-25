@@ -563,7 +563,7 @@ async function sendThreadCompletionFallback(params: {
   const channel = params.channel?.trim();
   const to = params.to?.trim();
   const content = params.content.trim();
-  if (!channel || !to || !params.threadId || !content) {
+  if (!channel || !to || !content) {
     return false;
   }
   await runAnnounceDeliveryWithRetry({
@@ -674,7 +674,7 @@ async function sendSubagentAnnounceDirectly(params: {
       };
     }
     const threadCompletionFallbackText =
-      params.expectsCompletionMessage && deliveryTarget.deliver && deliveryTarget.threadId
+      params.expectsCompletionMessage && deliveryTarget.deliver
         ? extractThreadCompletionFallbackText(params.internalEvents)
         : "";
     let directAnnounceResponse: unknown;
