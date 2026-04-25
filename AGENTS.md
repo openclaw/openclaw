@@ -120,7 +120,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
 - Changelog user-facing only; pure test/internal usually no entry.
-- Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include exactly one `Thanks @author` attribution, using the credited GitHub username.
+- Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include at least one `Thanks @author` attribution, using credited GitHub username(s).
 
 ## Git
 

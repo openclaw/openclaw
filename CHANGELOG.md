@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Heartbeat: clamp oversized scheduler delays through the shared safe timer helper, preventing `every` values over Node's timeout cap from becoming a 1 ms crash loop. Fixes #71414. (#71478) Thanks @hclsys.
+- Control UI/chat: collapse assistant token/model context details behind an explicit Context disclosure and show full dates in message footers, making historical transcript timing clear without noisy default metadata. (#71337) Thanks @BunsDev.
 - Telegram: remove the startup persisted-offset `getUpdates` preflight so polling restarts do not self-conflict before the runner starts. Fixes #69304. (#69779) Thanks @chinar-amrutkar.
 - Browser/Playwright: ignore benign already-handled route races during guarded navigation so browser-page tasks no longer fail when Playwright tears down a route mid-flight. (#68708) Thanks @Steady-ai.
 - Browser/aria snapshots: bind `format=aria` `axN` refs to live DOM nodes through backend DOM ids when Playwright is available, so follow-up browser actions can use those refs without timing out. (#62434) Thanks @MrKipler.
@@ -235,7 +236,6 @@ Docs: https://docs.openclaw.ai
 - Telegram/config: include generated Telegram channel config schema metadata in packaged plugin manifests so forum-topic/group config is accepted before runtime loads. Thanks @steipete.
 - CLI/Claude: include user-configured `mcp.servers` in the strict Claude CLI MCP bundle config, matching Pi runs while preserving the OpenClaw loopback override. Fixes #70909. Thanks @keishingu.
 - Browser/tool: keep explicit AI snapshots from inheriting the efficient role-snapshot default and preserve numeric Playwright AI refs, so `--format ai` remains a real AI snapshot path. Fixes #62550. Thanks @ly85206559.
-- Control UI/chat: collapse assistant token/model context details behind an explicit Context disclosure and show full dates in message footers, making historical transcript timing clear without noisy default metadata. (#71337) Thanks @BunsDev.
 - Gateway/config: keep in-process config patch reload comparisons on the resolved source snapshot when `${VAR}` env refs are restored on disk, avoiding false full gateway restarts for unchanged gateway/plugin secrets. Fixes #71208. Thanks @robbiethompson18.
 - Slack/messages: serialize write-client requests and whole outbound sends per target so rapid multi-message Slack replies preserve send order. Fixes #69101. (#69105) Thanks @nightq and @ztexydt-cqh.
 - Slack/messages: keep Slack bot tokens out of internal message-ordering and DM cache keys. Thanks @steipete.
