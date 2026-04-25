@@ -267,7 +267,11 @@ export class TelegramPollingSession {
       void withTelegramApiErrorLogging({
         operation: "deleteWebhook",
         runtime: this.opts.runtime,
-        fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
+        fn: () =>
+          (bot.api.deleteWebhook as any)(
+            { drop_pending_updates: false },
+            telegramApiTimeoutSignal(MAX_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS),
+          ),
       })
         .then(() => {
           this.#webhookCleared = true;
