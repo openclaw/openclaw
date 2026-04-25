@@ -7,6 +7,8 @@ export type BrowserProfileConfig = {
   userDataDir?: string;
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "clawd" | "existing-session";
+  /** If true, launch this profile in headless mode. Falls back to browser.headless. */
+  headless?: boolean;
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */

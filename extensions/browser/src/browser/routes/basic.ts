@@ -101,7 +101,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     detectError,
     userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
     color: profileCtx.profile.color,
-    headless: current.resolved.headless,
+    headless: profileCtx.profile.headless,
     noSandbox: current.resolved.noSandbox,
     executablePath: current.resolved.executablePath ?? null,
     attachOnly: profileCtx.profile.attachOnly,

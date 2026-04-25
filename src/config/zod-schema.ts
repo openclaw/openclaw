@@ -409,6 +409,7 @@ export const OpenClawSchema = z
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
+                headless: z.boolean().optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })

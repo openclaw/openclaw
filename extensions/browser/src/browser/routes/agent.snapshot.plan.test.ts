@@ -11,6 +11,7 @@ function profile(driver: "existing-session" | "openclaw"): ResolvedBrowserProfil
     cdpHost: "127.0.0.1",
     cdpIsLoopback: true,
     color: "#00AA00",
+    headless: false,
     attachOnly: driver === "existing-session",
   };
 }

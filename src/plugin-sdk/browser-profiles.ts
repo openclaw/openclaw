@@ -43,6 +43,7 @@ export type ResolvedBrowserProfile = {
   userDataDir?: string;
   color: string;
   driver: "openclaw" | "existing-session";
+  headless?: boolean;
   attachOnly: boolean;
 };
 
