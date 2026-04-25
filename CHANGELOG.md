@@ -62,6 +62,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: keep queued subagent announces session-only when the
+  requester has no external channel target, avoiding ambiguous multi-channel
+  delivery failures. Fixes #59201. Thanks @larrylhollan.
 - Gateway/subagents: keep direct-loopback backend RPCs authenticated with the
   shared gateway token/password off stale CLI paired-device scope baselines, so
   internal calls no longer hit `scope-upgrade` pairing prompts while remote,

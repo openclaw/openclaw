@@ -356,6 +356,14 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+  const deliveryTarget = !requesterIsSubagent
+    ? resolveExternalBestEffortDeliveryTarget({
+        channel: origin?.channel,
+        to: origin?.to,
+        accountId: origin?.accountId,
+        threadId,
+      })
+    : { deliver: false };
   const idempotencyKey = buildAnnounceIdempotencyKey(
     resolveQueueAnnounceId({
       announceId: item.announceId,
@@ -368,11 +376,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: requesterIsSubagent ? undefined : origin?.channel,
-      accountId: requesterIsSubagent ? undefined : origin?.accountId,
-      to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      channel: deliveryTarget.deliver ? deliveryTarget.channel : undefined,
+      accountId: deliveryTarget.deliver ? deliveryTarget.accountId : undefined,
+      to: deliveryTarget.deliver ? deliveryTarget.to : undefined,
+      threadId: deliveryTarget.deliver ? deliveryTarget.threadId : undefined,
+      deliver: deliveryTarget.deliver,
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",
