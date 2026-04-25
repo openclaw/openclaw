@@ -1160,7 +1160,13 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
-  it("does not trust runtime deps that only resolve from the package root", () => {
+  it("trusts runtime deps that resolve from the package root (image-baked deps)", () => {
+    // Renato/Marcus 2026-04-25 — inverted from the previous contract.
+    // Our Fly.io Docker image bakes plugin runtime deps into the openclaw
+    // package root's `node_modules` at build time. Without this, every
+    // plugin re-ran `npm install` on cold start, costing ~6 minutes per
+    // boot. We now trust the package-root sentinel so the loader
+    // short-circuits when deps are already present.
     const packageRoot = makeTempDir();
     const pluginRoot = path.join(packageRoot, "dist", "extensions", "openai");
     fs.mkdirSync(path.join(packageRoot, "node_modules", "@mariozechner", "pi-ai"), {
@@ -1190,22 +1196,18 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       pluginRoot,
     });
 
+    // No installs should fire — the dep already lives in the package root.
     expect(result).toEqual({
-      installedSpecs: ["@mariozechner/pi-ai@0.68.1"],
-      retainSpecs: ["@mariozechner/pi-ai@0.68.1"],
+      installedSpecs: [],
+      retainSpecs: [],
     });
-    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
-    expect(calls).toEqual([
-      {
-        installRoot,
-        missingSpecs: ["@mariozechner/pi-ai@0.68.1"],
-        installSpecs: ["@mariozechner/pi-ai@0.68.1"],
-      },
-    ]);
-    expect(installRoot).not.toBe(pluginRoot);
+    expect(calls).toEqual([]);
   });
 
-  it("installs deps that are only present in the package root", () => {
+  it("only installs the deps not already present in the package root", () => {
+    // Renato/Marcus 2026-04-25 — inverted from the previous contract.
+    // Mixed scenario: ws is baked into the package root, zod isn't.
+    // Loader should only spawn `npm install zod`, not both.
     const packageRoot = makeTempDir();
     const pluginRoot = path.join(packageRoot, "dist", "extensions", "codex");
     fs.mkdirSync(path.join(packageRoot, "node_modules", "ws"), { recursive: true });
@@ -1234,15 +1236,19 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       pluginRoot,
     });
 
+    // installedSpecs only contains what actually got installed (just `zod`);
+    // retainSpecs/installSpecs include both because the retained manifest
+    // tracks all declared deps so it stays accurate even if the package-root
+    // copy of `ws` later disappears.
     expect(result).toEqual({
-      installedSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
+      installedSpecs: ["zod@^4.3.6"],
       retainSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
     });
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
     expect(calls).toEqual([
       {
         installRoot,
-        missingSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
+        missingSpecs: ["zod@^4.3.6"],
         installSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
       },
     ]);

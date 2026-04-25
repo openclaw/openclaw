@@ -477,6 +477,58 @@ function hasAllDependencySentinels(rootDir: string, deps: readonly { name: strin
   return deps.every((dep) => fs.existsSync(path.join(rootDir, dependencySentinelPath(dep.name))));
 }
 
+/**
+ * Build the set of directories whose `node_modules` may already satisfy a
+ * bundled plugin's runtime deps. Order matters — we use the first match.
+ *
+ * For a packaged install (`<openclawPackageRoot>/dist/extensions/<id>`),
+ * the openclaw image's TOP-LEVEL `node_modules` may already contain the
+ * dep — e.g. when our Docker image bakes plugin deps into the openclaw
+ * package root at build time. Without this lookup the loader runs a
+ * sequential `npm install` per plugin, which on Fly machines costs ~6
+ * minutes of cold start even when nothing actually needs to be installed.
+ *
+ * The `installRoot` is always included first so plugin-local installs
+ * still take priority. The package root is consulted only when it can
+ * be resolved from the plugin tree (i.e. packaged plugins under
+ * `<packageRoot>/dist/extensions/<id>`).
+ */
+function collectBundledRuntimeDepSearchRoots(
+  installRoot: string,
+  pluginRoot: string,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const roots: string[] = [installRoot];
+  const seen = new Set<string>([path.resolve(installRoot)]);
+  const add = (candidate: string | null | undefined): void => {
+    if (!candidate) return;
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) return;
+    try {
+      if (!fs.statSync(path.join(resolved, "node_modules")).isDirectory()) return;
+    } catch {
+      return;
+    }
+    seen.add(resolved);
+    roots.push(resolved);
+  };
+
+  const packageRoot = resolveBundledPluginPackageRoot(pluginRoot);
+  if (packageRoot) {
+    // The openclaw package root itself — e.g. `node_modules/openclaw`
+    // when installed as a global, or the source-checkout root.
+    add(packageRoot);
+    // The package-level install root used by `scanBundledPluginRuntimeDeps`
+    // for its top-level dep staging.
+    try {
+      add(resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env }));
+    } catch {
+      // resolver may throw on weird filesystem layouts — fall through.
+    }
+  }
+  return roots;
+}
+
 function isInstalledDependencyVersionSatisfied(installedVersion: string, spec: string): boolean {
   const normalizedInstalledVersion = validSemver(installedVersion);
   const normalizedRange = validRange(spec);
@@ -871,7 +923,21 @@ export function scanBundledPluginRuntimeDeps(params: {
   const packageInstallRoot = resolveBundledRuntimeDependencyPackageInstallRoot(params.packageRoot, {
     env: params.env,
   });
-  const packageSearchRoots = [packageInstallRoot];
+  // Also include the openclaw package root itself — our Docker images
+  // bake plugin runtime deps there at build time so they satisfy the
+  // sentinel check without re-running npm install per plugin.
+  const packageSearchRoots: string[] = [packageInstallRoot];
+  try {
+    const packageRootNodeModules = path.resolve(params.packageRoot);
+    if (
+      !packageSearchRoots.some((root) => path.resolve(root) === packageRootNodeModules) &&
+      fs.statSync(path.join(packageRootNodeModules, "node_modules")).isDirectory()
+    ) {
+      packageSearchRoots.push(packageRootNodeModules);
+    }
+  } catch {
+    // No top-level node_modules — fine, fall through.
+  }
   const missing = deps.filter(
     (dep) =>
       !hasDependencySentinel(packageSearchRoots, dep) &&
@@ -880,7 +946,10 @@ export function scanBundledPluginRuntimeDeps(params: {
         const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
           env: params.env,
         });
-        return !hasDependencySentinel([installRoot], dep);
+        return !hasDependencySentinel(
+          collectBundledRuntimeDepSearchRoots(installRoot, pluginRoot, params.env),
+          dep,
+        );
       }),
   );
   return { deps, missing, conflicts };
@@ -1119,8 +1188,18 @@ export function ensureBundledPluginRuntimeDeps(params: {
         ...dependencySpecs,
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
+    // Search the plugin's install root first, then the openclaw package
+    // root and its top-level install root. When our Docker image bakes
+    // plugin runtime deps into the openclaw package's top-level
+    // `node_modules` at build time, this short-circuits the per-plugin
+    // reinstall loop that was costing ~6 minutes of cold start on Fly.
+    const dependencySearchRoots = collectBundledRuntimeDepSearchRoots(
+      installRoot,
+      params.pluginRoot,
+      params.env,
+    );
     const missingSpecs = deps
-      .filter((dep) => !hasDependencySentinel([installRoot], dep))
+      .filter((dep) => !hasDependencySentinel(dependencySearchRoots, dep))
       .map((dep) => `${dep.name}@${dep.version}`)
       .toSorted((left, right) => left.localeCompare(right));
     if (missingSpecs.length === 0) {
