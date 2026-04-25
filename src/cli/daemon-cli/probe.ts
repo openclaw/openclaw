@@ -1,4 +1,14 @@
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withProgress } from "../progress.js";
+
+type GatewayStatusProbeKind = "connect" | "read";
+
+let probeGatewayModulePromise: Promise<typeof import("../../gateway/probe.js")> | undefined;
+
+async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
+  probeGatewayModulePromise ??= import("../../gateway/probe.js");
+  return await probeGatewayModulePromise;
+}
 
 function resolveProbeFailureMessage(result: {
   error?: string | null;
@@ -23,6 +33,7 @@ export async function probeGatewayStatus(opts: {
   requireRpc?: boolean;
   configPath?: string;
 }) {
+  const kind = (opts.requireRpc ? "read" : "connect") satisfies GatewayStatusProbeKind;
   try {
     const result = await withProgress(
       {
@@ -31,6 +42,17 @@ export async function probeGatewayStatus(opts: {
         enabled: opts.json !== true,
       },
       async () => {
+        const { probeGateway } = await loadProbeGatewayModule();
+        const probeOpts = {
+          url: opts.url,
+          auth: {
+            token: opts.token,
+            password: opts.password,
+          },
+          tlsFingerprint: opts.tlsFingerprint,
+          timeoutMs: opts.timeoutMs,
+          includeDetails: false,
+        };
         if (opts.requireRpc) {
           const { callGateway } = await import("../../gateway/call.js");
           await callGateway({
@@ -42,32 +64,38 @@ export async function probeGatewayStatus(opts: {
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
-          return { ok: true } as const;
+          const authProbe = await probeGateway(probeOpts).catch(() => null);
+          return { ok: true as const, authProbe };
         }
-        const { probeGateway } = await import("../../gateway/probe.js");
-        return await probeGateway({
-          url: opts.url,
-          auth: {
-            token: opts.token,
-            password: opts.password,
-          },
-          tlsFingerprint: opts.tlsFingerprint,
-          timeoutMs: opts.timeoutMs,
-          includeDetails: false,
-        });
+        return await probeGateway(probeOpts);
       },
     );
+    const auth = "auth" in result ? result.auth : result.authProbe?.auth;
     if (result.ok) {
-      return { ok: true } as const;
+      return {
+        ok: true,
+        kind,
+        capability:
+          kind === "read"
+            ? auth?.capability && auth.capability !== "unknown"
+              ? auth.capability
+              : "read_only"
+            : auth?.capability,
+        auth,
+      } as const;
     }
     return {
       ok: false,
+      kind,
+      capability: auth?.capability,
+      auth,
       error: resolveProbeFailureMessage(result),
     } as const;
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      kind,
+      error: formatErrorMessage(err),
     } as const;
   }
 }

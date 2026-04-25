@@ -1,23 +1,54 @@
 import { RequestClient } from "@buape/carbon";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
+import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
+import type { DiscordRuntimeAccountContext } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
 
 export type DiscordClientOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   rest?: RequestClient;
   retry?: RetryConfig;
   verbose?: boolean;
 };
+
+export function createDiscordRuntimeAccountContext(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+}): DiscordRuntimeAccountContext {
+  return {
+    cfg: params.cfg,
+    accountId: normalizeAccountId(params.accountId),
+  };
+}
+
+export function resolveDiscordClientAccountContext(
+  opts: Pick<DiscordClientOpts, "cfg" | "accountId">,
+  runtime?: Pick<RuntimeEnv, "error">,
+) {
+  const resolvedCfg = requireRuntimeConfig(opts.cfg, "Discord client");
+  const account = resolveAccountWithoutToken({
+    cfg: resolvedCfg,
+    accountId: opts.accountId,
+  });
+  return {
+    cfg: resolvedCfg,
+    account,
+    proxyFetch: resolveDiscordProxyFetchForAccount(account, resolvedCfg, runtime),
+  };
+}
 
 function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   const fallback = normalizeDiscordToken(params.fallbackToken, "channels.discord.token");
@@ -29,12 +60,32 @@ function resolveToken(params: { accountId: string; fallbackToken?: string }) {
   return fallback;
 }
 
-function resolveRest(token: string, rest?: RequestClient) {
-  return rest ?? new RequestClient(token);
+export function resolveDiscordProxyFetch(
+  opts: Pick<DiscordClientOpts, "cfg" | "accountId">,
+  runtime?: Pick<RuntimeEnv, "error">,
+): typeof fetch | undefined {
+  return resolveDiscordClientAccountContext(opts, runtime).proxyFetch;
+}
+
+function resolveRest(
+  token: string,
+  account: ResolvedDiscordAccount,
+  cfg: OpenClawConfig,
+  rest?: RequestClient,
+  proxyFetch?: typeof fetch,
+) {
+  if (rest) {
+    return rest;
+  }
+  const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
+  return createDiscordRequestClient(
+    token,
+    resolvedProxyFetch ? { fetch: resolvedProxyFetch } : undefined,
+  );
 }
 
 function resolveAccountWithoutToken(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   accountId?: string;
 }): ResolvedDiscordAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -44,21 +95,19 @@ function resolveAccountWithoutToken(params: {
   return {
     accountId,
     enabled: baseEnabled && accountEnabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     token: "",
     tokenSource: "none",
     config: merged,
   };
 }
 
-export function createDiscordRestClient(
-  opts: DiscordClientOpts,
-  cfg?: ReturnType<typeof loadConfig>,
-) {
-  const resolvedCfg = opts.cfg ?? cfg ?? loadConfig();
+export function createDiscordRestClient(opts: DiscordClientOpts) {
   const explicitToken = normalizeDiscordToken(opts.token, "channels.discord.token");
+  const proxyContext = resolveDiscordClientAccountContext(opts);
+  const resolvedCfg = proxyContext.cfg;
   const account = explicitToken
-    ? resolveAccountWithoutToken({ cfg: resolvedCfg, accountId: opts.accountId })
+    ? proxyContext.account
     : resolveDiscordAccount({ cfg: resolvedCfg, accountId: opts.accountId });
   const token =
     explicitToken ??
@@ -66,15 +115,16 @@ export function createDiscordRestClient(
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, opts.rest);
+  const rest = resolveRest(token, account, resolvedCfg, opts.rest, proxyContext.proxyFetch);
   return { token, rest, account };
 }
 
-export function createDiscordClient(
-  opts: DiscordClientOpts,
-  cfg?: ReturnType<typeof loadConfig>,
-): { token: string; rest: RequestClient; request: RetryRunner } {
-  const { token, rest, account } = createDiscordRestClient(opts, opts.cfg ?? cfg);
+export function createDiscordClient(opts: DiscordClientOpts): {
+  token: string;
+  rest: RequestClient;
+  request: RetryRunner;
+} {
+  const { token, rest, account } = createDiscordRestClient(opts);
   const request = createDiscordRetryRunner({
     retry: opts.retry,
     configRetry: account.config.retry,
@@ -84,5 +134,5 @@ export function createDiscordClient(
 }
 
 export function resolveDiscordRest(opts: DiscordClientOpts) {
-  return createDiscordRestClient(opts, opts.cfg).rest;
+  return createDiscordRestClient(opts).rest;
 }

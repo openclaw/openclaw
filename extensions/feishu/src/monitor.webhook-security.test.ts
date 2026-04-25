@@ -28,6 +28,15 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   ),
 }));
 
+vi.mock("./monitor.state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor.state.js")>();
+  return {
+    ...actual,
+    FEISHU_WEBHOOK_BODY_TIMEOUT_MS: 50,
+  };
+});
+
+import type { RuntimeEnv } from "../runtime-api.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -35,6 +44,8 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
+import { monitorWebhook } from "./monitor.transport.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 async function waitForSlowBodyTimeoutResponse(
   url: string,
@@ -110,6 +121,33 @@ describe("Feishu webhook security hardening", () => {
     await expect(monitorFeishuProvider({ config: cfg })).rejects.toThrow(/requires encryptKey/i);
   });
 
+  it("refuses to start the webhook transport without encryptKey", async () => {
+    const account = {
+      accountId: "transport-missing-encrypt-key",
+      config: {
+        enabled: true,
+        connectionMode: "webhook",
+        webhookHost: "127.0.0.1",
+        webhookPort: await getFreePort(),
+        webhookPath: "/hook-transport-missing-encrypt",
+      },
+    } as ResolvedFeishuAccount;
+
+    await expect(
+      monitorWebhook({
+        account,
+        accountId: account.accountId,
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        } as RuntimeEnv,
+        abortSignal: new AbortController().signal,
+        eventDispatcher: {} as never,
+      }),
+    ).rejects.toThrow(/requires encryptKey/i);
+  });
+
   it("returns 415 for POST requests without json content type", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
     await withRunningWebhookMonitor(
@@ -167,10 +205,10 @@ describe("Feishu webhook security hardening", () => {
       },
       monitorFeishuProvider,
       async (url) => {
-        const result = await waitForSlowBodyTimeoutResponse(url, 15_000);
+        const result = await waitForSlowBodyTimeoutResponse(url, 1_000);
         expect(result.body).toContain("408 Request Timeout");
         expect(result.body).toContain("Request body timeout");
-        expect(result.elapsedMs).toBeLessThan(12_000);
+        expect(result.elapsedMs).toBeLessThan(500);
       },
     );
   });

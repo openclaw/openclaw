@@ -1,5 +1,6 @@
 import type { ReactionTypeEmoji } from "@grammyjs/types";
 import { DEFAULT_EMOJIS, type StatusReactionEmojis } from "openclaw/plugin-sdk/channel-feedback";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 
 type StatusReactionEmojiKey = keyof Required<StatusReactionEmojis>;
@@ -113,11 +114,6 @@ const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
   "compacting",
 ];
 
-function normalizeEmoji(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function toUniqueNonEmpty(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
@@ -127,18 +123,18 @@ export function resolveTelegramStatusReactionEmojis(params: {
   overrides?: StatusReactionEmojis;
 }): Required<StatusReactionEmojis> {
   const { overrides } = params;
-  const queuedFallback = normalizeEmoji(params.initialEmoji) ?? DEFAULT_EMOJIS.queued;
+  const queuedFallback = normalizeOptionalString(params.initialEmoji) ?? DEFAULT_EMOJIS.queued;
   return {
-    queued: normalizeEmoji(overrides?.queued) ?? queuedFallback,
-    thinking: normalizeEmoji(overrides?.thinking) ?? DEFAULT_EMOJIS.thinking,
-    tool: normalizeEmoji(overrides?.tool) ?? DEFAULT_EMOJIS.tool,
-    coding: normalizeEmoji(overrides?.coding) ?? DEFAULT_EMOJIS.coding,
-    web: normalizeEmoji(overrides?.web) ?? DEFAULT_EMOJIS.web,
-    done: normalizeEmoji(overrides?.done) ?? DEFAULT_EMOJIS.done,
-    error: normalizeEmoji(overrides?.error) ?? DEFAULT_EMOJIS.error,
-    stallSoft: normalizeEmoji(overrides?.stallSoft) ?? DEFAULT_EMOJIS.stallSoft,
-    stallHard: normalizeEmoji(overrides?.stallHard) ?? DEFAULT_EMOJIS.stallHard,
-    compacting: normalizeEmoji(overrides?.compacting) ?? DEFAULT_EMOJIS.compacting,
+    queued: normalizeOptionalString(overrides?.queued) ?? queuedFallback,
+    thinking: normalizeOptionalString(overrides?.thinking) ?? DEFAULT_EMOJIS.thinking,
+    tool: normalizeOptionalString(overrides?.tool) ?? DEFAULT_EMOJIS.tool,
+    coding: normalizeOptionalString(overrides?.coding) ?? DEFAULT_EMOJIS.coding,
+    web: normalizeOptionalString(overrides?.web) ?? DEFAULT_EMOJIS.web,
+    done: normalizeOptionalString(overrides?.done) ?? DEFAULT_EMOJIS.done,
+    error: normalizeOptionalString(overrides?.error) ?? DEFAULT_EMOJIS.error,
+    stallSoft: normalizeOptionalString(overrides?.stallSoft) ?? DEFAULT_EMOJIS.stallSoft,
+    stallHard: normalizeOptionalString(overrides?.stallHard) ?? DEFAULT_EMOJIS.stallHard,
+    compacting: normalizeOptionalString(overrides?.compacting) ?? DEFAULT_EMOJIS.compacting,
   };
 }
 
@@ -147,7 +143,7 @@ export function buildTelegramStatusReactionVariants(
 ): Map<string, string[]> {
   const variantsByRequested = new Map<string, string[]>();
   for (const key of STATUS_REACTION_EMOJI_KEYS) {
-    const requested = normalizeEmoji(emojis[key]);
+    const requested = normalizeOptionalString(emojis[key]);
     if (!requested) {
       continue;
     }
@@ -169,7 +165,7 @@ export function extractTelegramAllowedEmojiReactions(
     return undefined;
   }
   const availableReactions = chat.available_reactions;
-  if (typeof availableReactions === "undefined") {
+  if (availableReactions === undefined) {
     return undefined;
   }
   if (availableReactions == null) {
@@ -224,7 +220,7 @@ export function resolveTelegramReactionVariant(params: {
   variantsByRequestedEmoji: Map<string, string[]>;
   allowedEmojiReactions?: Set<TelegramReactionEmoji> | null;
 }): TelegramReactionEmoji | undefined {
-  const requestedEmoji = normalizeEmoji(params.requestedEmoji);
+  const requestedEmoji = normalizeOptionalString(params.requestedEmoji);
   if (!requestedEmoji) {
     return undefined;
   }

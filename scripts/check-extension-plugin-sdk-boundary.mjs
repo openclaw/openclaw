@@ -8,6 +8,7 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
 import {
   diffInventoryEntries,
   normalizeRepoPath,
@@ -63,13 +64,8 @@ function isCodeFile(fileName) {
   return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(fileName);
 }
 
-function isTestLikeFile(relativePath) {
-  return (
-    /(^|\/)(__tests__|fixtures|test|tests|test-support)\//.test(relativePath) ||
-    /(^|\/)test-support\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath) ||
-    /(^|\/)[^/]*test-(support|helpers)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath) ||
-    /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath)
-  );
+function isBoundaryCanaryFile(fileName) {
+  return fileName.includes("__rootdir_boundary_canary__");
 }
 
 async function collectExtensionSourceFiles(rootDir) {
@@ -85,11 +81,11 @@ async function collectExtensionSourceFiles(rootDir) {
         await walk(fullPath);
         continue;
       }
-      if (!entry.isFile() || !isCodeFile(entry.name)) {
+      if (!entry.isFile() || !isCodeFile(entry.name) || isBoundaryCanaryFile(entry.name)) {
         continue;
       }
       const relativePath = normalizeRepoPath(repoRoot, fullPath);
-      if (isTestLikeFile(relativePath)) {
+      if (classifyBundledExtensionSourcePath(relativePath).isTestLike) {
         continue;
       }
       out.push(fullPath);

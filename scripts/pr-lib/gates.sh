@@ -103,26 +103,30 @@ prepare_gates() {
       echo "Docs-only change detected with high confidence; skipping pnpm test."
     else
       gates_mode="full"
-      local prepare_unit_fast_batch_target_ms
-      prepare_unit_fast_batch_target_ms="${OPENCLAW_PREPARE_TEST_UNIT_FAST_BATCH_TARGET_MS:-5000}"
-      echo "Running pnpm test with OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS=$prepare_unit_fast_batch_target_ms for shorter-lived unit-fast workers."
-      run_quiet_logged \
-        "pnpm test" \
-        ".local/gates-test.log" \
-        env OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS="$prepare_unit_fast_batch_target_ms" pnpm test
+      if [ -n "${OPENCLAW_VITEST_MAX_WORKERS:-}" ]; then
+        echo "Running pnpm test with OPENCLAW_VITEST_MAX_WORKERS=$OPENCLAW_VITEST_MAX_WORKERS."
+        run_quiet_logged \
+          "pnpm test" \
+          ".local/gates-test.log" \
+          env OPENCLAW_VITEST_MAX_WORKERS="$OPENCLAW_VITEST_MAX_WORKERS" pnpm test
+      else
+        echo "Running pnpm test with host-aware scheduling defaults."
+        run_quiet_logged "pnpm test" ".local/gates-test.log" pnpm test
+      fi
       previous_full_gates_head="$current_head"
     fi
   fi
 
-  cat > .local/gates.env <<EOF_ENV
-PR_NUMBER=$pr
-DOCS_ONLY=$docs_only
-CHANGELOG_REQUIRED=$changelog_required
-GATES_MODE=$gates_mode
-LAST_VERIFIED_HEAD_SHA=$current_head
-FULL_GATES_HEAD_SHA=${previous_full_gates_head:-}
-GATES_PASSED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF_ENV
+  # Security: shell-escape values to prevent command injection when sourced.
+  printf '%s=%q\n' \
+    PR_NUMBER "$pr" \
+    DOCS_ONLY "$docs_only" \
+    CHANGELOG_REQUIRED "$changelog_required" \
+    GATES_MODE "$gates_mode" \
+    LAST_VERIFIED_HEAD_SHA "$current_head" \
+    FULL_GATES_HEAD_SHA "${previous_full_gates_head:-}" \
+    GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > .local/gates.env
 
   echo "docs_only=$docs_only"
   echo "changelog_required=$changelog_required"

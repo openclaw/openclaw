@@ -1,12 +1,15 @@
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import type { CliDeps } from "./deps.types.js";
 import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
+import { createChannelOutboundRuntimeSend } from "./send-runtime/channel-outbound-send.js";
 
 /**
  * Lazy-loaded per-channel send functions, keyed by channel ID.
  * Values are proxy functions that dynamically import the real module on first use.
  */
-export type CliDeps = { [channelId: string]: unknown };
+export type { CliDeps } from "./deps.types.js";
 type RuntimeSend = {
   sendMessage: (...args: unknown[]) => Promise<unknown>;
 };
@@ -40,32 +43,20 @@ function createLazySender(
 export function createDefaultDeps(): CliDeps {
   // Keep the default dependency barrel limited to lazy senders so callers that
   // only need outbound deps do not pull channel runtime boundaries on import.
-  return {
-    whatsapp: createLazySender(
-      "whatsapp",
-      () => import("./send-runtime/whatsapp.js") as Promise<RuntimeSendModule>,
-    ),
-    telegram: createLazySender(
-      "telegram",
-      () => import("./send-runtime/telegram.js") as Promise<RuntimeSendModule>,
-    ),
-    discord: createLazySender(
-      "discord",
-      () => import("./send-runtime/discord.js") as Promise<RuntimeSendModule>,
-    ),
-    slack: createLazySender(
-      "slack",
-      () => import("./send-runtime/slack.js") as Promise<RuntimeSendModule>,
-    ),
-    signal: createLazySender(
-      "signal",
-      () => import("./send-runtime/signal.js") as Promise<RuntimeSendModule>,
-    ),
-    imessage: createLazySender(
-      "imessage",
-      () => import("./send-runtime/imessage.js") as Promise<RuntimeSendModule>,
-    ),
-  };
+  const deps: CliDeps = {};
+  for (const plugin of listChannelPlugins()) {
+    deps[plugin.id] = createLazySender(
+      plugin.id,
+      async () =>
+        ({
+          runtimeSend: createChannelOutboundRuntimeSend({
+            channelId: plugin.id,
+            unavailableMessage: `${plugin.meta.label ?? plugin.id} outbound adapter is unavailable.`,
+          }) as RuntimeSend,
+        }) satisfies RuntimeSendModule,
+    );
+  }
+  return deps;
 }
 
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {

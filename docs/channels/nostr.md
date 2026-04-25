@@ -6,27 +6,20 @@ read_when:
 title: "Nostr"
 ---
 
-# Nostr
-
-**Status:** Optional plugin (disabled by default).
+**Status:** Optional bundled plugin (disabled by default until configured).
 
 Nostr is a decentralized protocol for social networking. This channel enables OpenClaw to receive and respond to encrypted direct messages (DMs) via NIP-04.
 
-## Install (on demand)
+## Bundled plugin
 
-### Onboarding (recommended)
+Current OpenClaw releases ship Nostr as a bundled plugin, so normal packaged
+builds do not need a separate install.
 
-- Onboarding (`openclaw onboard`) and `openclaw channels add` list optional channel plugins.
-- Selecting Nostr prompts you to install the plugin on demand.
+### Older/custom installs
 
-Install defaults:
-
-- **Dev channel + git checkout available:** uses the local plugin path.
-- **Stable/Beta:** downloads from npm.
-
-You can always override the choice in the prompt.
-
-### Manual install
+- Onboarding (`openclaw onboard`) and `openclaw channels add` still surface
+  Nostr from the shared channel catalog.
+- If your build excludes bundled Nostr, install it manually.
 
 ```bash
 openclaw plugins install @openclaw/nostr
@@ -132,7 +125,7 @@ Notes:
 
 Enforcement notes:
 
-- Sender policy is checked before signature verification and NIP-04 decryption.
+- Inbound event signatures are verified before sender policy and NIP-04 decryption, so forged events are rejected early.
 - Pairing replies are sent without processing the original DM body.
 - Inbound DMs are rate-limited and oversized payloads are dropped before decrypt.
 
@@ -240,7 +233,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 - Never commit private keys.
 - Use environment variables for keys.
 - Consider `allowlist` for production bots.
-- Pairing and allowlist policy is enforced before decrypt, so unknown senders cannot force full crypto work.
+- Signatures are verified before sender policy, and sender policy is enforced before decrypt, so forged events are rejected early and unknown senders cannot force full crypto work.
 
 ## Limitations (MVP)
 

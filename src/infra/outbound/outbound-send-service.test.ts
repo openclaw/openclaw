@@ -1,14 +1,61 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 
-const mocks = vi.hoisted(() => ({
-  getDefaultMediaLocalRoots: vi.fn(() => []),
-  dispatchChannelMessageAction: vi.fn(),
-  sendMessage: vi.fn(),
-  sendPoll: vi.fn(),
-  getAgentScopedMediaLocalRootsForSources: vi.fn(() => ["/tmp/agent-roots"]),
-  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
-}));
+const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
+const dispatchChannelMessageActionMock = vi.hoisted(() => vi.fn());
+const sendMessageMock = vi.hoisted(() => vi.fn());
+const sendPollMock = vi.hoisted(() => vi.fn());
+const getAgentScopedMediaLocalRootsForSourcesMock = vi.hoisted(() =>
+  vi.fn<(params: { cfg: unknown; agentId?: string; mediaSources?: readonly string[] }) => string[]>(
+    () => ["/tmp/agent-roots"],
+  ),
+);
+const createAgentScopedHostMediaReadFileMock = vi.hoisted(() =>
+  vi.fn<(params: { cfg: unknown; agentId?: string }) => (filePath: string) => Promise<Buffer>>(
+    () => async () => Buffer.from("capability"),
+  ),
+);
+const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
+  vi.fn<
+    (params: {
+      cfg: unknown;
+      agentId?: string;
+      mediaSources?: readonly string[];
+      accountId?: string;
+      requesterSenderId?: string;
+      requesterSenderName?: string;
+      requesterSenderUsername?: string;
+      requesterSenderE164?: string;
+    }) => {
+      localRoots: string[];
+      readFile: (filePath: string) => Promise<Buffer>;
+    }
+  >((params) => ({
+    localRoots: getAgentScopedMediaLocalRootsForSourcesMock({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      mediaSources: params.mediaSources ?? [],
+    }),
+    readFile: createAgentScopedHostMediaReadFileMock({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    }),
+  })),
+);
+const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
+  vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+);
+
+const mocks = {
+  getDefaultMediaLocalRoots: getDefaultMediaLocalRootsMock,
+  dispatchChannelMessageAction: dispatchChannelMessageActionMock,
+  sendMessage: sendMessageMock,
+  sendPoll: sendPollMock,
+  getAgentScopedMediaLocalRootsForSources: getAgentScopedMediaLocalRootsForSourcesMock,
+  createAgentScopedHostMediaReadFile: createAgentScopedHostMediaReadFileMock,
+  resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessMock,
+  appendAssistantMessageToSessionTranscript: appendAssistantMessageToSessionTranscriptMock,
+};
 
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
@@ -19,8 +66,15 @@ vi.mock("./message.js", () => ({
   sendPoll: mocks.sendPoll,
 }));
 
-vi.mock("../../media/local-roots.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../media/local-roots.js")>();
+vi.mock("../../media/read-capability.js", () => ({
+  createAgentScopedHostMediaReadFile: mocks.createAgentScopedHostMediaReadFile,
+  resolveAgentScopedOutboundMediaAccess: mocks.resolveAgentScopedOutboundMediaAccess,
+}));
+
+vi.mock("../../media/local-roots.js", async () => {
+  const actual = await vi.importActual<typeof import("../../media/local-roots.js")>(
+    "../../media/local-roots.js",
+  );
   return {
     ...actual,
     getDefaultMediaLocalRoots: mocks.getDefaultMediaLocalRoots,
@@ -33,6 +87,8 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
+type ExecuteSendInput = Parameters<OutboundSendServiceModule["executeSendAction"]>[0];
+type ExecuteSendContext = ExecuteSendInput["ctx"];
 
 let executePollAction: OutboundSendServiceModule["executePollAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
@@ -91,14 +147,41 @@ describe("executeSendAction", () => {
     });
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  function createPluginMediaSendContext(
+    overrides: Partial<ExecuteSendContext>,
+  ): ExecuteSendContext {
+    return {
+      cfg: {},
+      channel: "demo-outbound",
+      params: { media: "/tmp/host.png" },
+      sessionKey: "agent:main:directchat:group:ops",
+      dryRun: false,
+      ...overrides,
+    } as ExecuteSendContext;
+  }
+
+  async function executePluginMediaSend(ctx: Partial<ExecuteSendContext>) {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: createPluginMediaSendContext(ctx),
+      to: "channel:123",
+      message: "hello",
+    });
+  }
+
+  beforeAll(async () => {
     ({ executePollAction, executeSendAction } = await import("./outbound-send-service.js"));
+  });
+
+  beforeEach(() => {
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
     mocks.getAgentScopedMediaLocalRootsForSources.mockClear();
+    mocks.createAgentScopedHostMediaReadFile.mockClear();
+    mocks.resolveAgentScopedOutboundMediaAccess.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
@@ -129,6 +212,203 @@ describe("executeSendAction", () => {
         channel: "demo-outbound",
         to: "channel:123",
         content: "hello",
+      }),
+    );
+  });
+
+  it("forwards requesterSenderId to sendMessage on core outbound path", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        sessionKey: "agent:main:directchat:group:ops",
+        requesterSenderId: "attacker",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderId: "attacker",
+      }),
+    );
+  });
+
+  it("forwards non-id requester sender fields to sendMessage on core outbound path", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        sessionKey: "agent:main:directchat:group:ops",
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+      }),
+    );
+  });
+
+  it("forwards requester session context to sendMessage on core outbound path", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        sessionKey: "agent:main:directchat:group:ops",
+        requesterAccountId: "source-account",
+        requesterSenderId: "attacker",
+        accountId: "destination-account",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:directchat:group:ops",
+        requesterAccountId: "source-account",
+        requesterSenderId: "attacker",
+        accountId: "destination-account",
+      }),
+    );
+  });
+
+  it("forwards requesterSenderId into outbound media access resolution", async () => {
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
+    });
+
+    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderId: "attacker",
+      }),
+    );
+  });
+
+  it("forwards non-id requester sender fields into outbound media access resolution", async () => {
+    await executePluginMediaSend({
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
+    });
+
+    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+      }),
+    );
+  });
+
+  it("keeps requester session channel authoritative for media policy", async () => {
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
+    });
+
+    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:directchat:group:ops",
+        messageProvider: undefined,
+      }),
+    );
+  });
+
+  it("uses requester account for media policy when session context is present", async () => {
+    await executePluginMediaSend({
+      requesterAccountId: "source-account",
+      requesterSenderId: "attacker",
+      accountId: "destination-account",
+    });
+
+    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:directchat:group:ops",
+        accountId: "source-account",
+      }),
+    );
+  });
+
+  it("falls back to destination account for media policy when requester account is missing", async () => {
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
+      accountId: "destination-account",
+    });
+
+    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:directchat:group:ops",
+        accountId: "destination-account",
+      }),
+    );
+  });
+
+  it("falls back to destination account when forwarding requester context to sendMessage", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        sessionKey: "agent:main:directchat:group:ops",
+        requesterSenderId: "attacker",
+        accountId: "destination-account",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:directchat:group:ops",
+        requesterAccountId: "destination-account",
       }),
     );
   });
@@ -204,6 +484,7 @@ describe("executeSendAction", () => {
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],
+        mediaReadFile: mocks.createAgentScopedHostMediaReadFile.mock.results[0]?.value,
       }),
     );
   });

@@ -922,30 +922,180 @@ describe("role-based agent routing", () => {
   });
 });
 
-describe("binding evaluation cache scalability", () => {
-  test("does not rescan full bindings after channel/account cache rollover (#36915)", () => {
-    const bindingCount = 2_205;
+describe("wildcard peer bindings (peer.id=*)", () => {
+  test("peer.id=* matches any direct peer and routes to the bound agent", () => {
     const cfg: OpenClawConfig = {
-      bindings: Array.from({ length: bindingCount }, (_, idx) => ({
-        agentId: `agent-${idx}`,
-        match: {
-          channel: "dingtalk",
-          accountId: `acct-${idx}`,
-          peer: { kind: "direct", id: `user-${idx}` },
+      agents: { list: [{ id: "second-ana" }] },
+      bindings: [
+        {
+          agentId: "second-ana",
+          match: {
+            channel: "telegram",
+            accountId: "second-ana",
+            peer: { kind: "direct", id: "*" },
+          },
         },
-      })),
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "second-ana",
+      peer: { kind: "direct", id: "12345678" },
+    });
+    expect(route.agentId).toBe("second-ana");
+    expect(route.sessionKey).toContain("agent:second-ana:");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
+  });
+
+  test("peer.id=* does not match group peers when kind is direct", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "dm-only" }] },
+      bindings: [
+        {
+          agentId: "dm-only",
+          match: {
+            channel: "telegram",
+            accountId: "bot1",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "bot1",
+      peer: { kind: "group", id: "group-999" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
+  test("exact peer binding wins over wildcard peer binding", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "exact" }, { id: "wild" }] },
+      bindings: [
+        {
+          agentId: "wild",
+          match: {
+            channel: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+        {
+          agentId: "exact",
+          match: {
+            channel: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "direct", id: "+1000" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: "biz",
+      peer: { kind: "direct", id: "+1000" },
+    });
+    expect(route.agentId).toBe("exact");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("wildcard peer binding wins over default fallback for unmatched peers", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "exact" }, { id: "wild" }] },
+      bindings: [
+        {
+          agentId: "wild",
+          match: {
+            channel: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+        {
+          agentId: "exact",
+          match: {
+            channel: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "direct", id: "+1000" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: "biz",
+      peer: { kind: "direct", id: "+9999" },
+    });
+    expect(route.agentId).toBe("wild");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
+  });
+
+  test("group wildcard peer matches any group peer", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "grp" }] },
+      bindings: [
+        {
+          agentId: "grp",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "group", id: "*" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "group", id: "g-42" },
+    });
+    expect(route.agentId).toBe("grp");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
+  });
+});
+
+describe("binding evaluation cache scalability", () => {
+  test("does not rescan full bindings across distinct channel/account cache entries (#36915)", () => {
+    const cacheKeyCount = 64;
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "agent-0",
+          match: {
+            channel: "dingtalk",
+            accountId: "acct-0",
+            peer: { kind: "direct", id: "user-0" },
+          },
+        },
+      ],
     };
     const listBindingsSpy = vi.spyOn(routingBindings, "listBindings");
     try {
-      for (let idx = 0; idx < bindingCount; idx += 1) {
+      const boundRoute = resolveAgentRoute({
+        cfg,
+        channel: "dingtalk",
+        accountId: "acct-0",
+        peer: { kind: "direct", id: "user-0" },
+      });
+      expect(boundRoute.agentId).toBe("agent-0");
+      expect(boundRoute.matchedBy).toBe("binding.peer");
+
+      for (let idx = 1; idx < cacheKeyCount; idx += 1) {
         const route = resolveAgentRoute({
           cfg,
           channel: "dingtalk",
           accountId: `acct-${idx}`,
           peer: { kind: "direct", id: `user-${idx}` },
         });
-        expect(route.agentId).toBe(`agent-${idx}`);
-        expect(route.matchedBy).toBe("binding.peer");
+        expect(route.agentId).toBe("main");
+        expect(route.matchedBy).toBe("default");
       }
 
       const repeated = resolveAgentRoute({
@@ -959,5 +1109,37 @@ describe("binding evaluation cache scalability", () => {
     } finally {
       listBindingsSpy.mockRestore();
     }
+  });
+
+  test("uses indexed channel/account bindings without per-route scans", () => {
+    const bindingCount = 101;
+    const cfg: OpenClawConfig = {
+      bindings: Array.from({ length: bindingCount }, (_, idx) => ({
+        agentId: `agent-${idx}`,
+        match: {
+          channel: "dingtalk",
+          accountId: `acct-${idx}`,
+          peer: { kind: "direct", id: `user-${idx}` },
+        },
+      })),
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: "acct-100",
+      peer: { kind: "direct", id: "user-100" },
+    });
+    expect(route.agentId).toBe("agent-100");
+    expect(route.matchedBy).toBe("binding.peer");
+
+    const defaultRoute = resolveAgentRoute({
+      cfg,
+      channel: "dingtalk",
+      accountId: "acct-missing",
+      peer: { kind: "direct", id: "user-missing" },
+    });
+    expect(defaultRoute.agentId).toBe("main");
+    expect(defaultRoute.matchedBy).toBe("default");
   });
 });

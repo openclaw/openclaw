@@ -2,10 +2,9 @@
 summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
-title: "Agent Loop"
+  - You are changing session queueing, transcript writes, or session write lock behavior
+title: "Agent loop"
 ---
-
-# Agent Loop (OpenClaw)
 
 An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
 tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
@@ -24,7 +23,7 @@ wired end-to-end.
 
 1. `agent` RPC validates params, resolves session (sessionKey/sessionId), persists session metadata, returns `{ runId, acceptedAt }` immediately.
 2. `agentCommand` runs the agent:
-   - resolves model + thinking/verbose defaults
+   - resolves model + thinking/verbose/trace defaults
    - loads skills snapshot
    - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
    - emits **lifecycle end/error** if the embedded loop does not emit one
@@ -38,7 +37,7 @@ wired end-to-end.
    - tool events => `stream: "tool"`
    - assistant deltas => `stream: "assistant"`
    - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
-5. `agent.wait` uses `waitForAgentJob`:
+5. `agent.wait` uses `waitForAgentRun`:
    - waits for **lifecycle end/error** for `runId`
    - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
@@ -48,13 +47,21 @@ wired end-to-end.
 - This prevents tool/session races and keeps session history consistent.
 - Messaging channels can choose queue modes (collect/steer/followup) that feed this lane system.
   See [Command Queue](/concepts/queue).
+- Transcript writes are also protected by a session write lock on the session file. The lock is
+  process-aware and file-based, so it catches writers that bypass the in-process queue or come from
+  another process.
+- Session write locks are non-reentrant by default. If a helper intentionally nests acquisition of
+  the same lock while preserving one logical writer, it must opt in explicitly with
+  `allowReentrant: true`.
 
 ## Session + workspace preparation
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt report.
-- A session write lock is acquired; `SessionManager` is opened and prepared before streaming.
+- A session write lock is acquired; `SessionManager` is opened and prepared before streaming. Any
+  later transcript rewrite, compaction, or truncation path must take the same lock before opening or
+  mutating the transcript file.
 
 ## Prompt assembly + system prompt
 
@@ -84,11 +91,12 @@ These run inside the agent loop or gateway pipeline:
 - **`before_model_resolve`**: runs pre-session (no `messages`) to deterministically override provider/model before model resolution.
 - **`before_prompt_build`**: runs after session load (with `messages`) to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext` before prompt submission. Use `prependContext` for per-turn dynamic text and system-context fields for stable guidance that should sit in system prompt space.
 - **`before_agent_start`**: legacy compatibility hook that may run in either phase; prefer the explicit hooks above.
+- **`before_agent_reply`**: runs after inline actions and before the LLM call, letting a plugin claim the turn and return a synthetic reply or silence the turn entirely.
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
 - **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
-- **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
+- **`tool_result_persist`**: synchronously transform tool results before they are written to an OpenClaw-owned session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
@@ -102,7 +110,11 @@ Hook decision rules for outbound/tool guards:
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear a prior cancel.
 
-See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook API and registration details.
+See [Plugin hooks](/plugins/hooks) for the hook API and registration details.
+
+Harnesses may adapt these hooks differently. The Codex app-server harness keeps
+OpenClaw plugin hooks as the compatibility contract for documented mirrored
+surfaces, while Codex native hooks remain a separate lower-level Codex mechanism.
 
 ## Streaming + partial replies
 
@@ -123,7 +135,8 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
   - assistant text (and optional reasoning)
   - inline tool summaries (when verbose + allowed)
   - assistant error text when the model errors
-- `NO_REPLY` is treated as a silent token and filtered from outgoing payloads.
+- The exact silent token `NO_REPLY` / `no_reply` is filtered from outgoing
+  payloads.
 - Messaging tool duplicates are removed from the final payload list.
 - If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted
   (unless a messaging tool already sent a user-visible reply).
@@ -149,6 +162,7 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
+- LLM idle timeout: `agents.defaults.llm.idleTimeoutSeconds` aborts a model request when no response chunks arrive before the idle window. Set it explicitly for slow local models or reasoning/tool-call providers; set it to 0 to disable. If it is not set, OpenClaw uses `agents.defaults.timeoutSeconds` when configured, otherwise 120s. Cron-triggered runs with no explicit LLM or agent timeout disable the idle watchdog and rely on the cron outer timeout.
 
 ## Where things can end early
 

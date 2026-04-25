@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
   - You want guided setup for gateway, workspace, auth, channels, and skills
-title: "onboard"
+title: "Onboard"
 ---
 
 # `openclaw onboard`
@@ -21,13 +21,20 @@ Interactive onboarding for local or remote Gateway setup.
 
 ```bash
 openclaw onboard
+openclaw onboard --modern
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
+openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
+`--modern` starts the Crestodian conversational onboarding preview. Without
+`--modern`, `openclaw onboard` keeps the classic onboarding flow.
+
 For plaintext private-network `ws://` targets (trusted networks only), set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
+There is no `openclaw.json` equivalent for this client-side transport
+break-glass.
 
 Non-interactive custom provider:
 
@@ -42,6 +49,17 @@ openclaw onboard --non-interactive \
 ```
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
+
+LM Studio also supports a provider-specific key flag in non-interactive mode:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice lmstudio \
+  --custom-base-url "http://localhost:1234/v1" \
+  --custom-model-id "qwen/qwen3.5-9b" \
+  --lmstudio-api-key "$LM_API_TOKEN" \
+  --accept-risk
+```
 
 Non-interactive Ollama:
 
@@ -82,6 +100,8 @@ Gateway token options in non-interactive mode:
 - With `--install-daemon`, when token auth requires a token, SecretRef-managed gateway tokens are validated but not persisted as resolved plaintext in supervisor service environment metadata.
 - With `--install-daemon`, if token mode requires a token and the configured token SecretRef is unresolved, onboarding fails closed with remediation guidance.
 - With `--install-daemon`, if both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, onboarding blocks install until mode is set explicitly.
+- Local onboarding writes `gateway.mode="local"` into the config. If a later config file is missing `gateway.mode`, treat that as config damage or an incomplete manual edit, not as a valid local-mode shortcut.
+- `--allow-unconfigured` is a separate gateway runtime escape hatch. It does not mean onboarding may omit `gateway.mode`.
 
 Example:
 
@@ -100,6 +120,7 @@ Non-interactive local gateway health:
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before it exits successfully.
 - `--install-daemon` starts the managed gateway install path first. Without it, you must already have a local gateway running, for example `openclaw gateway run`.
 - If you only want config/workspace/bootstrap writes in automation, use `--skip-health`.
+- If you manage workspace files yourself, pass `--skip-bootstrap` to set `agents.defaults.skipBootstrap: true` and skip creating `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
 
 Interactive onboarding behavior with reference mode:
@@ -113,7 +134,7 @@ Interactive onboarding behavior with reference mode:
 
 Non-interactive Z.AI endpoint choices:
 
-Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5`).
+Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5.1`).
 If you specifically want the GLM Coding Plan endpoints, pick `zai-coding-global` or `zai-coding-cn`.
 
 ```bash
@@ -140,9 +161,18 @@ Flow notes:
 
 - `quickstart`: minimal prompts, auto-generates a gateway token.
 - `manual`: full prompts for port/bind/auth (alias of `advanced`).
-- In the web-search step, choosing **Grok** can trigger a separate follow-up
-  prompt to enable `x_search` with the same `XAI_API_KEY` and optionally pick
-  an `x_search` model. Other web-search providers do not show that prompt.
+- When an auth choice implies a preferred provider, onboarding prefilters the
+  default-model and allowlist pickers to that provider. For Volcengine and
+  BytePlus, this also matches the coding-plan variants
+  (`volcengine-plan/*`, `byteplus-plan/*`).
+- If the preferred-provider filter yields no loaded models yet, onboarding
+  falls back to the unfiltered catalog instead of leaving the picker empty.
+- In the web-search step, some providers can trigger provider-specific
+  follow-up prompts:
+  - **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY`
+    and an `x_search` model choice.
+  - **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs
+    `api.moonshot.cn`) and the default Kimi web-search model.
 - Local onboarding DM scope behavior: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals).
 - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
 - Custom Provider: connect any OpenAI or Anthropic compatible endpoint,

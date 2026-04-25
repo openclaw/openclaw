@@ -7,15 +7,15 @@ let registerSlackMemberEvents: typeof import("./members.js").registerSlackMember
 let initSlackHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-async function createChannelRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
-) {
-  const actual = await importOriginal();
-  return { ...actual, enqueueSystemEvent: memberMocks.enqueue };
-}
-
-vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
-vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
+}));
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
+}));
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  readStoreAllowFromForDmPolicy: async () => [],
+}));
 
 type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -71,7 +71,6 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
 
 describe("registerSlackMemberEvents", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerSlackMemberEvents } = await import("./members.js"));
     ({ createSlackSystemEventTestHarness: initSlackHarness } =
       await import("./system-event-test-harness.js"));

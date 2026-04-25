@@ -3,6 +3,42 @@ import type { ModelProviderConfig } from "../../config/config.js";
 import { discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
+vi.mock("../../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
+    "../../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    applyProviderResolvedModelCompatWithPlugins: () => undefined,
+    applyProviderResolvedTransportWithPlugin: () => undefined,
+    buildProviderUnknownModelHintWithPlugin: () => undefined,
+    clearProviderRuntimeHookCache: () => {},
+    normalizeProviderTransportWithPlugin: () => undefined,
+    normalizeProviderResolvedModelWithPlugin: () => undefined,
+    prepareProviderDynamicModel: async () => {},
+    runProviderDynamicModel: () => undefined,
+  };
+});
+
+vi.mock("../model-suppression.js", () => ({
+  shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
+    (provider === "openai" ||
+      provider === "azure-openai-responses" ||
+      provider === "openai-codex") &&
+    id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
+  buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
+    if (
+      (provider !== "openai" &&
+        provider !== "azure-openai-responses" &&
+        provider !== "openai-codex") ||
+      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
+    ) {
+      return undefined;
+    }
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
+  },
+}));
+
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
@@ -27,7 +63,7 @@ beforeEach(() => {
 
 function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
-    handledDynamicProviders: ["anthropic", "zai", "openai-codex"],
+    handledDynamicProviders: ["anthropic", "google-antigravity", "zai", "openai-codex"],
   });
 }
 
@@ -74,13 +110,14 @@ function resolveAnthropicModelWithProviderOverrides(overrides: Partial<ModelProv
 }
 
 describe("resolveModel forward-compat errors and overrides", () => {
-  it("resolves supported antigravity thinking model ids", () => {
+  it("builds a forward-compat fallback for supported antigravity thinking ids", () => {
     expectResolvedForwardCompatFallbackResult({
       result: resolveModelForTest("google-antigravity", "claude-opus-4-6-thinking", "/tmp/agent"),
       expectedModel: {
-        provider: "google-antigravity",
-        id: "claude-opus-4-6-thinking",
         api: "google-gemini-cli",
+        baseUrl: "https://cloudcode-pa.googleapis.com",
+        id: "claude-opus-4-6-thinking",
+        provider: "google-antigravity",
         reasoning: true,
       },
     });
@@ -107,7 +144,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
     );
   });
 
@@ -128,7 +165,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
     );
   });
 
@@ -141,7 +178,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+      "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
     );
   });
 
@@ -217,7 +254,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
     });
   });
 
-  it("does not rewrite openai baseUrl when openai-codex api stays non-codex", () => {
+  it("normalizes openai-codex gpt-5.4 back to codex transport", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {
@@ -234,8 +271,8 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expectResolvedForwardCompatFallbackResult({
       result: resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent", cfg),
       expectedModel: {
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
         provider: "openai-codex",
       },

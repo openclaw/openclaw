@@ -11,7 +11,9 @@ import {
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ErrorCodes,
   errorShape,
@@ -42,7 +44,7 @@ type ToolCatalogGroup = {
 function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
   const cfg = loadConfig();
   const knownAgents = listAgentIds(cfg);
-  const requestedAgentId = typeof rawAgentId === "string" ? rawAgentId.trim() : "";
+  const requestedAgentId = normalizeOptionalString(rawAgentId) ?? "";
   const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
   if (requestedAgentId && !knownAgents.includes(agentId)) {
     respond(
@@ -71,7 +73,7 @@ function buildCoreGroups(): ToolCatalogGroup[] {
 }
 
 function buildPluginGroups(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId: string;
   existingToolNames: Set<string>;
 }): ToolCatalogGroup[] {
@@ -105,7 +107,7 @@ function buildPluginGroups(params: {
       } as ToolCatalogGroup);
     existing.tools.push({
       id: tool.name,
-      label: typeof tool.label === "string" && tool.label.trim() ? tool.label.trim() : tool.name,
+      label: normalizeOptionalString(tool.label) ?? tool.name,
       description: summarizeToolDescriptionText({
         rawDescription: typeof tool.description === "string" ? tool.description : undefined,
         displaySummary: tool.displaySummary,
@@ -118,19 +120,18 @@ function buildPluginGroups(params: {
     groups.set(groupId, existing);
   }
   return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)),
-    }))
+    .map((group) =>
+      Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
+    )
     .toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 export function buildToolsCatalogResult(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId?: string;
   includePlugins?: boolean;
 }): ToolsCatalogResult {
-  const agentId = params.agentId?.trim() || resolveDefaultAgentId(params.cfg);
+  const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
   const includePlugins = params.includePlugins !== false;
   const groups = buildCoreGroups();
   if (includePlugins) {

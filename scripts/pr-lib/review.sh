@@ -1,9 +1,10 @@
 set_review_mode() {
   local mode="$1"
-  cat > .local/review-mode.env <<EOF_ENV
-REVIEW_MODE=$mode
-REVIEW_MODE_SET_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF_ENV
+  # Security: shell-escape values to prevent command injection when sourced.
+  printf '%s=%q\n' \
+    REVIEW_MODE "$mode" \
+    REVIEW_MODE_SET_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > .local/review-mode.env
 }
 
 review_claim() {
@@ -482,10 +483,11 @@ review_tests() {
     exit 1
   fi
 
-  {
-    echo "REVIEW_TESTS_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "REVIEW_TEST_TARGET_COUNT=$#"
-  } > .local/review-tests.env
+  # Security: shell-escape values to prevent command injection when sourced.
+  printf '%s=%q\n' \
+    REVIEW_TESTS_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    REVIEW_TEST_TARGET_COUNT "$#" \
+    > .local/review-tests.env
 
   echo "review tests passed and were observed in output"
 }
@@ -502,15 +504,17 @@ review_init() {
   local mb
   mb=$(git merge-base origin/main "pr-$pr")
 
-  cat > .local/review-context.env <<EOF_ENV
-PR_NUMBER=$pr
-MERGE_BASE=$mb
-REVIEW_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF_ENV
+  # Security: shell-escape values to prevent command injection when sourced.
+  printf '%s=%q\n' \
+    PR_NUMBER "$pr" \
+    MERGE_BASE "$mb" \
+    REVIEW_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > .local/review-context.env
   set_review_mode main
 
   printf '%s\n' "$json" | jq '{number,title,url,state,isDraft,author:.author.login,base:.baseRefName,head:.headRefName,headSha:.headRefOid,headRepo:.headRepository.nameWithOwner,additions,deletions,files:(.files|length)}'
   echo "worktree=$PWD"
+  echo "pr_url=${PR_URL:-}"
   echo "merge_base=$mb"
   echo "branch=$(git branch --show-current)"
   echo "wrote=.local/pr-meta.json .local/pr-meta.env .local/review-context.env .local/review-mode.env"

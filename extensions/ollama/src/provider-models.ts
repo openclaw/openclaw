@@ -1,5 +1,6 @@
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -25,11 +26,16 @@ export type OllamaTagsResponse = {
 
 export type OllamaModelWithContext = OllamaTagModel & {
   contextWindow?: number;
+  capabilities?: string[];
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
+const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
+const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
+const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
+const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
-export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
     return undefined;
@@ -39,9 +45,12 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | unde
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
+    if (OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)) {
+      return undefined;
+    }
     return {
-      allowedHostnames: [parsed.hostname],
       hostnameAllowlist: [parsed.hostname],
+      allowPrivateNetwork: true,
     };
   } catch {
     return undefined;
@@ -56,49 +65,123 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
-export async function queryOllamaContextWindow(
+export type OllamaModelShowInfo = {
+  contextWindow?: number;
+  capabilities?: string[];
+};
+
+function buildOllamaModelShowCacheKey(
+  apiBase: string,
+  model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+): string | undefined {
+  const version = model.digest?.trim() || model.modified_at?.trim();
+  if (!version) {
+    return undefined;
+  }
+  return `${resolveOllamaApiBase(apiBase)}|${model.name}|${version}`;
+}
+
+function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
+  if (ollamaModelShowInfoCache.size >= MAX_OLLAMA_SHOW_CACHE_ENTRIES) {
+    const oldestKey = ollamaModelShowInfoCache.keys().next().value;
+    if (typeof oldestKey === "string") {
+      ollamaModelShowInfoCache.delete(oldestKey);
+    }
+  }
+  ollamaModelShowInfoCache.set(key, value);
+}
+
+function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
+  return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
+}
+
+export async function queryOllamaModelShowInfo(
   apiBase: string,
   modelName: string,
-): Promise<number | undefined> {
+): Promise<OllamaModelShowInfo> {
+  const normalizedApiBase = resolveOllamaApiBase(apiBase);
   try {
     const { response, release } = await fetchWithSsrFGuard({
-      url: `${apiBase}/api/show`,
+      url: `${normalizedApiBase}/api/show`,
       init: {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: modelName }),
         signal: AbortSignal.timeout(3000),
       },
-      policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
+      policy: buildOllamaBaseUrlSsrFPolicy(normalizedApiBase),
       auditContext: "ollama-provider-models.show",
     });
     try {
       if (!response.ok) {
-        return undefined;
+        return {};
       }
-      const data = (await response.json()) as { model_info?: Record<string, unknown> };
-      if (!data.model_info) {
-        return undefined;
-      }
-      for (const [key, value] of Object.entries(data.model_info)) {
-        if (
-          key.endsWith(".context_length") &&
-          typeof value === "number" &&
-          Number.isFinite(value)
-        ) {
-          const contextWindow = Math.floor(value);
-          if (contextWindow > 0) {
-            return contextWindow;
+      const data = (await response.json()) as {
+        model_info?: Record<string, unknown>;
+        capabilities?: unknown;
+      };
+
+      let contextWindow: number | undefined;
+      if (data.model_info) {
+        for (const [key, value] of Object.entries(data.model_info)) {
+          if (
+            key.endsWith(".context_length") &&
+            typeof value === "number" &&
+            Number.isFinite(value)
+          ) {
+            const ctx = Math.floor(value);
+            if (ctx > 0) {
+              contextWindow = ctx;
+              break;
+            }
           }
         }
       }
-      return undefined;
+
+      const capabilities = Array.isArray(data.capabilities)
+        ? (data.capabilities as unknown[]).filter((c): c is string => typeof c === "string")
+        : undefined;
+
+      return { contextWindow, capabilities };
     } finally {
       await release();
     }
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+async function queryOllamaModelShowInfoCached(
+  apiBase: string,
+  model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
+): Promise<OllamaModelShowInfo> {
+  const normalizedApiBase = resolveOllamaApiBase(apiBase);
+  const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model);
+  if (!cacheKey) {
+    return await queryOllamaModelShowInfo(normalizedApiBase, model.name);
+  }
+
+  const cached = ollamaModelShowInfoCache.get(cacheKey);
+  if (cached) {
+    return await cached;
+  }
+
+  const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name).then((result) => {
+    if (!hasCachedOllamaModelShowInfo(result)) {
+      ollamaModelShowInfoCache.delete(cacheKey);
+    }
+    return result;
+  });
+  setOllamaModelShowCacheEntry(cacheKey, pending);
+  return await pending;
+}
+
+/** @deprecated Use queryOllamaModelShowInfo instead. */
+export async function queryOllamaContextWindow(
+  apiBase: string,
+  modelName: string,
+): Promise<number | undefined> {
+  return (await queryOllamaModelShowInfo(apiBase, modelName)).contextWindow;
 }
 
 export async function enrichOllamaModelsWithContext(
@@ -111,10 +194,13 @@ export async function enrichOllamaModelsWithContext(
   for (let index = 0; index < models.length; index += concurrency) {
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
-      batch.map(async (model) => ({
-        ...model,
-        contextWindow: await queryOllamaContextWindow(apiBase, model.name),
-      })),
+      batch.map(async (model) => {
+        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model);
+        return Object.assign({}, model, {
+          contextWindow: showInfo.contextWindow,
+          capabilities: showInfo.capabilities,
+        });
+      }),
     );
     enriched.push(...batchResults);
   }
@@ -128,12 +214,15 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
+  capabilities?: string[],
 ): ModelDefinitionConfig {
+  const hasVision = capabilities?.includes("vision") ?? false;
+  const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
   return {
     id: modelId,
     name: modelId,
     reasoning: isReasoningModelHeuristic(modelId),
-    input: ["text"],
+    input,
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
@@ -166,4 +255,30 @@ export async function fetchOllamaModels(
   } catch {
     return { reachable: false, models: [] };
   }
+}
+
+export async function buildOllamaProvider(
+  configuredBaseUrl?: string,
+  opts?: { quiet?: boolean },
+): Promise<ModelProviderConfig> {
+  const apiBase = resolveOllamaApiBase(configuredBaseUrl);
+  const { reachable, models } = await fetchOllamaModels(apiBase);
+  if (!reachable && !opts?.quiet) {
+    console.warn(`Ollama could not be reached at ${apiBase}.`);
+  }
+  const discovered = await enrichOllamaModelsWithContext(
+    apiBase,
+    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+  );
+  return {
+    baseUrl: apiBase,
+    api: "ollama",
+    models: discovered.map((model) =>
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
+    ),
+  };
+}
+
+export function resetOllamaModelShowInfoCacheForTest(): void {
+  ollamaModelShowInfoCache.clear();
 }

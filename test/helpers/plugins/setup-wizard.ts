@@ -1,9 +1,23 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { createRuntimeEnv } from "./runtime-env.js";
 
 export type { WizardPrompter } from "../../../src/wizard/prompts.js";
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type QueuedWizardPrompter = {
+  intro: AsyncUnknownMock;
+  outro: AsyncUnknownMock;
+  note: AsyncUnknownMock;
+  select: AsyncUnknownMock;
+  multiselect: AsyncUnknownMock;
+  text: AsyncUnknownMock;
+  confirm: AsyncUnknownMock;
+  progress: Mock<() => { update: UnknownMock; stop: UnknownMock }>;
+  prompter: WizardPrompter;
+};
 
 export async function selectFirstWizardOption<T>(params: {
   options: Array<{ value: T }>;
@@ -33,7 +47,7 @@ export function createQueuedWizardPrompter(params?: {
   selectValues?: string[];
   textValues?: string[];
   confirmValues?: boolean[];
-}) {
+}): QueuedWizardPrompter {
   const selectValues = [...(params?.selectValues ?? [])];
   const textValues = [...(params?.textValues ?? [])];
   const confirmValues = [...(params?.confirmValues ?? [])];
@@ -76,6 +90,33 @@ type SetupWizardAdapterParams = Parameters<typeof buildChannelSetupWizardAdapter
 type SetupWizardPlugin = SetupWizardAdapterParams["plugin"];
 type SetupWizard = NonNullable<SetupWizardAdapterParams["wizard"]>;
 type SetupWizardCredentialValues = Record<string, string>;
+type SetupWizardTestPlugin = {
+  id: string;
+  setupWizard?: ChannelPlugin["setupWizard"];
+  config: Record<string, unknown>;
+} & Record<string, unknown>;
+
+function isDeclarativeSetupWizard(
+  setupWizard: ChannelPlugin["setupWizard"],
+): setupWizard is SetupWizard {
+  return Boolean(
+    setupWizard &&
+    typeof setupWizard === "object" &&
+    "status" in setupWizard &&
+    "credentials" in setupWizard,
+  );
+}
+
+function requireDeclarativeSetupWizard(plugin: SetupWizardTestPlugin): SetupWizard {
+  const { setupWizard } = plugin;
+  if (!setupWizard) {
+    throw new Error(`${plugin.id} is missing setupWizard`);
+  }
+  if (!isDeclarativeSetupWizard(setupWizard)) {
+    throw new Error(`${plugin.id} setupWizard is adapter-shaped; test helper expects a wizard`);
+  }
+  return setupWizard;
+}
 
 function resolveSetupWizardAccountContext<TCfg>(params: {
   cfg?: TCfg;
@@ -110,28 +151,19 @@ export function createSetupWizardAdapter(params: SetupWizardAdapterParams) {
   return buildChannelSetupWizardAdapterFromSetupWizard(params);
 }
 
-export function createPluginSetupWizardAdapter<
-  TPlugin extends SetupWizardPlugin & { setupWizard?: SetupWizard },
->(plugin: TPlugin) {
-  const wizard = plugin.setupWizard;
-  if (!wizard) {
-    throw new Error(`${plugin.id} is missing setupWizard`);
-  }
+export function createPluginSetupWizardAdapter(plugin: SetupWizardTestPlugin) {
+  const wizard = requireDeclarativeSetupWizard(plugin);
   return createSetupWizardAdapter({
-    plugin,
+    plugin: plugin as unknown as SetupWizardPlugin,
     wizard,
   });
 }
 
-export function createPluginSetupWizardConfigure<
-  TPlugin extends SetupWizardPlugin & { setupWizard?: SetupWizard },
->(plugin: TPlugin) {
+export function createPluginSetupWizardConfigure(plugin: SetupWizardTestPlugin) {
   return createPluginSetupWizardAdapter(plugin).configure;
 }
 
-export function createPluginSetupWizardStatus<
-  TPlugin extends SetupWizardPlugin & { setupWizard?: SetupWizard },
->(plugin: TPlugin) {
+export function createPluginSetupWizardStatus(plugin: SetupWizardTestPlugin) {
   return createPluginSetupWizardAdapter(plugin).getStatus;
 }
 

@@ -4,29 +4,24 @@ import {
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
-const messageQueueMock = vi.fn();
-const messageAllowMock = vi.fn();
+const { messageQueueMock, messageAllowMock } = vi.hoisted(() => ({
+  messageQueueMock: vi.fn(),
+  messageAllowMock: vi.fn(),
+}));
 
-async function createChannelRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
-  };
-}
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
+}));
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
+}));
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  readStoreAllowFromForDmPolicy: async () => [],
+}));
 
-vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
-vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
+  readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
+}));
 
 let registerSlackMessageEvents: typeof import("./messages.js").registerSlackMessageEvents;
 
@@ -58,7 +53,6 @@ function resetMessageMocks(): void {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ registerSlackMessageEvents } = await import("./messages.js"));
 });
 
@@ -75,6 +69,26 @@ function makeChangedEvent(overrides?: { channel?: string; user?: string }) {
     message: { ts: "123.456", user },
     previous_message: { ts: "123.450", user },
     event_ts: "123.456",
+  };
+}
+
+function makeAssistantChangedEvent(overrides?: { user?: string }) {
+  const user = overrides?.user ?? "UREAL123";
+  return {
+    type: "message",
+    subtype: "message_changed",
+    channel: "D1",
+    channel_type: "im",
+    user: "U_BOT",
+    message: {
+      ts: "123.456",
+      thread_ts: "123.000",
+      user: "U_BOT",
+      text: "assistant wrapped user text",
+      metadata: { event_payload: { user } },
+    },
+    previous_message: { ts: "123.456", user: "U_BOT" },
+    event_ts: "123.789",
   };
 }
 
@@ -175,18 +189,6 @@ describe("registerSlackMessageEvents", () => {
       },
       calls: 0,
     },
-    {
-      name: "blocks thread_broadcast system events without an authenticated sender",
-      input: {
-        overrides: { dmPolicy: "open" },
-        event: {
-          ...makeThreadBroadcastEvent(),
-          user: undefined,
-          message: { ts: "123.456" },
-        },
-      },
-      calls: 0,
-    },
   ];
   it.each(cases)("$name", async ({ input, calls }) => {
     await runMessageCase(input);
@@ -207,6 +209,65 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("passes thread_broadcast events to the message handler", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open" },
+      event: makeThreadBroadcastEvent({ channel: "C1", user: "U1" }),
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subtype: "thread_broadcast",
+        channel: "C1",
+        user: "U1",
+      }),
+      { source: "message" },
+    );
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("rehydrates assistant DM message_changed events with a metadata user as inbound messages", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open" },
+      event: makeAssistantChangedEvent(),
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "D1",
+        channel_type: "im",
+        user: "UREAL123",
+        text: "assistant wrapped user text",
+        ts: "123.456",
+        thread_ts: "123.000",
+      }),
+      { source: "message" },
+    );
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("drops self-authored message_changed events without assistant sender metadata", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open" },
+      event: {
+        ...makeAssistantChangedEvent(),
+        message: {
+          ts: "123.456",
+          user: "U_BOT",
+          text: "preview edit",
+        },
+      },
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 

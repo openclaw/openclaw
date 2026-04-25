@@ -1,12 +1,14 @@
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
+import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
   buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
+  fetchWithRuntimeDispatcherOrMockedGlobal,
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
-} from "../../runtime-api.js";
-import { readResponseWithLimit } from "./read-response-with-limit.js";
+  type PinnedDispatcherPolicy,
+} from "./transport-runtime-api.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -19,6 +21,10 @@ type QueryValue =
   | Array<string | number | boolean | null | undefined>;
 
 export type QueryParams = Record<string, QueryValue> | null | undefined;
+
+type MatrixDispatcherRequestInit = RequestInit & {
+  dispatcher?: ReturnType<typeof createPinnedDispatcher>;
+};
 
 function normalizeEndpoint(endpoint: string): string {
   if (!endpoint) {
@@ -83,6 +89,17 @@ function buildBufferedResponse(params: {
   return response;
 }
 
+async function fetchWithMatrixDispatcher(params: {
+  url: string;
+  init: MatrixDispatcherRequestInit;
+}): Promise<Response> {
+  // Keep this dispatcher-routing logic local to Matrix transport. Shared SSRF
+  // fetches must stay fail-closed unless a retry path can preserve the
+  // validated pinned-address binding. Route dispatcher-attached requests
+  // through undici runtime fetch so the pinned dispatcher is preserved.
+  return await fetchWithRuntimeDispatcherOrMockedGlobal(params.url, params.init);
+}
+
 async function fetchWithMatrixGuardedRedirects(params: {
   url: string;
   init?: RequestInit;
@@ -109,15 +126,18 @@ async function fetchWithMatrixGuardedRedirects(params: {
         policy: params.ssrfPolicy,
       });
       dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.ssrfPolicy);
-      const response = await fetch(currentUrl.toString(), {
-        ...params.init,
-        method,
-        body,
-        headers,
-        redirect: "manual",
-        signal,
-        dispatcher,
-      } as RequestInit & { dispatcher: unknown });
+      const response = await fetchWithMatrixDispatcher({
+        url: currentUrl.toString(),
+        init: {
+          ...params.init,
+          method,
+          body,
+          headers,
+          redirect: "manual",
+          signal,
+          dispatcher,
+        } as MatrixDispatcherRequestInit,
+      });
 
       if (!isRedirectStatus(response.status)) {
         return {
@@ -280,7 +300,7 @@ export async function performMatrixRequest(params: {
       if (params.maxBytes && contentLength) {
         const length = Number(contentLength);
         if (Number.isFinite(length) && length > params.maxBytes) {
-          throw new Error(
+          throw new MatrixMediaSizeLimitError(
             `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
           );
         }
@@ -288,7 +308,7 @@ export async function performMatrixRequest(params: {
       const bytes = params.maxBytes
         ? await readResponseWithLimit(response, params.maxBytes, {
             onOverflow: ({ maxBytes, size }) =>
-              new Error(
+              new MatrixMediaSizeLimitError(
                 `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
               ),
             chunkTimeoutMs: params.readIdleTimeoutMs,

@@ -1,7 +1,14 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
-import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import {
+  asRecord,
+  normalizeWebhookMessage,
+  normalizeWebhookReaction,
+} from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
 import {
   _resetBlueBubblesShortIdState,
@@ -15,6 +22,7 @@ import {
   type WebhookTarget,
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
+import { getBlueBubblesRuntime } from "./runtime.js";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
@@ -24,8 +32,7 @@ import {
   resolveRequestClientIp,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
-} from "./runtime-api.js";
-import { getBlueBubblesRuntime } from "./runtime.js";
+} from "./webhook-ingress.js";
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({
@@ -87,15 +94,9 @@ function parseBlueBubblesWebhookPayload(
     try {
       return { ok: true, value: JSON.parse(payload) as unknown };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: formatErrorMessage(error) };
     }
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function maskSecret(value: string): string {
@@ -110,24 +111,19 @@ function normalizeAuthToken(raw: string): string {
   if (!value) {
     return "";
   }
-  if (value.toLowerCase().startsWith("bearer ")) {
+  if (normalizeLowercaseStringOrEmpty(value).startsWith("bearer ")) {
     return value.slice("bearer ".length).trim();
   }
   return value;
 }
 
-function safeEqualSecret(aRaw: string, bRaw: string): boolean {
+function safeEqualAuthToken(aRaw: string, bRaw: string): boolean {
   const a = normalizeAuthToken(aRaw);
   const b = normalizeAuthToken(bRaw);
   if (!a || !b) {
     return false;
   }
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) {
-    return false;
-  }
-  return timingSafeEqual(bufA, bufB);
+  return safeEqualSecret(a, b);
 }
 
 function collectTrustedProxies(targets: readonly WebhookTarget[]): string[] {
@@ -198,7 +194,7 @@ export async function handleBlueBubblesWebhookRequest(
         res,
         isMatch: (target) => {
           const token = target.account.config.password?.trim() ?? "";
-          return safeEqualSecret(guid, token);
+          return safeEqualAuthToken(guid, token);
         },
       });
       if (!target) {
@@ -252,11 +248,22 @@ export async function handleBlueBubblesWebhookRequest(
         return true;
       }
       const reaction = normalizeWebhookReaction(payload);
+      // Normalize the webhook message early so the attachment-update detection
+      // below sees attachments under any supported wrapper format (`payload.data`,
+      // `payload.message`, `payload.data.message`, JSON-string payloads), not just
+      // raw `payload.data.attachments`. (#65430, #67510)
+      const message = reaction ? null : normalizeWebhookMessage(payload, { eventType });
+      // BlueBubbles fires `updated-message` when attachments are indexed after the
+      // initial `new-message` (which may arrive with attachments: []). Let those
+      // through so the agent can ingest the image. (#65430)
+      const isAttachmentUpdate =
+        eventType === "updated-message" && (message?.attachments?.length ?? 0) > 0;
       if (
         (eventType === "updated-message" ||
           eventType === "message-reaction" ||
           eventType === "reaction") &&
-        !reaction
+        !reaction &&
+        !isAttachmentUpdate
       ) {
         res.statusCode = 200;
         res.end("ok");
@@ -264,12 +271,11 @@ export async function handleBlueBubblesWebhookRequest(
           logVerbose(
             firstTarget.core,
             firstTarget.runtime,
-            `webhook ignored ${eventType || "event"} without reaction`,
+            `webhook ignored ${eventType || "event"} (no reaction or attachment update)`,
           );
         }
         return true;
       }
-      const message = reaction ? null : normalizeWebhookMessage(payload);
       if (!message && !reaction) {
         res.statusCode = 400;
         res.end("invalid payload");
@@ -325,6 +331,10 @@ export async function monitorBlueBubblesProvider(
   const { account, config, runtime, abortSignal, statusSink } = options;
   const core = getBlueBubblesRuntime();
   const path = options.webhookPath?.trim() || DEFAULT_WEBHOOK_PATH;
+  const allowPrivateNetwork = resolveBlueBubblesEffectiveAllowPrivateNetwork({
+    baseUrl: account.baseUrl,
+    config: account.config,
+  });
 
   // Fetch and cache server info (for macOS version detection in action gating)
   const serverInfo = await fetchBlueBubblesServerInfo({
@@ -332,7 +342,7 @@ export async function monitorBlueBubblesProvider(
     password: account.config.password,
     accountId: account.accountId,
     timeoutMs: 5000,
-    allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+    allowPrivateNetwork,
   }).catch(() => null);
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);
@@ -343,14 +353,15 @@ export async function monitorBlueBubblesProvider(
     );
   }
 
-  const unregister = registerBlueBubblesWebhookTarget({
+  const target: WebhookTarget = {
     account,
     config,
     runtime,
     core,
     path,
     statusSink,
-  });
+  };
+  const unregister = registerBlueBubblesWebhookTarget(target);
 
   return await new Promise((resolve) => {
     const stop = () => {
@@ -367,6 +378,19 @@ export async function monitorBlueBubblesProvider(
     runtime.log?.(
       `[${account.accountId}] BlueBubbles webhook listening on ${normalizeWebhookPath(path)}`,
     );
+
+    // Kick off a catchup pass for messages delivered while the webhook
+    // target wasn't reachable. Fire-and-forget; the catchup runs through the
+    // same processMessage path webhooks use, and #66230's inbound dedupe
+    // drops any GUID that was already handled, so this is safe even if a
+    // live webhook raced the startup replay. See #66721.
+    import("./catchup.js")
+      .then(({ runBlueBubblesCatchup }) => runBlueBubblesCatchup(target))
+      .catch((err) => {
+        runtime.error?.(
+          `[${account.accountId}] BlueBubbles catchup: unexpected failure: ${String(err)}`,
+        );
+      });
   });
 }
 

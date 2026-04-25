@@ -1,6 +1,6 @@
 import {
+  addWildcardAllowFrom,
   createSetupInputPresenceValidator,
-  createTopLevelChannelDmPolicySetter,
   normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
@@ -11,12 +11,32 @@ import {
 import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 
 const channel = "bluebubbles" as const;
-const setBlueBubblesTopLevelDmPolicy = createTopLevelChannelDmPolicySetter({
-  channel,
-});
 
-export function setBlueBubblesDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
-  return setBlueBubblesTopLevelDmPolicy(cfg, dmPolicy);
+export function setBlueBubblesDmPolicy(
+  cfg: OpenClawConfig,
+  accountId: string,
+  dmPolicy: DmPolicy,
+): OpenClawConfig {
+  const resolvedAccountId = normalizeAccountId(accountId);
+  const existingAllowFrom =
+    resolvedAccountId === "default"
+      ? cfg.channels?.bluebubbles?.allowFrom
+      : ((
+          cfg.channels?.bluebubbles?.accounts?.[resolvedAccountId] as
+            | { allowFrom?: ReadonlyArray<string | number> }
+            | undefined
+        )?.allowFrom ?? cfg.channels?.bluebubbles?.allowFrom);
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId: resolvedAccountId,
+    patch: {
+      dmPolicy,
+      ...(dmPolicy === "open" ? { allowFrom: addWildcardAllowFrom(existingAllowFrom) } : {}),
+    },
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
+  });
 }
 
 export function setBlueBubblesAllowFrom(

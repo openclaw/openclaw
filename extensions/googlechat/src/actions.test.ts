@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listEnabledGoogleChatAccounts = vi.hoisted(() => vi.fn());
@@ -55,6 +56,27 @@ describe("googlechat message actions", () => {
     ]);
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toEqual({
+      actions: ["send", "upload-file", "react", "reactions"],
+    });
+  });
+
+  it("honors account-scoped reaction gates during discovery", () => {
+    resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
+      enabled: true,
+      credentialSource: "service-account",
+      config: {
+        actions: { reactions: accountId === "work" },
+      },
+    }));
+
+    expect(
+      googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId: "default" }),
+    ).toEqual({
+      actions: ["send", "upload-file"],
+    });
+    expect(
+      googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId: "work" }),
+    ).toEqual({
       actions: ["send", "upload-file", "react", "reactions"],
     });
   });
@@ -130,19 +152,14 @@ describe("googlechat message actions", () => {
       config: { mediaMaxMb: 5 },
     });
     resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/BBB");
-    const loadWebMedia = vi.fn(async () => ({
-      buffer: Buffer.from("local-bytes"),
-      fileName: "local.txt",
-      contentType: "text/plain",
-    }));
+    const localRoot = "/tmp/googlechat-action-test";
+    const localPath = path.join(localRoot, "local.md");
+    const readFile = vi.fn(async () => Buffer.from("local-bytes"));
     getGoogleChatRuntime.mockReturnValue({
       channel: {
         media: {
           fetchRemoteMedia: vi.fn(),
         },
-      },
-      media: {
-        loadWebMedia,
       },
     });
     uploadGoogleChatAttachment.mockResolvedValue({
@@ -159,23 +176,22 @@ describe("googlechat message actions", () => {
       action: "upload-file",
       params: {
         to: "spaces/BBB",
-        path: "/tmp/local.txt",
+        path: localPath,
         message: "notes",
         filename: "renamed.txt",
       },
       cfg: {},
       accountId: "default",
-      mediaLocalRoots: ["/tmp"],
+      mediaLocalRoots: [localRoot],
+      mediaReadFile: readFile,
     } as never);
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
-      "/tmp/local.txt",
-      expect.objectContaining({ localRoots: ["/tmp"] }),
-    );
+    expect(readFile).toHaveBeenCalledWith(localPath);
     expect(uploadGoogleChatAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
         space: "spaces/BBB",
         filename: "renamed.txt",
+        buffer: Buffer.from("local-bytes"),
       }),
     );
     expect(sendGoogleChatMessage).toHaveBeenCalledWith(

@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginInstallDir } from "./install.js";
 import {
+  cleanupTrackedTempDirsAsync,
+  makeTrackedTempDirAsync,
+} from "./test-helpers/fs-fixtures.js";
+import {
   removePluginFromConfig,
   resolveUninstallChannelConfigKeys,
   resolveUninstallDirectoryTarget,
@@ -302,6 +306,31 @@ describe("removePluginFromConfig", () => {
     expect(actions.loadPath).toBe(true);
   });
 
+  it("removes absolute load path for a workspace-relative install source path", async () => {
+    const tempRoot = path.join(process.cwd(), ".tmp");
+    await fs.mkdir(tempRoot, { recursive: true });
+    const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-uninstall-portable-source-"));
+    try {
+      const pluginDir = path.join(tempDir, "plugins", "demo");
+      await fs.mkdir(pluginDir, { recursive: true });
+      const realPluginDir = await fs.realpath(pluginDir);
+      const sourcePath = `./${path.relative(process.cwd(), realPluginDir).split(path.sep).join("/")}`;
+      const config = createPluginConfig({
+        installs: {
+          "my-plugin": createPathInstallRecord(undefined, sourcePath),
+        },
+        loadPaths: [realPluginDir, "/other/path"],
+      });
+
+      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+      expect(result.plugins?.load?.paths).toEqual(["/other/path"]);
+      expect(actions.loadPath).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       name: "clears memory slot when uninstalling active memory plugin",
@@ -597,13 +626,14 @@ describe("removePluginFromConfig", () => {
 
 describe("uninstallPlugin", () => {
   let tempDir: string;
+  const tempDirs: string[] = [];
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "uninstall-test-"));
+    tempDir = await makeTrackedTempDirAsync("uninstall-test", tempDirs);
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await cleanupTrackedTempDirsAsync(tempDirs);
   });
 
   it("returns error when plugin not found", async () => {

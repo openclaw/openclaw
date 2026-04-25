@@ -1,3 +1,13 @@
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
@@ -66,7 +76,7 @@ export async function openaiTTS(params: {
   voice: string;
   speed?: number;
   instructions?: string;
-  responseFormat: "mp3" | "opus" | "pcm";
+  responseFormat: "mp3" | "opus" | "pcm" | "wav";
   timeoutMs: number;
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
@@ -80,33 +90,53 @@ export async function openaiTTS(params: {
     throw new Error(`Invalid voice: ${voice}`);
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(`${baseUrl}/audio/speech`, {
+  const requestHeaders = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  const requestBody = JSON.stringify({
+    model,
+    input: text,
+    voice,
+    response_format: responseFormat,
+    ...(speed != null && { speed }),
+    ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+  });
+  const requestUrl = `${baseUrl}/audio/speech`;
+  const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
+  const { response, release } = await fetchWithSsrFGuard({
+    url: requestUrl,
+    init: {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-        ...(speed != null && { speed }),
-        ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenAI TTS API error (${response.status})`);
+      headers: requestHeaders,
+      body: requestBody,
+    },
+    timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    capture: false,
+    pinDns: debugProxyFetchPatchInstalled ? false : undefined,
+    auditContext: "openai-tts",
+  });
+  try {
+    if (!debugProxyFetchPatchInstalled) {
+      captureHttpExchange({
+        url: requestUrl,
+        method: "POST",
+        requestHeaders,
+        requestBody,
+        response,
+        transport: "http",
+        meta: {
+          provider: "openai",
+          capability: "tts",
+        },
+      });
     }
+
+    await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
     return Buffer.from(await response.arrayBuffer());
   } finally {
-    clearTimeout(timeout);
+    await release();
   }
 }

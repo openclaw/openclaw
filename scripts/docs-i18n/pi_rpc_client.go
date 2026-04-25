@@ -71,10 +71,12 @@ func startDocsPiClient(ctx context.Context, options docsPiClientOptions) (*docsP
 	}
 
 	args := append([]string{}, command.Args...)
+	args = append(args, "--mode", "rpc")
+	if provider := docsPiProviderArg(); provider != "" && !docsPiOmitProvider() {
+		args = append(args, "--provider", provider)
+	}
 	args = append(args,
-		"--mode", "rpc",
-		"--provider", docsPiProvider(),
-		"--model", docsPiModel(),
+		"--model", docsPiModelRef(),
 		"--thinking", options.Thinking,
 		"--no-session",
 	)
@@ -83,7 +85,7 @@ func startDocsPiClient(ctx context.Context, options docsPiClientOptions) (*docsP
 	}
 
 	process := exec.Command(command.Executable, args...)
-	agentDir, err := getDocsPiAgentDir()
+	agentDir, err := resolveDocsPiAgentDir()
 	if err != nil {
 		return nil, err
 	}
@@ -238,12 +240,9 @@ func extractTranslationResult(raw json.RawMessage) (string, error) {
 		if message.Role != "assistant" {
 			continue
 		}
-		if message.ErrorMessage != "" || strings.EqualFold(message.StopReason, "error") {
-			msg := strings.TrimSpace(message.ErrorMessage)
-			if msg == "" {
-				msg = "unknown error"
-			}
-			return "", fmt.Errorf("pi error: %s", msg)
+		if message.ErrorMessage != "" || isTerminalPiStopReason(message.StopReason) {
+			text, _ := extractContentText(message.Content)
+			return "", formatPiAgentError(message, text)
 		}
 		text, err := extractContentText(message.Content)
 		if err != nil {
@@ -252,6 +251,46 @@ func extractTranslationResult(raw json.RawMessage) (string, error) {
 		return text, nil
 	}
 	return "", errors.New("assistant message not found")
+}
+
+func isTerminalPiStopReason(stopReason string) bool {
+	switch strings.ToLower(strings.TrimSpace(stopReason)) {
+	case "error", "terminated", "cancelled", "canceled", "aborted":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatPiAgentError(message agentMessage, assistantText string) error {
+	parts := []string{}
+	if msg := strings.TrimSpace(message.ErrorMessage); msg != "" {
+		parts = append(parts, msg)
+	}
+	if stop := strings.TrimSpace(message.StopReason); stop != "" {
+		parts = append(parts, "stopReason="+stop)
+	}
+	if preview := previewPiAssistantText(assistantText); preview != "" {
+		parts = append(parts, "assistant="+preview)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "unknown error")
+	}
+	return fmt.Errorf("pi error: %s", strings.Join(parts, "; "))
+}
+
+func previewPiAssistantText(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.ReplaceAll(trimmed, "\n", " ")
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	const limit = 160
+	if len(trimmed) <= limit {
+		return trimmed
+	}
+	return trimmed[:limit] + "..."
 }
 
 func extractContentText(content json.RawMessage) (string, error) {
@@ -299,4 +338,14 @@ func getDocsPiAgentDir() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func resolveDocsPiAgentDir() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); override != "" {
+		if err := os.MkdirAll(override, 0o700); err != nil {
+			return "", err
+		}
+		return override, nil
+	}
+	return getDocsPiAgentDir()
 }

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -17,10 +18,10 @@ import {
   renderAgentChannels,
   renderAgentCron,
 } from "./agents-panels-status-files.ts";
+export type { AgentsPanel } from "./agents.types.ts";
 import { renderAgentTools, renderAgentSkills } from "./agents-panels-tools-skills.ts";
 import { agentBadgeText, buildAgentContext, normalizeAgentLabel } from "./agents-utils.ts";
-
-export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+import type { AgentsPanel } from "./agents.types.ts";
 
 export type ConfigState = {
   form: Record<string, unknown> | null;
@@ -196,7 +197,7 @@ export function renderAgents(props: AgentsProps) {
               ?disabled=${props.loading}
               @click=${props.onRefresh}
             >
-              ${props.loading ? "Loading…" : "Refresh"}
+              ${props.loading ? t("common.loading") : t("common.refresh")}
             </button>
           </div>
         </div>

@@ -1,16 +1,14 @@
 ---
-title: "Session Pruning"
 summary: "Trimming old tool results to keep context lean and caching efficient"
+title: "Session pruning"
 read_when:
   - You want to reduce context growth from tool outputs
   - You want to understand Anthropic prompt cache optimization
 ---
 
-# Session Pruning
-
 Session pruning trims **old tool results** from the context before each LLM
 call. It reduces context bloat from accumulated tool outputs (exec results, file
-reads, search results) without touching your conversation messages.
+reads, search results) without rewriting normal conversation text.
 
 <Info>
 Pruning is in-memory only -- it does not modify the on-disk session transcript.
@@ -30,19 +28,31 @@ cache-write size, directly lowering cost.
 ## How it works
 
 1. Wait for the cache TTL to expire (default 5 minutes).
-2. Find old tool results (user and assistant messages are never touched).
+2. Find old tool results for normal pruning (conversation text is left alone).
 3. **Soft-trim** oversized results -- keep the head and tail, insert `...`.
 4. **Hard-clear** the rest -- replace with a placeholder.
 5. Reset the TTL so follow-up requests reuse the fresh cache.
+
+## Legacy image cleanup
+
+OpenClaw also runs a separate idempotent cleanup for older legacy sessions that
+persisted raw image blocks in history.
+
+- It preserves the **3 most recent completed turns** byte-for-byte so prompt
+  cache prefixes for recent follow-ups stay stable.
+- Older already-processed image blocks in `user` or `toolResult` history can be
+  replaced with `[image data removed - already processed by model]`.
+- This is separate from normal cache-TTL pruning. It exists to stop repeated
+  image payloads from busting prompt caches on later turns.
 
 ## Smart defaults
 
 OpenClaw auto-enables pruning for Anthropic profiles:
 
-| Profile type         | Pruning enabled | Heartbeat |
-| -------------------- | --------------- | --------- |
-| OAuth or setup-token | Yes             | 1 hour    |
-| API key              | Yes             | 30 min    |
+| Profile type                                            | Pruning enabled | Heartbeat |
+| ------------------------------------------------------- | --------------- | --------- |
+| Anthropic OAuth/token auth (including Claude CLI reuse) | Yes             | 1 hour    |
+| API key                                                 | Yes             | 30 min    |
 
 If you set explicit values, OpenClaw does not override them.
 
@@ -78,3 +88,9 @@ compaction cycles.
 - [Compaction](/concepts/compaction) -- summarization-based context reduction
 - [Gateway Configuration](/gateway/configuration) -- all pruning config knobs
   (`contextPruning.*`)
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session tools](/concepts/session-tool)
+- [Context engine](/concepts/context-engine)

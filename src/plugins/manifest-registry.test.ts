@@ -310,7 +310,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -330,7 +330,42 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+    expectRegistryDiagnosticContains(
+      registry,
+      "global plugin will be overridden by bundled plugin",
+    );
+  });
+
+  it("lets config-loaded plugins replace bundled duplicates", () => {
+    const bundledDir = makeTempDir();
+    const configDir = makeTempDir();
+    const manifest = { id: "config-shadow", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(configDir, manifest);
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "config-shadow",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "config-shadow",
+        rootDir: configDir,
+        origin: "config",
+      }),
+    ]);
+
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
+    const warning = registry.diagnostics.find((diag) => diag.pluginId === "config-shadow");
+    expect(warning?.source).toBe(path.join(bundledDir, "index.ts"));
+    expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
   it("reports explicit installed globals as the effective duplicate winner", () => {
@@ -371,6 +406,8 @@ describe("loadPluginManifestRegistry", () => {
         diag.message.includes("bundled plugin will be overridden by global plugin"),
       ),
     ).toBe(true);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
   });
 
   it("preserves provider auth env metadata from plugin manifests", () => {
@@ -379,9 +416,20 @@ describe("loadPluginManifestRegistry", () => {
       id: "openai",
       enabledByDefault: true,
       providers: ["openai", "openai-codex"],
-      cliBackends: ["codex-cli"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
+      },
+      providerEndpoints: [
+        {
+          endpointClass: "openai-public",
+          hosts: ["API.OPENAI.COM", ""],
+          baseUrls: ["https://api.openai.com/v1"],
+        },
+      ],
+      syntheticAuthRefs: ["openai-cli"],
+      nonSecretAuthMarkers: ["openai-cli"],
+      providerAuthAliases: {
+        "openai-codex": "openai",
       },
       providerAuthChoices: [
         {
@@ -389,6 +437,8 @@ describe("loadPluginManifestRegistry", () => {
           method: "api-key",
           choiceId: "openai-api-key",
           choiceLabel: "OpenAI API key",
+          assistantPriority: 10,
+          assistantVisibility: "visible",
         },
       ],
       configSchema: { type: "object" },
@@ -403,7 +453,18 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
     });
-    expect(registry.plugins[0]?.cliBackends).toEqual(["codex-cli"]);
+    expect(registry.plugins[0]?.providerEndpoints).toEqual([
+      {
+        endpointClass: "openai-public",
+        hosts: ["api.openai.com"],
+        baseUrls: ["https://api.openai.com/v1"],
+      },
+    ]);
+    expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
+    expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
+    expect(registry.plugins[0]?.providerAuthAliases).toEqual({
+      "openai-codex": "openai",
+    });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
     expect(registry.plugins[0]?.providerAuthChoices).toEqual([
       {
@@ -411,6 +472,556 @@ describe("loadPluginManifestRegistry", () => {
         method: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
+        assistantPriority: 10,
+        assistantVisibility: "visible",
+      },
+    ]);
+  });
+
+  it("preserves model catalog metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "moonshot",
+      providers: ["moonshot"],
+      modelCatalog: {
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            api: "openai-responses",
+            headers: {
+              "x-provider": "moonshot",
+            },
+            models: [
+              {
+                id: "kimi-k2.6",
+                name: "Kimi K2.6",
+                input: ["text", "image", "bogus"],
+                reasoning: true,
+                contextWindow: 256000,
+                contextTokens: 200000,
+                maxTokens: 128000,
+                cost: {
+                  input: 0.6,
+                  output: 2.5,
+                  cacheRead: 0.15,
+                  tieredPricing: [
+                    {
+                      input: 0.6,
+                      output: 2.5,
+                      cacheRead: 0.15,
+                      cacheWrite: 0.6,
+                      range: [0, "bad"],
+                    },
+                    {
+                      input: 0.6,
+                      output: 2.5,
+                      cacheRead: 0.15,
+                      cacheWrite: 0.6,
+                      range: [0, -1],
+                    },
+                    {
+                      input: 0.6,
+                      output: 2.5,
+                      cacheRead: 0.15,
+                      cacheWrite: 0.6,
+                      range: [0, 256000],
+                    },
+                  ],
+                },
+                compat: {
+                  supportsTools: true,
+                  supportedReasoningEfforts: ["low", "medium"],
+                  supportsStore: "yes",
+                  unknownFlag: true,
+                },
+                status: "available",
+                tags: ["default"],
+              },
+            ],
+          },
+          openai: {
+            models: [{ id: "gpt-5.4" }],
+          },
+        },
+        aliases: {
+          kimi: {
+            provider: "moonshot",
+            api: "openai-responses",
+          },
+          openai: {
+            provider: "openai",
+          },
+        },
+        suppressions: [
+          {
+            provider: "openai",
+            model: "legacy-kimi",
+            reason: "superseded by moonshot/kimi-k2.6",
+          },
+        ],
+        discovery: {
+          moonshot: "static",
+          openai: "static",
+          ignored: "unknown",
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "moonshot",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.modelCatalog).toEqual({
+      providers: {
+        moonshot: {
+          baseUrl: "https://api.moonshot.ai/v1",
+          api: "openai-responses",
+          headers: {
+            "x-provider": "moonshot",
+          },
+          models: [
+            {
+              id: "kimi-k2.6",
+              name: "Kimi K2.6",
+              input: ["text", "image"],
+              reasoning: true,
+              contextWindow: 256000,
+              contextTokens: 200000,
+              maxTokens: 128000,
+              cost: {
+                input: 0.6,
+                output: 2.5,
+                cacheRead: 0.15,
+                tieredPricing: [
+                  {
+                    input: 0.6,
+                    output: 2.5,
+                    cacheRead: 0.15,
+                    cacheWrite: 0.6,
+                    range: [0, 256000],
+                  },
+                ],
+              },
+              compat: {
+                supportsTools: true,
+                supportedReasoningEfforts: ["low", "medium"],
+              },
+              status: "available",
+              tags: ["default"],
+            },
+          ],
+        },
+      },
+      aliases: {
+        kimi: {
+          provider: "moonshot",
+          api: "openai-responses",
+        },
+      },
+      suppressions: [
+        {
+          provider: "openai",
+          model: "legacy-kimi",
+          reason: "superseded by moonshot/kimi-k2.6",
+        },
+      ],
+      discovery: {
+        moonshot: "static",
+      },
+    });
+  });
+
+  it("reports non-bundled providerAuthEnvVars as deprecated compat metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-openai",
+      providers: ["openai"],
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-openai",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
+      openai: ["OPENAI_API_KEY"],
+    });
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        pluginId: "external-openai",
+        source: path.join(dir, "openclaw.plugin.json"),
+        message: expect.stringContaining(
+          "providerAuthEnvVars is deprecated compatibility metadata",
+        ),
+      }),
+    );
+  });
+
+  it("sanitizes manifest-controlled fields in provider auth compatibility diagnostics", () => {
+    const dir = makeTempDir();
+    const lineBreak = String.fromCharCode(10);
+    const ansiRed = `${String.fromCharCode(27)}[31m`;
+    writeManifest(dir, {
+      id: `external${lineBreak}openai${ansiRed}`,
+      providers: ["openai"],
+      providerAuthEnvVars: {
+        [`openai${lineBreak}${ansiRed}`]: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-openai",
+      rootDir: dir,
+      origin: "global",
+    });
+    const diagnostic = registry.diagnostics.find((entry) =>
+      entry.message.includes("providerAuthEnvVars is deprecated compatibility metadata"),
+    );
+
+    expect(diagnostic?.pluginId).toBe("externalopenai");
+    expect(diagnostic?.message).toContain("openai");
+    expect(diagnostic?.message).not.toContain(lineBreak);
+    expect(diagnostic?.message).not.toContain(ansiRed);
+  });
+
+  it("reports non-bundled channel manifests without channel config descriptors", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.channels).toEqual(["external-chat"]);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        pluginId: "external-chat",
+        source: path.join(dir, "openclaw.plugin.json"),
+        message: expect.stringContaining("without channelConfigs metadata"),
+      }),
+    );
+  });
+
+  it("sanitizes manifest-controlled fields in channel config descriptor diagnostics", () => {
+    const dir = makeTempDir();
+    const lineBreak = String.fromCharCode(10);
+    const ansiRed = `${String.fromCharCode(27)}[31m`;
+    writeManifest(dir, {
+      id: `external${lineBreak}chat${ansiRed}`,
+      channels: [`external${lineBreak}channel${ansiRed}`],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+    const diagnostic = registry.diagnostics.find((entry) =>
+      entry.message.includes("without channelConfigs metadata"),
+    );
+
+    expect(diagnostic?.pluginId).toBe("externalchat");
+    expect(diagnostic?.message).toContain("externalchannel");
+    expect(diagnostic?.message).not.toContain(lineBreak);
+    expect(diagnostic?.message).not.toContain(ansiRed);
+  });
+
+  it("accepts non-bundled channel manifests with channel config descriptors", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        "external-chat": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              token: { type: "string" },
+            },
+          },
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.channelConfigs?.["external-chat"]?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+    });
+    expect(
+      registry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+  });
+
+  it("drops prototype-polluting channel config keys from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeTextFile(
+      dir,
+      "openclaw.plugin.json",
+      JSON.stringify({
+        id: "external-chat",
+        channels: ["safe-chat"],
+        configSchema: { type: "object" },
+        channelConfigs: {
+          ["__proto__"]: {
+            schema: {
+              type: "object",
+              properties: {
+                polluted: { const: true },
+              },
+            },
+          },
+          constructor: {
+            schema: { type: "object" },
+          },
+          prototype: {
+            schema: { type: "object" },
+          },
+          "safe-chat": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    );
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+    const channelConfigs = registry.plugins[0]?.channelConfigs;
+
+    expect(channelConfigs).toBeDefined();
+    expect(Object.getPrototypeOf(channelConfigs)).toBe(null);
+    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "__proto__")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "constructor")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "prototype")).toBe(false);
+    expect(channelConfigs?.["safe-chat"]?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+    });
+  });
+
+  it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "anthropic-vertex",
+      providers: ["anthropic-vertex"],
+      providerDiscoveryEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dir, "provider-discovery.js"), "export default {};\n", "utf8");
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "anthropic-vertex",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBe(
+      path.join(dir, "provider-discovery.js"),
+    );
+  });
+
+  it("preserves activation and setup descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai"],
+      activation: {
+        onProviders: ["openai"],
+        onCommands: ["models"],
+        onChannels: ["web"],
+        onRoutes: ["gateway-webhook"],
+        onCapabilities: ["provider", "tool"],
+      },
+      setup: {
+        providers: [
+          {
+            id: "openai",
+            authMethods: ["api-key"],
+            envVars: ["OPENAI_API_KEY"],
+          },
+        ],
+        cliBackends: ["openai-cli"],
+        configMigrations: ["legacy-openai-auth"],
+        requiresRuntime: false,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.activation).toEqual({
+      onProviders: ["openai"],
+      onCommands: ["models"],
+      onChannels: ["web"],
+      onRoutes: ["gateway-webhook"],
+      onCapabilities: ["provider", "tool"],
+    });
+    expect(registry.plugins[0]?.setup).toEqual({
+      providers: [
+        {
+          id: "openai",
+          authMethods: ["api-key"],
+          envVars: ["OPENAI_API_KEY"],
+        },
+      ],
+      cliBackends: ["openai-cli"],
+      configMigrations: ["legacy-openai-auth"],
+      requiresRuntime: false,
+    });
+  });
+
+  it("preserves media-understanding provider metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      contracts: {
+        mediaUnderstandingProviders: ["openai"],
+      },
+      mediaUnderstandingProviderMetadata: {
+        openai: {
+          capabilities: ["image", "audio", "unknown"],
+          defaultModels: {
+            image: "gpt-5.4-mini",
+            audio: "gpt-4o-transcribe",
+            unknown: "ignored",
+          },
+          autoPriority: {
+            image: 10,
+            audio: 20,
+            video: "ignored",
+          },
+          nativeDocumentInputs: ["pdf", "docx"],
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.mediaUnderstandingProviderMetadata).toEqual({
+      openai: {
+        capabilities: ["image", "audio"],
+        defaultModels: {
+          image: "gpt-5.4-mini",
+          audio: "gpt-4o-transcribe",
+        },
+        autoPriority: {
+          image: 10,
+          audio: 20,
+        },
+        nativeDocumentInputs: ["pdf"],
+      },
+    });
+  });
+
+  it("preserves external auth provider contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acme-ai",
+      providers: ["acme-ai"],
+      contracts: {
+        externalAuthProviders: ["acme-ai"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acme-ai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      externalAuthProviders: ["acme-ai"],
+    });
+  });
+
+  it("preserves channel env metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "slack",
+      channels: ["slack"],
+      channelEnvVars: {
+        slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "slack",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.channelEnvVars).toEqual({
+      slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+    });
+  });
+
+  it("preserves qa runner descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "qa-matrix",
+      qaRunners: [
+        {
+          commandName: "matrix",
+          description: "Run the Matrix live QA lane",
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "qa-matrix",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.qaRunners).toEqual([
+      {
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
       },
     ]);
   });
@@ -498,6 +1109,87 @@ describe("loadPluginManifestRegistry", () => {
       }),
     );
   });
+
+  it("preserves manifest-owned config contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acpx",
+      configSchema: { type: "object" },
+      configContracts: {
+        compatibilityMigrationPaths: ["models.bedrockDiscovery"],
+        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+        dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
+        secretInputs: {
+          bundledDefaultEnabled: false,
+          paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acpx",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.configContracts).toEqual({
+      compatibilityMigrationPaths: ["models.bedrockDiscovery"],
+      compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+      dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
+      secretInputs: {
+        bundledDefaultEnabled: false,
+        paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+      },
+    });
+  });
+
+  it("resolves contract plugin ids by compatibility runtime path", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "brave",
+      configSchema: { type: "object" },
+      contracts: {
+        webSearchProviders: ["brave"],
+      },
+      configContracts: {
+        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+      },
+    });
+
+    const otherDir = makeTempDir();
+    writeManifest(otherDir, {
+      id: "google",
+      configSchema: { type: "object" },
+      contracts: {
+        webSearchProviders: ["gemini"],
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "brave",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "google",
+        rootDir: otherDir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(
+      registry.plugins
+        .filter(
+          (plugin) =>
+            (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+            (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(
+              "tools.web.search.apiKey",
+            ),
+        )
+        .map((plugin) => plugin.id),
+    ).toEqual(["brave"]);
+  });
   it("does not promote legacy top-level capability fields into contracts", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -577,6 +1269,8 @@ describe("loadPluginManifestRegistry", () => {
   ] as const)("$name", ({ registry: buildRegistry, expectedMessage }) => {
     const registry = buildRegistry();
     expectRegistryDiagnosticContains(registry, expectedMessage);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
@@ -634,32 +1328,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
-  it.each([
-    { name: "provider-style", manifestId: "openai", idHint: "openai-provider" },
-    { name: "plugin-style", manifestId: "brave", idHint: "brave-plugin" },
-    { name: "sandbox-style", manifestId: "openshell", idHint: "openshell-sandbox" },
-    { name: "multi-entry-style", manifestId: "matrix", idHint: "matrix/index" },
-    {
-      name: "media-understanding-style",
-      manifestId: "groq",
-      idHint: "groq-media-understanding",
-    },
-  ] as const)("accepts $name id hints without warning", ({ manifestId, idHint }) => {
-    const dir = makeTempDir();
-    writeManifest(dir, { id: manifestId, configSchema: { type: "object" } });
-
-    expect(
-      hasPluginIdMismatchWarning(
-        loadSingleCandidateRegistry({
-          idHint,
-          rootDir: dir,
-          origin: "bundled",
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("still warns for unrelated id hint mismatches", () => {
+  it("does not warn for id hint mismatches when manifest id is authoritative", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
 
@@ -671,13 +1340,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes(
-          'plugin id mismatch (manifest uses "openai", entry hints "totally-different")',
-        ),
-      ),
-    ).toBe(true);
+    expect(hasPluginIdMismatchWarning(registry)).toBe(false);
   });
 
   it.each([

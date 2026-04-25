@@ -1,3 +1,3 @@
 import { describeOpenRouterProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
 
-describeOpenRouterProviderRuntimeContract();
+describeOpenRouterProviderRuntimeContract(() => import("./index.js"));

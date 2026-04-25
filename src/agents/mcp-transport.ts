@@ -1,8 +1,13 @@
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  SSEClientTransport,
+  type SSEClientTransportOptions,
+} from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
 import { logDebug } from "../logger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 export type ResolvedMcpTransport = {
@@ -13,13 +18,14 @@ export type ResolvedMcpTransport = {
   detachStderr?: () => void;
 };
 
-function attachStderrLogging(serverName: string, transport: StdioClientTransport) {
+function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
   if (!stderr || typeof stderr.on !== "function") {
     return undefined;
   }
   const onData = (chunk: Buffer | string) => {
-    const message = String(chunk).trim();
+    const message =
+      normalizeOptionalString(typeof chunk === "string" ? chunk : String(chunk)) ?? "";
     if (!message) {
       return;
     }
@@ -40,7 +46,17 @@ function attachStderrLogging(serverName: string, transport: StdioClientTransport
   };
 }
 
-function buildSseEventSourceFetch(headers: Record<string, string>) {
+type SseEventSourceFetch = NonNullable<
+  NonNullable<SSEClientTransportOptions["eventSourceInit"]>["fetch"]
+>;
+
+const fetchWithUndici: FetchLike = async (url, init) =>
+  (await loadUndiciRuntimeDeps().fetch(
+    url,
+    init as Parameters<ReturnType<typeof loadUndiciRuntimeDeps>["fetch"]>[1],
+  )) as unknown as Response;
+
+function buildSseEventSourceFetch(headers: Record<string, string>): SseEventSourceFetch {
   return (url: string | URL, init?: RequestInit) => {
     const sdkHeaders: Record<string, string> = {};
     if (init?.headers) {
@@ -52,10 +68,10 @@ function buildSseEventSourceFetch(headers: Record<string, string>) {
         Object.assign(sdkHeaders, init.headers);
       }
     }
-    return fetch(url, {
-      ...init,
+    return fetchWithUndici(url, {
+      ...(init as RequestInit),
       headers: { ...sdkHeaders, ...headers },
-    });
+    }) as ReturnType<SseEventSourceFetch>;
   };
 }
 
@@ -68,7 +84,7 @@ export function resolveMcpTransport(
     return null;
   }
   if (resolved.kind === "stdio") {
-    const transport = new StdioClientTransport({
+    const transport = new OpenClawStdioClientTransport({
       command: resolved.command,
       args: resolved.args,
       env: resolved.env,
@@ -100,7 +116,8 @@ export function resolveMcpTransport(
   return {
     transport: new SSEClientTransport(new URL(resolved.url), {
       requestInit: hasHeaders ? { headers } : undefined,
-      eventSourceInit: hasHeaders ? { fetch: buildSseEventSourceFetch(headers) } : undefined,
+      fetch: fetchWithUndici,
+      eventSourceInit: { fetch: buildSseEventSourceFetch(headers) },
     }),
     description: resolved.description,
     transportType: "sse",

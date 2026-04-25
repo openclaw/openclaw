@@ -1,13 +1,11 @@
 ---
-title: "Diffs"
 summary: "Read-only diff viewer and file renderer for agents (optional plugin tool)"
+title: "Diffs"
 read_when:
   - You want agents to show code or markdown edits as diffs
   - You want a canvas-ready viewer URL or a rendered diff file
   - You need controlled, temporary diff artifacts with secure defaults
 ---
-
-# Diffs
 
 `diffs` is an optional plugin tool with short built-in system guidance and a companion skill that turns change content into a read-only diff artifact for agents.
 
@@ -118,8 +116,16 @@ All fields are optional unless noted:
 - `fileQuality` (`"standard" | "hq" | "print"`): quality preset for PNG or PDF rendering.
 - `fileScale` (`number`): device scale override (`1`-`4`).
 - `fileMaxWidth` (`number`): max render width in CSS pixels (`640`-`2400`).
-- `ttlSeconds` (`number`): viewer artifact TTL in seconds. Default 1800, max 21600.
-- `baseUrl` (`string`): viewer URL origin override. Must be `http` or `https`, no query/hash.
+- `ttlSeconds` (`number`): artifact TTL in seconds for viewer and standalone file outputs. Default 1800, max 21600.
+- `baseUrl` (`string`): viewer URL origin override. Overrides plugin `viewerBaseUrl`. Must be `http` or `https`, no query/hash.
+
+Legacy input aliases still accepted for backward compatibility:
+
+- `format` -> `fileFormat`
+- `imageFormat` -> `fileFormat`
+- `imageQuality` -> `fileQuality`
+- `imageScale` -> `fileScale`
+- `imageMaxWidth` -> `fileMaxWidth`
 
 Validation and limits:
 
@@ -164,11 +170,20 @@ File fields when PNG or PDF is rendered:
 - `fileScale`
 - `fileMaxWidth`
 
+Compatibility aliases also returned for existing callers:
+
+- `format` (same value as `fileFormat`)
+- `imagePath` (same value as `filePath`)
+- `imageBytes` (same value as `fileBytes`)
+- `imageQuality` (same value as `fileQuality`)
+- `imageScale` (same value as `fileScale`)
+- `imageMaxWidth` (same value as `fileMaxWidth`)
+
 Mode behavior summary:
 
 - `mode: "view"`: viewer fields only.
 - `mode: "file"`: file fields only, no viewer artifact.
-- `mode: "both"`: viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError`.
+- `mode: "both"`: viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError` and compatibility alias `imageError`.
 
 ## Collapsed unchanged sections
 
@@ -231,6 +246,29 @@ Supported defaults:
 
 Explicit tool parameters override these defaults.
 
+Persistent viewer URL config:
+
+- `viewerBaseUrl` (`string`, optional)
+  - Plugin-owned fallback for returned viewer links when a tool call does not pass `baseUrl`.
+  - Must be `http` or `https`, no query/hash.
+
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      diffs: {
+        enabled: true,
+        config: {
+          viewerBaseUrl: "https://gateway.example.com/openclaw",
+        },
+      },
+    },
+  },
+}
+```
+
 ## Security config
 
 - `security.allowRemoteViewer` (`boolean`, default `false`)
@@ -264,7 +302,7 @@ Example:
   - random token (48 hex chars)
   - `createdAt` and `expiresAt`
   - stored `viewer.html` path
-- Default viewer TTL is 30 minutes when not specified.
+- Default artifact TTL is 30 minutes when not specified.
 - Maximum accepted viewer TTL is 6 hours.
 - Cleanup runs opportunistically after artifact creation.
 - Expired artifacts are deleted.
@@ -285,8 +323,9 @@ The viewer document resolves those assets relative to the viewer URL, so an opti
 
 URL construction behavior:
 
-- If `baseUrl` is provided, it is used after strict validation.
-- Without `baseUrl`, viewer URL defaults to loopback `127.0.0.1`.
+- If tool-call `baseUrl` is provided, it is used after strict validation.
+- Else if plugin `viewerBaseUrl` is configured, it is used.
+- Without either override, viewer URL defaults to loopback `127.0.0.1`.
 - If gateway bind mode is `custom` and `gateway.customBindHost` is set, that host is used.
 
 `baseUrl` rules:
@@ -353,8 +392,13 @@ Viewer accessibility issues:
 
 - Viewer URL resolves to `127.0.0.1` by default.
 - For remote access scenarios, either:
+  - set plugin `viewerBaseUrl`, or
   - pass `baseUrl` per tool call, or
   - use `gateway.bind=custom` and `gateway.customBindHost`
+- If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw loopback viewer requests without forwarded client-IP headers fail closed by design.
+- For that proxy topology:
+  - prefer `mode: "file"` or `mode: "both"` when you only need an attachment, or
+  - intentionally enable `security.allowRemoteViewer` and set plugin `viewerBaseUrl` or pass a proxy/public `baseUrl` when you need a shareable viewer URL
 - Enable `security.allowRemoteViewer` only when you intend external viewer access.
 
 Unmodified-lines row has no expand button:

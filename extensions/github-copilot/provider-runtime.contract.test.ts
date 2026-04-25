@@ -1,3 +1,3 @@
 import { describeGithubCopilotProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
 
-describeGithubCopilotProviderRuntimeContract();
+describeGithubCopilotProviderRuntimeContract(() => import("./index.js"));

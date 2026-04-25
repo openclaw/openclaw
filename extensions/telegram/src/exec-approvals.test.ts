@@ -1,5 +1,12 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type {
+  OpenClawConfig,
+  TelegramAccountConfig,
+  TelegramExecApprovalConfig,
+} from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalAuthorizedSender,
@@ -7,9 +14,28 @@ import {
   isTelegramExecApprovalClientEnabled,
   isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalTarget,
+  shouldHandleTelegramExecApprovalRequest,
   shouldEnableTelegramExecApprovalButtons,
   shouldInjectTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
+
+const tempDirs: string[] = [];
+
+type TelegramExecApprovalRequest = Parameters<
+  typeof shouldHandleTelegramExecApprovalRequest
+>[0]["request"];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function createTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-exec-approvals-"));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>["execApprovals"],
@@ -26,8 +52,65 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
+function telegramAccount(
+  accountId: string,
+  execApprovals: TelegramExecApprovalConfig,
+  overrides: Partial<TelegramAccountConfig> = {},
+): TelegramAccountConfig {
+  return {
+    botToken: `tok-${accountId}`,
+    ...overrides,
+    execApprovals,
+  };
+}
+
+function buildMultiAccountTelegramConfig(params: {
+  sessionStorePath?: string;
+  defaultExecApprovals?: TelegramExecApprovalConfig;
+  opsExecApprovals?: TelegramExecApprovalConfig;
+  defaultOverrides?: Partial<TelegramAccountConfig>;
+  opsOverrides?: Partial<TelegramAccountConfig>;
+}): OpenClawConfig {
+  return {
+    ...(params.sessionStorePath ? { session: { store: params.sessionStorePath } } : {}),
+    channels: {
+      telegram: {
+        accounts: {
+          default: telegramAccount(
+            "default",
+            params.defaultExecApprovals ?? { enabled: true, approvers: ["123"] },
+            params.defaultOverrides,
+          ),
+          ops: telegramAccount(
+            "ops",
+            params.opsExecApprovals ?? { enabled: true, approvers: ["123"] },
+            params.opsOverrides,
+          ),
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function makeForeignChannelApprovalRequest(params: {
+  id: string;
+  sessionKey?: string;
+}): TelegramExecApprovalRequest {
+  return {
+    id: params.id,
+    request: {
+      command: "echo hi",
+      sessionKey: params.sessionKey ?? "agent:ops:missing",
+      turnSourceChannel: "slack",
+      turnSourceTo: "channel:C123",
+    },
+    createdAtMs: 0,
+    expiresAtMs: 1000,
+  };
+}
+
 describe("telegram exec approvals", () => {
-  it("requires enablement and an explicit or inferred approver", () => {
+  it("requires explicit enablement even when approvers resolve", () => {
     expect(isTelegramExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
@@ -36,18 +119,28 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }, { allowFrom: ["123"] }),
+        cfg: buildConfig(undefined, { allowFrom: ["123"] }),
+      }),
+    ).toBe(false);
+    expect(
+      isTelegramExecApprovalClientEnabled({
+        cfg: buildConfig({ approvers: ["123"] }),
+      }),
+    ).toBe(false);
+    expect(
+      isTelegramExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: "auto", approvers: ["123"] }),
       }),
     ).toBe(true);
     expect(
       isTelegramExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+        cfg: buildConfig({ enabled: false, approvers: ["123"] }),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("matches approvers by normalized sender id", () => {
-    const cfg = buildConfig({ enabled: true, approvers: [123, "456"] });
+    const cfg = buildConfig({ approvers: [123, "456"] });
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "123" })).toBe(true);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
@@ -71,6 +164,164 @@ describe("telegram exec approvals", () => {
     expect(
       resolveTelegramExecApprovalTarget({ cfg: buildConfig({ enabled: true, approvers: ["1"] }) }),
     ).toBe("dm");
+  });
+
+  it("matches agent filters from the Telegram session key when request.agentId is absent", () => {
+    const cfg = buildConfig({
+      enabled: true,
+      approvers: ["123"],
+      agentFilter: ["ops"],
+    });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        request: {
+          id: "req-1",
+          request: {
+            command: "echo hi",
+            sessionKey: "agent:ops:telegram:direct:123:tail",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("scopes non-telegram turn sources to the stored telegram account", () => {
+    const tmpDir = createTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:telegram:direct:123": {
+          sessionId: "main",
+          updatedAt: 1,
+          origin: {
+            provider: "telegram",
+            accountId: "ops",
+          },
+          lastChannel: "slack",
+          lastTo: "channel:C999",
+          lastAccountId: "work",
+        },
+      }),
+      "utf-8",
+    );
+    const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });
+    const request = makeForeignChannelApprovalRequest({
+      id: "req-2",
+      sessionKey: "agent:ops:telegram:direct:123",
+    });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects unbound foreign-channel approvals in multi-account telegram configs", () => {
+    const cfg = buildMultiAccountTelegramConfig({});
+    const request = makeForeignChannelApprovalRequest({ id: "req-3" });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows unbound foreign-channel approvals when only one telegram account can handle them", () => {
+    const cfg = buildMultiAccountTelegramConfig({
+      opsExecApprovals: { enabled: false, approvers: ["123"] },
+    });
+    const request = makeForeignChannelApprovalRequest({ id: "req-4" });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("uses request filters when checking foreign-channel telegram ambiguity", () => {
+    const cfg = buildMultiAccountTelegramConfig({
+      defaultExecApprovals: {
+        enabled: true,
+        approvers: ["123"],
+        agentFilter: ["ops"],
+      },
+      opsExecApprovals: {
+        enabled: true,
+        approvers: ["123"],
+        agentFilter: ["other"],
+      },
+    });
+    const request = makeForeignChannelApprovalRequest({ id: "req-5" });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores disabled telegram accounts when checking foreign-channel ambiguity", () => {
+    const cfg = buildMultiAccountTelegramConfig({ opsOverrides: { enabled: false } });
+    const request = makeForeignChannelApprovalRequest({ id: "req-6" });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
   });
 
   it("only injects approval buttons on eligible telegram targets", () => {

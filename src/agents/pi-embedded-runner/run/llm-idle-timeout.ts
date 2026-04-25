@@ -1,14 +1,14 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
+import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
  * Default idle timeout for LLM streaming responses in milliseconds.
- * If no token is received within this time, the request is aborted.
- * Set to 0 to disable (never timeout).
- * Default: 60 seconds.
  */
-export const DEFAULT_LLM_IDLE_TIMEOUT_MS = 60_000;
+export const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 1000;
 
 /**
  * Maximum safe timeout value (approximately 24.8 days).
@@ -17,18 +17,46 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 /**
  * Resolves the LLM idle timeout from configuration.
- * @param cfg - OpenClaw configuration
  * @returns Idle timeout in milliseconds, or 0 to disable
  */
-export function resolveLlmIdleTimeoutMs(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
-  // 0 means disabled (no timeout)
+export function resolveLlmIdleTimeoutMs(params?: {
+  cfg?: OpenClawConfig;
+  trigger?: EmbeddedRunTrigger;
+  runTimeoutMs?: number;
+}): number {
+  const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
+  const clampImplicitTimeoutMs = (valueMs: number) =>
+    clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
+  const raw = params?.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
+  // 0 means explicitly disabled (no timeout).
   if (raw === 0) {
     return 0;
   }
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.min(Math.floor(raw) * 1000, MAX_SAFE_TIMEOUT_MS);
+    return clampTimeoutMs(raw * 1000);
   }
+
+  const runTimeoutMs = params?.runTimeoutMs;
+  if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
+    if (runTimeoutMs >= MAX_SAFE_TIMEOUT_MS) {
+      return 0;
+    }
+    return clampImplicitTimeoutMs(runTimeoutMs);
+  }
+
+  const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
+  if (
+    typeof agentTimeoutSeconds === "number" &&
+    Number.isFinite(agentTimeoutSeconds) &&
+    agentTimeoutSeconds > 0
+  ) {
+    return clampImplicitTimeoutMs(agentTimeoutSeconds * 1000);
+  }
+
+  if (params?.trigger === "cron") {
+    return 0;
+  }
+
   return DEFAULT_LLM_IDLE_TIMEOUT_MS;
 }
 
@@ -75,13 +103,14 @@ export function streamWithIdleTimeout(
             }
           };
 
-          return {
-            async next() {
+          return createStreamIteratorWrapper({
+            iterator,
+            next: async (streamIterator) => {
               clearTimer();
 
               try {
                 // Race between the actual next() and the timeout
-                const result = await Promise.race([iterator.next(), createTimeoutPromise()]);
+                const result = await Promise.race([streamIterator.next(), createTimeoutPromise()]);
 
                 if (result.done) {
                   clearTimer();
@@ -95,17 +124,15 @@ export function streamWithIdleTimeout(
                 throw error;
               }
             },
-
-            return() {
+            onReturn(streamIterator) {
               clearTimer();
-              return iterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
+              return streamIterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
             },
-
-            throw(error?: unknown) {
+            onThrow(streamIterator, error) {
               clearTimer();
-              return iterator.throw?.(error) ?? Promise.reject(error);
+              return streamIterator.throw?.(error) ?? Promise.reject(error);
             },
-          };
+          });
         };
 
       return stream;

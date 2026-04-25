@@ -1,3 +1,3 @@
 import { describeOpenAICodexProviderAuthContract } from "../../test/helpers/plugins/provider-auth-contract.js";
 
-describeOpenAICodexProviderAuthContract();
+describeOpenAICodexProviderAuthContract(() => import("./index.js"));

@@ -1,10 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+
+const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
+  hasAnthropicVertexAvailableAuthMock: vi.fn(),
+}));
+
+vi.mock("./api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api.js")>();
+  return {
+    ...actual,
+    hasAnthropicVertexAvailableAuth: hasAnthropicVertexAvailableAuthMock,
+  };
+});
+
 import anthropicVertexPlugin from "./index.js";
 
 describe("anthropic-vertex provider plugin", () => {
-  it("resolves the ADC marker through the provider hook", () => {
-    const provider = registerSingleProviderPlugin(anthropicVertexPlugin);
+  beforeEach(() => {
+    hasAnthropicVertexAvailableAuthMock.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolves the ADC marker through the provider hook", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
     expect(
       provider.resolveConfigApiKey?.({
@@ -17,7 +38,7 @@ describe("anthropic-vertex provider plugin", () => {
   });
 
   it("merges the implicit Vertex catalog into explicit provider overrides", async () => {
-    const provider = registerSingleProviderPlugin(anthropicVertexPlugin);
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
     const result = await provider.catalog?.run({
       config: {
@@ -55,5 +76,56 @@ describe("anthropic-vertex provider plugin", () => {
         ],
       },
     });
+  });
+
+  it("owns Anthropic-style replay policy", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "anthropic-vertex",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    });
+  });
+
+  it("resolves synthetic auth when ADC is available", async () => {
+    hasAnthropicVertexAvailableAuthMock.mockReturnValue(true);
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    const result = provider.resolveSyntheticAuth?.({
+      provider: "anthropic-vertex",
+      config: undefined,
+      providerConfig: undefined,
+    } as never);
+
+    expect(result).toEqual({
+      apiKey: "gcp-vertex-credentials",
+      source: "gcp-vertex-credentials (ADC)",
+      mode: "api-key",
+    });
+  });
+
+  it("returns undefined when ADC is not available", async () => {
+    hasAnthropicVertexAvailableAuthMock.mockReturnValue(false);
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    const result = provider.resolveSyntheticAuth?.({
+      provider: "anthropic-vertex",
+      config: undefined,
+      providerConfig: undefined,
+    } as never);
+
+    expect(result).toBeUndefined();
   });
 });

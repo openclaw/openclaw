@@ -21,6 +21,33 @@ const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: 
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
 
+function mergeStreamingText(
+  previousText: string | undefined,
+  nextText: string | undefined,
+): string {
+  const previous = typeof previousText === "string" ? previousText : "";
+  const next = typeof nextText === "string" ? nextText : "";
+  if (!next) {
+    return previous;
+  }
+  if (!previous || next === previous) {
+    return next;
+  }
+  if (next.startsWith(previous) || next.includes(previous)) {
+    return next;
+  }
+  if (previous.startsWith(next) || previous.includes(next)) {
+    return previous;
+  }
+  const maxOverlap = Math.min(previous.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (previous.slice(-overlap) === next.slice(0, overlap)) {
+      return `${previous}${next.slice(overlap)}`;
+    }
+  }
+  return `${previous}${next}`;
+}
+
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
@@ -38,10 +65,9 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", async () => {
-  const actual = await vi.importActual<typeof import("./streaming-card.js")>("./streaming-card.js");
+vi.mock("./streaming-card.js", () => {
   return {
-    mergeStreamingText: actual.mergeStreamingText,
+    mergeStreamingText,
     FeishuStreamingSession: class {
       active = false;
       start = vi.fn(async () => {
@@ -60,13 +86,17 @@ vi.mock("./streaming-card.js", async () => {
   };
 });
 
-import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  clearFeishuStreamingStartBackoffForTests,
+  createFeishuReplyDispatcher,
+} from "./reply-dispatcher.js";
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearFeishuStreamingStartBackoffForTests();
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
@@ -338,6 +368,27 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
+
+  it("skips final text already closed by idle streaming", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "```md\nidle streamed reply\n```" });
+    await options.onIdle?.();
+    await options.deliver({ text: "```md\nidle streamed reply\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\nidle streamed reply\n```", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("suppresses duplicate final text while still sending media", async () => {
     const options = setupNonStreamingAutoDispatcher();
     await options.deliver({ text: "plain final" }, { kind: "final" });
@@ -392,7 +443,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    await result.replyOptions.onPartialReply?.({ text: "hello" });
+    result.replyOptions.onPartialReply?.({ text: "hello" });
     await options.deliver({ text: "lo world" }, { kind: "block" });
     await options.onIdle?.();
 
@@ -498,6 +549,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("streams reasoning content as blockquote before answer", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -512,7 +564,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) =>
-      String(c[0] ?? ""),
+      typeof c[0] === "string" ? c[0] : "",
     );
     const reasoningUpdate = updateCalls.find((c) => c.includes("Thinking"));
     expect(reasoningUpdate).toContain("> 💭 **Thinking**");
@@ -531,13 +583,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(closeArg).toContain("answer part final");
   });
 
-  it("provides onReasoningStream and onReasoningEnd when streaming is enabled", () => {
+  it("provides onReasoningStream and onReasoningEnd when reasoning previews are allowed", () => {
     const { result } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     expect(result.replyOptions.onReasoningStream).toBeTypeOf("function");
     expect(result.replyOptions.onReasoningEnd).toBeTypeOf("function");
+  });
+
+  it("omits reasoning callbacks unless reasoning previews are allowed", () => {
+    const { result } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    expect(result.replyOptions.onReasoningStream).toBeUndefined();
+    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
   });
 
   it("omits reasoning callbacks when streaming is disabled", () => {
@@ -563,6 +625,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("renders reasoning-only card when no answer text arrives", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -582,6 +645,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("ignores empty reasoning payloads", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -598,6 +662,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("deduplicates final text by raw answer payload, not combined card text", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
+      allowReasoningPreview: true,
     });
 
     await options.onReplyStart?.();
@@ -670,9 +735,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("recovers streaming after start() throws (HTTP 400)", async () => {
+  it("backs off streaming retries after start() throws (HTTP 400)", async () => {
     const errorMock = vi.fn();
     let shouldFailStart = true;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
 
     // Intercept streaming instance creation to make first start() reject
     const origPush = streamingInstances.push.bind(streamingInstances);
@@ -697,22 +763,33 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
 
       // First deliver with markdown triggers startStreaming - which will fail
-      await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+      await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
 
       // Wait for the async error to propagate
       await vi.waitFor(() => {
         expect(errorMock).toHaveBeenCalledWith(expect.stringContaining("streaming start failed"));
       });
+      expect(streamingInstances).toHaveLength(1);
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
 
-      // Second deliver should create a NEW streaming session (not stuck)
+      // Immediate next markdown reply should skip a new streaming start and
+      // fall back directly to a normal card instead of paying the 400 latency.
       await options.deliver({ text: "```ts\nconst y = 2\n```" }, { kind: "final" });
 
-      // Two instances created: first failed, second succeeded and closed
+      expect(streamingInstances).toHaveLength(1);
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(2);
+
+      // After the short backoff expires, retry streaming so fixed permissions
+      // or transient Feishu failures recover without a process restart.
+      nowSpy.mockReturnValue(62_000);
+      await options.deliver({ text: "```ts\nconst z = 3\n```" }, { kind: "final" });
+
       expect(streamingInstances).toHaveLength(2);
       expect(streamingInstances[1].start).toHaveBeenCalled();
       expect(streamingInstances[1].close).toHaveBeenCalled();
     } finally {
       streamingInstances.push = origPush;
+      nowSpy.mockRestore();
     }
   });
 });

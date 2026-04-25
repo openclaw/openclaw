@@ -1,4 +1,4 @@
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
@@ -17,16 +17,20 @@ export type IMessageSendOpts = {
   replyToId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
   client?: IMessageRpcClient;
-  config?: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   account?: ResolvedIMessageAccount;
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
-    options?: { localRoots?: readonly string[] },
+    options?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    },
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
@@ -76,7 +80,7 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.guid === "string" && result.guid.trim()) ||
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
-  return raw ? String(raw).trim() : null;
+  return raw ? raw.trim() : null;
 }
 
 function resolveDeliveredIMessageText(text: string, mediaContentType?: string): string {
@@ -93,9 +97,9 @@ function resolveDeliveredIMessageText(text: string, mediaContentType?: string): 
 export async function sendMessageIMessage(
   to: string,
   text: string,
-  opts: IMessageSendOpts = {},
+  opts: IMessageSendOpts,
 ): Promise<IMessageSendResult> {
-  const cfg = opts.config ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.config, "iMessage send");
   const account =
     opts.account ??
     resolveIMessageAccount({
@@ -123,6 +127,7 @@ export async function sendMessageIMessage(
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
     const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
+      readFile: opts.mediaReadFile,
     });
     filePath = resolved.path;
     message = resolveDeliveredIMessageText(message, resolved.contentType ?? undefined);

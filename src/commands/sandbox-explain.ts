@@ -2,7 +2,6 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -10,6 +9,7 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -18,6 +18,10 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -74,7 +78,7 @@ function inferProviderFromSessionKey(params: {
   if (parts[0] === configuredMainKey) {
     return undefined;
   }
-  const candidate = parts[0]?.trim().toLowerCase();
+  const candidate = normalizeOptionalLowercaseString(parts[0]);
   if (!candidate) {
     return undefined;
   }
@@ -108,13 +112,18 @@ function resolveActiveChannel(params: {
     entry?.lastProvider ??
     entry?.provider ??
     ""
-  )
-    .trim()
-    .toLowerCase();
-  if (candidate === INTERNAL_MESSAGE_CHANNEL) {
+  ).trim();
+  const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
+  if (!normalizedCandidate) {
+    return inferProviderFromSessionKey({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+  }
+  if (normalizedCandidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }
-  const normalized = normalizeAnyChannelId(candidate);
+  const normalized = normalizeAnyChannelId(normalizedCandidate);
   if (normalized) {
     return normalized;
   }
@@ -175,7 +184,7 @@ export async function sandboxExplainCommand(
   const agentAllow = channel ? elevatedAgent?.allowFrom?.[channel] : undefined;
 
   const allowTokens = (values?: Array<string | number>) =>
-    (values ?? []).map((v) => String(v).trim()).filter(Boolean);
+    (values ?? []).map((v) => normalizeStringifiedOptionalString(v) ?? "").filter(Boolean);
   const globalAllowTokens = allowTokens(globalAllow);
   const agentAllowTokens = allowTokens(agentAllow);
 
@@ -237,7 +246,6 @@ export async function sandboxExplainCommand(
     sandbox: {
       mode: sandboxCfg.mode,
       scope: sandboxCfg.scope,
-      perSession: sandboxCfg.scope === "session",
       workspaceAccess: sandboxCfg.workspaceAccess,
       workspaceRoot: sandboxCfg.workspaceRoot,
       sessionIsSandboxed,
@@ -286,7 +294,7 @@ export async function sandboxExplainCommand(
   lines.push(
     `  ${key("mode:")} ${value(payload.sandbox.mode)} ${key("scope:")} ${value(
       payload.sandbox.scope,
-    )} ${key("perSession:")} ${bool(payload.sandbox.perSession)}`,
+    )}`,
   );
   lines.push(
     `  ${key("workspaceAccess:")} ${value(
