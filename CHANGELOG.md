@@ -187,6 +187,7 @@ Docs: https://docs.openclaw.ai
 - Sessions: make `sessions_spawn(mode="session")` errors name usable alternatives when the current channel cannot bind subagent threads. Fixes #67400. (#67790) Thanks @stainlu.
 - Agents/Claude CLI: pass the OpenClaw system prompt through Claude's prompt-file flag so Windows runs avoid argv length failures without changing system prompt semantics. Fixes #69158. (#69211) Thanks @skylee-01, @cassioanorte, @Syu0, and @Stache73.
 - Agents/CLI sessions: bind `google-gemini-cli` session auth-epoch to the Google account identity in `~/.gemini/oauth_creds.json`, so Gemini-backed agents resume their conversation after gateway restart instead of minting a fresh session, and stale bindings are invalidated when the authenticated Google account changes. Fixes #70973. (#71076) Thanks @openperf.
+- Slack: stop treating user mentions in assistant-authored message edit blocks as sender attribution, preventing edited bot messages from spoofing a mentioned DM user. (#71700) Thanks @vincentkoc.
 
 ## 2026.4.24
 
