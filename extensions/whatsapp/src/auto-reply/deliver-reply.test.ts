@@ -867,6 +867,7 @@ describe("deliverWebReply", () => {
         fileName: "tulsi-villa-bp-reply.docx",
         caption: "sending the latest BP reply draft",
       }),
+      undefined,
     );
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
   });
