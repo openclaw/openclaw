@@ -207,13 +207,24 @@ function resolveTelegramReasoningLevel(params: {
   return "off";
 }
 
+const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
+const MAX_PROGRESS_MARKDOWN_FENCE_CHARS = 10;
+
+function clipProgressMarkdownText(text: string): string {
+  if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, MAX_PROGRESS_MARKDOWN_TEXT_CHARS - 1).trimEnd()}…`;
+}
+
 function formatProgressAsMarkdownCode(text: string): string {
+  const clipped = clipProgressMarkdownText(text);
   const maxBacktickRun = Math.max(
     0,
-    ...Array.from(text.matchAll(/`+/g), (match) => match[0].length),
+    ...Array.from(clipped.matchAll(/`+/g), (match) => match[0].length),
   );
-  const fence = "`".repeat(maxBacktickRun + 1);
-  return `${fence}${text}${fence}`;
+  const fence = "`".repeat(Math.min(maxBacktickRun + 1, MAX_PROGRESS_MARKDOWN_FENCE_CHARS));
+  return `${fence}${clipped}${fence}`;
 }
 
 export const dispatchTelegramMessage = async ({
