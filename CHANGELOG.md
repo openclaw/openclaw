@@ -67,6 +67,9 @@ Docs: https://docs.openclaw.ai
 - CLI/plugins: keep `message` startup, `channels logs`, `agents delete`, and
   `agents set-identity` off broad plugin preloading; message delivery still
   loads plugins when the action actually runs.
+- Image understanding: resolve configured image models such as local LM Studio
+  vision entries before reporting `Unknown model` when the discovery registry
+  has not registered that provider. Fixes #66486. Thanks @zhanggpcsu.
 - CLI/agents: keep `agents bind`, `agents unbind`, and `agents bindings` on
   setup-safe channel metadata paths so they do not preload bundled plugin
   runtimes or stage runtime dependencies. Fixes #71743.
