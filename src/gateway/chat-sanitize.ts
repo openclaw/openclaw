@@ -13,6 +13,8 @@ export { stripEnvelope };
 
 const LEGACY_BACKGROUND_TASK_STATUS_RE =
   /^System:\s*\[[^\]]+\]\s*Background task (?:blocked|cancelled|canceled|done|failed|lost|started|timed out|update|updated):[^\r\n]*(?:\r?\n+|$)/i;
+const LEGACY_GATEWAY_RESTART_STATUS_RE =
+  /^System:\s*\[[^\]]+\]\s*Gateway restart\b[^\r\n]*(?:\r?\n|$)(?:System:[^\r\n]*(?:\r?\n|$))*/i;
 const LEGACY_DAY_TIMESTAMP_ENVELOPE_RE =
   /^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+(?:GMT|UTC)[+-]\d{1,2}\]\s*/i;
 const LEGACY_RUNTIME_QUOTE_CHARS = new Set(['"', "'", "\u201c", "\u201d", "\u2018", "\u2019"]);
@@ -53,7 +55,8 @@ function looksLikeLegacyRuntimeText(text: string): boolean {
     trimmed.startsWith("An async command the user already approved has completed.") ||
     trimmed.startsWith("An async command did not run.") ||
     trimmed.startsWith("A new session was started via /new or /reset.") ||
-    LEGACY_BACKGROUND_TASK_STATUS_RE.test(trimmed)
+    LEGACY_BACKGROUND_TASK_STATUS_RE.test(trimmed) ||
+    LEGACY_GATEWAY_RESTART_STATUS_RE.test(trimmed)
   );
 }
 
@@ -96,6 +99,13 @@ function stripLegacyBackgroundTaskStatusPrefix(text: string): string {
   return text.replace(LEGACY_BACKGROUND_TASK_STATUS_RE, "").trimStart();
 }
 
+function stripLegacyGatewayRestartStatusPrefix(text: string): string {
+  if (!LEGACY_GATEWAY_RESTART_STATUS_RE.test(text)) {
+    return text;
+  }
+  return text.replace(LEGACY_GATEWAY_RESTART_STATUS_RE, "").trimStart();
+}
+
 function stripLegacyDayTimestampEnvelope(text: string): string {
   if (!LEGACY_DAY_TIMESTAMP_ENVELOPE_RE.test(text)) {
     return text;
@@ -112,7 +122,9 @@ function stripVisibleTranscriptText(
 } {
   const unwrapped = unwrapLegacyRuntimeQuoteEnvelope(text);
   const withoutBackgroundStatus = stripLegacyBackgroundTaskStatusPrefix(unwrapped);
-  const withoutLegacyPrompt = stripLegacyInternalOnlyPrompt(withoutBackgroundStatus);
+  const withoutGatewayRestartStatus =
+    stripLegacyGatewayRestartStatusPrefix(withoutBackgroundStatus);
+  const withoutLegacyPrompt = stripLegacyInternalOnlyPrompt(withoutGatewayRestartStatus);
   const runtimeStripped = stripInternalRuntimeContext(withoutLegacyPrompt);
   const inboundStripped = stripInboundMetadata(runtimeStripped);
   const stripped = stripUserEnvelope

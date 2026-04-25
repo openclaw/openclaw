@@ -318,4 +318,41 @@ describe("SessionHistorySseState", () => {
     expect(historyText(snapshot)).toEqual(["升级前 5 分钟 checklist"]);
     expect(snapshot.history.messages).toHaveLength(1);
   });
+
+  test("strips failed background task prefix while preserving following user text", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        userTextMessage(
+          [
+            "System: [2026-04-25 09:03:19 GMT+8] Background task failed: ACP background task (run 7898c7b0). Internal error",
+            "",
+            "[Sat 2026-04-25 09:06 GMT+8] 检查codex 状态",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(historyText(snapshot)).toEqual(["检查codex 状态"]);
+    expect(snapshot.history.messages).toHaveLength(1);
+  });
+
+  test("strips gateway restart status block while preserving following user text", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        userTextMessage(
+          [
+            "System: [2026-04-25 09:15:31 GMT+8] Gateway restart restart ok (gateway.restart)",
+            "System: Gateway 正在重启；我会回来继续复测 Codex。",
+            "System: Reason: 重启 Gateway 以加载/复位 ACPX Codex runtime 状态，然后复测 Codex ACP。",
+            "System: Run: openclaw doctor --non-interactive",
+            "",
+            "[Sat 2026-04-25 09:18 GMT+8] 好了吗",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(historyText(snapshot)).toEqual(["好了吗"]);
+    expect(snapshot.history.messages).toHaveLength(1);
+  });
 });
