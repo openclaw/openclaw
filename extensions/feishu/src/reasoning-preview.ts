@@ -17,6 +17,7 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
       : "off";
 
   if (!params.sessionKey) {
+    // Feishu preview only supports the "stream" variant; "on" (block-mode) has no preview equivalent.
     return configDefault === "stream";
   }
 
@@ -31,5 +32,6 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
   } catch {
     // Fall through to config default.
   }
+  // Feishu preview only supports the "stream" variant; "on" (block-mode) has no preview equivalent.
   return configDefault === "stream";
 }
