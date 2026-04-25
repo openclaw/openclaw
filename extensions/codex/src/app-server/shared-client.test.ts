@@ -5,10 +5,12 @@ import { createClientHarness } from "./test-support.js";
 
 const mocks = vi.hoisted(() => ({
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
+  applyCodexAppServerAuthProfile: vi.fn(async () => undefined),
   resolveOpenClawAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
 }));
 
 vi.mock("./auth-bridge.js", () => ({
+  applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
 }));
 
@@ -51,6 +53,7 @@ describe("shared Codex app-server client", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
+    mocks.applyCodexAppServerAuthProfile.mockClear();
     mocks.resolveOpenClawAgentDir.mockClear();
   });
 
@@ -84,7 +87,7 @@ describe("shared Codex app-server client", () => {
     expect(first.process.kill).toHaveBeenCalledTimes(1);
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await sendInitializeResult(second, "openclaw/0.118.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.125.0 (macOS; test)");
     await sendEmptyModelList(second);
 
     await expect(secondList).resolves.toEqual({ models: [] });
@@ -109,11 +112,16 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       authProfileId: "openai-codex:work",
     });
-    await sendInitializeResult(harness, "openclaw/0.118.0 (macOS; test)");
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
     expect(mocks.bridgeCodexAppServerStartOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "openai-codex:work",
+      }),
+    );
+    expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         authProfileId: "openai-codex:work",
       }),
@@ -139,7 +147,7 @@ describe("shared Codex app-server client", () => {
         headers: {},
       },
     });
-    await sendInitializeResult(first, "openclaw/0.118.0 (macOS; test)");
+    await sendInitializeResult(first, "openclaw/0.125.0 (macOS; test)");
     await sendEmptyModelList(first);
     await expect(firstList).resolves.toEqual({ models: [] });
 
@@ -154,7 +162,7 @@ describe("shared Codex app-server client", () => {
         headers: {},
       },
     });
-    await sendInitializeResult(second, "openclaw/0.118.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.125.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -198,7 +206,7 @@ describe("shared Codex app-server client", () => {
 
     await expect(firstFailure).resolves.toBeInstanceOf(Error);
 
-    await sendInitializeResult(second, "openclaw/0.118.0 (macOS; test)");
+    await sendInitializeResult(second, "openclaw/0.125.0 (macOS; test)");
     await sendEmptyModelList(second);
     await expect(secondList).resolves.toEqual({ models: [] });
 
@@ -214,7 +222,7 @@ describe("shared Codex app-server client", () => {
         const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
         if (message.method === "initialize") {
           socket.send(
-            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.118.0" } }),
+            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.125.0" } }),
           );
           return;
         }

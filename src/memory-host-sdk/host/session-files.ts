@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
@@ -10,14 +11,11 @@ import {
   isUsageCountedSessionTranscriptFileName,
 } from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import { redactSensitiveText } from "../../logging/redact.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
-import { hashText } from "./internal.js";
+import { hashText } from "./hash.js";
 
-const log = createSubsystemLogger("memory");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
 // wrap pathological long messages so downstream indexers never ingest a single
@@ -53,6 +51,11 @@ export type BuildSessionEntryOptions = {
 export type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
+};
+
+type SessionTranscriptStoreEntry = {
+  sessionFile?: unknown;
+  sessionId?: unknown;
 };
 
 function isCheckpointTranscriptFileName(fileName: string): boolean {
@@ -169,7 +172,7 @@ export function loadSessionTranscriptClassificationForSessionsDir(
   sessionsDir: string,
 ): SessionTranscriptClassification {
   const storePath = path.join(sessionsDir, "sessions.json");
-  const store = loadSessionStore(storePath);
+  const store = readSessionTranscriptClassificationStore(storePath);
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
   for (const [sessionKey, entry] of Object.entries(store)) {
@@ -190,6 +193,20 @@ export function loadSessionTranscriptClassificationForSessionsDir(
   };
 }
 
+function readSessionTranscriptClassificationStore(
+  storePath: string,
+): Record<string, SessionTranscriptStoreEntry> {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(storePath, "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    return parsed as Record<string, SessionTranscriptStoreEntry>;
+  } catch {
+    return {};
+  }
+}
+
 export function loadDreamingNarrativeTranscriptPathSetForAgent(
   agentId: string,
 ): ReadonlySet<string> {
@@ -204,18 +221,18 @@ export function loadSessionTranscriptClassificationForAgent(
   );
 }
 
-function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean {
+function classifySessionTranscriptFromSessionStore(absPath: string): {
+  generatedByDreamingNarrative: boolean;
+  generatedByCronRun: boolean;
+} {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
   const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  return classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath);
-}
-
-function isCronRunTranscriptFromSessionStore(absPath: string): boolean {
-  const sessionsDir = path.dirname(absPath);
-  const normalizedAbsPath = normalizeComparablePath(absPath);
-  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  return classification.cronRunTranscriptPaths.has(normalizedAbsPath);
+  return {
+    generatedByDreamingNarrative:
+      classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath),
+    generatedByCronRun: classification.cronRunTranscriptPaths.has(normalizedAbsPath),
+  };
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -234,6 +251,11 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
 
 export function sessionPathForFile(absPath: string): string {
   return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
+}
+
+async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
+  const { createSubsystemLogger } = await import("../../logging/subsystem.js");
+  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
 }
 
 function normalizeSessionText(value: string): string {
@@ -451,10 +473,16 @@ export async function buildSessionEntry(
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
+    const sessionStoreClassification =
+      opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined
+        ? classifySessionTranscriptFromSessionStore(absPath)
+        : null;
     let generatedByDreamingNarrative =
-      opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
+      opts.generatedByDreamingNarrative ??
+      sessionStoreClassification?.generatedByDreamingNarrative ??
+      false;
     const generatedByCronRun =
-      opts.generatedByCronRun ?? isCronRunTranscriptFromSessionStore(absPath);
+      opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -528,7 +556,7 @@ export async function buildSessionEntry(
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
   } catch (err) {
-    log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
+    void logSessionFileReadFailure(absPath, err);
     return null;
   }
 }

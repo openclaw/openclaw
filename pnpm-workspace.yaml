@@ -8,6 +8,7 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "acpx"
+  - "@agentclientprotocol/sdk"
   - "axios"
   - "basic-ftp"
   - "hono"

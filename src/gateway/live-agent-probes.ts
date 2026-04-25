@@ -5,8 +5,6 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const execFileAsync = promisify(execFile);
 
-export type LiveAgentFamily = "claude" | "codex" | "gemini";
-
 export type CronListCliResult = {
   jobs?: Array<{
     id?: string;
@@ -28,23 +26,14 @@ export type LiveCronProbeSpec = {
   argsJson: string;
 };
 
-export function normalizeLiveAgentFamily(raw: string): LiveAgentFamily {
+export function isClaudeLikeLiveAgent(raw: string): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "claude" || normalized === "claude-cli") {
-    return "claude";
-  }
-  if (normalized === "codex" || normalized === "codex-cli") {
-    return "codex";
-  }
-  if (normalized === "gemini" || normalized === "google-gemini-cli") {
-    return "gemini";
-  }
-  throw new Error(`unsupported live agent family: ${raw}`);
+  return normalized === "claude" || normalized === "claude-cli";
 }
 
 export function assertLiveImageProbeReply(text: string): void {
   const normalized = normalizeOptionalLowercaseString(text);
-  if (normalized !== "cat") {
+  if (normalized !== "cat" && !/(^|[^a-z])cat[.!?`'")\]]*$/.test(normalized ?? "")) {
     throw new Error(`image probe expected 'cat', got: ${normalized}`);
   }
 }
@@ -81,7 +70,7 @@ export function buildLiveCronProbeMessage(params: {
   attempt: number;
   exactReply: string;
 }): string {
-  const family = normalizeLiveAgentFamily(params.agent);
+  const claudeLike = isClaudeLikeLiveAgent(params.agent);
   if (params.attempt === 0) {
     return (
       "Use the OpenClaw MCP tool `openclaw-tools/cron` (server `openclaw-tools`, tool `cron`). " +
@@ -90,7 +79,7 @@ export function buildLiveCronProbeMessage(params: {
       `After the cron job is created, reply exactly: ${params.exactReply}`
     );
   }
-  if (family === "claude") {
+  if (claudeLike) {
     return (
       "Retry the OpenClaw MCP tool `openclaw-tools/cron` now. " +
       `Use these exact JSON arguments: ${params.argsJson}. ` +

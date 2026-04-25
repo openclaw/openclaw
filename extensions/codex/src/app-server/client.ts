@@ -16,9 +16,13 @@ import {
 } from "./protocol.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
-import { closeCodexAppServerTransport, type CodexAppServerTransport } from "./transport.js";
+import {
+  closeCodexAppServerTransport,
+  closeCodexAppServerTransportAndWait,
+  type CodexAppServerTransport,
+} from "./transport.js";
 
-export const MIN_CODEX_APP_SERVER_VERSION = "0.118.0";
+export const MIN_CODEX_APP_SERVER_VERSION = "0.125.0";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 
 type PendingRequest = {
@@ -225,13 +229,18 @@ export class CodexAppServerClient {
   }
 
   close(): void {
-    if (this.closed) {
+    if (!this.markClosed(new Error("codex app-server client is closed"))) {
       return;
     }
-    this.closed = true;
-    this.lines.close();
-    this.rejectPendingRequests(new Error("codex app-server client is closed"));
     closeCodexAppServerTransport(this.child);
+  }
+
+  async closeAndWait(options?: {
+    exitTimeoutMs?: number;
+    forceKillDelayMs?: number;
+  }): Promise<void> {
+    this.markClosed(new Error("codex app-server client is closed"));
+    await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
   private writeMessage(message: RpcRequest | RpcResponse): void {
@@ -325,13 +334,19 @@ export class CodexAppServerClient {
   }
 
   private closeWithError(error: Error): void {
+    if (this.markClosed(error)) {
+      closeCodexAppServerTransport(this.child);
+    }
+  }
+
+  private markClosed(error: Error): boolean {
     if (this.closed) {
-      return;
+      return false;
     }
     this.closed = true;
     this.lines.close();
     this.rejectPendingRequests(error);
-    closeCodexAppServerTransport(this.child);
+    return true;
   }
 
   private rejectPendingRequests(error: Error): void {
@@ -413,8 +428,10 @@ export function readCodexVersionFromUserAgent(userAgent: string | undefined): st
 }
 
 function compareVersions(left: string, right: string): number {
-  const leftParts = numericVersionParts(left);
-  const rightParts = numericVersionParts(right);
+  const leftVersion = parseVersionForComparison(left);
+  const rightVersion = parseVersionForComparison(right);
+  const leftParts = leftVersion.parts;
+  const rightParts = rightVersion.parts;
   for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
     const leftPart = leftParts[index] ?? 0;
     const rightPart = rightParts[index] ?? 0;
@@ -422,17 +439,30 @@ function compareVersions(left: string, right: string): number {
       return leftPart < rightPart ? -1 : 1;
     }
   }
+  if (leftVersion.unstableSuffix && !rightVersion.unstableSuffix) {
+    return -1;
+  }
+  if (!leftVersion.unstableSuffix && rightVersion.unstableSuffix) {
+    return 1;
+  }
   return 0;
 }
 
-function numericVersionParts(version: string): number[] {
-  // Pre-release/build tags do not affect our minimum gate; 0.118.0-dev should
-  // satisfy the same protocol floor as 0.118.0.
-  return version
-    .split(/[+-]/, 1)[0]
-    .split(".")
-    .map((part) => Number.parseInt(part, 10))
-    .map((part) => (Number.isFinite(part) ? part : 0));
+function parseVersionForComparison(version: string): { parts: number[]; unstableSuffix: boolean } {
+  // Same-version prerelease or build-suffixed versions do not satisfy a stable
+  // protocol floor because important app-server contract changes can land
+  // between alpha cuts and custom builds.
+  const hasBuildMetadata = version.includes("+");
+  const [withoutBuild = version] = version.split("+", 1);
+  const prereleaseIndex = withoutBuild.indexOf("-");
+  const numeric = prereleaseIndex >= 0 ? withoutBuild.slice(0, prereleaseIndex) : withoutBuild;
+  return {
+    parts: numeric
+      .split(".")
+      .map((part) => Number.parseInt(part, 10))
+      .map((part) => (Number.isFinite(part) ? part : 0)),
+    unstableSuffix: prereleaseIndex >= 0 || hasBuildMetadata,
+  };
 }
 
 function redactCodexAppServerLinePreview(value: string): string {
@@ -470,5 +500,6 @@ function formatExitValue(value: unknown): string {
 
 export const __testing = {
   closeCodexAppServerTransport,
+  closeCodexAppServerTransportAndWait,
   redactCodexAppServerLinePreview,
 } as const;

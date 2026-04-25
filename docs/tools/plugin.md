@@ -65,6 +65,9 @@ Packaged OpenClaw installs do not eagerly install every bundled plugin's
 runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
 plugin config, legacy channel config, or a default-enabled manifest, startup
 repairs only that plugin's declared runtime dependencies before importing it.
+Explicit disablement still wins: `plugins.entries.<id>.enabled: false`,
+`plugins.deny`, `plugins.enabled: false`, and `channels.<id>.enabled: false`
+prevent automatic bundled runtime-dependency repair for that plugin/channel.
 External plugins and custom load paths must still be installed through
 `openclaw plugins install`.
 
@@ -156,12 +159,12 @@ hooks; restart the Gateway process that is serving the live channel before
 expecting updated `register(api)` code, `api.on(...)` hooks, tools, services, or
 provider/runtime hooks to run.
 
-`openclaw plugins list` is a local CLI/config snapshot. A `loaded` plugin there
-means the plugin is discoverable and loadable from the config/files seen by that
-CLI invocation. It does not prove that an already-running remote Gateway child
-has restarted into the same plugin code. On VPS/container setups with wrapper
-processes, send restarts to the actual `openclaw gateway run` process, or use
-`openclaw gateway restart` against the running Gateway.
+`openclaw plugins list` is a local plugin registry/config snapshot. An
+`enabled` plugin there means the persisted registry and current config allow the
+plugin to participate. It does not prove that an already-running remote Gateway
+child has restarted into the same plugin code. On VPS/container setups with
+wrapper processes, send restarts to the actual `openclaw gateway run` process,
+or use `openclaw gateway restart` against the running Gateway.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
@@ -208,7 +211,7 @@ OpenClaw scans for plugins in this order (first match wins):
   app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
   `codex/*` model refs
 
-## Troubleshooting Runtime Hooks
+## Troubleshooting runtime hooks
 
 If a plugin appears in `plugins list` but `register(api)` side effects or hooks
 do not run in live chat traffic, check these first:
@@ -253,7 +256,7 @@ Some categories are exclusive (only one active at a time):
 
 ```bash
 openclaw plugins list                       # compact inventory
-openclaw plugins list --enabled            # only loaded plugins
+openclaw plugins list --enabled            # only enabled plugins
 openclaw plugins list --verbose            # per-plugin detail lines
 openclaw plugins list --json               # machine-readable inventory
 openclaw plugins inspect <id>              # deep detail
@@ -261,6 +264,9 @@ openclaw plugins inspect <id> --json       # machine-readable
 openclaw plugins inspect --all             # fleet-wide table
 openclaw plugins info <id>                 # inspect alias
 openclaw plugins doctor                    # diagnostics
+openclaw plugins registry                  # inspect persisted registry state
+openclaw plugins registry --refresh        # rebuild persisted registry
+openclaw doctor --fix                      # repair registry/ledger migration state
 
 openclaw plugins install <package>         # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
@@ -274,7 +280,7 @@ openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id-or-npm-spec> # update one plugin
 openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
-openclaw plugins uninstall <id>          # remove config/install records
+openclaw plugins uninstall <id>          # remove config and install ledger records
 openclaw plugins uninstall <id> --keep-files
 openclaw plugins marketplace list <source>
 openclaw plugins marketplace list <source> --json
@@ -295,6 +301,16 @@ of copying over a managed install target.
 When `plugins.allow` is already set, `openclaw plugins install` adds the
 installed plugin id to that allowlist before enabling it, so installs are
 immediately loadable after restart.
+
+OpenClaw keeps a persisted local plugin registry as the cold read model for
+plugin inventory, contribution ownership, and startup planning. Install, update,
+uninstall, enable, and disable flows refresh that registry after changing plugin
+state. If the registry is missing, stale, or invalid, `openclaw plugins registry
+--refresh` rebuilds it from the durable install ledger, config policy, and
+manifest/package metadata without loading plugin runtime modules.
+If a machine still has legacy `plugins.installs` records in config, run
+`openclaw doctor --fix` to move them into the managed
+`plugins/installs.json` ledger and remove the config copy.
 
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name
@@ -363,6 +379,25 @@ activation. The loader still falls back to `activate(api)` for older plugins,
 but bundled plugins and new external plugins should treat `register` as the
 public contract.
 
+`api.registrationMode` tells a plugin why its entry is being loaded:
+
+| Mode            | Meaning                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `full`          | Runtime activation. Register tools, hooks, services, commands, routes, and other live side effects.                              |
+| `discovery`     | Read-only capability discovery. Register providers and metadata; trusted plugin entry code may load, but skip live side effects. |
+| `setup-only`    | Channel setup metadata loading through a lightweight setup entry.                                                                |
+| `setup-runtime` | Channel setup loading that also needs the runtime entry.                                                                         |
+| `cli-metadata`  | CLI command metadata collection only.                                                                                            |
+
+Plugin entries that open sockets, databases, background workers, or long-lived
+clients should guard those side effects with `api.registrationMode === "full"`.
+Discovery loads are cached separately from activating loads and do not replace
+the running Gateway registry. Discovery is non-activating, not import-free:
+OpenClaw may evaluate the trusted plugin entry or channel plugin module to build
+the snapshot. Keep module top levels lightweight and side-effect-free, and move
+network clients, subprocesses, listeners, credential reads, and service startup
+behind full-runtime paths.
+
 Common registration methods:
 
 | Method                                  | What it registers           |
@@ -394,13 +429,20 @@ Hook guard behavior for typed lifecycle hooks:
 - `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
 
-For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
+Native Codex app-server runs bridge Codex-native tool events back into this
+hook surface. Plugins can block native Codex tools through `before_tool_call`,
+observe results through `after_tool_call`, and participate in Codex
+`PermissionRequest` approvals. The bridge does not rewrite Codex-native tool
+arguments yet. The exact Codex runtime support boundary lives in the
+[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
+
+For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 
-- [Building Plugins](/plugins/building-plugins) — create your own plugin
-- [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
-- [Plugin Manifest](/plugins/manifest) — manifest schema
-- [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
-- [Plugin Internals](/plugins/architecture) — capability model and load pipeline
-- [Community Plugins](/plugins/community) — third-party listings
+- [Building plugins](/plugins/building-plugins) — create your own plugin
+- [Plugin bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
+- [Plugin manifest](/plugins/manifest) — manifest schema
+- [Registering tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
+- [Plugin internals](/plugins/architecture) — capability model and load pipeline
+- [Community plugins](/plugins/community) — third-party listings

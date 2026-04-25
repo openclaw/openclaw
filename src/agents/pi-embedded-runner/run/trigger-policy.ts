@@ -4,6 +4,10 @@ type EmbeddedRunTriggerPolicy = {
   injectHeartbeatPrompt: boolean;
 };
 
+// FORK: default-agent non-cron/non-heartbeat runs SHOULD inject the heartbeat
+// prompt (e.g. user-driven turns on the heartbeat agent). Heartbeat- and
+// cron-triggered runs explicitly suppress it so exec/cron wakes don't
+// re-execute the heartbeat checklist on every event.
 const DEFAULT_EMBEDDED_RUN_TRIGGER_POLICY: EmbeddedRunTriggerPolicy = {
   injectHeartbeatPrompt: true,
 };

@@ -55,6 +55,12 @@ While a job is in flight, duplicate `video_generate` calls in the same session r
 
 Outside of session-backed agent runs (for example, direct tool invocations), the tool falls back to inline generation and returns the final media path in the same turn.
 
+Generated video files are saved under OpenClaw-managed media storage when the
+provider returns bytes. The default generated-video save cap follows the video
+media limit, and `agents.defaults.mediaMaxMb` raises it for larger renders.
+When a provider also returns a hosted output URL, OpenClaw can deliver that URL
+instead of failing the task if local persistence rejects an oversized file.
+
 ### Task lifecycle
 
 Each `video_generate` request moves through four states:
@@ -85,13 +91,13 @@ Duplicate prevention: if a video task is already `queued` or `running` for the c
 | ComfyUI               | `workflow`                      | Yes  | 1 image                                              | No               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
 | fal                   | `fal-ai/minimax/video-01-live`  | Yes  | 1 image                                              | No               | `FAL_KEY`                                |
 | Google                | `veo-3.1-fast-generate-preview` | Yes  | 1 image                                              | 1 video          | `GEMINI_API_KEY`                         |
-| MiniMax               | `MiniMax-Hailuo-2.3`            | Yes  | 1 image                                              | No               | `MINIMAX_API_KEY`                        |
+| MiniMax               | `MiniMax-Hailuo-2.3`            | Yes  | 1 image                                              | No               | `MINIMAX_API_KEY` or MiniMax OAuth       |
 | OpenAI                | `sora-2`                        | Yes  | 1 image                                              | 1 video          | `OPENAI_API_KEY`                         |
 | Qwen                  | `wan2.6-t2v`                    | Yes  | Yes (remote URL)                                     | Yes (remote URL) | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        | Yes  | 1 image                                              | 1 video          | `RUNWAYML_API_SECRET`                    |
 | Together              | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image                                              | No               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          | Yes  | 1 image (`kling`)                                    | No               | `VYDRA_API_KEY`                          |
-| xAI                   | `grok-imagine-video`            | Yes  | 1 image                                              | 1 video          | `XAI_API_KEY`                            |
+| xAI                   | `grok-imagine-video`            | Yes  | 1 first-frame image or up to 7 `reference_image`s    | 1 video          | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
 
@@ -144,7 +150,9 @@ Role hints are forwarded to the provider as-is. Canonical values come from
 the `VideoGenerationAssetRole` union but providers may accept additional
 role strings. `*Roles` arrays must not have more entries than the
 corresponding reference list; off-by-one mistakes fail with a clear error.
-Use an empty string to leave a slot unset.
+Use an empty string to leave a slot unset. For xAI, set every image role to
+`reference_image` to use its `reference_images` generation mode; omit the role
+or use `first_frame` for single-image image-to-video.
 
 ### Style controls
 
@@ -320,7 +328,7 @@ entries.
   </Accordion>
 
   <Accordion title="xAI">
-    Supports text-to-video, image-to-video, and remote video edit/extend flows.
+    Supports text-to-video, single first-frame image-to-video, up to 7 `reference_image` inputs through xAI `reference_images`, and remote video edit/extend flows.
   </Accordion>
 </AccordionGroup>
 

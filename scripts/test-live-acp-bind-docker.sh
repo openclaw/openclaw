@@ -31,8 +31,9 @@ openclaw_live_acp_bind_resolve_auth_provider() {
     claude) printf '%s\n' "claude-cli" ;;
     codex) printf '%s\n' "codex-cli" ;;
     gemini) printf '%s\n' "google-gemini-cli" ;;
+    opencode) printf '%s\n' "opencode" ;;
     *)
-      echo "Unsupported OPENCLAW_LIVE_ACP_BIND agent: ${1:-} (expected claude, codex, or gemini)" >&2
+      echo "Unsupported OPENCLAW_LIVE_ACP_BIND agent: ${1:-} (expected claude, codex, gemini, or opencode)" >&2
       return 1
       ;;
   esac
@@ -43,6 +44,7 @@ openclaw_live_acp_bind_resolve_agent_command() {
     claude) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_CLAUDE:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     codex) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_CODEX:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     gemini) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_GEMINI:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
+    opencode) printf '%s' "${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND_OPENCODE:-${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}}" ;;
     *) return 1 ;;
   esac
 }
@@ -78,8 +80,10 @@ if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
 fi
 
 PROFILE_MOUNT=()
+PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  PROFILE_STATUS="$PROFILE_FILE"
 fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
@@ -155,25 +159,23 @@ WRAP
       npm install -g @google/gemini-cli
     fi
     ;;
+  opencode)
+    if [ ! -x "$NPM_CONFIG_PREFIX/bin/opencode" ]; then
+      npm install -g opencode-ai
+    fi
+    export OPENCODE_CONFIG_CONTENT="$(
+      node -e 'process.stdout.write(JSON.stringify({model: process.env.OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL || "opencode/kimi-k2.6"}))'
+    )"
+    ;;
   *)
     echo "Unsupported OPENCLAW_LIVE_ACP_BIND_AGENT: $agent" >&2
     exit 1
     ;;
 esac
 tmp_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_dir"
-}
-trap cleanup EXIT
 source /src/scripts/lib/live-docker-stage.sh
 openclaw_live_stage_source_tree "$tmp_dir"
-# Use a writable node_modules overlay in the temp repo. Vite writes bundled
-# config artifacts under the nearest node_modules/.vite-temp path, and the
-# build-stage /app/node_modules tree is root-owned in this Docker lane.
-mkdir -p "$tmp_dir/node_modules"
-cp -aRs /app/node_modules/. "$tmp_dir/node_modules"
-rm -rf "$tmp_dir/node_modules/.vite-temp"
-mkdir -p "$tmp_dir/node_modules/.vite-temp"
+openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
@@ -195,7 +197,7 @@ for token in "${ACP_AGENT_TOKENS[@]}"; do
 done
 
 if ((${#ACP_AGENTS[@]} == 0)); then
-  echo "No ACP bind agents selected. Use OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini." >&2
+  echo "No ACP bind agents selected. Use OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini,opencode." >&2
   exit 1
 fi
 
@@ -269,6 +271,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
 
   echo "==> Run ACP bind live test in Docker"
   echo "==> Agent: $ACP_AGENT"
+  echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
   DOCKER_RUN_ARGS=(docker run --rm -t \
@@ -281,6 +284,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e GEMINI_API_KEY \
     -e GOOGLE_API_KEY \
     -e OPENAI_API_KEY \
+    -e OPENCODE_API_KEY \
+    -e OPENCODE_ZEN_API_KEY \
+    -e OPENCODE_CONFIG_CONTENT \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e HOME=/home/node \
     -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
@@ -289,9 +295,11 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
     -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
     -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
+    -e OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}" \
     -e OPENCLAW_LIVE_TEST=1 \
     -e OPENCLAW_LIVE_ACP_BIND=1 \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
+    -e OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL="${OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL:-opencode/kimi-k2.6}" \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="$AGENT_COMMAND")
   openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
   DOCKER_RUN_ARGS+=(\

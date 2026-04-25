@@ -13,6 +13,7 @@ import {
   applyEmbeddedAttemptToolsAllow,
   isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
+  normalizeMessagesForLlmBoundary,
   prependSystemPromptAddition,
   remapInjectedContextFilesToWorkspace,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -20,6 +21,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
+  shouldCreateBundleMcpRuntimeForAttempt,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldStripBootstrapFromEmbeddedContext,
@@ -71,6 +73,58 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     expect(
       applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
     ).toEqual(["exec", "read"]);
+  });
+});
+
+describe("normalizeMessagesForLlmBoundary", () => {
+  it("strips tool result details before provider conversion", () => {
+    const input = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "visible output" }],
+        details: { aggregated: "hidden diagnostics" },
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as Array<Record<string, unknown>>;
+
+    expect(output[0]).not.toHaveProperty("details");
+    expect(output[0]?.content).toEqual([{ type: "text", text: "visible output" }]);
+    expect(input[0]).toHaveProperty("details");
+  });
+});
+
+describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
+  it("skips bundle MCP when tools are disabled or unavailable", () => {
+    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: false })).toBe(false);
+    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, disableTools: true })).toBe(
+      false,
+    );
+  });
+
+  it("creates bundle MCP only when the allowlist can reach bundle MCP tool names", () => {
+    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })).toBe(true);
+    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow: [] })).toBe(
+      true,
+    );
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["memory_search", "memory_get"],
+      }),
+    ).toBe(false);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["strict__strict_probe"],
+      }),
+    ).toBe(true);
   });
 });
 

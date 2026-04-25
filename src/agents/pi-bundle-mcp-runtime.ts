@@ -1,8 +1,16 @@
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
+import type {
+  JsonSchemaType,
+  JsonSchemaValidator,
+  jsonSchemaValidator,
+} from "@modelcontextprotocol/sdk/validation/types.js";
+import type { ErrorObject, ValidateFunction } from "ajv";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -34,7 +42,55 @@ type CreateSessionMcpRuntime = (
   params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
 ) => SessionMcpRuntime;
 
+const require = createRequire(import.meta.url);
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
+const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
+const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
+
+type Ajv2020Like = {
+  compile: (schema: JsonSchemaType) => ValidateFunction;
+  errorsText: (errors?: ErrorObject[] | null) => string;
+};
+
+function isDraft202012Schema(schema: JsonSchemaType): boolean {
+  return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12_SCHEMA;
+}
+
+export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
+  const defaultValidator = new AjvJsonSchemaValidator();
+  const Ajv2020Ctor = require("ajv/dist/2020") as new (opts?: object) => Ajv2020Like;
+  const ajv2020 = new Ajv2020Ctor({
+    strict: false,
+    validateFormats: false,
+    validateSchema: false,
+    allErrors: true,
+  });
+
+  return {
+    getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
+      if (!isDraft202012Schema(schema)) {
+        return defaultValidator.getValidator<T>(schema);
+      }
+      const ajvValidator = ajv2020.compile(schema);
+      return (input: unknown) => {
+        const valid = ajvValidator(input);
+        if (valid) {
+          return {
+            valid: true,
+            data: input as T,
+            errorMessage: undefined,
+          };
+        }
+        return {
+          valid: false,
+          data: undefined,
+          errorMessage: ajv2020.errorsText(ajvValidator.errors),
+        };
+      };
+    },
+  };
+}
 
 function connectWithTimeout(
   client: Client,
@@ -114,6 +170,14 @@ function createDisposedError(sessionId: string): Error {
   return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
 }
 
+function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
+  const raw = cfg?.mcp?.sessionIdleTtlMs;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+}
+
 export function createSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
@@ -132,6 +196,7 @@ export function createSessionMcpRuntime(params: {
   }
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
+  let activeLeases = 0;
   let disposed = false;
   let catalog: McpToolCatalog | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
@@ -183,7 +248,9 @@ export function createSessionMcpRuntime(params: {
               name: "openclaw-bundle-mcp",
               version: "0.0.0",
             },
-            {},
+            {
+              jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
+            },
           );
           const session: BundleMcpSession = {
             serverName,
@@ -277,6 +344,21 @@ export function createSessionMcpRuntime(params: {
     get lastUsedAt() {
       return lastUsedAt;
     },
+    get activeLeases() {
+      return activeLeases;
+    },
+    acquireLease() {
+      activeLeases += 1;
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        activeLeases = Math.max(0, activeLeases - 1);
+        lastUsedAt = Date.now();
+      };
+    },
     getCatalog,
     markUsed() {
       lastUsedAt = Date.now();
@@ -332,11 +414,29 @@ export function createSessionMcpRuntime(params: {
 }
 
 function createSessionMcpRuntimeManager(
-  opts: { createRuntime?: CreateSessionMcpRuntime } = {},
+  opts: {
+    createRuntime?: CreateSessionMcpRuntime;
+    now?: () => number;
+    enableIdleSweepTimer?: boolean;
+    idleSweepIntervalMs?: number;
+  } = {},
 ): SessionMcpRuntimeManager {
-  const runtimesBySessionId = new Map<string, SessionMcpRuntime>();
+  // FORK (reference-counted shared runtimes):
+  // Multiple sessions sharing the same workspaceDir + configFingerprint share a
+  // single MCP runtime. This avoids spawning duplicate stdio processes and (for
+  // model-backed servers like TTS/Whisper) loading models multiple times.
+  //
+  //   runtimesByKey         : runtimeKey -> shared SessionMcpRuntime
+  //   runtimeKeyBySessionId : sessionId  -> runtimeKey (refcount, set membership)
+  //
+  // Upstream's per-session disposal/eviction APIs still work: when the LAST
+  // session referencing a shared runtime is removed, the runtime is disposed.
+  const runtimesByKey = new Map<string, SessionMcpRuntime>();
+  const runtimeKeyBySessionId = new Map<string, string>();
   const sessionIdBySessionKey = new Map<string, string>();
+  const idleTtlMsBySessionId = new Map<string, number>();
   const createRuntime = opts.createRuntime ?? createSessionMcpRuntime;
+  const now = opts.now ?? Date.now;
   const createInFlight = new Map<
     string,
     {
@@ -345,9 +445,103 @@ function createSessionMcpRuntimeManager(
       configFingerprint: string;
     }
   >();
+  const idleSweepIntervalMs = opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS;
+  let idleSweepTimer: ReturnType<typeof setInterval> | undefined;
+  let idleSweepInFlight: Promise<void> | undefined;
+
+  const forgetSessionKeysForSessionId = (sessionId: string) => {
+    for (const [sessionKey, mappedSessionId] of sessionIdBySessionKey.entries()) {
+      if (mappedSessionId === sessionId) {
+        sessionIdBySessionKey.delete(sessionKey);
+      }
+    }
+  };
+
+  const sessionsForRuntimeKey = (runtimeKey: string): string[] => {
+    const result: string[] = [];
+    for (const [sessionId, key] of runtimeKeyBySessionId.entries()) {
+      if (key === runtimeKey) result.push(sessionId);
+    }
+    return result;
+  };
+
+  const minIdleTtlForRuntimeKey = (runtimeKey: string): number => {
+    const sessions = sessionsForRuntimeKey(runtimeKey);
+    if (sessions.length === 0) return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+    let min = Number.POSITIVE_INFINITY;
+    for (const sessionId of sessions) {
+      const ttl =
+        idleTtlMsBySessionId.get(sessionId) ?? DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+      if (ttl < min) min = ttl;
+    }
+    return Number.isFinite(min) ? min : DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
+  };
+
+  const sweepIdleRuntimes = async (): Promise<number> => {
+    const nowMs = now();
+    const expired: SessionMcpRuntime[] = [];
+    for (const [runtimeKey, runtime] of Array.from(runtimesByKey.entries())) {
+      const idleTtlMs = minIdleTtlForRuntimeKey(runtimeKey);
+      if (idleTtlMs <= 0 || (runtime.activeLeases ?? 0) > 0) {
+        continue;
+      }
+      if (nowMs - runtime.lastUsedAt < idleTtlMs) {
+        continue;
+      }
+      runtimesByKey.delete(runtimeKey);
+      // Drop all sessions associated with the evicted runtime.
+      for (const sessionId of sessionsForRuntimeKey(runtimeKey)) {
+        runtimeKeyBySessionId.delete(sessionId);
+        idleTtlMsBySessionId.delete(sessionId);
+        forgetSessionKeysForSessionId(sessionId);
+      }
+      expired.push(runtime);
+    }
+    await Promise.allSettled(expired.map((runtime) => runtime.dispose()));
+    return expired.length;
+  };
+
+  const queueIdleSweep = () => {
+    if (idleSweepInFlight) {
+      return;
+    }
+    idleSweepInFlight = sweepIdleRuntimes()
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        logWarn(`bundle-mcp: idle runtime sweep failed: ${String(error)}`);
+      })
+      .finally(() => {
+        idleSweepInFlight = undefined;
+      });
+  };
+
+  const ensureIdleSweepTimer = () => {
+    if (opts.enableIdleSweepTimer === false || idleSweepIntervalMs <= 0 || idleSweepTimer) {
+      return;
+    }
+    idleSweepTimer = setInterval(queueIdleSweep, idleSweepIntervalMs);
+    idleSweepTimer.unref?.();
+  };
+
+  const clearIdleSweepTimer = () => {
+    if (!idleSweepTimer) {
+      return;
+    }
+    clearInterval(idleSweepTimer);
+    idleSweepTimer = undefined;
+  };
 
   return {
     async getOrCreate(params) {
+      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
+      const existingKeyForSession = runtimeKeyBySessionId.get(params.sessionId);
+      if (existingKeyForSession && runtimesByKey.has(existingKeyForSession)) {
+        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
+      }
+      await sweepIdleRuntimes();
+      if (idleTtlMs > 0) {
+        ensureIdleSweepTimer();
+      }
       if (params.sessionKey) {
         sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
@@ -360,13 +554,15 @@ function createSessionMcpRuntimeManager(
       // workspace + config. Stateless servers (TTS, Whisper) don't need
       // per-session isolation and spawning duplicates wastes VRAM + startup time.
       const runtimeKey = `${params.workspaceDir}::${nextFingerprint}`;
-      const existing = runtimesBySessionId.get(runtimeKey);
+      const existing = runtimesByKey.get(runtimeKey);
       if (existing) {
         if (existing.configFingerprint !== nextFingerprint) {
-          runtimesBySessionId.delete(runtimeKey);
+          runtimesByKey.delete(runtimeKey);
           await existing.dispose();
         } else {
           existing.markUsed();
+          runtimeKeyBySessionId.set(params.sessionId, runtimeKey);
+          idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
           return existing;
         }
       }
@@ -376,11 +572,13 @@ function createSessionMcpRuntimeManager(
           inFlight.workspaceDir === params.workspaceDir &&
           inFlight.configFingerprint === nextFingerprint
         ) {
+          runtimeKeyBySessionId.set(params.sessionId, runtimeKey);
+          idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
           return inFlight.promise;
         }
         createInFlight.delete(runtimeKey);
         const staleRuntime = await inFlight.promise.catch(() => undefined);
-        runtimesBySessionId.delete(runtimeKey);
+        runtimesByKey.delete(runtimeKey);
         await staleRuntime?.dispose();
       }
       const created = Promise.resolve(
@@ -393,7 +591,9 @@ function createSessionMcpRuntimeManager(
         }),
       ).then((runtime) => {
         runtime.markUsed();
-        runtimesBySessionId.set(runtimeKey, runtime);
+        runtimesByKey.set(runtimeKey, runtime);
+        runtimeKeyBySessionId.set(params.sessionId, runtimeKey);
+        idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
         return runtime;
       });
       createInFlight.set(runtimeKey, {
@@ -414,21 +614,48 @@ function createSessionMcpRuntimeManager(
       return sessionIdBySessionKey.get(sessionKey);
     },
     async disposeSession(sessionId) {
-      // FORK: With shared runtimes, individual session disposal only cleans up
-      // the session key mapping. The shared runtime stays alive for other sessions.
-      // Full cleanup happens via disposeAll() on shutdown.
-      for (const [sessionKey, mappedSessionId] of sessionIdBySessionKey.entries()) {
-        if (mappedSessionId === sessionId) {
-          sessionIdBySessionKey.delete(sessionKey);
+      // FORK: refcounted shared runtimes. Drop this session's reference; only
+      // dispose the underlying runtime when the last reference is released.
+      forgetSessionKeysForSessionId(sessionId);
+      idleTtlMsBySessionId.delete(sessionId);
+      const runtimeKey = runtimeKeyBySessionId.get(sessionId);
+      runtimeKeyBySessionId.delete(sessionId);
+      if (!runtimeKey) {
+        // No mapping yet; dispose any in-flight build keyed by sessionId.
+        const inFlight = createInFlight.get(sessionId);
+        if (inFlight) {
+          createInFlight.delete(sessionId);
+          const runtime = await inFlight.promise.catch(() => undefined);
+          await runtime?.dispose();
         }
+        return;
+      }
+      // Are there other sessions still referencing this shared runtime?
+      const otherRefs = sessionsForRuntimeKey(runtimeKey);
+      if (otherRefs.length > 0) {
+        return;
+      }
+      const runtime = runtimesByKey.get(runtimeKey);
+      runtimesByKey.delete(runtimeKey);
+      const inFlight = createInFlight.get(runtimeKey);
+      createInFlight.delete(runtimeKey);
+      const inFlightRuntime = inFlight
+        ? await inFlight.promise.catch(() => undefined)
+        : undefined;
+      const target = runtime ?? inFlightRuntime;
+      if (target) {
+        await target.dispose();
       }
     },
     async disposeAll() {
+      clearIdleSweepTimer();
       const inFlightRuntimes = Array.from(createInFlight.values());
       createInFlight.clear();
-      const runtimes = Array.from(runtimesBySessionId.values());
-      runtimesBySessionId.clear();
+      const runtimes = Array.from(runtimesByKey.values());
+      runtimesByKey.clear();
+      runtimeKeyBySessionId.clear();
       sessionIdBySessionKey.clear();
+      idleTtlMsBySessionId.clear();
       const lateRuntimes = await Promise.all(
         inFlightRuntimes.map(async ({ promise }) => await promise.catch(() => undefined)),
       );
@@ -440,8 +667,9 @@ function createSessionMcpRuntimeManager(
       }
       await Promise.allSettled(Array.from(allRuntimes, (runtime) => runtime.dispose()));
     },
+    sweepIdleRuntimes,
     listSessionIds() {
-      return Array.from(runtimesBySessionId.keys());
+      return Array.from(runtimeKeyBySessionId.keys());
     },
   };
 }
@@ -510,4 +738,5 @@ export const __testing = {
   getCachedSessionIds() {
     return getSessionMcpRuntimeManager().listSessionIds();
   },
+  resolveSessionMcpRuntimeIdleTtlMs,
 };

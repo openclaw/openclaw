@@ -58,7 +58,17 @@ Natural-language triggers that should route to the native Codex plugin:
 - "Attach this chat to Codex thread `<id>`."
 - "Show Codex threads, then bind this one."
 
-Native Codex conversation binding is the default chat-control path, but it is intentionally conservative for interactive Codex approval/tool flows: OpenClaw dynamic tools and approval prompts are not exposed through this bound-chat path yet, so those requests are declined with a clear explanation. Use the Codex harness path or explicit ACP fallback when the workflow depends on OpenClaw dynamic tools or long-running interactive approvals.
+Native Codex conversation binding is the default chat-control path. OpenClaw
+dynamic tools still execute through OpenClaw, while Codex-native tools such as
+shell/apply-patch execute inside Codex. For Codex-native tool events, OpenClaw
+injects a per-turn native hook relay so plugin hooks can block
+`before_tool_call`, observe `after_tool_call`, and route Codex
+`PermissionRequest` events through OpenClaw approvals. The v1 relay is
+deliberately conservative: it does not mutate Codex-native tool arguments,
+rewrite Codex thread records, or gate final answers/Stop hooks. Use explicit
+ACP only when you want the ACP runtime/session model. The embedded Codex support
+boundary is documented in the
+[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
 
 Natural-language triggers that should route to the ACP runtime:
 
@@ -67,6 +77,13 @@ Natural-language triggers that should route to the ACP runtime:
 - "Run Codex through ACP in a background thread."
 
 OpenClaw picks `runtime: "acp"`, resolves the harness `agentId`, binds to the current conversation or thread when supported, and routes follow-ups to that session until close/expiry. Codex only follows this path when ACP is explicit or the requested background runtime still needs ACP.
+
+For `sessions_spawn`, `runtime: "acp"` targets ACP harness ids such as `codex`,
+`claude`, `gemini`, or `opencode`. Do not pass a normal OpenClaw config agent
+id from `agents_list` unless that entry is explicitly configured with
+`agents.list[].runtime.type="acp"`; otherwise use the default sub-agent runtime.
+When an OpenClaw agent is configured with `runtime.type="acp"`, OpenClaw uses
+`runtime.acp.agent` as the underlying harness id.
 
 ## ACP versus sub-agents
 
@@ -319,7 +336,9 @@ Interface details:
 - `resumeSessionId` (optional): resume an existing ACP session instead of creating a new one. The agent replays its conversation history via `session/load`. Requires `runtime: "acp"`.
 - `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
-- `model` (optional): explicit model override for the ACP child session. Honored for `runtime: "acp"` so the child uses the requested model instead of silently falling back to the target agent default.
+- `runTimeoutSeconds` (optional): aborts the ACP child turn after N seconds. `0` keeps the turn on the gateway's no-timeout path. The same value is applied to the Gateway run and ACP runtime so stalled/quota-exhausted harnesses do not occupy the parent agent lane indefinitely.
+- `model` (optional): explicit model override for the ACP child session. Codex ACP spawns normalize OpenClaw Codex refs such as `openai-codex/gpt-5.4` to Codex ACP startup config before `session/new`; slash forms such as `openai-codex/gpt-5.4/high` also set Codex ACP reasoning effort. Other harnesses must advertise ACP `models` and support `session/set_model`; otherwise OpenClaw/acpx fails clearly instead of silently falling back to the target agent default.
+- `thinking` (optional): explicit thinking/reasoning effort for the ACP child session. For Codex ACP, `minimal` maps to low effort, `low`/`medium`/`high`/`xhigh` map directly, and `off` omits the reasoning-effort startup override.
 
 ## Delivery model
 
@@ -341,6 +360,7 @@ One-shot ACP sessions spawned by another agent run are background children, simi
 
 - The parent asks for work with `sessions_spawn({ runtime: "acp", mode: "run" })`.
 - The child runs in its own ACP harness session.
+- Child turns run on the same background lane used by native sub-agent spawns, so a slow ACP harness does not block unrelated main-session work.
 - Completion reports back through the internal task-completion announce path.
 - The parent rewrites the child result in normal assistant voice when a user-facing reply is useful.
 
@@ -512,7 +532,8 @@ Notes:
 
 Equivalent operations:
 
-- `/acp model <id>` maps to runtime config key `model`.
+- `/acp model <id>` maps to runtime config key `model`. For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to Codex ACP `reasoning_effort`. For other harnesses, model control depends on adapter support for ACP `models` and `session/set_model`.
+- `/acp set thinking <level>` maps to runtime config key `thinking`. For Codex ACP, OpenClaw sends the corresponding `reasoning_effort` where the adapter supports one.
 - `/acp permissions <profile>` maps to runtime config key `approval_policy`.
 - `/acp timeout <seconds>` maps to runtime config key `timeout`.
 - `/acp cwd <path>` updates runtime cwd override directly.
@@ -542,6 +563,7 @@ plugin-tools and OpenClaw-tools MCP bridges, and ACP permission modes, see
 | `Thread bindings are unavailable for <channel>.`                            | Adapter lacks thread binding capability.                                        | Use `--thread off` or move to supported adapter/channel.                                                                                                                 |
 | `Sandboxed sessions cannot spawn ACP sessions ...`                          | ACP runtime is host-side; requester session is sandboxed.                       | Use `runtime="subagent"` from sandboxed sessions, or run ACP spawn from a non-sandboxed session.                                                                         |
 | `sessions_spawn sandbox="require" is unsupported for runtime="acp" ...`     | `sandbox="require"` requested for ACP runtime.                                  | Use `runtime="subagent"` for required sandboxing, or use ACP with `sandbox="inherit"` from a non-sandboxed session.                                                      |
+| `Cannot apply --model ... did not advertise model support`                  | The target harness does not expose generic ACP model switching.                 | Use a harness that advertises ACP `models`/`session/set_model`, use Codex ACP model refs, or configure the model directly in the harness if it has its own startup flag. |
 | Missing ACP metadata for bound session                                      | Stale/deleted ACP session metadata.                                             | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                                    |
 | `AcpRuntimeError: Permission prompt unavailable in non-interactive mode`    | `permissionMode` blocks writes/exec in non-interactive ACP session.             | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](/tools/acp-agents-setup#permission-configuration). |
 | ACP session fails early with little output                                  | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`. | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`.        |

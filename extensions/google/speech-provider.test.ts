@@ -1,4 +1,12 @@
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
+}));
+
 import { buildGoogleSpeechProvider, __testing } from "./speech-provider.js";
 
 function installGoogleTtsFetchMock(pcm = Buffer.from([1, 0, 2, 0])) {
@@ -30,6 +38,7 @@ describe("Google speech provider", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    transcodeAudioBufferToOpusMock.mockReset();
   });
 
   it("synthesizes Gemini PCM as WAV and preserves audio tags in the request text", async () => {
@@ -81,6 +90,39 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
     expect(result.audioBuffer.readUInt32LE(24)).toBe(__testing.GOOGLE_TTS_SAMPLE_RATE);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
+    expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
+  });
+
+  it("transcodes Gemini PCM to Opus for voice-note targets", async () => {
+    installGoogleTtsFetchMock(Buffer.from([5, 0, 6, 0]));
+    transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("google-opus"));
+    const provider = buildGoogleSpeechProvider();
+
+    const result = await provider.synthesize({
+      text: "Send this as a voice note.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+      },
+      target: "voice-note",
+      timeoutMs: 12_000,
+    });
+
+    expect(result).toEqual({
+      audioBuffer: Buffer.from("google-opus"),
+      outputFormat: "opus",
+      fileExtension: ".opus",
+      voiceCompatible: true,
+    });
+    expect(transcodeAudioBufferToOpusMock).toHaveBeenCalledWith({
+      audioBuffer: expect.any(Buffer),
+      inputExtension: "wav",
+      tempPrefix: "tts-google-",
+      timeoutMs: 12_000,
+    });
+    const [{ audioBuffer }] = transcodeAudioBufferToOpusMock.mock.calls[0];
+    expect(audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    expect(audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
   });
 
   it("falls back to GEMINI_API_KEY and configured Google API base URL", async () => {
@@ -166,6 +208,39 @@ describe("Google speech provider", () => {
     });
   });
 
+  it("prepends configured Gemini TTS profile text", async () => {
+    const fetchMock = installGoogleTtsFetchMock();
+    const provider = buildGoogleSpeechProvider();
+
+    await provider.synthesize({
+      text: "Status update starts now.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+        audioProfile: "Speak professionally with a calm executive tone.",
+        speakerName: "Alex",
+      },
+      target: "audio-file",
+      timeoutMs: 10_000,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      contents: [
+        {
+          parts: [
+            {
+              text:
+                "Speak professionally with a calm executive tone.\n\n" +
+                "Speaker name: Alex\n\n" +
+                "Status update starts now.",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("resolves provider config and directive overrides", () => {
     const provider = buildGoogleSpeechProvider();
 
@@ -178,6 +253,8 @@ describe("Google speech provider", () => {
               apiKey: "configured-key",
               model: "google/gemini-3.1-flash-tts-preview",
               voice: "Leda",
+              audioProfile: "Speak warmly.",
+              speakerName: "Narrator",
             },
           },
         },
@@ -185,8 +262,10 @@ describe("Google speech provider", () => {
       }),
     ).toEqual({
       apiKey: "configured-key",
+      audioProfile: "Speak warmly.",
       baseUrl: undefined,
       model: "gemini-3.1-flash-tts-preview",
+      speakerName: "Narrator",
       voiceName: "Leda",
     });
 
@@ -243,6 +322,94 @@ describe("Google speech provider", () => {
         { id: "Kore", name: "Kore" },
         { id: "Puck", name: "Puck" },
       ]),
+    );
+  });
+
+  it("formats Google TTS HTTP errors with provider details", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "Quota exceeded",
+              status: "RESOURCE_EXHAUSTED",
+            },
+          }),
+          {
+            status: 429,
+            headers: { "x-request-id": "google_req_123" },
+          },
+        ),
+      ),
+    );
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Read this plainly.",
+        cfg: {},
+        providerConfig: { apiKey: "google-test-key" },
+        target: "audio-file",
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow(
+      "Google TTS failed (429): Quota exceeded [code=RESOURCE_EXHAUSTED] [request_id=google_req_123]",
+    );
+  });
+
+  it("honors configured private-network opt-in for Google TTS", async () => {
+    installGoogleTtsFetchMock();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesize({
+      text: "hello",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+      providerConfig: { apiKey: "google-test-key" },
+      target: "audio-file",
+      timeoutMs: 12_345,
+    });
+
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
+  });
+
+  it("honors configured private-network opt-in for Google telephony TTS", async () => {
+    installGoogleTtsFetchMock();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+      providerConfig: { apiKey: "google-test-key" },
+      timeoutMs: 12_345,
+    });
+
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
     );
   });
 });

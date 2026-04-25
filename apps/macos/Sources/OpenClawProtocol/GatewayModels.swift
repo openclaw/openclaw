@@ -723,17 +723,26 @@ public struct AgentIdentityResult: Codable, Sendable {
     public let agentid: String
     public let name: String?
     public let avatar: String?
+    public let avatarsource: String?
+    public let avatarstatus: String?
+    public let avatarreason: String?
     public let emoji: String?
 
     public init(
         agentid: String,
         name: String?,
         avatar: String?,
+        avatarsource: String?,
+        avatarstatus: String?,
+        avatarreason: String?,
         emoji: String?)
     {
         self.agentid = agentid
         self.name = name
         self.avatar = avatar
+        self.avatarsource = avatarsource
+        self.avatarstatus = avatarstatus
+        self.avatarreason = avatarreason
         self.emoji = emoji
     }
 
@@ -741,6 +750,9 @@ public struct AgentIdentityResult: Codable, Sendable {
         case agentid = "agentId"
         case name
         case avatar
+        case avatarsource = "avatarSource"
+        case avatarstatus = "avatarStatus"
+        case avatarreason = "avatarReason"
         case emoji
     }
 }
@@ -2610,18 +2622,22 @@ public struct WebLoginStartParams: Codable, Sendable {
 public struct WebLoginWaitParams: Codable, Sendable {
     public let timeoutms: Int?
     public let accountid: String?
+    public let currentqrdataurl: String?
 
     public init(
         timeoutms: Int?,
-        accountid: String?)
+        accountid: String?,
+        currentqrdataurl: String?)
     {
         self.timeoutms = timeoutms
         self.accountid = accountid
+        self.currentqrdataurl = currentqrdataurl
     }
 
     private enum CodingKeys: String, CodingKey {
         case timeoutms = "timeoutMs"
         case accountid = "accountId"
+        case currentqrdataurl = "currentQrDataUrl"
     }
 }
 

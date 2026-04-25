@@ -15,7 +15,7 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
-export type AgentContextInjection = "always" | "continuation-skip";
+export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type Gpt5PromptOverlayConfig = {
@@ -127,6 +127,8 @@ export type CliBackendConfig = {
   sessionIdFields?: string[];
   /** Flag used to pass system prompt. */
   systemPromptArg?: string;
+  /** Flag used to pass a system prompt file. */
+  systemPromptFileArg?: string;
   /** Config override flag used to pass a system prompt file (e.g. -c). */
   systemPromptFileConfigArg?: string;
   /** Config override key used to pass a system prompt file. */

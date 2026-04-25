@@ -229,6 +229,7 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
   const seenKeys = listRowsModule.appendDiscoveredRows({
     rows: rows as never,
     models: loaded.models as never,
+    modelRegistry: loaded.registry as never,
     context: context as never,
   });
   if (opts.supplementCatalog !== false) {
@@ -527,6 +528,51 @@ describe("modelsListCommand forward-compat", () => {
       );
     });
 
+    it("includes provider-owned supplemental catalog rows with provider filters", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [],
+        availableKeys: new Set(["opencode-go/deepseek-v4-pro"]),
+        registry: {
+          getAll: () => [],
+        },
+      });
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "opencode-go",
+          id: "deepseek-v4-pro",
+          name: "DeepSeek V4 Pro",
+          input: ["text"],
+          contextWindow: 1_000_000,
+        },
+      ]);
+      mocks.resolveModelWithRegistry.mockImplementation(
+        ({ provider, modelId }: { provider: string; modelId: string }) =>
+          provider === "opencode-go" && modelId === "deepseek-v4-pro"
+            ? {
+                provider,
+                id: modelId,
+                name: "DeepSeek V4 Pro",
+                api: "anthropic-messages",
+                baseUrl: "https://opencode.ai/zen/go",
+                input: ["text"],
+                contextWindow: 1_000_000,
+                maxTokens: 384_000,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              }
+            : undefined,
+      );
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "opencode-go", json: true }, runtime as never);
+
+      expect(lastPrintedRows<{ key: string }>()).toEqual([
+        expect.objectContaining({
+          key: "opencode-go/deepseek-v4-pro",
+        }),
+      ]);
+    });
+
     it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.loadModelRegistry.mockResolvedValueOnce({
@@ -572,6 +618,74 @@ describe("modelsListCommand forward-compat", () => {
         expect.objectContaining({
           key: "openai-codex/gpt-5.4",
           available: true,
+        }),
+      ]);
+    });
+
+    it("uses provider runtime metadata for discovered codex gpt-5.5 rows", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [
+          {
+            provider: "openai-codex",
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            input: ["text", "image"],
+            contextWindow: 272000,
+            maxTokens: 128000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+        availableKeys: new Set(["openai-codex/gpt-5.5"]),
+        registry: {
+          getAll: () => [
+            {
+              provider: "openai-codex",
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              input: ["text", "image"],
+              contextWindow: 272000,
+              maxTokens: 128000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      });
+      mocks.resolveModelWithRegistry.mockImplementation(
+        ({ provider, modelId }: { provider: string; modelId: string }) =>
+          provider === "openai-codex" && modelId === "gpt-5.5"
+            ? {
+                provider: "openai-codex",
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                api: "openai-codex-responses",
+                baseUrl: "https://chatgpt.com/backend-api",
+                input: ["text", "image"],
+                contextWindow: 400000,
+                contextTokens: 272000,
+                maxTokens: 128000,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              }
+            : undefined,
+      );
+
+      const runtime = createRuntime();
+      await modelsListCommand(
+        { all: true, provider: "openai-codex", json: true },
+        runtime as never,
+      );
+
+      expect(
+        lastPrintedRows<{ key: string; contextWindow: number; contextTokens?: number }>(),
+      ).toEqual([
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.5",
+          contextWindow: 400000,
+          contextTokens: 272000,
         }),
       ]);
     });

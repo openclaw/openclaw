@@ -7,8 +7,6 @@ read_when:
 title: "Gateway protocol"
 ---
 
-# Gateway protocol (WebSocket)
-
 The Gateway WS protocol is the **single control plane + node transport** for
 OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
 nodes) connect over WebSocket and declare their **role** + **scope** at
@@ -111,6 +109,14 @@ permissions:
   }
 }
 ```
+
+Trusted same-process backend clients (`client.id: "gateway-client"`,
+`client.mode: "backend"`) may omit `device` on direct loopback connections when
+they authenticate with the shared gateway token/password. This path is reserved
+for internal control-plane RPCs and keeps stale CLI/device pairing baselines from
+blocking local backend work such as subagent session updates. Remote clients,
+browser-origin clients, node clients, and explicit device-token/device-identity
+clients still use the normal pairing and scope-upgrade checks.
 
 When a device token is issued, `hello-ok` also includes:
 
