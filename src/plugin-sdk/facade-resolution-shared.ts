@@ -64,6 +64,7 @@ export function resolveBundledFacadeModuleLocation(params: {
   bundledPluginsDir?: string | null;
 }): FacadeModuleLocationLike | null {
   const preferSource = !params.currentModulePath.includes(`${path.sep}dist${path.sep}`);
+  const packageSourceRoot = path.resolve(params.packageRoot, "extensions");
   const publicSurfaceParams = {
     rootDir: params.packageRoot,
     env: params.env,
@@ -75,8 +76,16 @@ export function resolveBundledFacadeModuleLocation(params: {
     ? (resolveBundledPluginSourcePublicSurfacePath({
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
-        sourceRoot: params.bundledPluginsDir ?? path.resolve(params.packageRoot, "extensions"),
-      }) ?? resolveBundledPluginPublicSurfacePath(publicSurfaceParams))
+        sourceRoot: params.bundledPluginsDir ?? packageSourceRoot,
+      }) ??
+      (params.bundledPluginsDir
+        ? resolveBundledPluginSourcePublicSurfacePath({
+            dirName: params.dirName,
+            artifactBasename: params.artifactBasename,
+            sourceRoot: packageSourceRoot,
+          })
+        : null) ??
+      resolveBundledPluginPublicSurfacePath(publicSurfaceParams))
     : resolveBundledPluginPublicSurfacePath(publicSurfaceParams);
   return modulePath
     ? {

@@ -30,28 +30,6 @@ const publicSurfaceLocations = new Map<
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 const sharedBundledPublicSurfaceJitiLoaders: PluginJitiLoaderCache = new Map();
 
-function isSourceArtifactPath(modulePath: string): boolean {
-  switch (path.extname(modulePath).toLowerCase()) {
-    case ".ts":
-    case ".tsx":
-    case ".mts":
-    case ".cts":
-    case ".mtsx":
-    case ".ctsx":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
-  return (
-    !params.tryNative &&
-    isSourceArtifactPath(params.modulePath) &&
-    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
-  );
-}
-
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
@@ -109,10 +87,50 @@ function getJiti(modulePath: string) {
   return loader;
 }
 
+function isSourceArtifactPath(modulePath: string): boolean {
+  switch (path.extname(modulePath).toLowerCase()) {
+    case ".ts":
+    case ".tsx":
+    case ".mts":
+    case ".cts":
+    case ".mtsx":
+    case ".ctsx":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
+  return (
+    !params.tryNative &&
+    isSourceArtifactPath(params.modulePath) &&
+    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
+  );
+}
+
+function shouldFallbackSourceArtifactRequireToJiti(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
+}
+
 function loadPublicSurfaceModule(modulePath: string): unknown {
   const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
   if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
-    return sourceArtifactRequire(modulePath);
+    try {
+      return sourceArtifactRequire(modulePath);
+    } catch (error) {
+      // Some source public artifacts keep emitted-style `.js` relative import
+      // specifiers. Plain require() then looks for compiled sibling `.js` files
+      // that do not exist in source-tree runs, while jiti resolves the `.ts`
+      // sources correctly.
+      if (!shouldFallbackSourceArtifactRequireToJiti(error)) {
+        throw error;
+      }
+    }
   }
   return getJiti(modulePath)(modulePath);
 }

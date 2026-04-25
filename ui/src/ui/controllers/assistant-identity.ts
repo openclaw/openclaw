@@ -19,6 +19,10 @@ export type AssistantAvatarOverrideState = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
+  chatAvatarUrl?: string | null;
+  chatAvatarSource?: string | null;
+  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  chatAvatarReason?: string | null;
 };
 
 export async function loadAssistantIdentity(
@@ -65,9 +69,18 @@ export function setAssistantAvatarOverride(
     state.assistantAvatarSource = avatar;
     state.assistantAvatarStatus = "data";
     state.assistantAvatarReason = null;
+    state.chatAvatarUrl = null;
+    state.chatAvatarSource = avatar;
+    state.chatAvatarStatus = "data";
+    state.chatAvatarReason = null;
   } else {
+    state.assistantAvatar = null;
     state.assistantAvatarSource = null;
     state.assistantAvatarStatus = null;
     state.assistantAvatarReason = null;
+    state.chatAvatarUrl = null;
+    state.chatAvatarSource = null;
+    state.chatAvatarStatus = null;
+    state.chatAvatarReason = null;
   }
 }

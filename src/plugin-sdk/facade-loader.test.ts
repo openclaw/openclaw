@@ -108,6 +108,19 @@ describe("plugin-sdk facade loader", () => {
     expect(fromB.marker).toBe("override-b");
   });
 
+  it("falls back to package source surfaces when an override dir lacks a bundled plugin", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
+
+    const loaded = loadBundledPluginPublicSurfaceModuleSync<{
+      closeTrackedBrowserTabsForSessions: unknown;
+    }>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
+
+    expect(loaded.closeTrackedBrowserTabsForSessions).toEqual(expect.any(Function));
+  });
+
   it("shares loaded facade ids with facade-runtime", () => {
     const dir = createBundledPluginDir("openclaw-facade-loader-ids-", "identity-check");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;

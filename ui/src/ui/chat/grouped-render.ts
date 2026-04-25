@@ -252,6 +252,21 @@ function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
+function renderActiveAssistantAvatar(
+  assistant?: AssistantIdentity,
+  basePath?: string,
+  authToken?: string | null,
+) {
+  return html`
+    <span class="chat-avatar-activity" aria-label="Assistant is working">
+      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
+      <span class="chat-avatar-activity__indicator" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </span>
+    </span>
+  `;
+}
+
 export function renderReadingIndicatorGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
@@ -259,7 +274,7 @@ export function renderReadingIndicatorGroup(
 ) {
   return html`
     <div class="chat-group assistant">
-      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
+      ${renderActiveAssistantAvatar(assistant, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -283,7 +298,7 @@ export function renderStreamingGroup(
 
   return html`
     <div class="chat-group assistant">
-      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
+      ${renderActiveAssistantAvatar(assistant, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {

@@ -2737,6 +2737,54 @@ td.data-table-key-col {
 }
 
 /* Reading indicator */
+.chat-avatar-activity {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+  align-self: flex-end;
+  margin-bottom: 4px;
+}
+
+.chat-avatar-activity > .chat-avatar {
+  margin-bottom: 0;
+  align-self: auto;
+}
+
+.chat-avatar-activity__indicator {
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px;
+  min-width: 18px;
+  min-height: 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--bg);
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.chat-avatar-activity__indicator > span {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  color: var(--accent-contrast, #fff);
+  opacity: 0.55;
+  animation: chatReadingDot 1.2s ease-in-out infinite;
+}
+
+.chat-avatar-activity__indicator > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.chat-avatar-activity__indicator > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
 .chat-bubble.chat-reading-indicator {
   width: fit-content;
   padding: 10px 16px;
@@ -2784,7 +2832,8 @@ td.data-table-key-col {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-reading-indicator__dots > span {
+  .chat-reading-indicator__dots > span,
+  .chat-avatar-activity__indicator > span {
     animation: none;
     opacity: 0.6;
   }

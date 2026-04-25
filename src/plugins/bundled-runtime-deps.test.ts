@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,9 +19,11 @@ import {
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
+  execFile: vi.fn(),
   spawnSync: vi.fn(),
 }));
 
+const execFileMock = vi.mocked(execFile);
 const spawnSyncMock = vi.mocked(spawnSync);
 const tempDirs: string[] = [];
 
@@ -33,6 +35,7 @@ function makeTempDir(): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  execFileMock.mockReset();
   spawnSyncMock.mockReset();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
