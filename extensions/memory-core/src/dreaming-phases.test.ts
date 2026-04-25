@@ -1215,7 +1215,7 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
     await fs.writeFile(
-      path.join(sessionsDir, "ordinary.checkpoint.abc123.jsonl"),
+      path.join(sessionsDir, "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
       JSON.stringify({
         type: "message",
         message: {

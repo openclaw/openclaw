@@ -103,8 +103,9 @@ Codex after changing config.
 ## Requirements
 
 - OpenClaw with the bundled `codex` plugin available.
-- Codex app-server `0.125.0` or newer. Native MCP hook payloads landed in Codex
-  `0.124.0`; OpenClaw uses `0.125.0` as the tested support floor.
+- Codex app-server `0.125.0` or newer. The bundled plugin manages a compatible
+  Codex app-server binary by default, so local `codex` commands on `PATH` do
+  not affect normal harness startup.
 - Codex auth available to the app-server process.
 
 The plugin blocks older or unversioned app-server handshakes. That keeps
@@ -340,11 +341,17 @@ fallback catalog:
 
 ## App-server connection and policy
 
-By default, the plugin starts Codex locally with:
+By default, the plugin starts OpenClaw's managed Codex binary locally with:
 
 ```bash
 codex app-server --listen stdio://
 ```
+
+The managed binary is declared as a bundled plugin runtime dependency and staged
+with the rest of the `codex` plugin dependencies. This keeps the app-server
+version tied to the bundled plugin instead of whichever separate Codex CLI
+happens to be installed locally. Set `appServer.command` only when you
+intentionally want to run a different executable.
 
 By default, OpenClaw starts local Codex harness sessions in YOLO mode:
 `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
@@ -414,7 +421,7 @@ Supported `appServer` fields:
 | Field               | Default                                  | Meaning                                                                                                      |
 | ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                     |
-| `command`           | `"codex"`                                | Executable for stdio transport.                                                                              |
+| `command`           | managed Codex binary                     | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override. |
 | `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                               |
 | `url`               | unset                                    | WebSocket app-server URL.                                                                                    |
 | `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                        |
@@ -426,14 +433,16 @@ Supported `appServer` fields:
 | `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias. |
 | `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.    |
 
-The older environment variables still work as fallbacks for local testing when
-the matching config field is unset:
+Environment overrides remain available for local testing:
 
 - `OPENCLAW_CODEX_APP_SERVER_BIN`
 - `OPENCLAW_CODEX_APP_SERVER_ARGS`
 - `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`
+
+`OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
+`appServer.command` is unset.
 
 `OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed. Use
 `plugins.entries.codex.config.appServer.mode: "guardian"` instead, or
