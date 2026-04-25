@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { MemoryBatchDisabledReason } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -332,7 +333,7 @@ function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] 
   return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
 }
 
-function formatBatchDisabledReason(reason: string | undefined): string | null {
+function formatBatchDisabledReason(reason: MemoryBatchDisabledReason | undefined): string | null {
   switch (reason) {
     case "configured_off":
       return "configured off";
@@ -342,14 +343,14 @@ function formatBatchDisabledReason(reason: string | undefined): string | null {
       return "provider unsupported";
     case "failure_limit":
       return "failure limit";
-    default:
+    case undefined:
       return null;
   }
 }
 
 function formatBatchStatusSuffix(batch: {
   enabled: boolean;
-  disabledReason?: string;
+  disabledReason?: MemoryBatchDisabledReason;
   failures: number;
   limit: number;
 }): string {

@@ -44,6 +44,31 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("rejects memorySearch.remote.baseUrl with a query string", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            remote: {
+              baseUrl: "https://memory.example/v1?api_key=secret",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            String(issue.path) === "agents.defaults.memorySearch.remote.baseUrl" &&
+            issue.message.includes("must not include a query string or fragment"),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("accepts memorySearch.qmd.extraCollections", () => {
     const res = validateConfigObject({
       agents: {
