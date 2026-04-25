@@ -245,19 +245,39 @@ async function processMessageWithPipeline(params: {
       runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
     });
 
-  // Typing indicator setup
-  // Note: Reaction mode requires user OAuth, not available with service account auth.
-  // If reaction is configured, we fall back to message mode with a warning.
-  let typingIndicator = account.config.typingIndicator ?? "message";
-  if (typingIndicator === "reaction") {
+  // --- BEGIN: DEFERRED RESPONSE TIMEOUT FIX (Issue #68944) ---
+  // If a typing indicator message is sent, we start a race against the 30s
+  // Google Chat API timeout for deferred responses.
+
+  // Define a type for the payload to avoid using 'any'.
+  type DeliverPayload = {
+    text?: string;
+    mediaUrls?: string[];
+    mediaUrl?: string;
+    replyToId?: string;
+  };
+
+  // A handle to the timeout so we can clear it if the agent responds in time.
+  let deferredResponseTimeout: NodeJS.Timeout | undefined;
+
+  // A flag to indicate if the fallback message has been sent.
+  let deferredResponseExpired = false;
+
+  // The delivery function is mutable because it's defined later (line ~330)
+  // after the reply pipeline is constructed.
+  let onDeliver: (payload: DeliverPayload) => Promise<void> = async () => {};
+
+  const configuredTypingIndicator = account.config.typingIndicator ?? "message";
+  if (configuredTypingIndicator === "reaction") {
     runtime.error?.(
-      `[${account.accountId}] typingIndicator="reaction" requires user OAuth (not supported with service account). Falling back to "message" mode.`,
+      `[${account.accountId}] typingIndicator="reaction" requires user OAuth (not supported with service accounts). Falling back to "message" mode.`,
     );
-    typingIndicator = "message";
   }
+  const typingIndicator: "none" | "message" =
+    configuredTypingIndicator === "none" ? "none" : "message";
   let typingMessageName: string | undefined;
 
-  // Start typing indicator (message mode only, reaction mode not supported with app auth)
+  // Start typing indicator and timeout race
   if (typingIndicator === "message") {
     try {
       const botName = resolveBotDisplayName({
@@ -272,6 +292,42 @@ async function processMessageWithPipeline(params: {
         thread: message.thread?.name,
       });
       typingMessageName = result?.messageName;
+
+      // If we successfully sent a typing message, start the 25-second timer.
+      if (typingMessageName) {
+        deferredResponseTimeout = setTimeout(() => {
+          // Flag that the timeout has occurred. deliverGoogleChatReply already
+          // routes through the new-message path when isDeferredResponseExpired
+          // is true (see lines ~493–540) — do NOT replace onDeliver here, or
+          // the agent's eventual response is silently discarded.
+          deferredResponseExpired = true;
+
+          // Send a "still working" message so the user isn't left in the dark.
+          // This does not use the deferred response mechanism.
+          sendGoogleChatMessage({
+            account,
+            space: spaceId,
+            text: "This is taking longer than expected. I'm still working on your request.",
+            thread: message.thread?.name,
+          }).catch((err) => {
+            runtime.error?.(`Failed to send 'still working' fallback message: ${String(err)}`);
+          });
+
+          // The deferred slot is gone; delete the "typing..." message and clear
+          // typingMessageName so the final delivery won't try to update it.
+          if (typingMessageName) {
+            const expiredTypingMessageName = typingMessageName;
+            typingMessageName = undefined;
+            deleteGoogleChatMessage({ account, messageName: expiredTypingMessageName }).catch(
+              (err) => {
+                runtime.error?.(
+                  `Failed to clean up 'typing...' message after timeout: ${String(err)}`,
+                );
+              },
+            );
+          }
+        }, 25000); // 25 seconds, leaving a 5-second buffer.
+      }
     } catch (err) {
       runtime.error?.(`Failed sending typing message: ${String(err)}`);
     }
@@ -284,24 +340,39 @@ async function processMessageWithPipeline(params: {
     accountId: route.accountId,
   });
 
+  // Define the delivery function that will be called when the agent has a response.
+  onDeliver = async (payload) => {
+    // Clear the pending timeout on first delivery. If the timer already fired,
+    // deferredResponseExpired is true and deliverGoogleChatReply will route
+    // through the new-message path rather than the deferred-update path.
+    if (deferredResponseTimeout) {
+      clearTimeout(deferredResponseTimeout);
+      deferredResponseTimeout = undefined;
+    }
+
+    await deliverGoogleChatReply({
+      payload,
+      account,
+      spaceId,
+      runtime,
+      core,
+      config,
+      statusSink,
+      typingMessageName,
+      // Pass the expired flag to the delivery function.
+      isDeferredResponseExpired: deferredResponseExpired,
+    });
+    // Only use typing message for first delivery
+    typingMessageName = undefined;
+  };
+
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: config,
     dispatcherOptions: {
       ...replyPipeline,
       deliver: async (payload) => {
-        await deliverGoogleChatReply({
-          payload,
-          account,
-          spaceId,
-          runtime,
-          core,
-          config,
-          statusSink,
-          typingMessageName,
-        });
-        // Only use typing message for first delivery
-        typingMessageName = undefined;
+        await onDeliver(payload);
       },
       onError: (err, info) => {
         runtime.error?.(
@@ -314,6 +385,7 @@ async function processMessageWithPipeline(params: {
     },
   });
 }
+// --- END: DEFERRED RESPONSE TIMEOUT FIX (Issue #68944) ---
 
 async function downloadAttachment(
   attachment: GoogleChatAttachment,
@@ -346,15 +418,90 @@ async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  isDeferredResponseExpired?: boolean; // --- ADDED: DEFERRED RESPONSE TIMEOUT FIX ---
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
-    params;
+  const {
+    payload,
+    account,
+    spaceId,
+    runtime,
+    core,
+    config,
+    statusSink,
+    typingMessageName,
+    isDeferredResponseExpired, // --- ADDED: DEFERRED RESPONSE TIMEOUT FIX ---
+  } = params;
   const reply = resolveSendableOutboundReplyParts(payload);
   const mediaCount = reply.mediaCount;
   const hasMedia = reply.hasMedia;
   const text = reply.text;
   let firstTextChunk = true;
   let suppressCaption = false;
+
+  const chunkLimit = account.config.textChunkLimit ?? 4000;
+  const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
+
+  // --- BEGIN: DEFERRED RESPONSE TIMEOUT FIX (Issue #68944) ---
+  // If the deferred response has expired, we must send the entire reply as a new message.
+  // We must not attempt to update the original "typing..." message.
+  if (isDeferredResponseExpired) {
+    await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      chunkText: (value) =>
+        core.channel.text.chunkMarkdownTextWithMode(value, chunkLimit, chunkMode),
+      sendText: async (chunk) => {
+        try {
+          await sendGoogleChatMessage({
+            account,
+            space: spaceId,
+            text: chunk,
+            thread: payload.replyToId,
+          });
+          statusSink?.({ lastOutboundAt: Date.now() });
+        } catch (err) {
+          runtime.error?.(`Google Chat message send failed (deferred fallback): ${String(err)}`);
+        }
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        // This logic is duplicated from the main path below.
+        // It could be refactored into a shared helper function.
+        try {
+          const loaded = await core.channel.media.fetchRemoteMedia({
+            url: mediaUrl,
+            maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
+          });
+          const upload = await uploadAttachmentForReply({
+            account,
+            spaceId,
+            buffer: loaded.buffer,
+            contentType: loaded.contentType,
+            filename: loaded.fileName ?? "attachment",
+          });
+          if (!upload.attachmentUploadToken) {
+            throw new Error("missing attachment upload token");
+          }
+          await sendGoogleChatMessage({
+            account,
+            space: spaceId,
+            text: caption,
+            thread: payload.replyToId,
+            attachments: [
+              {
+                attachmentUploadToken: upload.attachmentUploadToken,
+                contentName: loaded.fileName,
+              },
+            ],
+          });
+          statusSink?.({ lastOutboundAt: Date.now() });
+        } catch (err) {
+          runtime.error?.(`Google Chat attachment send failed (deferred fallback): ${String(err)}`);
+        }
+      },
+    });
+    return; // End execution here for the expired case.
+  }
+  // --- END: DEFERRED RESPONSE TIMEOUT FIX (Issue #68944) ---
 
   if (hasMedia) {
     if (typingMessageName) {
@@ -384,8 +531,6 @@ async function deliverGoogleChatReply(params: {
     }
   }
 
-  const chunkLimit = account.config.textChunkLimit ?? 4000;
-  const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
   await deliverTextOrMediaReply({
     payload,
     text: suppressCaption ? "" : reply.text,
@@ -393,11 +538,30 @@ async function deliverGoogleChatReply(params: {
     sendText: async (chunk) => {
       try {
         if (firstTextChunk && typingMessageName) {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: chunk,
-          });
+          // --- BEGIN: DEFERRED RESPONSE TIMEOUT FIX (Issue #68944) ---
+          // Add explicit try/catch for the update call.
+          try {
+            await updateGoogleChatMessage({
+              account,
+              messageName: typingMessageName,
+              text: chunk,
+            });
+          } catch (err) {
+            // This is the critical failure point. If the update fails (e.g., timeout),
+            // log the error and fall back to sending a new message.
+            runtime.error?.(
+              `Google Chat deferred message update failed. Falling back to new message. Error: ${String(
+                err,
+              )}`,
+            );
+            await sendGoogleChatMessage({
+              account,
+              space: spaceId,
+              text: chunk,
+              thread: payload.replyToId,
+            });
+          }
+          // --- END: DEFERRED RESPONSE TIMEOUT FIX (Issue #68944) ---
         } else {
           await sendGoogleChatMessage({
             account,
