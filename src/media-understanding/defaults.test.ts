@@ -29,7 +29,7 @@ describe("resolveDefaultMediaModel", () => {
       "gpt-5-nano",
     );
     expect(resolveDefaultMediaModel({ providerId: "opencode-go", capability: "image" })).toBe(
-      "kimi-k2.5",
+      "kimi-k2.6",
     );
   });
 });

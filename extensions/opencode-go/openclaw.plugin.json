@@ -27,7 +27,7 @@
     "opencode-go": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "kimi-k2.5"
+        "image": "kimi-k2.6"
       }
     }
   },

@@ -18,7 +18,7 @@ describe("opencode-go provider plugin", () => {
         expect.objectContaining({
           id: "opencode-go",
           capabilities: ["image"],
-          defaultModels: { image: "kimi-k2.5" },
+          defaultModels: { image: "kimi-k2.6" },
           describeImage: expect.any(Function),
           describeImages: expect.any(Function),
         }),

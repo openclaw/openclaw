@@ -91,6 +91,7 @@ Docs: https://docs.openclaw.ai
 - Docs/TTS: clarify that legacy flat TTS provider config blocks are repaired by `openclaw doctor --fix`, not accepted by strict runtime schema on load. Fixes #56220.
 - Plugins/OpenCode: strip unsupported disabled Responses reasoning payloads for OpenCode image understanding. Fixes #70252.
 - Plugins/OpenCode/OpenCode Go: register image understanding metadata so the image tool is available for OpenCode catalog models with vision support. Fixes #70482 and #61789.
+- Plugins/OpenCode Go: update the default Go catalog model to `opencode-go/kimi-k2.6`. Thanks @masrlinu.
 - Providers/ElevenLabs: omit the MP3-only `Accept` header for PCM telephony synthesis, so Voice Call requests for `pcm_22050` no longer receive MP3 audio. Fixes #67340. Thanks @marcchabot.
 - Providers/MiniMax TTS: truncate fractional pitch overrides before sending T2A requests, matching MiniMax's integer pitch contract while preserving fractional speed and volume. Fixes #62144.
 - Providers/MiniMax TTS: transcode voice-note targets to Opus so Feishu/Telegram receive native voice messages instead of MP3 file attachments. Fixes #63540, #64134, and #70445.
