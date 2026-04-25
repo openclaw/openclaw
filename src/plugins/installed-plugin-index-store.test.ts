@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
+  inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
@@ -109,6 +110,76 @@ describe("installed plugin index persistence", () => {
     fs.writeFileSync(filePath, JSON.stringify({ version: 999 }), "utf8");
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
+  });
+
+  it("inspects missing, fresh, and stale persisted index state without loading runtime", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    await expect(
+      inspectPersistedInstalledPluginIndex({ stateDir, candidates: [candidate], env }),
+    ).resolves.toMatchObject({
+      state: "missing",
+      refreshReasons: ["missing"],
+      persisted: null,
+      current: {
+        plugins: [expect.objectContaining({ pluginId: "demo" })],
+      },
+    });
+
+    const current = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+
+    await expect(
+      inspectPersistedInstalledPluginIndex({ stateDir, candidates: [candidate], env }),
+    ).resolves.toMatchObject({
+      state: "fresh",
+      refreshReasons: [],
+      persisted: current,
+      current: {
+        plugins: [expect.objectContaining({ pluginId: "demo" })],
+      },
+    });
+
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+        name: "Demo",
+        configSchema: { type: "object" },
+        providers: ["demo", "demo-next"],
+      }),
+      "utf8",
+    );
+
+    await expect(
+      inspectPersistedInstalledPluginIndex({ stateDir, candidates: [candidate], env }),
+    ).resolves.toMatchObject({
+      state: "stale",
+      refreshReasons: ["stale-manifest"],
+      persisted: current,
+      current: {
+        plugins: [
+          expect.objectContaining({
+            pluginId: "demo",
+            contributions: expect.objectContaining({ providers: ["demo", "demo-next"] }),
+          }),
+        ],
+      },
+    });
   });
 
   it("refreshes and persists a rebuilt index without loading plugin runtime", async () => {
