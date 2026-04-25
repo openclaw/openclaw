@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
@@ -12,6 +15,7 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 
@@ -264,6 +268,41 @@ function wrapPcm16MonoToWav(pcm: Buffer, sampleRate = GOOGLE_TTS_SAMPLE_RATE): B
   return Buffer.concat([header, pcm]);
 }
 
+async function transcodeWavToOpus(wavBuffer: Buffer, timeoutMs: number | undefined) {
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  await mkdir(tempRoot, { recursive: true, mode: 0o700 });
+  const tempDir = await mkdtemp(path.join(tempRoot, "tts-google-"));
+  try {
+    const inputPath = path.join(tempDir, "input.wav");
+    const outputPath = path.join(tempDir, "voice.opus");
+    await writeFile(inputPath, wavBuffer, { mode: 0o600 });
+    await runFfmpeg(
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        inputPath,
+        "-vn",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "64k",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
+        outputPath,
+      ],
+      { timeoutMs },
+    );
+    return await readFile(outputPath);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function synthesizeGoogleTtsPcm(params: {
   text: string;
   apiKey: string;
@@ -394,8 +433,18 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         speakerName: overrides.speakerName ?? config.speakerName,
         timeoutMs: req.timeoutMs,
       });
+      const wav = wrapPcm16MonoToWav(pcm);
+      if (req.target === "voice-note") {
+        const opus = await transcodeWavToOpus(wav, req.timeoutMs);
+        return {
+          audioBuffer: opus,
+          outputFormat: "opus",
+          fileExtension: ".opus",
+          voiceCompatible: true,
+        };
+      }
       return {
-        audioBuffer: wrapPcm16MonoToWav(pcm),
+        audioBuffer: wav,
         outputFormat: "wav",
         fileExtension: ".wav",
         voiceCompatible: false,

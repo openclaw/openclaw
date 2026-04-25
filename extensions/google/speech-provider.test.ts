@@ -1,5 +1,12 @@
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const runFfmpegMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  runFfmpeg: runFfmpegMock,
+}));
+
 import { buildGoogleSpeechProvider, __testing } from "./speech-provider.js";
 
 function installGoogleTtsFetchMock(pcm = Buffer.from([1, 0, 2, 0])) {
@@ -27,6 +34,17 @@ function installGoogleTtsFetchMock(pcm = Buffer.from([1, 0, 2, 0])) {
 }
 
 describe("Google speech provider", () => {
+  beforeEach(() => {
+    runFfmpegMock.mockReset();
+    runFfmpegMock.mockImplementation(async (args: string[]) => {
+      const outputPath = args.at(-1);
+      if (typeof outputPath === "string") {
+        const fs = await import("node:fs/promises");
+        await fs.writeFile(outputPath, Buffer.from("opus-default"));
+      }
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -370,5 +388,53 @@ describe("Google speech provider", () => {
     expect(postJsonRequestSpy).toHaveBeenCalledWith(
       expect.objectContaining({ allowPrivateNetwork: true }),
     );
+  });
+
+  it("transcodes Google PCM to Opus for voice-note targets", async () => {
+    installGoogleTtsFetchMock();
+    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+      const outputPath = args.at(-1);
+      if (typeof outputPath !== "string") {
+        throw new Error("missing ffmpeg output path");
+      }
+      const fs = await import("node:fs/promises");
+      await fs.writeFile(outputPath, Buffer.from("fake-opus-data"));
+    });
+
+    const provider = buildGoogleSpeechProvider();
+    const result = await provider.synthesize({
+      text: "Hello world",
+      cfg: {},
+      providerConfig: { apiKey: "google-test-key" },
+      target: "voice-note",
+      timeoutMs: 30_000,
+    });
+
+    expect(result.outputFormat).toBe("opus");
+    expect(result.fileExtension).toBe(".opus");
+    expect(result.voiceCompatible).toBe(true);
+    expect(result.audioBuffer.toString()).toBe("fake-opus-data");
+    expect(runFfmpegMock).toHaveBeenCalledWith(
+      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000"]),
+      { timeoutMs: 30_000 },
+    );
+  });
+
+  it("emits WAV for non-voice-note targets and does not invoke ffmpeg", async () => {
+    installGoogleTtsFetchMock();
+
+    const provider = buildGoogleSpeechProvider();
+    const result = await provider.synthesize({
+      text: "Hello world",
+      cfg: {},
+      providerConfig: { apiKey: "google-test-key" },
+      target: "audio-file",
+      timeoutMs: 30_000,
+    });
+
+    expect(result.outputFormat).toBe("wav");
+    expect(result.fileExtension).toBe(".wav");
+    expect(result.voiceCompatible).toBe(false);
+    expect(runFfmpegMock).not.toHaveBeenCalled();
   });
 });
