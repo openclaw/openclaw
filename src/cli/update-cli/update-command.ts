@@ -57,6 +57,7 @@ import {
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
+import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
@@ -580,6 +581,9 @@ async function updatePluginsAfterCoreUpdate(params: {
     config: params.configSnapshot.sourceConfig,
     channel: params.channel,
     workspaceDir: params.root,
+    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
+      workspaceDir: params.root,
+    }),
     logger: pluginLogger,
   });
   let pluginConfig = syncResult.config;

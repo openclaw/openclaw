@@ -15,25 +15,6 @@ export type ExternalizedBundledPluginBridge = {
   preferOver?: readonly string[];
 };
 
-const EXTERNALIZED_BUNDLED_PLUGIN_BRIDGES: readonly ExternalizedBundledPluginBridge[] = [
-  {
-    bundledPluginId: "tlon",
-    npmSpec: "@openclaw/tlon",
-    channelIds: ["tlon"],
-  },
-  {
-    bundledPluginId: "twitch",
-    npmSpec: "@openclaw/twitch",
-    channelIds: ["twitch", "twitch-chat"],
-    legacyPluginIds: ["twitch-chat"],
-  },
-  {
-    bundledPluginId: "synology-chat",
-    npmSpec: "@openclaw/synology-chat",
-    channelIds: ["synology-chat"],
-  },
-];
-
 function normalizePluginId(value: string | undefined): string {
   return value?.trim() ?? "";
 }
@@ -59,8 +40,4 @@ export function getExternalizedBundledPluginLookupIds(
         .filter(Boolean),
     ),
   );
-}
-
-export function listExternalizedBundledPluginBridges(): readonly ExternalizedBundledPluginBridge[] {
-  return EXTERNALIZED_BUNDLED_PLUGIN_BRIDGES;
 }
