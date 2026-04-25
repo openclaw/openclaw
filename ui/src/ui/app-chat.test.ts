@@ -149,6 +149,49 @@ describe("refreshChatAvatar", () => {
     expect(host.chatAvatarUrl).toBe("blob:local-avatar");
   });
 
+  it("blobifies local avatar URLs even without an auth token", async () => {
+    const createObjectURL = vi.fn(() => "blob:no-auth-avatar");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = createObjectURL;
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url === "/avatar/main?meta=1") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ avatarUrl: "/avatar/main" }),
+        });
+      }
+      if (url === "/avatar/main") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["avatar"]),
+        });
+      }
+      throw new Error(`Unexpected avatar URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    // No auth token — basePath is empty (no settings.token, no password, no hello.auth)
+    const host = makeHost({ basePath: "", sessionKey: "agent:main" });
+    await refreshChatAvatar(host);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/avatar/main?meta=1",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/avatar/main",
+      expect.objectContaining({ method: "GET", headers: undefined }),
+    );
+    expect(host.chatAvatarUrl).toBe("blob:no-auth-avatar");
+  });
+
   it("prefers the paired device token for avatar metadata and local avatar URLs", async () => {
     const createObjectURL = vi.fn(() => "blob:device-avatar");
     const revokeObjectURL = vi.fn();
