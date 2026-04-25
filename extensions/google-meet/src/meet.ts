@@ -112,6 +112,12 @@ export type GoogleMeetArtifactsResult = {
   artifacts: GoogleMeetArtifactsEntry[];
 };
 
+export type GoogleMeetLatestConferenceRecordResult = {
+  input: string;
+  space: GoogleMeetSpace;
+  conferenceRecord?: GoogleMeetConferenceRecord;
+};
+
 export type GoogleMeetAttendanceRow = {
   conferenceRecord: string;
   participant: string;
@@ -257,6 +263,7 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
   path: string;
   collectionKey: string;
   query?: Record<string, string | number | boolean | undefined>;
+  maxItems?: number;
   auditContext: string;
   errorPrefix: string;
 }): Promise<T[]> {
@@ -270,13 +277,17 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
       auditContext: params.auditContext,
       errorPrefix: params.errorPrefix,
     });
-    items.push(
-      ...assertResourceArray<T>(
-        payload[params.collectionKey],
-        params.collectionKey,
-        params.errorPrefix,
-      ),
+    const pageItems = assertResourceArray<T>(
+      payload[params.collectionKey],
+      params.collectionKey,
+      params.errorPrefix,
     );
+    const remaining =
+      typeof params.maxItems === "number" ? Math.max(params.maxItems - items.length, 0) : undefined;
+    items.push(...(remaining === undefined ? pageItems : pageItems.slice(0, remaining)));
+    if (typeof params.maxItems === "number" && items.length >= params.maxItems) {
+      break;
+    }
     pageToken = typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
   } while (pageToken);
   return items;
@@ -370,6 +381,7 @@ export async function listGoogleMeetConferenceRecords(params: {
   accessToken: string;
   meeting?: string;
   pageSize?: number;
+  maxItems?: number;
 }): Promise<GoogleMeetConferenceRecord[]> {
   const filter = params.meeting
     ? `space.name = "${normalizeGoogleMeetSpaceName(params.meeting)}"`
@@ -382,9 +394,31 @@ export async function listGoogleMeetConferenceRecords(params: {
       pageSize: params.pageSize,
       filter,
     },
+    maxItems: params.maxItems,
     auditContext: "google-meet.conferenceRecords.list",
     errorPrefix: "Google Meet conferenceRecords.list",
   });
+}
+
+export async function fetchLatestGoogleMeetConferenceRecord(params: {
+  accessToken: string;
+  meeting: string;
+}): Promise<GoogleMeetLatestConferenceRecordResult> {
+  const space = await fetchGoogleMeetSpace({
+    accessToken: params.accessToken,
+    meeting: params.meeting,
+  });
+  const [conferenceRecord] = await listGoogleMeetConferenceRecords({
+    accessToken: params.accessToken,
+    meeting: space.name,
+    pageSize: 1,
+    maxItems: 1,
+  });
+  return {
+    input: params.meeting,
+    space,
+    ...(conferenceRecord ? { conferenceRecord } : {}),
+  };
 }
 
 export async function listGoogleMeetParticipants(params: {

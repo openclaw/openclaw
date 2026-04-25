@@ -14,6 +14,7 @@ import {
   createGoogleMeetSpace,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
+  fetchLatestGoogleMeetConferenceRecord,
   fetchGoogleMeetSpace,
   normalizeGoogleMeetSpaceName,
 } from "./src/meet.js";
@@ -343,6 +344,7 @@ describe("google-meet plugin", () => {
             "setup_status",
             "resolve_space",
             "preflight",
+            "latest",
             "artifacts",
             "attendance",
             "recover_current_tab",
@@ -494,6 +496,32 @@ describe("google-meet plugin", () => {
         auditContext: "google-meet.conferenceRecords.transcripts.entries.list",
       }),
     );
+  });
+
+  it("fetches only the latest Meet conference record for a meeting", async () => {
+    const fetchMock = stubMeetArtifactsApi();
+
+    await expect(
+      fetchLatestGoogleMeetConferenceRecord({
+        accessToken: "token",
+        meeting: "abc-defg-hij",
+      }),
+    ).resolves.toMatchObject({
+      input: "abc-defg-hij",
+      space: { name: "spaces/abc-defg-hij" },
+      conferenceRecord: { name: "conferenceRecords/rec-1" },
+    });
+
+    const listCall = fetchMock.mock.calls.find(([input]) => {
+      const url = requestUrl(input);
+      return url.pathname === "/v2/conferenceRecords";
+    });
+    if (!listCall) {
+      throw new Error("Expected conferenceRecords.list fetch call");
+    }
+    const listUrl = requestUrl(listCall[0]);
+    expect(listUrl.searchParams.get("pageSize")).toBe("1");
+    expect(listUrl.searchParams.get("filter")).toBe('space.name = "spaces/abc-defg-hij"');
   });
 
   it("lists Meet attendance rows with participant sessions", async () => {
@@ -693,6 +721,26 @@ describe("google-meet plugin", () => {
     });
 
     expect(result.details.attendance).toEqual([expect.objectContaining({ displayName: "Alice" })]);
+  });
+
+  it("reports the latest conference record through the tool", async () => {
+    stubMeetArtifactsApi();
+    const { tools } = setup();
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { conferenceRecord?: { name?: string } } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "latest",
+      accessToken: "token",
+      expiresAt: Date.now() + 120_000,
+      meeting: "abc-defg-hij",
+    });
+
+    expect(result.details.conferenceRecord).toMatchObject({ name: "conferenceRecords/rec-1" });
   });
 
   it("fails setup status when the configured Chrome node is not connected", async () => {
@@ -913,6 +961,37 @@ describe("google-meet plugin", () => {
         ],
         tokenSource: "cached-access-token",
       });
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI latest prints the latest conference record", async () => {
+    stubMeetArtifactsApi();
+    const program = new Command();
+    const stdout = captureStdout();
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () => ({}) as unknown as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(
+        [
+          "googlemeet",
+          "latest",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--meeting",
+          "abc-defg-hij",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain("space: spaces/abc-defg-hij");
+      expect(stdout.output()).toContain("conference record: conferenceRecords/rec-1");
     } finally {
       stdout.restore();
     }
