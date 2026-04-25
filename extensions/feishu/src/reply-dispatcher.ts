@@ -453,12 +453,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta" });
+              queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
             }
             if (info?.kind === "final") {
-              streamText = mergeStreamingText(streamText, text);
-              await closeStreaming();
-              deliveredFinalTexts.add(text);
+              streamText = text;
+              flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
