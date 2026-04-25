@@ -165,6 +165,34 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/screenshot.png"]);
   });
 
+  it("preserves legacy audio_as_voice when queuing trusted MEDIA tool output", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+      builtinToolNames: new Set(["tts"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated audio reply.\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus",
+          },
+        ],
+      },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+  });
+
   it("does NOT emit local media for untrusted tools", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });

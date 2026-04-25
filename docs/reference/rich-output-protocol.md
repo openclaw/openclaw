@@ -14,6 +14,7 @@ Assistant output can carry a small set of delivery/render directives:
 - `[embed ...]` for Control UI rich rendering
 
 These directives are separate. `MEDIA:` and reply/voice tags remain delivery metadata; `[embed ...]` is the web-only rich render path.
+Trusted tool-result media uses the same `MEDIA:` / `[[audio_as_voice]]` parser before delivery, so legacy tool outputs can still mark an audio attachment as a voice note.
 
 When block streaming is enabled, `MEDIA:` remains single-delivery metadata for a
 turn. If the same media URL is sent in a streamed block and repeated in the final
