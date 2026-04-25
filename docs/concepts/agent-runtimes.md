@@ -46,6 +46,20 @@ That means OpenClaw selects an OpenAI model ref, then asks the Codex app-server
 runtime to run the embedded agent turn. It does not mean the channel, model
 provider catalog, or OpenClaw session store becomes Codex.
 
+When the bundled `codex` plugin is enabled, natural-language Codex control
+should use the native `/codex` command surface (`/codex bind`, `/codex threads`,
+`/codex resume`, `/codex steer`, `/codex stop`) instead of ACP. Use ACP for
+Codex only when the user explicitly asks for ACP/acpx or is testing the ACP
+adapter path. Claude Code, Gemini CLI, OpenCode, Cursor, and similar external
+harnesses still use ACP.
+
+| You mean...                             | Use...                                       |
+| --------------------------------------- | -------------------------------------------- |
+| Codex app-server chat/thread control    | `/codex ...` from the bundled `codex` plugin |
+| Codex app-server embedded agent runtime | `embeddedHarness.runtime: "codex"`           |
+| OpenAI Codex OAuth on the PI runner     | `openai-codex/*` model refs                  |
+| Claude Code or other external harness   | ACP/acpx                                     |
+
 For the OpenAI-family prefix split, see [OpenAI](/providers/openai) and
 [Model providers](/concepts/model-providers). For the Codex runtime support
 contract, see [Codex harness](/plugins/codex-harness#v1-support-contract).

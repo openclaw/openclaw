@@ -381,6 +381,14 @@ function buildMessagingSection(params: {
   ];
 }
 
+function hasNativeCommand(params: { nativeCommandNames?: string[]; command: string }): boolean {
+  const target = normalizeLowercaseStringOrEmpty(params.command);
+  return (params.nativeCommandNames ?? []).some((name) => {
+    const normalized = normalizeLowercaseStringOrEmpty(name).replace(/^\/+/, "");
+    return normalized === target;
+  });
+}
+
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   if (params.isMinimal) {
     return [];
@@ -461,6 +469,8 @@ export function buildAgentSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Registered runtime slash/native command names such as `codex`. */
+  nativeCommandNames?: string[];
   runtimeInfo?: {
     agentId?: string;
     host?: string;
@@ -569,6 +579,10 @@ export function buildAgentSystemPrompt(params: {
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
+  const nativeCodexCommandAvailable = hasNativeCommand({
+    nativeCommandNames: params.nativeCommandNames,
+    command: "codex",
+  });
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
     const normalized = key.trim().toLowerCase();
@@ -718,10 +732,15 @@ export function buildAgentSystemPrompt(params: {
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     'Sub-agents start isolated by default. Use `sessions_spawn` with `context:"fork"` only when the child needs the current transcript context; otherwise omit `context` or use `context:"isolated"`.',
+    ...(nativeCodexCommandAvailable
+      ? [
+          "Native Codex app-server plugin is available (`/codex ...`). For Codex bind/control/thread/resume/steer/stop requests, prefer `/codex bind`, `/codex threads`, `/codex resume`, `/codex steer`, and `/codex stop` over ACP.",
+          "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
+        ]
+      : []),
     ...(acpHarnessSpawnAllowed
       ? [
-          'For requests like "do this in claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
-          "For Codex conversation binding/control, prefer the native Codex app-server plugin path (`/codex bind`, `/codex threads`, `/codex resume`). Use ACP for Codex only when the user explicitly asks for ACP/`/acp`, or for background child sessions where native Codex runtime spawn is not exposed.",
+          'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
           'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
           "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',

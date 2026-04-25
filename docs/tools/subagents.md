@@ -60,7 +60,7 @@ transcript path on disk when you need the raw full transcript.
 - `--model` and `--thinking` override defaults for that specific run.
 - Use `info`/`log` to inspect details and output after completion.
 - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
-- For ACP harness sessions (Codex, Claude Code, Gemini CLI, OpenCode), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime, and see [ACP Agents](/tools/acp-agents), especially the [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.list[]` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
+- For ACP harness sessions (Claude Code, Gemini CLI, OpenCode, or explicit Codex ACP/acpx), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime, and see [ACP Agents](/tools/acp-agents), especially the [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. When the `codex` plugin is enabled, Codex chat/thread control should prefer `/codex ...` over ACP unless the user explicitly asks for ACP/acpx. OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.list[]` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
 
 Primary goals:
 
@@ -103,7 +103,7 @@ Tool params:
 - `task` (required)
 - `label?` (optional)
 - `agentId?` (optional; spawn under another agent id if allowed)
-- `runtime?` (`subagent|acp`, default `subagent`; `acp` is only for external ACP harnesses such as `codex`, `claude`, `gemini`, or `opencode`, or for `agents.list[]` entries whose `runtime.type` is `acp`)
+- `runtime?` (`subagent|acp`, default `subagent`; `acp` is only for external ACP harnesses such as `claude`, `gemini`, `opencode`, or explicitly requested Codex ACP/acpx, or for `agents.list[]` entries whose `runtime.type` is `acp`)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (defaults to `agents.defaults.subagents.runTimeoutSeconds` when set, otherwise `0`; when set, the sub-agent run is aborted after N seconds)
@@ -159,7 +159,7 @@ Allowlist:
 
 Discovery:
 
-- Use `agents_list` to see which agent ids are currently allowed for `sessions_spawn`.
+- Use `agents_list` to see which agent ids are currently allowed for `sessions_spawn`. The response includes each listed agent's effective model and embedded runtime metadata so callers can distinguish PI, Codex app-server, and other configured native runtimes.
 
 Auto-archive:
 

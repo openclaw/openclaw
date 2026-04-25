@@ -20,6 +20,12 @@ If you are trying to orient yourself, start with
 `openai/gpt-5.5` is the model ref, `codex` is the runtime, and Telegram,
 Discord, Slack, or another channel remains the communication surface.
 
+The same plugin also owns the native `/codex` chat-control command surface. If
+the plugin is enabled and the user asks to bind, resume, steer, stop, or inspect
+Codex threads from chat, agents should prefer `/codex ...` over ACP. ACP remains
+the explicit fallback when the user asks for ACP/acpx or is testing the ACP
+Codex adapter.
+
 Native Codex turns keep OpenClaw plugin hooks as the public compatibility layer.
 These are in-process OpenClaw hooks, not Codex `hooks.json` command hooks:
 

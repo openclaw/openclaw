@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Android/Talk Mode: expose Talk Mode in the Voice tab with runtime-owned voice capture modes and microphone foreground-service escalation. Thanks @alex-latitude.
 - Providers/LiteLLM: register `litellm` as an image-generation provider so `image_generate model=litellm/...` calls and `agents.defaults.imageGenerationModel.fallbacks` entries resolve through the LiteLLM proxy. Thanks @zqchris.
 - Codex harness: require Codex app-server `0.125.0` or newer and cover native MCP `PreToolUse`, `PostToolUse`, and `PermissionRequest` payloads through the OpenClaw hook relay.
+- Agents/Codex: teach prompts and `agents_list` to surface native Codex app-server availability so agents prefer `/codex ...` over Codex ACP unless ACP/acpx is explicit. Thanks @vincentkoc.
 
 ### Fixes
 
