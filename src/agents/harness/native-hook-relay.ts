@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -98,7 +98,7 @@ type NativeHookRelayInvocationMetadata = Partial<
 
 type NativeHookRelayProviderAdapter = {
   normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
-  readToolInput: (rawPayload: JsonValue) => Record<string, unknown>;
+  readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
   renderPreToolUseBlockResponse: (reason: string) => NativeHookRelayProcessResponse;
@@ -116,6 +116,10 @@ const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
 const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;
 const MAX_NATIVE_HOOK_RELAY_STRING_LENGTH = 1_000_000;
 const MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH = 4_000_000;
+const MAX_NATIVE_HOOK_RELAY_HISTORY_STRING_LENGTH = 4_000;
+const MAX_NATIVE_HOOK_RELAY_HISTORY_TOTAL_STRING_LENGTH = 20_000;
+const MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS = 50;
+const MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS = 50;
 const MAX_PERMISSION_FALLBACK_KEYS = 200;
 const MAX_PERMISSION_FALLBACK_KEY_CHARS = 240;
 const MAX_APPROVAL_TITLE_LENGTH = 80;
@@ -146,7 +150,7 @@ type NativeHookRelayPermissionApprovalRequest = {
   toolCallId?: string;
   cwd?: string;
   model?: string;
-  toolInput: Record<string, unknown>;
+  toolInput: Record<string, JsonValue>;
   signal?: AbortSignal;
 };
 
@@ -325,7 +329,10 @@ export function renderNativeHookRelayUnavailableResponse(params: {
 }
 
 function recordNativeHookRelayInvocation(invocation: NativeHookRelayInvocation): void {
-  invocations.push(invocation);
+  invocations.push({
+    ...invocation,
+    rawPayload: snapshotNativeHookRelayPayload(invocation.rawPayload),
+  });
   if (invocations.length > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
     invocations.splice(0, invocations.length - MAX_NATIVE_HOOK_RELAY_INVOCATIONS);
   }
@@ -481,7 +488,10 @@ function nativeHookRelayPermissionApprovalKey(params: {
   return [
     params.registration.relayId,
     params.registration.runId,
-    params.request.toolCallId ?? permissionRequestFallbackKey(params.request),
+    params.request.toolCallId
+      ? `call:${params.request.toolCallId}`
+      : permissionRequestFallbackKey(params.request),
+    permissionRequestContentFingerprint(params.request),
   ].join(":");
 }
 
@@ -511,6 +521,53 @@ function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unkn
   return fingerprint || "none";
 }
 
+function permissionRequestContentFingerprint(
+  request: NativeHookRelayPermissionApprovalRequest,
+): string {
+  const hash = createHash("sha256");
+  hash.update(request.toolName);
+  hash.update("\0");
+  updateJsonHash(hash, request.toolInput);
+  return hash.digest("hex");
+}
+
+function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): void {
+  if (value === null) {
+    hash.update("null");
+    return;
+  }
+  if (typeof value === "string") {
+    hash.update("string:");
+    hash.update(JSON.stringify(value));
+    return;
+  }
+  if (typeof value === "number") {
+    hash.update(`number:${String(value)}`);
+    return;
+  }
+  if (typeof value === "boolean") {
+    hash.update(`boolean:${String(value)}`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    hash.update("[");
+    for (const item of value) {
+      updateJsonHash(hash, item);
+      hash.update(",");
+    }
+    hash.update("]");
+    return;
+  }
+  hash.update("{");
+  for (const key of Object.keys(value).toSorted()) {
+    hash.update(JSON.stringify(key));
+    hash.update(":");
+    updateJsonHash(hash, value[key]);
+    hash.update(",");
+  }
+  hash.update("}");
+}
+
 function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now()): boolean {
   const windowStart = now - PERMISSION_APPROVAL_WINDOW_MS;
   const timestamps = (permissionApprovalWindows.get(relayId) ?? []).filter(
@@ -532,6 +589,55 @@ function removeNativeHookRelayPermissionState(relayId: string): void {
       pendingPermissionApprovals.delete(key);
     }
   }
+}
+
+function snapshotNativeHookRelayPayload(payload: JsonValue): JsonValue {
+  return snapshotJsonValue(payload, {
+    remainingStringLength: MAX_NATIVE_HOOK_RELAY_HISTORY_TOTAL_STRING_LENGTH,
+  });
+}
+
+function snapshotJsonValue(value: JsonValue, state: { remainingStringLength: number }): JsonValue {
+  if (value === null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return snapshotString(value, state);
+  }
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS)
+      .map((item) => snapshotJsonValue(item, state));
+    if (value.length > MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS) {
+      items.push("[truncated]");
+    }
+    return items;
+  }
+  const snapshot: Record<string, JsonValue> = {};
+  const keys = Object.keys(value);
+  for (const key of keys.slice(0, MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS)) {
+    snapshot[snapshotString(key, state)] = snapshotJsonValue(value[key], state);
+  }
+  if (keys.length > MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS) {
+    snapshot["[truncated]"] = keys.length - MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS;
+  }
+  return snapshot;
+}
+
+function snapshotString(value: string, state: { remainingStringLength: number }): string {
+  if (state.remainingStringLength <= 0) {
+    return "[truncated]";
+  }
+  const limit = Math.min(
+    value.length,
+    MAX_NATIVE_HOOK_RELAY_HISTORY_STRING_LENGTH,
+    state.remainingStringLength,
+  );
+  state.remainingStringLength -= limit;
+  if (limit >= value.length) {
+    return value;
+  }
+  return `${value.slice(0, limit)}...[truncated]`;
 }
 
 function normalizeNativeHookInvocation(params: {
@@ -588,16 +694,16 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   return metadata;
 }
 
-function readCodexToolInput(rawPayload: JsonValue): Record<string, unknown> {
+function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const toolInput = payload.tool_input;
   if (isJsonObject(toolInput)) {
-    return toolInput;
+    return toolInput as Record<string, JsonValue>;
   }
   if (toolInput === undefined) {
     return {};
   }
-  return { value: toolInput };
+  return { value: toolInput as JsonValue };
 }
 
 function readCodexToolResponse(rawPayload: JsonValue): unknown {

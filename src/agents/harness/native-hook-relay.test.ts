@@ -90,6 +90,34 @@ describe("native hook relay registry", () => {
     ]);
   });
 
+  it("retains bounded payload snapshots in invocation history", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        tool_name: "mcp__filesystem__read_file",
+        tool_use_id: "large-payload-call",
+        tool_input: { path: "/repo/large.txt" },
+        tool_response: "x".repeat(50_000),
+      },
+    });
+
+    const [recorded] = __testing.getNativeHookRelayInvocationsForTests();
+    expect(JSON.stringify(recorded?.rawPayload).length).toBeLessThan(25_000);
+    expect(recorded?.rawPayload).toMatchObject({
+      tool_response: expect.stringContaining("[truncated]"),
+    });
+  });
+
   it("removes retained invocations when a relay is unregistered", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -789,6 +817,63 @@ describe("native hook relay registry", () => {
         },
       },
     ]);
+  });
+
+  it("does not reuse pending PermissionRequest approvals when a tool call id is reused with different input", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    let resolveDecision: ((decision: "allow") => void) | undefined;
+    const pendingDecision = new Promise<"allow">((resolve) => {
+      resolveDecision = resolve;
+    });
+    const approvalRequester = vi.fn(async (request: { toolInput?: Record<string, unknown> }) => {
+      return request.toolInput?.command === "git status" ? pendingDecision : "deny";
+    });
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    const first = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_use_id: "reused-call-id",
+        tool_input: { command: "git status" },
+      },
+    });
+    const second = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_use_id: "reused-call-id",
+        tool_input: { command: "rm -rf /tmp/openclaw-important-state" },
+      },
+    });
+
+    await Promise.resolve();
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    const secondResponse = await second;
+    expect(JSON.parse(secondResponse.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "Denied by user" },
+      },
+    });
+    resolveDecision?.("allow");
+    const firstResponse = await first;
+    expect(JSON.parse(firstResponse.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "allow" },
+      },
+    });
   });
 
   it("defers PermissionRequest approvals after the per-relay approval budget is exhausted", async () => {

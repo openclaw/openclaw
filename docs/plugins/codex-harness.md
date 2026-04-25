@@ -608,7 +608,7 @@ Supported in Codex runtime v1:
 | Dynamic tool hooks                            | Supported                               | `before_tool_call`, `after_tool_call`, and tool-result middleware run around OpenClaw-owned dynamic tools.                                                                                            |
 | Lifecycle hooks                               | Supported as adapter observations       | `llm_input`, `llm_output`, `agent_end`, `before_compaction`, and `after_compaction` fire with honest Codex-mode payloads.                                                                             |
 | Native shell, patch, and MCP block or observe | Supported through the native hook relay | Codex `PreToolUse` and `PostToolUse` are relayed for committed native tool surfaces, including MCP payloads on Codex app-server `0.125.0` or newer. Blocking is supported; argument rewriting is not. |
-| Native permission policy                      | Supported through the native hook relay | Codex `PermissionRequest` can be routed through OpenClaw policy where the runtime exposes it.                                                                                                         |
+| Native permission policy                      | Supported through the native hook relay | Codex `PermissionRequest` can be routed through OpenClaw policy where the runtime exposes it. If OpenClaw returns no decision, Codex continues through its normal guardian or user approval path.     |
 | App-server trajectory capture                 | Supported                               | OpenClaw records the request it sent to app-server and the app-server notifications it receives.                                                                                                      |
 
 Not supported in Codex runtime v1:
@@ -637,6 +637,10 @@ the Codex runtime, that includes shell, patch, and MCP `PreToolUse`,
 `PostToolUse`, and `PermissionRequest` payloads. Do not assume every future
 Codex hook event is an OpenClaw plugin surface until the runtime contract names
 it.
+
+For `PermissionRequest`, OpenClaw only returns explicit allow or deny decisions
+when policy decides. A no-decision result is not an allow. Codex treats it as no
+hook decision and falls through to its own guardian or user approval path.
 
 Codex MCP tool approval elicitations are routed through OpenClaw's plugin
 approval flow when Codex marks `_meta.codex_approval_kind` as
