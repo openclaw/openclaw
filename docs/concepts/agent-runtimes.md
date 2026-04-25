@@ -14,12 +14,18 @@ the finished turn to OpenClaw.
 Runtimes are easy to confuse with providers because both show up near model
 configuration. They are different layers:
 
-| Layer              | Examples                              | What It Means                                                       |
-| ------------------ | ------------------------------------- | ------------------------------------------------------------------- |
-| Provider           | `openai`, `anthropic`, `openai-codex` | How OpenClaw authenticates, discovers models, and names model refs. |
-| Model              | `gpt-5.5`, `claude-opus-4-6`          | The model selected for the agent turn.                              |
-| Runtime or harness | `pi`, `codex`, ACP-backed runtimes    | The low level loop that executes the prepared turn.                 |
-| Channel            | Telegram, Discord, Slack, WhatsApp    | Where messages enter and leave OpenClaw.                            |
+| Layer         | Examples                              | What It Means                                                       |
+| ------------- | ------------------------------------- | ------------------------------------------------------------------- |
+| Provider      | `openai`, `anthropic`, `openai-codex` | How OpenClaw authenticates, discovers models, and names model refs. |
+| Model         | `gpt-5.5`, `claude-opus-4-6`          | The model selected for the agent turn.                              |
+| Agent runtime | `pi`, `codex`, ACP-backed runtimes    | The low level loop that executes the prepared turn.                 |
+| Channel       | Telegram, Discord, Slack, WhatsApp    | Where messages enter and leave OpenClaw.                            |
+
+You will also see the word **harness** in code and config. A harness is the
+implementation that provides an agent runtime. For example, the bundled Codex
+harness implements the `codex` runtime. The config key is still named
+`embeddedHarness` for compatibility, but user-facing docs and status output
+should generally say runtime.
 
 The common Codex setup uses the `openai` provider with the `codex` runtime:
 
@@ -101,11 +107,11 @@ The Codex runtime support contract is documented in
 
 ## Status labels
 
-Status output may show both runtime and runner labels. Read them as diagnostics,
-not as provider names.
+Status output may show both `Execution` and `Runtime` labels. Read them as
+diagnostics, not as provider names.
 
 - A model ref such as `openai/gpt-5.5` tells you the selected provider/model.
-- A runtime or harness id such as `codex` tells you which loop is executing the turn.
+- A runtime id such as `codex` tells you which loop is executing the turn.
 - A channel label such as Telegram or Discord tells you where the conversation is happening.
 
 If a session still shows PI after changing runtime config, start a new session
