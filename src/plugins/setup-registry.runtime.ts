@@ -36,7 +36,7 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
   }
   bundledSetupCliBackendsCache = loadPluginRegistrySnapshot({ cache: true }).plugins.flatMap(
     (plugin) => {
-      if (plugin.origin !== "bundled" || plugin.enabled === false) {
+      if (plugin.origin !== "bundled" || !plugin.enabled) {
         return [];
       }
       return plugin.contributions.cliBackends.map(
