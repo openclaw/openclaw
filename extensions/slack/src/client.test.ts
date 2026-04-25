@@ -14,6 +14,8 @@ vi.mock("@slack/web-api", () => {
 
 let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
+let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
+let clearSlackWriteClientCacheForTest: typeof import("./client.js").clearSlackWriteClientCacheForTest;
 let resolveSlackWebClientOptions: typeof import("./client.js").resolveSlackWebClientOptions;
 let resolveSlackWriteClientOptions: typeof import("./client.js").resolveSlackWriteClientOptions;
 let SLACK_DEFAULT_RETRY_OPTIONS: typeof import("./client.js").SLACK_DEFAULT_RETRY_OPTIONS;
@@ -25,6 +27,8 @@ beforeAll(async () => {
   ({
     createSlackWebClient,
     createSlackWriteClient,
+    getSlackWriteClient,
+    clearSlackWriteClientCacheForTest,
     resolveSlackWebClientOptions,
     resolveSlackWriteClientOptions,
     SLACK_DEFAULT_RETRY_OPTIONS,
@@ -35,6 +39,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   WebClient.mockClear();
+  clearSlackWriteClientCacheForTest();
 });
 
 describe("slack web client config", () => {
@@ -92,6 +97,29 @@ describe("slack web client config", () => {
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       }),
     );
+  });
+
+  it("reuses default write clients per token", () => {
+    const first = getSlackWriteClient("xoxb-test");
+    const second = getSlackWriteClient("xoxb-test");
+
+    expect(second).toBe(first);
+    expect(WebClient).toHaveBeenCalledTimes(1);
+    expect(WebClient).toHaveBeenCalledWith(
+      "xoxb-test",
+      expect.objectContaining({
+        maxRequestConcurrency: 1,
+        retryConfig: SLACK_WRITE_RETRY_OPTIONS,
+      }),
+    );
+  });
+
+  it("keeps default write clients separated by token", () => {
+    const first = getSlackWriteClient("xoxb-one");
+    const second = getSlackWriteClient("xoxb-two");
+
+    expect(second).not.toBe(first);
+    expect(WebClient).toHaveBeenCalledTimes(2);
   });
 });
 

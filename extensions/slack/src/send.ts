@@ -19,7 +19,7 @@ import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWriteClient } from "./client.js";
+import { getSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
@@ -397,7 +397,7 @@ async function sendMessageSlackQueued(params: {
   blocks?: (Block | KnownBlock)[];
 }): Promise<SlackSendResult> {
   const { opts, cfg, account, token, recipient, blocks, trimmedMessage } = params;
-  const client = opts.client ?? createSlackWriteClient(token);
+  const client = opts.client ?? getSlackWriteClient(token);
   const { channelId } = await resolveChannelId(client, recipient, {
     accountId: account.accountId,
     token,
