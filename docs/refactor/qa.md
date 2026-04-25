@@ -1,4 +1,10 @@
-# QA Refactor
+---
+summary: "QA refactor plan for scenario catalog and harness consolidation"
+read_when:
+  - Refactoring QA scenario definitions or qa-lab harness code
+  - Moving QA behavior between markdown scenarios and TypeScript harness logic
+title: "QA refactor"
+---
 
 Status: foundational migration landed.
 
@@ -528,3 +534,7 @@ This is the smallest path that proves both goals:
 - whether artifact references should be strongly typed in schema or string-based
 - whether custom handlers should live in one registry or per-surface registries
 - whether the generated JSON compatibility file should remain checked in during migration
+
+## Related
+
+- [QA E2E automation](/concepts/qa-e2e-automation)

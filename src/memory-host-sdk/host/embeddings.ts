@@ -1,8 +1,13 @@
-import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
-import { importNodeLlamaCpp } from "./node-llama.js";
+import {
+  importNodeLlamaCpp,
+  type Llama,
+  type LlamaEmbeddingContext,
+  type LlamaModel,
+} from "./node-llama.js";
 
 export type {
   EmbeddingProvider,
@@ -13,14 +18,14 @@ export type {
   GeminiTaskType,
 } from "./embeddings.types.js";
 
-export const DEFAULT_LOCAL_MODEL =
-  "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
+export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
   const modelCacheDir = normalizeOptionalString(options.local?.modelCacheDir);
+  const contextSize: number | "auto" = options.local?.contextSize ?? 4096;
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
   const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
@@ -47,7 +52,7 @@ export async function createLocalEmbeddingProvider(
           embeddingModel = await llama.loadModel({ modelPath: resolved });
         }
         if (!embeddingContext) {
-          embeddingContext = await embeddingModel.createEmbeddingContext();
+          embeddingContext = await embeddingModel.createEmbeddingContext({ contextSize });
         }
         return embeddingContext;
       } catch (err) {

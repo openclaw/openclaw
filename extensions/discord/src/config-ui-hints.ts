@@ -61,6 +61,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Draft Chunk Break Preference",
     help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   },
+  "streaming.preview.toolProgress": {
+    label: "Discord Draft Tool Progress",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+  },
   "retry.attempts": {
     label: "Discord Retry Attempts",
     help: "Max retry attempts for outbound Discord API calls (default: 3).",
@@ -80,6 +84,10 @@ export const discordChannelConfigUiHints = {
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
+  },
+  "thread.inheritParent": {
+    label: "Discord Thread Parent Inheritance",
+    help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
   },
   "inboundWorker.runTimeoutMs": {
     label: "Discord Inbound Worker Timeout (ms)",
@@ -132,6 +140,10 @@ export const discordChannelConfigUiHints = {
   "voice.enabled": {
     label: "Discord Voice Enabled",
     help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+  },
+  "voice.model": {
+    label: "Discord Voice Model",
+    help: "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model.",
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",

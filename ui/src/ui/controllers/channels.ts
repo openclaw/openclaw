@@ -41,16 +41,17 @@ export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
   }
   state.whatsappBusy = true;
   try {
-    const res = await state.client.request<{ message?: string; qrDataUrl?: string }>(
-      "web.login.start",
-      {
-        force,
-        timeoutMs: 30000,
-      },
-    );
+    const res = await state.client.request<{
+      message?: string;
+      qrDataUrl?: string;
+      connected?: boolean;
+    }>("web.login.start", {
+      force,
+      timeoutMs: 30000,
+    });
     state.whatsappLoginMessage = res.message ?? null;
     state.whatsappLoginQrDataUrl = res.qrDataUrl ?? null;
-    state.whatsappLoginConnected = null;
+    state.whatsappLoginConnected = typeof res.connected === "boolean" ? res.connected : null;
   } catch (err) {
     state.whatsappLoginMessage = String(err);
     state.whatsappLoginQrDataUrl = null;
@@ -66,15 +67,19 @@ export async function waitWhatsAppLogin(state: ChannelsState) {
   }
   state.whatsappBusy = true;
   try {
-    const res = await state.client.request<{ message?: string; connected?: boolean }>(
-      "web.login.wait",
-      {
-        timeoutMs: 120000,
-      },
-    );
+    const res = await state.client.request<{
+      message?: string;
+      connected?: boolean;
+      qrDataUrl?: string;
+    }>("web.login.wait", {
+      timeoutMs: 120000,
+      currentQrDataUrl: state.whatsappLoginQrDataUrl ?? undefined,
+    });
     state.whatsappLoginMessage = res.message ?? null;
     state.whatsappLoginConnected = res.connected ?? null;
-    if (res.connected) {
+    if (res.qrDataUrl) {
+      state.whatsappLoginQrDataUrl = res.qrDataUrl;
+    } else if (res.connected) {
       state.whatsappLoginQrDataUrl = null;
     }
   } catch (err) {

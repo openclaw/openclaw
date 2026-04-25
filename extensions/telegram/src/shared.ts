@@ -19,12 +19,15 @@ import {
 import {
   buildTelegramCommandsListChannelData,
   buildTelegramModelBrowseChannelData,
+  buildTelegramModelsAddProviderChannelData,
   buildTelegramModelsListChannelData,
+  buildTelegramModelsMenuChannelData,
   buildTelegramModelsProviderChannelData,
 } from "./command-ui.js";
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { telegramDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { telegramSecurityAdapter } from "./security.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
 export const TELEGRAM_CHANNEL = "telegram" as const;
@@ -120,6 +123,7 @@ export function createTelegramPluginBase(params: {
   | "capabilities"
   | "commands"
   | "doctor"
+  | "security"
   | "reload"
   | "configSchema"
   | "config"
@@ -146,11 +150,14 @@ export function createTelegramPluginBase(params: {
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: true,
       buildCommandsListChannelData: buildTelegramCommandsListChannelData,
+      buildModelsMenuChannelData: buildTelegramModelsMenuChannelData,
       buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
+      buildModelsAddProviderChannelData: buildTelegramModelsAddProviderChannelData,
       buildModelsListChannelData: buildTelegramModelsListChannelData,
       buildModelBrowseChannelData: buildTelegramModelBrowseChannelData,
     },
     doctor: telegramDoctor,
+    security: telegramSecurityAdapter,
     reload: { configPrefixes: ["channels.telegram"] },
     configSchema: TelegramChannelConfigSchema,
     config: {
@@ -240,6 +247,7 @@ export function createTelegramPluginBase(params: {
     | "capabilities"
     | "commands"
     | "doctor"
+    | "security"
     | "reload"
     | "configSchema"
     | "config"

@@ -105,14 +105,14 @@ export function sanitizeToolResult(result: unknown): unknown {
     const entry = item as Record<string, unknown>;
     const type = readStringValue(entry.type);
     if (type === "text" && typeof entry.text === "string") {
-      return { ...entry, text: truncateToolText(entry.text) };
+      return Object.assign({}, entry, { text: truncateToolText(entry.text) });
     }
     if (type === "image") {
       const data = readStringValue(entry.data);
       const bytes = data ? data.length : undefined;
       const cleaned = { ...entry };
       delete cleaned.data;
-      return { ...cleaned, bytes, omitted: true };
+      return Object.assign({}, cleaned, { bytes, omitted: true });
     }
     return entry;
   });
@@ -239,7 +239,7 @@ export function filterToolResultMediaUrls(
  *
  * Strategy (first match wins):
  * 1. Read structured `details.media` attachments from tool details.
- * 2. Parse legacy `MEDIA:` tokens from text content blocks.
+ * 2. Parse `MEDIA:` directive tokens from text content blocks.
  * 3. Fall back to `details.path` when image content exists (legacy imageResult).
  *
  * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
@@ -249,6 +249,7 @@ export function filterToolResultMediaUrls(
 export type ToolResultMediaArtifact = {
   mediaUrls: string[];
   audioAsVoice?: boolean;
+  trustedLocalMedia?: boolean;
 };
 
 function readToolResultDetailsMedia(
@@ -278,6 +279,44 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   return Array.from(new Set(urls));
 }
 
+function extractTextContentMediaArtifact(content: unknown[]): {
+  mediaUrls: string[];
+  audioAsVoice?: boolean;
+  hasImageContent: boolean;
+} {
+  const mediaUrls: string[] = [];
+  let audioAsVoice = false;
+  let hasImageContent = false;
+
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (entry.type === "image") {
+      hasImageContent = true;
+      continue;
+    }
+    if (entry.type !== "text" || typeof entry.text !== "string") {
+      continue;
+    }
+
+    const parsed = splitMediaFromOutput(entry.text);
+    if (parsed.audioAsVoice) {
+      audioAsVoice = true;
+    }
+    if (parsed.mediaUrls?.length) {
+      mediaUrls.push(...parsed.mediaUrls);
+    }
+  }
+
+  return {
+    mediaUrls,
+    ...(audioAsVoice ? { audioAsVoice: true } : {}),
+    hasImageContent,
+  };
+}
+
 export function extractToolResultMediaArtifact(
   result: unknown,
 ): ToolResultMediaArtifact | undefined {
@@ -292,6 +331,7 @@ export function extractToolResultMediaArtifact(
       return {
         mediaUrls,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       };
     }
   }
@@ -301,35 +341,18 @@ export function extractToolResultMediaArtifact(
     return undefined;
   }
 
-  // Extract legacy MEDIA: paths from text content blocks using the shared
-  // parser so directive matching and validation stay in sync with outbound
-  // reply parsing.
-  const paths: string[] = [];
-  let hasImageContent = false;
-  for (const item of content) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const entry = item as Record<string, unknown>;
-    if (entry.type === "image") {
-      hasImageContent = true;
-      continue;
-    }
-    if (entry.type === "text" && typeof entry.text === "string") {
-      const parsed = splitMediaFromOutput(entry.text);
-      if (parsed.mediaUrls?.length) {
-        paths.push(...parsed.mediaUrls);
-      }
-    }
-  }
+  const textMedia = extractTextContentMediaArtifact(content);
 
-  if (paths.length > 0) {
-    return { mediaUrls: paths };
+  if (textMedia.mediaUrls.length > 0) {
+    return {
+      mediaUrls: textMedia.mediaUrls,
+      ...(textMedia.audioAsVoice ? { audioAsVoice: true } : {}),
+    };
   }
 
   // Fall back to legacy details.path when image content exists but no
   // structured media details or MEDIA: text.
-  if (hasImageContent) {
+  if (textMedia.hasImageContent) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {

@@ -19,6 +19,7 @@ import {
 } from "../infra/agent-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -177,7 +178,7 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
     return lastSlash >= 0 ? filePath.slice(0, lastSlash) : ".";
   };
   const joinPath = (...parts: string[]): string => {
-    const separator = parts.find((part) => part.includes("\\")) ? "\\" : "/";
+    const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
     return parts
       .map((part, index) =>
         index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, ""),
@@ -223,13 +224,7 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
   };
 });
 
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
-  }),
-};
+const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-", skipSessionCleanup: true });

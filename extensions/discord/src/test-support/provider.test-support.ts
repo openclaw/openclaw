@@ -205,6 +205,7 @@ export function mockResolvedDiscordAccountConfig(overrides: Record<string, unkno
   }));
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe handler params shape.
 export function getFirstDiscordMessageHandlerParams<T extends object>() {
   expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
   const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as [T] | undefined;
@@ -469,6 +470,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({
 
 vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
   createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
+  waitForDiscordGatewayPluginRegistration: () => undefined,
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({

@@ -5,12 +5,8 @@ import type { OpenClawConfig } from "../config/types.js";
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(),
 }));
-const bootstrapRegistryMocks = vi.hoisted(() => ({
-  getBootstrapChannelPlugin: vi.fn(),
-}));
 
 vi.mock("../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
-vi.mock("../channels/plugins/bootstrap-registry.js", () => bootstrapRegistryMocks);
 
 import {
   resolveChannelInboundAttachmentRoots,
@@ -30,7 +26,7 @@ function unableToResolve(dirName: string, artifactBasename: string): Error {
 function createContext(provider: string, accountId = "work"): MsgContext {
   return {
     Body: "hi",
-    From: "imessage:work:demo",
+    From: "localchat:work:demo",
     To: "+2000",
     ChatType: "direct",
     Provider: provider,
@@ -40,14 +36,13 @@ function createContext(provider: string, accountId = "work"): MsgContext {
 
 beforeEach(() => {
   publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockReset();
-  bootstrapRegistryMocks.getBootstrapChannelPlugin.mockReset();
 });
 
 describe("channel inbound roots fast path", () => {
   it("prefers media contract artifacts over full channel bootstrap", () => {
     publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
       ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
+        if (dirName === "localchat" && artifactBasename === "media-contract-api.js") {
           return {
             resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
               `/local/${accountId}`,
@@ -64,32 +59,26 @@ describe("channel inbound roots fast path", () => {
     expect(
       resolveChannelInboundAttachmentRoots({
         cfg,
-        ctx: createContext("imessage"),
+        ctx: createContext("localchat"),
       }),
     ).toEqual(["/local/work"]);
     expect(
       resolveChannelRemoteInboundAttachmentRoots({
         cfg,
-        ctx: createContext("imessage"),
+        ctx: createContext("localchat"),
       }),
     ).toEqual(["/remote/work"]);
-    expect(bootstrapRegistryMocks.getBootstrapChannelPlugin).not.toHaveBeenCalled();
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
-        dirName: "imessage",
+        dirName: "localchat",
         artifactBasename: "media-contract-api.js",
       },
     );
   });
 
-  it("falls back to generic contract artifacts before full channel bootstrap", () => {
+  it("does not load broad generic contract artifacts on the media-root path", () => {
     publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
       ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "legacy-channel" && artifactBasename === "contract-api.js") {
-          return {
-            resolveRemoteInboundAttachmentRoots: () => ["/legacy-remote"],
-          };
-        }
         throw unableToResolve(dirName, artifactBasename);
       },
     );
@@ -97,46 +86,26 @@ describe("channel inbound roots fast path", () => {
     expect(
       resolveChannelRemoteInboundAttachmentRoots({
         cfg,
-        ctx: createContext("legacy-channel"),
+        ctx: createContext("mobilechat"),
       }),
-    ).toEqual(["/legacy-remote"]);
-    expect(bootstrapRegistryMocks.getBootstrapChannelPlugin).not.toHaveBeenCalled();
+    ).toBeUndefined();
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
-        dirName: "legacy-channel",
+        dirName: "mobilechat",
         artifactBasename: "media-contract-api.js",
       },
     );
-    expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
-      {
-        dirName: "legacy-channel",
-        artifactBasename: "contract-api.js",
-      },
-    );
-  });
-
-  it("uses channel bootstrap when no public root contract exists", () => {
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
-      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        throw unableToResolve(dirName, artifactBasename);
-      },
-    );
-    bootstrapRegistryMocks.getBootstrapChannelPlugin.mockReturnValue({
-      messaging: {
-        resolveRemoteInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
-          `/bootstrap/${accountId}`,
-        ],
-      },
+    expect(
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+    ).not.toHaveBeenCalledWith({
+      dirName: "mobilechat",
+      artifactBasename: "contract-api.js",
     });
-
     expect(
-      resolveChannelRemoteInboundAttachmentRoots({
-        cfg,
-        ctx: createContext("bootstrap-channel"),
-      }),
-    ).toEqual(["/bootstrap/work"]);
-    expect(bootstrapRegistryMocks.getBootstrapChannelPlugin).toHaveBeenCalledWith(
-      "bootstrap-channel",
-    );
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+    ).not.toHaveBeenCalledWith({
+      dirName: "mobilechat",
+      artifactBasename: "index.js",
+    });
   });
 });

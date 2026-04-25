@@ -21,6 +21,10 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "CLAWHUB_URL",
   "HTTP_PROXY",
   "HTTPS_PROXY",
+  "IRC_HOST",
+  "MATTERMOST_URL",
+  "MATRIX_HOMESERVER",
+  "MINIMAX_API_HOST",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
   "OPENAI_API_KEY",
@@ -65,15 +69,22 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "OPENCLAW_TEST_TAILSCALE_BINARY",
   "PI_CODING_AGENT_DIR",
   "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+  "SYNOLOGY_CHAT_INCOMING_URL",
+  "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.
-const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
+// `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
+// in addition to the bare MATRIX_HOMESERVER listed above.
+const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_HOMESERVER"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
   "OPENAI_API_KEY_",
+  // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
+  // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
+  "OPENCLAW_",
   "OPENCLAW_CLAWHUB_",
   "OPENCLAW_DISABLE_",
   "OPENCLAW_SKIP_",

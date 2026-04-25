@@ -8,6 +8,11 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
+type ResolveProviderInstallCatalogEntry =
+  typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntry;
+type EnsureOnboardingPluginInstalled =
+  typeof import("../commands/onboarding-plugin-install.js").ensureOnboardingPluginInstalled;
+
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<() => { provider: ProviderPlugin; method: ProviderAuthMethod } | null>(),
@@ -60,27 +65,58 @@ vi.mock("../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers,
 }));
 
+const resolveProviderInstallCatalogEntry = vi.hoisted(() =>
+  vi.fn<ResolveProviderInstallCatalogEntry>(() => undefined),
+);
+vi.mock("../plugins/provider-install-catalog.js", () => ({
+  resolveProviderInstallCatalogEntry,
+}));
+
+const ensureOnboardingPluginInstalled = vi.hoisted(() =>
+  vi.fn<EnsureOnboardingPluginInstalled>(async ({ cfg, entry }) => ({
+    cfg,
+    installed: false,
+    pluginId: entry?.pluginId ?? "missing-plugin",
+    status: "skipped",
+  })),
+);
+vi.mock("../commands/onboarding-plugin-install.js", () => ({
+  ensureOnboardingPluginInstalled,
+}));
+
+const clearPluginDiscoveryCache = vi.hoisted(() => vi.fn());
+vi.mock("../plugins/discovery.js", () => ({
+  clearPluginDiscoveryCache,
+}));
+
+const LOCAL_PROVIDER_ID = "local-provider";
+const LOCAL_PROVIDER_LABEL = "Local Provider";
+const LOCAL_AUTH_METHOD_ID = "local";
+const LOCAL_PROFILE_ID = `${LOCAL_PROVIDER_ID}:default`;
+const LOCAL_API_KEY = "local-provider-key";
+const LOCAL_DEFAULT_MODEL = `${LOCAL_PROVIDER_ID}/demo-model`;
+
 function buildProvider(): ProviderPlugin {
   return {
-    id: "ollama",
-    label: "Ollama",
+    id: LOCAL_PROVIDER_ID,
+    label: LOCAL_PROVIDER_LABEL,
     auth: [
       {
-        id: "local",
-        label: "Ollama",
+        id: LOCAL_AUTH_METHOD_ID,
+        label: LOCAL_PROVIDER_LABEL,
         kind: "custom",
         run: async () => ({
           profiles: [
             {
-              profileId: "ollama:default",
+              profileId: LOCAL_PROFILE_ID,
               credential: {
                 type: "api_key",
-                provider: "ollama",
-                key: "ollama-local",
+                provider: LOCAL_PROVIDER_ID,
+                key: LOCAL_API_KEY,
               },
             },
           ],
-          defaultModel: "ollama/qwen3:4b",
+          defaultModel: LOCAL_DEFAULT_MODEL,
         }),
       },
     ],
@@ -89,7 +125,7 @@ function buildProvider(): ProviderPlugin {
 
 function buildParams(overrides: Partial<ApplyAuthChoiceParams> = {}): ApplyAuthChoiceParams {
   return {
-    authChoice: "ollama",
+    authChoice: LOCAL_PROVIDER_ID,
     config: {},
     prompter: {
       note: vi.fn(async () => {}),
@@ -100,10 +136,49 @@ function buildParams(overrides: Partial<ApplyAuthChoiceParams> = {}): ApplyAuthC
   };
 }
 
+function buildLocalProviderInstallCatalogEntry() {
+  return {
+    pluginId: "local-provider-plugin",
+    providerId: LOCAL_PROVIDER_ID,
+    methodId: LOCAL_AUTH_METHOD_ID,
+    choiceId: LOCAL_PROVIDER_ID,
+    choiceLabel: LOCAL_PROVIDER_LABEL,
+    label: LOCAL_PROVIDER_LABEL,
+    origin: "bundled" as const,
+    install: {
+      npmSpec: "@openclaw/local-provider",
+    },
+  };
+}
+
+function buildInstalledLocalProviderPluginResult() {
+  return {
+    cfg: {
+      plugins: {
+        entries: {
+          "local-provider-plugin": {
+            enabled: true,
+          },
+        },
+      },
+    },
+    installed: true,
+    pluginId: "local-provider-plugin",
+    status: "installed" as const,
+  };
+}
+
 describe("applyAuthChoiceLoadedPluginProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     applyAuthProfileConfig.mockImplementation((config) => config);
+    resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
+    ensureOnboardingPluginInstalled.mockImplementation(async ({ cfg, entry }) => ({
+      cfg,
+      installed: false,
+      pluginId: entry?.pluginId ?? "missing-plugin",
+      status: "skipped",
+    }));
   });
 
   it("returns an agent model override when default model application is deferred", async () => {
@@ -122,41 +197,41 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
     expect(result).toEqual({
       config: {},
-      agentModelOverride: "ollama/qwen3:4b",
+      agentModelOverride: LOCAL_DEFAULT_MODEL,
     });
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
   });
 
   it("keeps provider config patches when default model application is deferred", async () => {
     const provider: ProviderPlugin = {
-      id: "moonshot",
-      label: "Moonshot",
+      id: "remote-alpha",
+      label: "Remote Alpha",
       auth: [
         {
-          id: "api-key-cn",
-          label: "Moonshot API key (.cn)",
+          id: "api-key",
+          label: "Remote Alpha API key",
           kind: "api_key",
           run: async () => ({
             profiles: [
               {
-                profileId: "moonshot:default",
+                profileId: "remote-alpha:default",
                 credential: {
                   type: "api_key",
-                  provider: "moonshot",
-                  key: "sk-moonshot-cn-test",
+                  provider: "remote-alpha",
+                  key: "sk-remote-alpha-test",
                 },
               },
             ],
             configPatch: {
               models: {
                 providers: {
-                  moonshot: {
+                  "remote-alpha": {
                     api: "openai-completions",
-                    baseUrl: "https://api.moonshot.cn/v1",
+                    baseUrl: "https://api.remote-alpha.example/v1",
                     models: [
                       {
-                        id: "kimi-k2.5",
-                        name: "kimi-k2.5",
+                        id: "alpha-large",
+                        name: "alpha-large",
                         input: ["text", "image"],
                         reasoning: true,
                         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -168,7 +243,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
                 },
               },
             },
-            defaultModel: "moonshot/kimi-k2.5",
+            defaultModel: "remote-alpha/alpha-large",
           }),
         },
       ],
@@ -192,18 +267,22 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       }),
     );
 
-    expect(result?.agentModelOverride).toBe("moonshot/kimi-k2.5");
+    expect(result?.agentModelOverride).toBe("remote-alpha/alpha-large");
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-6",
     });
-    expect(result?.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
-    expect(result?.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
+    expect(result?.config.models?.providers?.["remote-alpha"]?.baseUrl).toBe(
+      "https://api.remote-alpha.example/v1",
+    );
+    expect(result?.config.models?.providers?.["remote-alpha"]?.models?.[0]?.input).toContain(
+      "image",
+    );
     expect(upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "moonshot:default",
+      profileId: "remote-alpha:default",
       credential: {
         type: "api_key",
-        provider: "moonshot",
-        key: "sk-moonshot-cn-test",
+        provider: "remote-alpha",
+        key: "sk-remote-alpha-test",
       },
       agentDir: "/tmp/agent",
     });
@@ -221,23 +300,83 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
 
     expect(result?.config.agents?.defaults?.model).toEqual({
-      primary: "ollama/qwen3:4b",
+      primary: LOCAL_DEFAULT_MODEL,
     });
     expect(upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "ollama:default",
+      profileId: LOCAL_PROFILE_ID,
       credential: {
         type: "api_key",
-        provider: "ollama",
-        key: "ollama-local",
+        provider: LOCAL_PROVIDER_ID,
+        key: LOCAL_API_KEY,
       },
       agentDir: "/tmp/agent",
     });
     expect(runProviderModelSelectedHook).toHaveBeenCalledWith({
       config: result?.config,
-      model: "ollama/qwen3:4b",
+      model: LOCAL_DEFAULT_MODEL,
       prompter: expect.objectContaining({ note: expect.any(Function) }),
       agentDir: undefined,
       workspaceDir: "/tmp/workspace",
+    });
+  });
+
+  it("installs a missing provider plugin and retries setup resolution", async () => {
+    const provider = buildProvider();
+    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
+    ensureOnboardingPluginInstalled.mockResolvedValue(buildInstalledLocalProviderPluginResult());
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
+      provider,
+      method: provider.auth[0],
+    });
+
+    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          pluginId: "local-provider-plugin",
+          label: LOCAL_PROVIDER_LABEL,
+        }),
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(clearPluginDiscoveryCache).toHaveBeenCalledOnce();
+    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: LOCAL_DEFAULT_MODEL,
+    });
+  });
+
+  it("does not persist plugin enablement when install is skipped", async () => {
+    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
+    resolveProviderPluginChoice.mockReturnValue(null);
+
+    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+    expect(result).toEqual({ config: {}, retrySelection: true });
+  });
+
+  it("preserves install config when the chosen provider still cannot resolve after install", async () => {
+    resolveProviderInstallCatalogEntry.mockReturnValue(buildLocalProviderInstallCatalogEntry());
+    ensureOnboardingPluginInstalled.mockResolvedValue(buildInstalledLocalProviderPluginResult());
+    resolveProviderPluginChoice.mockReturnValue(null);
+
+    const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
+
+    expect(clearPluginDiscoveryCache).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      config: {
+        plugins: {
+          entries: {
+            "local-provider-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      retrySelection: true,
     });
   });
 
@@ -270,27 +409,27 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       run: async () => ({
         profiles: [
           {
-            profileId: "ollama:default",
+            profileId: LOCAL_PROFILE_ID,
             credential: {
               type: "api_key",
-              provider: "ollama",
-              key: "ollama-local",
+              provider: LOCAL_PROVIDER_ID,
+              key: LOCAL_API_KEY,
             },
           },
         ],
         configPatch: {
           models: {
             providers: {
-              ollama: {
-                api: "ollama",
-                baseUrl: "http://127.0.0.1:11434",
+              [LOCAL_PROVIDER_ID]: {
+                api: "openai-completions",
+                baseUrl: "http://127.0.0.1:4000/v1",
                 models: [],
               },
             },
           },
         },
-        defaultModel: "ollama/qwen3:4b",
-        notes: ["Detected local Ollama runtime.", "Pulled model metadata."],
+        defaultModel: LOCAL_DEFAULT_MODEL,
+        notes: ["Detected local provider runtime.", "Pulled model metadata."],
       }),
     };
 
@@ -309,18 +448,18 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       method,
     });
 
-    expect(result.defaultModel).toBe("ollama/qwen3:4b");
-    expect(result.config.models?.providers?.ollama).toEqual({
-      api: "ollama",
-      baseUrl: "http://127.0.0.1:11434",
+    expect(result.defaultModel).toBe(LOCAL_DEFAULT_MODEL);
+    expect(result.config.models?.providers?.[LOCAL_PROVIDER_ID]).toEqual({
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:4000/v1",
       models: [],
     });
-    expect(result.config.auth?.profiles?.["ollama:default"]).toEqual({
-      provider: "ollama",
+    expect(result.config.auth?.profiles?.[LOCAL_PROFILE_ID]).toEqual({
+      provider: LOCAL_PROVIDER_ID,
       mode: "api_key",
     });
     expect(note).toHaveBeenCalledWith(
-      "Detected local Ollama runtime.\nPulled model metadata.",
+      "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
     );
   });
@@ -347,6 +486,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
             },
           },
         },
+        replaceDefaultModels: true,
         defaultModel: "claude-cli/claude-sonnet-4-6",
       }),
     };
@@ -392,7 +532,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     const note = vi.fn(async () => {});
     const result = await applyAuthChoicePluginProvider(
       buildParams({
-        authChoice: "provider-plugin:ollama:local",
+        authChoice: `provider-plugin:${LOCAL_PROVIDER_ID}:${LOCAL_AUTH_METHOD_ID}`,
         agentId: "worker",
         setDefaultModel: false,
         prompter: {
@@ -400,25 +540,25 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         } as unknown as ApplyAuthChoiceParams["prompter"],
       }),
       {
-        authChoice: "provider-plugin:ollama:local",
-        pluginId: "ollama",
-        providerId: "ollama",
-        methodId: "local",
-        label: "Ollama",
+        authChoice: `provider-plugin:${LOCAL_PROVIDER_ID}:${LOCAL_AUTH_METHOD_ID}`,
+        pluginId: LOCAL_PROVIDER_ID,
+        providerId: LOCAL_PROVIDER_ID,
+        methodId: LOCAL_AUTH_METHOD_ID,
+        label: LOCAL_PROVIDER_LABEL,
       },
     );
 
-    expect(result?.agentModelOverride).toBe("ollama/qwen3:4b");
+    expect(result?.agentModelOverride).toBe(LOCAL_DEFAULT_MODEL);
     expect(result?.config.plugins).toEqual({
       entries: {
-        ollama: {
+        [LOCAL_PROVIDER_ID]: {
           enabled: true,
         },
       },
     });
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      'Default model set to ollama/qwen3:4b for agent "worker".',
+      `Default model set to ${LOCAL_DEFAULT_MODEL} for agent "worker".`,
       "Model configured",
     );
   });
@@ -438,10 +578,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         } as unknown as ApplyAuthChoiceParams["prompter"],
       }),
       {
-        authChoice: "ollama",
-        pluginId: "ollama",
-        providerId: "ollama",
-        label: "Ollama",
+        authChoice: LOCAL_PROVIDER_ID,
+        pluginId: LOCAL_PROVIDER_ID,
+        providerId: LOCAL_PROVIDER_ID,
+        label: LOCAL_PROVIDER_LABEL,
       },
     );
 
@@ -453,6 +593,9 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
     });
     expect(resolvePluginProviders).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith("Ollama plugin is disabled (plugins disabled).", "Ollama");
+    expect(note).toHaveBeenCalledWith(
+      "Local Provider plugin is disabled (plugins disabled).",
+      LOCAL_PROVIDER_LABEL,
+    );
   });
 });

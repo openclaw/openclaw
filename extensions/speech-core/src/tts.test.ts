@@ -1,7 +1,6 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -66,6 +65,35 @@ function createTtsConfig(prefsName: string): OpenClawConfig {
   };
 }
 
+async function expectTtsPayloadResult(params: {
+  channel: string;
+  prefsName: string;
+  text: string;
+  target: "voice-note" | "audio-file";
+  audioAsVoice: true | undefined;
+}) {
+  const cfg = createTtsConfig(params.prefsName);
+  let mediaDir: string | undefined;
+  try {
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: params.text },
+      cfg,
+      channel: params.channel,
+      kind: "final",
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ target: params.target }));
+    expect(result.audioAsVoice).toBe(params.audioAsVoice);
+    expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+
+    mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+  } finally {
+    if (mediaDir) {
+      rmSync(mediaDir, { recursive: true, force: true });
+    }
+  }
+}
+
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
     synthesizeMock.mockClear();
@@ -81,17 +109,29 @@ describe("speech-core native voice-note routing", () => {
   });
 
   it("marks Discord auto TTS replies as native voice messages", async () => {
-    const cfg = createTtsConfig("openclaw-speech-core-tts-test");
-    const payload: ReplyPayload = {
+    await expectTtsPayloadResult({
+      channel: "discord",
+      prefsName: "openclaw-speech-core-tts-test",
       text: "This Discord reply should be delivered as a native voice note.",
-    };
+      target: "voice-note",
+      audioAsVoice: true,
+    });
+  });
 
+  it("marks Feishu voice-note TTS for channel-side transcoding when provider returns mp3", async () => {
+    synthesizeMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("mp3"),
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+      voiceCompatible: false,
+    });
+    const cfg = createTtsConfig("openclaw-speech-core-tts-feishu-mp3-test");
     let mediaDir: string | undefined;
     try {
       const result = await maybeApplyTtsToPayload({
-        payload,
+        payload: { text: "This Feishu reply should be transcoded by the channel." },
         cfg,
-        channel: "discord",
+        channel: "feishu",
         kind: "final",
       });
 
@@ -99,8 +139,7 @@ describe("speech-core native voice-note routing", () => {
         expect.objectContaining({ target: "voice-note" }),
       );
       expect(result.audioAsVoice).toBe(true);
-      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
-
+      expect(result.mediaUrl).toMatch(/voice-\d+\.mp3$/);
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
       if (mediaDir) {
@@ -110,31 +149,12 @@ describe("speech-core native voice-note routing", () => {
   });
 
   it("keeps non-native voice-note channels as regular audio files", async () => {
-    const cfg = createTtsConfig("openclaw-speech-core-tts-slack-test");
-    const payload: ReplyPayload = {
+    await expectTtsPayloadResult({
+      channel: "slack",
+      prefsName: "openclaw-speech-core-tts-slack-test",
       text: "Slack replies should be delivered as regular audio attachments.",
-    };
-
-    let mediaDir: string | undefined;
-    try {
-      const result = await maybeApplyTtsToPayload({
-        payload,
-        cfg,
-        channel: "slack",
-        kind: "final",
-      });
-
-      expect(synthesizeMock).toHaveBeenCalledWith(
-        expect.objectContaining({ target: "audio-file" }),
-      );
-      expect(result.audioAsVoice).toBeUndefined();
-      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
-
-      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
-    } finally {
-      if (mediaDir) {
-        rmSync(mediaDir, { recursive: true, force: true });
-      }
-    }
+      target: "audio-file",
+      audioAsVoice: undefined,
+    });
   });
 });

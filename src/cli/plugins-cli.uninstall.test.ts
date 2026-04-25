@@ -5,6 +5,7 @@ import {
   buildPluginDiagnosticsReport,
   loadConfig,
   promptYesNo,
+  refreshPluginRegistry,
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeErrors,
@@ -47,6 +48,7 @@ describe("plugins cli uninstall", () => {
 
     expect(uninstallPlugin).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(runtimeLogs.some((line) => line.includes("Dry run, no changes made."))).toBe(true);
   });
 
@@ -101,6 +103,10 @@ describe("plugins cli uninstall", () => {
       }),
     );
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: nextConfig,
+      reason: "source-changed",
+    });
   });
 
   it("exits when uninstall target is not managed by plugin install records", async () => {

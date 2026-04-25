@@ -3,6 +3,15 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../types.ts";
+
+vi.mock("../markdown.ts", () => ({
+  toSanitizedMarkdownHtml: (value: string) => value,
+}));
+
+vi.mock("../icons.ts", () => ({
+  icons: {},
+}));
+
 import {
   getContextNoticeViewModel,
   renderContextNotice,
@@ -12,15 +21,16 @@ import { renderSideResult } from "./side-result-render.ts";
 
 describe("context notice", () => {
   afterEach(() => {
-    document.documentElement.style.removeProperty("--warn");
-    document.documentElement.style.removeProperty("--danger");
+    vi.restoreAllMocks();
     resetContextNoticeThemeCacheForTest();
   });
 
   it("renders only for fresh high current usage", () => {
     const container = document.createElement("div");
-    document.documentElement.style.setProperty("--warn", "rgb(1, 2, 3)");
-    document.documentElement.style.setProperty("--danger", "tomato");
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      getPropertyValue: (name: string) =>
+        name === "--warn" ? "#010203" : name === "--danger" ? "#040506" : "",
+    } as CSSStyleDeclaration);
     resetContextNoticeThemeCacheForTest();
 
     expect(
@@ -49,10 +59,12 @@ describe("context notice", () => {
 
     expect(container.textContent).toContain("95% context used");
     expect(container.textContent).toContain("190k / 200k");
+    expect(getContextNoticeViewModel(session, 200_000)?.compactRecommended).toBe(true);
     expect(container.textContent).not.toContain("757.3k / 200k");
     const notice = container.querySelector<HTMLElement>(".context-notice");
     expect(notice).not.toBeNull();
     expect(notice?.style.getPropertyValue("--ctx-color")).toContain("rgb(");
+    expect(notice?.style.getPropertyValue("--ctx-color")).toContain("4, 5, 6");
     expect(notice?.style.getPropertyValue("--ctx-color")).not.toContain("NaN");
     expect(notice?.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
 
@@ -63,6 +75,12 @@ describe("context notice", () => {
     expect(icon?.getAttribute("width")).toBe("16");
     expect(icon?.getAttribute("height")).toBe("16");
     expect(icon?.querySelector("path")).not.toBeNull();
+
+    const onCompact = vi.fn();
+    render(renderContextNotice(session, 200_000, { onCompact }), container);
+    expect(container.textContent).toContain("Compact");
+    container.querySelector<HTMLButtonElement>(".context-notice__action")?.click();
+    expect(onCompact).toHaveBeenCalledTimes(1);
 
     expect(
       getContextNoticeViewModel(

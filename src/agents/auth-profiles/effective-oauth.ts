@@ -1,21 +1,18 @@
-import {
-  readManagedExternalCliCredential,
-  shouldReplaceStoredOAuthCredential,
-} from "./external-cli-sync.js";
+import { readManagedExternalCliCredential } from "./external-cli-sync.js";
+import { resolveEffectiveOAuthCredential as resolveManagedOAuthCredential } from "./oauth-manager.js";
 import type { OAuthCredential } from "./types.js";
 
 export function resolveEffectiveOAuthCredential(params: {
   profileId: string;
   credential: OAuthCredential;
 }): OAuthCredential {
-  const imported = readManagedExternalCliCredential({
+  return resolveManagedOAuthCredential({
     profileId: params.profileId,
     credential: params.credential,
+    readBootstrapCredential: ({ profileId, credential }) =>
+      readManagedExternalCliCredential({
+        profileId,
+        credential,
+      }),
   });
-  if (!imported) {
-    return params.credential;
-  }
-  return shouldReplaceStoredOAuthCredential(params.credential, imported)
-    ? imported
-    : params.credential;
 }

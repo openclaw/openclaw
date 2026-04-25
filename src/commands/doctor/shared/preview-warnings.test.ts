@@ -50,6 +50,10 @@ vi.mock("./channel-doctor.js", () => ({
       ];
     },
   ),
+  createChannelDoctorEmptyAllowlistPolicyHooks: vi.fn(() => ({
+    extraWarningsForAccount: () => [],
+    shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
+  })),
   shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(() => false),
 }));
 
@@ -151,6 +155,17 @@ function channelManifest(id: string, channelId: string): TestManifestRecord {
   };
 }
 
+function stalePluginConfig(id = "acpx") {
+  return {
+    plugins: {
+      allow: [id],
+      entries: {
+        [id]: { enabled: true },
+      },
+    },
+  };
+}
+
 describe("doctor preview warnings", () => {
   beforeEach(() => {
     manifestState.plugins = [manifest("discord")];
@@ -212,14 +227,7 @@ describe("doctor preview warnings", () => {
 
   it("includes stale plugin config warnings", async () => {
     const warnings = await collectDoctorPreviewWarnings({
-      cfg: {
-        plugins: {
-          allow: ["acpx"],
-          entries: {
-            acpx: { enabled: true },
-          },
-        },
-      },
+      cfg: stalePluginConfig(),
       doctorFixCommand: "openclaw doctor --fix",
     });
 
@@ -260,14 +268,7 @@ describe("doctor preview warnings", () => {
     ];
 
     const warnings = await collectDoctorPreviewWarnings({
-      cfg: {
-        plugins: {
-          allow: ["acpx"],
-          entries: {
-            acpx: { enabled: true },
-          },
-        },
-      },
+      cfg: stalePluginConfig(),
       doctorFixCommand: "openclaw doctor --fix",
     });
 

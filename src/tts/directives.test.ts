@@ -56,6 +56,28 @@ const fullPolicy: SpeechModelOverridePolicy = {
 };
 
 describe("parseTtsDirectives provider-aware routing", () => {
+  it("does not resolve providers when text has no directives", () => {
+    const failProvider = {
+      get id() {
+        throw new Error("provider should not be read without directives");
+      },
+      get autoSelectOrder() {
+        throw new Error("provider order should not be read without directives");
+      },
+    } as unknown as SpeechProviderPlugin;
+
+    const result = parseTtsDirectives("hello without TTS markup", fullPolicy, {
+      providers: [failProvider, failProvider],
+    });
+
+    expect(result).toEqual({
+      cleanedText: "hello without TTS markup",
+      overrides: {},
+      warnings: [],
+      hasDirective: false,
+    });
+  });
+
   it("routes generic speed to the explicitly declared provider", () => {
     const result = parseTtsDirectives(
       "hello [[tts:provider=minimax speed=1.2]] world",
@@ -143,5 +165,56 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.provider).toBeUndefined();
     expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
     expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
+  });
+
+  it("accepts bare tts tags as a tagged-mode trigger", () => {
+    const result = parseTtsDirectives("[[tts]] read this aloud", fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe(" read this aloud");
+    expect(result.ttsText).toBeUndefined();
+  });
+
+  it("accepts plain tts blocks as speak-and-show text", () => {
+    const result = parseTtsDirectives("[[tts]]hello world[[/tts]]", fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe("hello world");
+    expect(result.ttsText).toBe("hello world");
+  });
+
+  it("strips orphan closing tts tags", () => {
+    const result = parseTtsDirectives("spoken content[[/tts:text]]", fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result.hasDirective).toBe(true);
+    expect(result.cleanedText).toBe("spoken content");
+  });
+
+  it("does not parse tts examples inside markdown code", () => {
+    const input = [
+      "Use `[[tts:text]]` for hidden speech.",
+      "",
+      "```",
+      "[[tts:provider=elevenlabs voice=alloy]]",
+      "```",
+      "",
+      "Then continue normally.",
+    ].join("\n");
+    const result = parseTtsDirectives(input, fullPolicy, {
+      providers: [elevenlabs, minimax],
+    });
+
+    expect(result).toEqual({
+      cleanedText: input,
+      overrides: {},
+      warnings: [],
+      hasDirective: false,
+    });
   });
 });

@@ -28,6 +28,7 @@ import {
   sanitizeToolUseResultPairing,
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import {
@@ -51,6 +52,37 @@ type ModelSnapshotEntry = {
   modelApi?: string | null;
   modelId?: string;
 };
+
+type ProviderReplayHookParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  provider: string;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+  sessionId?: string;
+};
+
+function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
+  const context = {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    provider: params.provider,
+    modelId: params.modelId,
+    modelApi: params.modelApi,
+    model: params.model,
+    sessionId: params.sessionId,
+  };
+  return {
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context,
+  };
+}
 
 function buildInterSessionPrefix(message: AgentMessage): string {
   const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
@@ -192,6 +224,81 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
       usage: makeZeroUsageSnapshot(),
     } as unknown as AgentMessage;
     touched = true;
+  }
+  return touched ? out : messages;
+}
+
+// `provider:"openclaw"` assistant entries written by the channel-delivery
+// transcript mirror (`model:"delivery-mirror"`, see config/sessions/transcript.ts)
+// and by the Gateway transcript-inject helper (`model:"gateway-injected"`, see
+// gateway/server-methods/chat-transcript-inject.ts) are user-visible transcript
+// records, not model output. Replaying them to the actual provider duplicates
+// content and, on Bedrock or strict OpenAI-compatible providers, can also
+// trigger turn-ordering rejections.
+const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
+
+function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const provider = (message as { provider?: unknown }).provider;
+  const model = (message as { model?: unknown }).model;
+  return (
+    provider === "openclaw" &&
+    typeof model === "string" &&
+    TRANSCRIPT_ONLY_OPENCLAW_MODELS.has(model)
+  );
+}
+
+export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (const message of messages) {
+    if (!message || message.role !== "assistant") {
+      out.push(message);
+      continue;
+    }
+    if (isTranscriptOnlyOpenclawAssistant(message)) {
+      // Drop from the in-memory replay copy; the persisted JSONL keeps the
+      // entry so user-facing transcript surfaces are unchanged.
+      touched = true;
+      continue;
+    }
+    const replayContent = (message as { content?: unknown }).content;
+    if (typeof replayContent === "string") {
+      out.push({
+        ...message,
+        content: [{ type: "text", text: replayContent }],
+      });
+      touched = true;
+      continue;
+    }
+    if (Array.isArray(replayContent) && replayContent.length === 0) {
+      // An assistant turn can legitimately end with `content: []` — for
+      // example the silent-reply / NO_REPLY path locked in by
+      // run.empty-error-retry.test.ts ("Clean stop with no output is a
+      // legitimate silent reply, not a crash"). We must NOT inject the
+      // failure sentinel into those turns: doing so would fabricate a
+      // failure statement in the next provider request and change model
+      // behavior even when no failure occurred.
+      //
+      // Only `stopReason: "error"` turns are the Bedrock-Converse replay
+      // poison this fix is scoped to: the provider rejects assistant
+      // messages with no ContentBlock, and the persisted error turn was
+      // never going to render anything useful to the model anyway. Leaving
+      // non-error empty-content turns untouched preserves silent-reply
+      // semantics on every other code path.
+      const stopReason = (message as { stopReason?: unknown }).stopReason;
+      if (stopReason === "error") {
+        out.push({
+          ...message,
+          content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        });
+        touched = true;
+        continue;
+      }
+    }
+    out.push(message);
   }
   return touched ? out : messages;
 }
@@ -412,8 +519,19 @@ export async function sanitizeSessionHistory(params: {
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
     params.modelApi === "azure-openai-responses";
+  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
+  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
+  const modelChanged = priorSnapshot
+    ? !isSameModelSnapshot(priorSnapshot, {
+        timestamp: 0,
+        provider: params.provider,
+        modelApi: params.modelApi,
+        modelId: params.modelId,
+      })
+    : false;
+  const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    normalizedAssistantReplay,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
@@ -433,18 +551,24 @@ export async function sanitizeSessionHistory(params: {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
   });
-  // OpenAI's fc_* pairing downgrade needs the raw call_id|fc_id separator intact,
-  // but displaced tool results must first be repaired back next to their
-  // assistant turn so the downgrade can rewrite both sides consistently.
+  // OpenAI Responses rejects orphan/missing function_call_output items. Upstream
+  // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
+  // so both call and result ids are rewritten together. Covered by unit replay
+  // tests plus live OpenAI/Codex and generic replay-repair model tests.
   const openAIRepairedToolCalls =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
       ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
           erroredAssistantResultPolicy: "drop",
+          // Match upstream Codex history normalization for OpenAI Responses:
+          // missing function_call_output entries are model-visible "aborted".
+          missingToolResultText: "aborted",
         })
       : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls),
+        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
+          dropReplayableReasoning: modelChanged,
+        }),
       )
     : sanitizedToolCalls;
   const sanitizedToolIds =
@@ -455,6 +579,9 @@ export async function sanitizeSessionHistory(params: {
           allowedToolNames: params.allowedToolNames,
         })
       : openAISafeToolCalls;
+  // Gemini/Anthropic-class providers also require tool results to stay adjacent
+  // to their assistant tool calls. They do not use Codex's "aborted" text, but
+  // the same ordering repair is live-tested with Gemini 3 Flash.
   const repairedTools =
     !isOpenAIResponsesApi && policy.repairToolUseResultPairing
       ? sanitizeToolUseResultPairing(sanitizedToolIds, {
@@ -465,39 +592,22 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
   );
-  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
-  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
-  const modelChanged = priorSnapshot
-    ? !isSameModelSnapshot(priorSnapshot, {
-        timestamp: 0,
-        provider: params.provider,
-        modelApi: params.modelApi,
-        modelId: params.modelId,
-      })
-    : false;
   const provider = params.provider?.trim();
-  const providerSanitized =
-    provider && provider.length > 0
-      ? await sanitizeProviderReplayHistoryWithPlugin({
-          provider,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          context: {
-            config: params.config,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
-            provider,
-            modelId: params.modelId,
-            modelApi: params.modelApi,
-            model: params.model,
-            sessionId: params.sessionId,
-            messages: sanitizedCompactionUsage,
-            allowedToolNames: params.allowedToolNames,
-            sessionState: createProviderReplaySessionState(params.sessionManager),
-          },
-        })
-      : undefined;
+  let providerSanitized: AgentMessage[] | undefined;
+  if (provider && provider.length > 0) {
+    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
+    const providerResult = await sanitizeProviderReplayHistoryWithPlugin({
+      ...pluginParams,
+      context: {
+        ...pluginParams.context,
+        sessionId: params.sessionId ?? "",
+        messages: sanitizedCompactionUsage,
+        allowedToolNames: params.allowedToolNames,
+        sessionState: createProviderReplaySessionState(params.sessionManager),
+      },
+    });
+    providerSanitized = providerResult ?? undefined;
+  }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
@@ -551,20 +661,11 @@ export async function validateReplayTurns(params: {
     });
   const provider = params.provider?.trim();
   if (provider) {
+    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
     const providerValidated = await validateProviderReplayTurnsWithPlugin({
-      provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
+      ...pluginParams,
       context: {
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        provider,
-        modelId: params.modelId,
-        modelApi: params.modelApi,
-        model: params.model,
-        sessionId: params.sessionId,
+        ...pluginParams.context,
         messages: params.messages,
       },
     });

@@ -1,5 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+type StrictInlineEvalBoundary =
+  typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
+
 const INLINE_EVAL_HIT = {
   executable: "python3",
   normalizedExecutable: "python3",
@@ -53,15 +56,10 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
-  vi.fn(
-    (value: {
-      approvedByAsk: boolean;
-      deniedReason: string | null;
-    }): {
-      approvedByAsk: boolean;
-      deniedReason: string | null;
-    } => value,
-  ),
+  vi.fn<StrictInlineEvalBoundary>((value) => ({
+    approvedByAsk: value.approvedByAsk,
+    deniedReason: value.deniedReason,
+  })),
 );
 const registerExecApprovalRequestForHostOrThrowMock = vi.hoisted(() =>
   vi.fn(async () => undefined),
@@ -150,6 +148,7 @@ let executeNodeHostCommand: typeof import("./bash-tools.exec-host-node.js").exec
 
 type MockNodeInvokeParams = {
   command?: string;
+  params?: Record<string, unknown>;
 };
 
 describe("executeNodeHostCommand", () => {
@@ -229,9 +228,10 @@ describe("executeNodeHostCommand", () => {
     });
     sendExecApprovalFollowupResultMock.mockReset();
     enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
-    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation(
-      (value: { approvedByAsk: boolean; deniedReason: string | null }) => value,
-    );
+    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) => ({
+      approvedByAsk: value.approvedByAsk,
+      deniedReason: value.deniedReason,
+    }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     registerExecApprovalRequestForHostOrThrowMock.mockReset();
@@ -272,6 +272,36 @@ describe("executeNodeHostCommand", () => {
           approved: true,
           approvalDecision: "allow-once",
           systemRunPlan: preparedPlan,
+        }),
+      }),
+    );
+  });
+
+  it("suppresses node completion events when notifyOnExit is disabled", async () => {
+    requiresExecApprovalMock.mockReturnValue(false);
+
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      notifyOnExit: false,
+    });
+
+    expect(callGatewayToolMock).toHaveBeenNthCalledWith(
+      2,
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        command: "system.run",
+        params: expect.objectContaining({
+          suppressNotifyOnExit: true,
         }),
       }),
     );

@@ -61,14 +61,43 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.hasHelpOrVersion) {
+  if (invocation.hasHelpOrVersion || shouldStartCrestodianForBareRoot(argv)) {
     return false;
   }
   return shouldEnsureCliPathForCommandPath(invocation.commandPath);
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
-  return resolveCliArgvInvocation(argv).isRootHelpInvocation;
+  return (
+    process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
+    resolveCliArgvInvocation(argv).isRootHelpInvocation
+  );
+}
+
+export function shouldUseBrowserHelpFastPath(argv: string[]): boolean {
+  if (process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "browser" &&
+    invocation.hasHelpOrVersion
+  );
+}
+
+export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
+}
+
+export function shouldStartCrestodianForModernOnboard(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath[0] === "onboard" &&
+    argv.includes("--modern") &&
+    !invocation.hasHelpOrVersion
+  );
 }
 
 export function resolveMissingPluginCommandMessage(
@@ -203,6 +232,38 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    if (shouldUseBrowserHelpFastPath(normalizedArgv)) {
+      const { outputPrecomputedBrowserHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedBrowserHelpText()) {
+        return;
+      }
+    }
+
+    if (shouldStartCrestodianForBareRoot(normalizedArgv)) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.error(
+          'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const { runCrestodian } = await import("../crestodian/crestodian.js");
+      await runCrestodian();
+      return;
+    }
+
+    if (shouldStartCrestodianForModernOnboard(normalizedArgv)) {
+      const { runCrestodian } = await import("../crestodian/crestodian.js");
+      const nonInteractive = normalizedArgv.includes("--non-interactive");
+      await runCrestodian({
+        message: nonInteractive ? "overview" : undefined,
+        yes: false,
+        json: normalizedArgv.includes("--json"),
+        interactive: !nonInteractive,
+      });
+      return;
+    }
+
     if (await tryRouteCli(normalizedArgv)) {
       return;
     }
@@ -210,12 +271,17 @@ export async function runCli(argv: string[] = process.argv) {
     // Capture all console output into structured logs while keeping stdout/stderr behavior.
     enableConsoleCapture();
 
-    const [{ buildProgram }, { installUnhandledRejectionHandler }, { restoreTerminalState }] =
-      await Promise.all([
-        import("./program.js"),
-        import("../infra/unhandled-rejections.js"),
-        import("../terminal/restore.js"),
-      ]);
+    const [
+      { buildProgram },
+      { runFatalErrorHooks },
+      { installUnhandledRejectionHandler },
+      { restoreTerminalState },
+    ] = await Promise.all([
+      import("./program.js"),
+      import("../infra/fatal-error-hooks.js"),
+      import("../infra/unhandled-rejections.js"),
+      import("../terminal/restore.js"),
+    ]);
     const program = buildProgram();
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
@@ -224,6 +290,9 @@ export async function runCli(argv: string[] = process.argv) {
 
     process.on("uncaughtException", (error) => {
       console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+      for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+        console.error("[openclaw]", message);
+      }
       restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
       process.exit(1);
     });
@@ -245,7 +314,10 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     const hasBuiltinPrimary =
-      primary !== null && program.commands.some((command) => command.name() === primary);
+      primary !== null &&
+      program.commands.some(
+        (command) => command.name() === primary || command.aliases().includes(primary),
+      );
     const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
       argv: parseArgv,
       primary,
@@ -264,7 +336,12 @@ export async function runCli(argv: string[] = process.argv) {
         },
       );
       if (config) {
-        if (primary && !program.commands.some((command) => command.name() === primary)) {
+        if (
+          primary &&
+          !program.commands.some(
+            (command) => command.name() === primary || command.aliases().includes(primary),
+          )
+        ) {
           const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
           if (missingPluginCommandMessage) {
             throw new Error(missingPluginCommandMessage);

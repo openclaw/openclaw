@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   createModelCatalog,
@@ -11,6 +11,35 @@ import {
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import { renderChatSessionSelect } from "./session-controls.ts";
+
+const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
+  vi.fn(async (state: AppViewState) => {
+    const agentId = state.agentsSelectedId ?? "main";
+    const sessionKey = state.sessionKey;
+    await state.client?.request("tools.effective", { agentId, sessionKey });
+    const override = state.chatModelOverrides[sessionKey];
+    state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override?.value ?? "(default)"}`;
+    state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
+  }),
+);
+const loadSessionsMock = vi.hoisted(() =>
+  vi.fn(async (state: AppViewState) => {
+    const res = await state.client?.request("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    if (res) {
+      state.sessionsResult = res as AppViewState["sessionsResult"];
+    }
+  }),
+);
+
+vi.mock("../controllers/agents.ts", () => ({
+  refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
+}));
+vi.mock("../controllers/sessions.ts", () => ({
+  loadSessions: loadSessionsMock,
+}));
 
 function createChatHeaderState(
   overrides: {
@@ -131,18 +160,21 @@ function createChatHeaderState(
   return { state, request };
 }
 
-function flushTasks() {
-  return new Promise<void>((resolve) => queueMicrotask(resolve));
+async function flushTasks(turns = 8) {
+  for (let i = 0; i < turns; i += 1) {
+    await Promise.resolve();
+  }
+  await vi.dynamicImportSettled();
 }
+
+afterEach(() => {
+  loadSessionsMock.mockClear();
+  refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
+  vi.unstubAllGlobals();
+});
 
 describe("chat session controls", () => {
   it("patches the current session model from the chat header picker", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
     const { state, request } = createChatHeaderState();
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
@@ -155,25 +187,19 @@ describe("chat session controls", () => {
 
     modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
       model: "openai/gpt-5-mini",
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+    await flushTasks();
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
-    vi.unstubAllGlobals();
   });
 
   it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
     const { state, request } = createChatHeaderState();
     state.agentsPanel = "tools";
     state.agentsSelectedId = "main";
@@ -194,22 +220,14 @@ describe("chat session controls", () => {
     modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
-
     expect(request).toHaveBeenCalledWith("tools.effective", {
       agentId: "main",
       sessionKey: "main",
     });
     expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
-    vi.unstubAllGlobals();
   });
 
   it("clears the session model override back to the default model", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
     const { state, request } = createChatHeaderState({ model: "gpt-5-mini" });
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
@@ -222,14 +240,14 @@ describe("chat session controls", () => {
 
     modelSelect!.value = "";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
       model: null,
     });
+    await flushTasks();
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
-    vi.unstubAllGlobals();
   });
 
   it("disables the chat header model picker while a run is active", () => {
@@ -247,12 +265,6 @@ describe("chat session controls", () => {
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
@@ -271,6 +283,36 @@ describe("chat session controls", () => {
       'select[data-chat-model-select="true"]',
     );
     expect(rerendered?.value).toBe("openai/gpt-5-mini");
-    vi.unstubAllGlobals();
+  });
+
+  it("uses default thinking options when the active session is absent", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai-codex",
+      defaultsThinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "adaptive", label: "adaptive" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "maximum" },
+      ],
+      omitSessionFromList: true,
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    const options = [...(thinkingSelect?.options ?? [])].map((option) => option.value);
+
+    expect(options).toContain("adaptive");
+    expect(options).toContain("xhigh");
+    expect(options).toContain("max");
+    expect(
+      [...(thinkingSelect?.options ?? [])]
+        .find((option) => option.value === "max")
+        ?.textContent?.trim(),
+    ).toBe("maximum");
   });
 });

@@ -6,15 +6,13 @@ read_when:
 title: "Docker"
 ---
 
-# Docker (optional)
-
 Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
 ## Is Docker right for me?
 
 - **Yes**: you want an isolated, throwaway gateway environment or to run OpenClaw on a host without local installs.
 - **No**: you are running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
-- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
+- **Sandboxing note**: the default sandbox backend uses Docker when sandboxing is enabled, but sandboxing is off by default and does **not** require the full gateway to run in Docker. SSH and OpenShell sandbox backends are also available. See [Sandboxing](/gateway/sandboxing).
 
 ## Prerequisites
 
@@ -124,15 +122,15 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                       | Purpose                                                          |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                   |
-| `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)        |
-| `OPENCLAW_EXTENSIONS`          | Pre-install extension deps at build time (space-separated names) |
-| `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
-| `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
-| `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
-| `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
+| Variable                       | Purpose                                                         |
+| ------------------------------ | --------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                  |
+| `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)       |
+| `OPENCLAW_EXTENSIONS`          | Pre-install plugin deps at build time (space-separated names)   |
+| `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`) |
+| `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                   |
+| `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
+| `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                     |
 
 ### Health checks
 
@@ -311,10 +309,11 @@ including binary baking, persistence, and updates.
 
 ## Agent Sandbox
 
-When `agents.defaults.sandbox` is enabled, the gateway runs agent tool execution
-(shell, file read/write, etc.) inside isolated Docker containers while the
-gateway itself stays on the host. This gives you a hard wall around untrusted or
-multi-tenant agent sessions without containerizing the entire gateway.
+When `agents.defaults.sandbox` is enabled with the Docker backend, the gateway
+runs agent tool execution (shell, file read/write, etc.) inside isolated Docker
+containers while the gateway itself stays on the host. This gives you a hard wall
+around untrusted or multi-tenant agent sessions without containerizing the entire
+gateway.
 
 Sandbox scope can be per-agent (default), per-session, or shared. Each scope
 gets its own workspace mounted at `/workspace`. You can also configure
