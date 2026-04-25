@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#70424) Thanks @jlapenna.
 - Control UI: refine the agent Tool Access panel with compact live-tool chips,
   collapsible tool groups, direct per-tool toggles, and clearer runtime/source
   provenance. (#71405) Thanks @BunsDev.

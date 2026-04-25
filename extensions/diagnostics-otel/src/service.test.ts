@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
@@ -125,6 +125,7 @@ const GRANDCHILD_SPAN_ID = "2222222222222222";
 const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 4096;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
+const ORIGINAL_OPENCLAW_OTEL_PRELOADED = process.env.OPENCLAW_OTEL_PRELOADED;
 
 function createLogger() {
   return {
@@ -194,6 +195,7 @@ function flushDiagnosticEvents() {
 
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
+    delete process.env.OPENCLAW_OTEL_PRELOADED;
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
     telemetryState.spans.length = 0;
@@ -206,6 +208,14 @@ describe("diagnostics-otel service", () => {
     logEmit.mockReset();
     logShutdown.mockClear();
     traceExporterCtor.mockClear();
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_OPENCLAW_OTEL_PRELOADED === undefined) {
+      delete process.env.OPENCLAW_OTEL_PRELOADED;
+    } else {
+      process.env.OPENCLAW_OTEL_PRELOADED = ORIGINAL_OPENCLAW_OTEL_PRELOADED;
+    }
   });
 
   test("records message-flow metrics and spans", async () => {
@@ -316,6 +326,84 @@ describe("diagnostics-otel service", () => {
       durationMs: 10,
     });
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+  });
+
+  test("uses a preloaded OpenTelemetry SDK without dropping diagnostic listeners", async () => {
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+    await service.start(ctx);
+
+    expect(sdkStart).not.toHaveBeenCalled();
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(ctx.logger.info).toHaveBeenCalledWith(
+      "diagnostics-otel: using preloaded OpenTelemetry SDK",
+    );
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      outcome: "completed",
+      durationMs: 100,
+    });
+    emitDiagnosticEvent({
+      type: "log.record",
+      level: "INFO",
+      message: "preloaded log",
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.histograms.get("openclaw.run.duration_ms")?.record).toHaveBeenCalledWith(
+      100,
+      expect.objectContaining({
+        "openclaw.provider": "openai",
+        "openclaw.model": "gpt-5.4",
+      }),
+    );
+    expect(telemetryState.tracer.startSpan).toHaveBeenCalledWith(
+      "openclaw.run",
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          "openclaw.outcome": "completed",
+        }),
+      }),
+      undefined,
+    );
+    expect(logEmit).toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+    expect(sdkShutdown).not.toHaveBeenCalled();
+    expect(logShutdown).toHaveBeenCalledTimes(1);
+  });
+
+  test("honors disabled traces when an OpenTelemetry SDK is preloaded", async () => {
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: false, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      outcome: "completed",
+      durationMs: 100,
+    });
+
+    expect(sdkStart).not.toHaveBeenCalled();
+    expect(telemetryState.histograms.get("openclaw.run.duration_ms")?.record).toHaveBeenCalledWith(
+      100,
+      expect.objectContaining({
+        "openclaw.provider": "openai",
+      }),
+    );
+    expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+
+    await service.stop?.(ctx);
+    expect(sdkShutdown).not.toHaveBeenCalled();
   });
 
   test("tears down active handles when restarted with diagnostics disabled", async () => {
