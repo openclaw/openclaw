@@ -435,6 +435,12 @@ async function runNativeHookRelayPermissionRequest(params: {
     toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
     ...(params.registration.signal ? { signal: params.registration.signal } : {}),
   };
+  if (!consumeNativeHookRelayPermissionBudget(params.registration.relayId)) {
+    log.warn(
+      `native hook permission approval rate limit exceeded; deferring to provider approval path: relay=${params.registration.relayId} run=${params.registration.runId}`,
+    );
+    return params.adapter.renderNoopResponse(params.invocation.event);
+  }
   const approvalKey = nativeHookRelayPermissionApprovalKey({
     registration: params.registration,
     request,
@@ -442,8 +448,7 @@ async function runNativeHookRelayPermissionRequest(params: {
   const pendingApproval = pendingPermissionApprovals.get(approvalKey);
   try {
     const decision = await (pendingApproval ??
-      requestNativeHookRelayPermissionApprovalWithBudget({
-        registration: params.registration,
+      startNativeHookRelayPermissionApproval({
         approvalKey,
         request,
       }));
@@ -463,17 +468,10 @@ async function runNativeHookRelayPermissionRequest(params: {
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
-async function requestNativeHookRelayPermissionApprovalWithBudget(params: {
-  registration: NativeHookRelayRegistration;
+async function startNativeHookRelayPermissionApproval(params: {
   approvalKey: string;
   request: NativeHookRelayPermissionApprovalRequest;
 }): Promise<NativeHookRelayPermissionApprovalResult> {
-  if (!consumeNativeHookRelayPermissionBudget(params.registration.relayId)) {
-    log.warn(
-      `native hook permission approval rate limit exceeded; deferring to provider approval path: relay=${params.registration.relayId} run=${params.registration.runId}`,
-    );
-    return "defer";
-  }
   const approval = nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
     pendingPermissionApprovals.delete(params.approvalKey);
   });
@@ -505,18 +503,18 @@ function permissionRequestFallbackKey(request: NativeHookRelayPermissionApproval
 
 function permissionRequestToolInputKeyFingerprint(toolInput: Record<string, unknown>): string {
   let fingerprint = "";
-  let processed = 0;
-  for (const key of Object.keys(toolInput).toSorted()) {
-    if (processed >= MAX_PERMISSION_FALLBACK_KEYS) {
-      break;
-    }
+  const { keys, truncated } = readBoundedOwnKeys(toolInput, MAX_PERMISSION_FALLBACK_KEYS);
+  for (const key of keys) {
     const separator = fingerprint ? "," : "";
     const remaining = MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length - separator.length;
     if (remaining <= 0) {
       break;
     }
     fingerprint += `${separator}${key.slice(0, remaining)}`;
-    processed += 1;
+  }
+  if (truncated && fingerprint.length < MAX_PERMISSION_FALLBACK_KEY_CHARS) {
+    const marker = `${fingerprint ? "," : ""}...`;
+    fingerprint += marker.slice(0, MAX_PERMISSION_FALLBACK_KEY_CHARS - fingerprint.length);
   }
   return fingerprint || "none";
 }
@@ -559,13 +557,36 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
     return;
   }
   hash.update("{");
-  for (const key of Object.keys(value).toSorted()) {
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
     hash.update(JSON.stringify(key));
     hash.update(":");
     updateJsonHash(hash, value[key]);
     hash.update(",");
   }
   hash.update("}");
+}
+
+function readBoundedOwnKeys(
+  value: Record<string, unknown>,
+  maxKeys: number,
+): { keys: string[]; truncated: boolean } {
+  const keys: string[] = [];
+  let truncated = false;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    if (keys.length >= maxKeys) {
+      truncated = true;
+      break;
+    }
+    keys.push(key);
+  }
+  keys.sort();
+  return { keys, truncated };
 }
 
 function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now()): boolean {
@@ -1031,6 +1052,14 @@ export const __testing = {
     request: NativeHookRelayPermissionApprovalRequest,
   ): string {
     return formatPermissionApprovalDescription(request);
+  },
+  permissionRequestContentFingerprintForTests(
+    request: NativeHookRelayPermissionApprovalRequest,
+  ): string {
+    return permissionRequestContentFingerprint(request);
+  },
+  permissionRequestToolInputKeyFingerprintForTests(toolInput: Record<string, unknown>): string {
+    return permissionRequestToolInputKeyFingerprint(toolInput);
   },
   setNativeHookRelayPermissionApprovalRequesterForTests(
     requester: NativeHookRelayPermissionApprovalRequester,

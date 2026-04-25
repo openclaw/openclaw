@@ -937,6 +937,32 @@ describe("native hook relay registry", () => {
     expect(responses.at(-1)).toEqual({ stdout: "", stderr: "", exitCode: 0 });
   });
 
+  it("fingerprints broad PermissionRequest inputs without Object.keys enumeration", () => {
+    const toolInput = Object.fromEntries(
+      Array.from({ length: 300 }, (_, index) => [`key-${index}`, `value-${index}`]),
+    );
+    const objectKeys = vi.spyOn(Object, "keys").mockImplementation(() => {
+      throw new Error("Object.keys should not be used for permission fingerprints");
+    });
+
+    try {
+      expect(__testing.permissionRequestToolInputKeyFingerprintForTests(toolInput)).toContain(
+        "key-",
+      );
+      expect(
+        __testing.permissionRequestContentFingerprintForTests({
+          provider: "codex",
+          sessionId: "session-1",
+          runId: "run-1",
+          toolName: "exec",
+          toolInput,
+        }),
+      ).toMatch(/^[a-f0-9]{64}$/);
+    } finally {
+      objectKeys.mockRestore();
+    }
+  });
+
   it("sanitizes PermissionRequest approval previews and reports omitted keys", () => {
     expect(
       __testing.formatPermissionApprovalDescriptionForTests({
