@@ -10,6 +10,7 @@ import { isAbortError, isTransientNetworkError } from "../infra/unhandled-reject
 import { redactSensitiveText } from "../logging/redact.js";
 import { MAX_DOCUMENT_BYTES } from "./constants.js";
 import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
+import { decodeContentDispositionFilename } from "./filename.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
@@ -103,31 +104,6 @@ type GuardedMediaResponse = {
   release: (() => Promise<void>) | null;
   sourceUrl: string;
 };
-
-function stripQuotes(value: string): string {
-  return value.replace(/^["']|["']$/g, "");
-}
-
-function parseContentDispositionFileName(header?: string | null): string | undefined {
-  if (!header) {
-    return undefined;
-  }
-  const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
-  if (starMatch?.[1]) {
-    const cleaned = stripQuotes(starMatch[1].trim());
-    const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
-    try {
-      return basenameFromAnyPath(decodeURIComponent(encoded));
-    } catch {
-      return basenameFromAnyPath(encoded);
-    }
-  }
-  const match = /filename\s*=\s*([^;]+)/i.exec(header);
-  if (match?.[1]) {
-    return basenameFromAnyPath(stripQuotes(match[1].trim()));
-  }
-  return undefined;
-}
 
 function basenameFromUrlPathname(pathname: string): string {
   const base = basenameFromAnyPath(pathname);
@@ -312,7 +288,7 @@ function resolveRemoteFileName(params: {
   } catch {
     // ignore parse errors; leave undefined
   }
-  const headerFileName = parseContentDispositionFileName(
+  const headerFileName = decodeContentDispositionFilename(
     params.res.headers.get("content-disposition"),
   );
   return (
