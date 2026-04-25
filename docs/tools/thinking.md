@@ -2,10 +2,8 @@
 summary: "Directive syntax for /think, /fast, /verbose, /trace, and reasoning visibility"
 read_when:
   - Adjusting thinking, fast-mode, or verbose directive parsing or defaults
-title: "Thinking Levels"
+title: "Thinking levels"
 ---
-
-# Thinking Levels (/think directives)
 
 ## What it does
 
@@ -15,8 +13,8 @@ title: "Thinking Levels"
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
-  - xhigh → “ultrathink+” (GPT-5.2 + Codex models and Anthropic Claude Opus 4.7 effort)
-  - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock and Anthropic Claude Opus 4.7)
+  - xhigh → “ultrathink+” (GPT-5.2+ and Codex models, plus Anthropic Claude Opus 4.7 effort)
+  - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock, Anthropic Claude Opus 4.7, and Google Gemini dynamic thinking)
   - max → provider max reasoning (currently Anthropic Claude Opus 4.7)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest` maps to `high`.
@@ -29,6 +27,7 @@ title: "Thinking Levels"
   - Anthropic Claude Opus 4.7 maps `/think xhigh` to adaptive thinking plus `output_config.effort: "xhigh"`, because `/think` is a thinking directive and `xhigh` is the Opus 4.7 effort setting.
   - Anthropic Claude Opus 4.7 also exposes `/think max`; it maps to the same provider-owned max effort path.
   - OpenAI GPT models map `/think` through model-specific Responses API effort support. `/think off` sends `reasoning.effort: "none"` only when the target model supports it; otherwise OpenClaw omits the disabled reasoning payload instead of sending an unsupported value.
+  - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
   - MiniMax (`minimax/*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from MiniMax's non-native Anthropic stream format.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
   - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
@@ -39,7 +38,7 @@ title: "Thinking Levels"
 2. Session override (set by sending a directive-only message).
 3. Per-agent default (`agents.list[].thinkingDefault` in config).
 4. Global default (`agents.defaults.thinkingDefault` in config).
-5. Fallback: provider-declared default when available, `low` for other catalog models marked reasoning-capable, `off` otherwise.
+5. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
 
 ## Setting a session default
 
@@ -68,6 +67,7 @@ title: "Thinking Levels"
 - For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
+- `/status` shows `Fast` only when fast mode is enabled.
 
 ## Verbose directives (/verbose or /v)
 
@@ -112,8 +112,8 @@ title: "Thinking Levels"
 
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
 - Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
-- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model's provider thinking profile.
-- The picker uses `thinkingOptions` returned by the gateway session row. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
+- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model's provider thinking profile plus the same fallback logic that `/status` and `session_status` use.
+- The picker uses `thinkingLevels` returned by the gateway session row/defaults, with `thinkingOptions` kept as a legacy label list. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.
 
 ## Provider profiles
@@ -121,4 +121,4 @@ title: "Thinking Levels"
 - Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
 - Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, or `max`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
 - Published legacy hooks (`supportsXHighThinking`, `isBinaryThinking`, and `resolveDefaultThinkingLevel`) remain as compatibility adapters, but new custom level sets should use `resolveThinkingProfile`.
-- Gateway rows expose `thinkingOptions` and `thinkingDefault` so ACP/chat clients render the same profile that runtime validation uses.
+- Gateway rows/defaults expose `thinkingLevels`, `thinkingOptions`, and `thinkingDefault` so ACP/chat clients render the same profile ids and labels that runtime validation uses.

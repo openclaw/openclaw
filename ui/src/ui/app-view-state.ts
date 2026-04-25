@@ -1,5 +1,6 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -59,6 +60,11 @@ export type AppViewState = {
   themeMode: ThemeMode;
   themeResolved: ResolvedTheme;
   themeOrder: ThemeName[];
+  customThemeImportUrl: string;
+  customThemeImportBusy: boolean;
+  customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
+  customThemeImportExpanded: boolean;
+  customThemeImportFocusToken: number;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -92,6 +98,10 @@ export type AppViewState = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
+  realtimeTalkActive: boolean;
+  realtimeTalkStatus: RealtimeTalkStatus;
+  realtimeTalkDetail: string | null;
+  realtimeTalkTranscript: string | null;
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
@@ -376,6 +386,10 @@ export type AppViewState = {
     setTab: (tab: Tab) => void;
     setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+    setCustomThemeImportUrl: (next: string) => void;
+    openCustomThemeImport: () => void;
+    importCustomTheme: () => Promise<void>;
+    clearCustomTheme: () => void;
     setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
@@ -425,6 +439,8 @@ export type AppViewState = {
     setPassword: (next: string) => void;
     setChatMessage: (next: string) => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+    toggleRealtimeTalk: () => Promise<void>;
+    steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;

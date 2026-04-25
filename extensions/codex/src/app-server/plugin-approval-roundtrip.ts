@@ -1,4 +1,7 @@
-import { callGatewayTool, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import {
+  callGatewayTool,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
@@ -53,6 +56,19 @@ export async function requestPluginApproval(params: {
     },
     { expectFinal: false },
   ) as Promise<ApprovalRequestResult | undefined>;
+}
+
+export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
+  if (result === null || result === undefined || typeof result !== "object") {
+    return false;
+  }
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(result, "decision");
+  } catch {
+    return false;
+  }
+  return descriptor !== undefined && "value" in descriptor && descriptor.value === null;
 }
 
 export async function waitForPluginApprovalDecision(params: {

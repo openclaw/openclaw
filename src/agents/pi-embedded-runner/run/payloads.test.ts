@@ -199,4 +199,73 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       assistantTexts: ['{"action":"NO_REPLY"}'],
     });
   });
+
+  it("strips NO_REPLY text but keeps voice media directives", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["NO_REPLY\nMEDIA:/tmp/openclaw/tts-a/voice-a.opus\n[[audio_as_voice]]"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      mediaUrl: "/tmp/openclaw/tts-a/voice-a.opus",
+      mediaUrls: ["/tmp/openclaw/tts-a/voice-a.opus"],
+      audioAsVoice: true,
+    });
+    expect(payloads[0]?.text).toBeUndefined();
+  });
+
+  it("preserves media directives when stored assistant text was reduced to visible text only", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Attached image"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/reply-image.png\nAttached image",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      text: "Attached image",
+      mediaUrl: "/tmp/reply-image.png",
+      mediaUrls: ["/tmp/reply-image.png"],
+    });
+  });
+
+  it("uses raw final assistant text when visible-text extraction removed a media-only directive line", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/reply-image.png\nAttached image",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      text: "Attached image",
+      mediaUrl: "/tmp/reply-image.png",
+      mediaUrls: ["/tmp/reply-image.png"],
+    });
+  });
 });

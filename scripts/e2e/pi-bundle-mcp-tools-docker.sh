@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw-pi-bundle-mcp-tools-e2e}"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-pi-bundle-mcp-tools-e2e" OPENCLAW_IMAGE)"
 CONTAINER_NAME="openclaw-pi-bundle-mcp-tools-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-pi-bundle-mcp-tools-log.XXXXXX)"
 
@@ -13,10 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ "${OPENCLAW_SKIP_DOCKER_BUILD:-0}" != "1" ]; then
-  echo "Building Docker image..."
-  run_logged pi-bundle-mcp-tools-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
-fi
+docker_e2e_build_or_reuse "$IMAGE_NAME" pi-bundle-mcp-tools
 
 echo "Running in-container Pi bundle MCP tool availability smoke..."
 set +e

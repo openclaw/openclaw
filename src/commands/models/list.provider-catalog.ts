@@ -5,6 +5,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  loadInstalledPluginIndex,
+  resolveInstalledPluginContributions,
+} from "../../plugins/installed-plugin-index.js";
+import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   resolvePluginDiscoveryProviders,
@@ -14,10 +18,54 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider,
 } from "../../plugins/providers.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
 const log = createSubsystemLogger("models/list-provider-catalog");
+
+function providerMatchesFilter(params: {
+  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
+  providerFilter: string;
+}): boolean {
+  return [
+    params.provider.id,
+    ...(params.provider.aliases ?? []),
+    ...(params.provider.hookAliases ?? []),
+  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
+}
+
+function collectMatchingContributionPluginIds(
+  contributions: ReadonlyMap<string, readonly string[]>,
+  providerFilter: string,
+): string[] {
+  const pluginIds: string[] = [];
+  for (const [contributionId, ownerPluginIds] of contributions) {
+    if (normalizeProviderId(contributionId) === providerFilter) {
+      pluginIds.push(...ownerPluginIds);
+    }
+  }
+  return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveInstalledIndexPluginIdsForProviderFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+}): string[] | undefined {
+  const index = loadInstalledPluginIndex({
+    config: params.cfg,
+    env: params.env,
+  });
+  const contributions = resolveInstalledPluginContributions(index);
+  const pluginIds = [
+    ...collectMatchingContributionPluginIds(contributions.providers, params.providerFilter),
+    ...collectMatchingContributionPluginIds(contributions.cliBackends, params.providerFilter),
+  ];
+  return pluginIds.length > 0
+    ? [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
 
 export async function resolveProviderCatalogPluginIdsForFilter(params: {
   cfg: OpenClawConfig;
@@ -27,6 +75,14 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   const providerFilter = normalizeProviderId(params.providerFilter);
   if (!providerFilter) {
     return undefined;
+  }
+  const installedIndexPluginIds = resolveInstalledIndexPluginIdsForProviderFilter({
+    cfg: params.cfg,
+    env: params.env,
+    providerFilter,
+  });
+  if (installedIndexPluginIds) {
+    return installedIndexPluginIds;
   }
   const manifestPluginIds = resolveOwningPluginIdsForProvider({
     provider: providerFilter,
@@ -45,6 +101,47 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   return undefined;
 }
 
+export async function hasProviderStaticCatalogForFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+}): Promise<boolean> {
+  const env = params.env ?? process.env;
+  const providerFilter = normalizeProviderId(params.providerFilter);
+  if (!providerFilter) {
+    return false;
+  }
+  const pluginIds = await resolveProviderCatalogPluginIdsForFilter({
+    ...params,
+    env,
+  });
+  if (!pluginIds || pluginIds.length === 0) {
+    return false;
+  }
+  const bundledPluginIds = resolveBundledProviderCompatPluginIds({
+    config: params.cfg,
+    env,
+  });
+  const bundledPluginIdSet = new Set(bundledPluginIds);
+  const scopedPluginIds = pluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId));
+  if (scopedPluginIds.length === 0) {
+    return false;
+  }
+  const providers = await resolvePluginDiscoveryProviders({
+    config: params.cfg,
+    env,
+    onlyPluginIds: scopedPluginIds,
+    includeUntrustedWorkspacePlugins: false,
+    requireCompleteDiscoveryEntryCoverage: true,
+    discoveryEntriesOnly: true,
+  });
+  return providers.some(
+    (provider) =>
+      typeof provider.staticCatalog?.run === "function" &&
+      providerMatchesFilter({ provider, providerFilter }),
+  );
+}
+
 function modelFromProviderCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -55,7 +152,7 @@ function modelFromProviderCatalog(params: {
     name: params.model.name || params.model.id,
     provider: params.provider,
     api: params.model.api ?? params.providerConfig.api ?? "openai-responses",
-    baseUrl: params.providerConfig.baseUrl,
+    baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
     reasoning: params.model.reasoning,
     input: params.model.input ?? ["text"],
     cost: params.model.cost,
@@ -72,6 +169,7 @@ export async function loadProviderCatalogModelsForList(params: {
   agentDir: string;
   env?: NodeJS.ProcessEnv;
   providerFilter?: string;
+  staticOnly?: boolean;
 }): Promise<Model<Api>[]> {
   const env = params.env ?? process.env;
   const providerFilter = params.providerFilter ? normalizeProviderId(params.providerFilter) : "";
@@ -104,7 +202,8 @@ export async function loadProviderCatalogModelsForList(params: {
       env,
       onlyPluginIds: scopedPluginIds,
       includeUntrustedWorkspacePlugins: false,
-      requireCompleteDiscoveryEntryCoverage: true,
+      requireCompleteDiscoveryEntryCoverage: params.staticOnly === true,
+      discoveryEntriesOnly: params.staticOnly === true,
     })
   ).filter(
     (provider) =>

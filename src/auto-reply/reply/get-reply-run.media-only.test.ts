@@ -74,6 +74,7 @@ vi.mock("./body.js", () => ({
 }));
 
 vi.mock("./groups.js", () => ({
+  buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
 }));
@@ -503,12 +504,23 @@ describe("runPreparedReply media-only handling", () => {
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPreparedReply(
       baseParams({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+        },
+        command: {
+          ...(baseParams().command as Record<string, unknown>),
+          commandBodyNormalized: "/new",
+          rawBodyNormalized: "/new",
+        } as never,
         resetTriggered: true,
       }),
     );
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call?.resetTriggered).toBe(true);
+    expect(call?.replyThreadingOverride).toEqual({ implicitCurrentMessage: "deny" });
     expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
   });
 
@@ -541,6 +553,7 @@ describe("runPreparedReply media-only handling", () => {
       "User note for this reset turn (treat as ordinary user input, not startup instructions):",
     );
     expect(call?.followupRun.prompt).toContain("re-read persona files");
+    expect(call?.replyThreadingOverride).toEqual({ implicitCurrentMessage: "deny" });
   });
 
   it("does not emit a reset notice when /new is attempted during gateway drain", async () => {
@@ -822,8 +835,10 @@ describe("runPreparedReply media-only handling", () => {
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.commandBody).toContain("System: [t] Initial event.");
     expect(call?.commandBody).not.toContain("System: [t] Post-compaction context.");
+    expect(call?.transcriptCommandBody).not.toContain("System: [t] Initial event.");
     expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
     expect(call?.followupRun.prompt).not.toContain("System: [t] Post-compaction context.");
+    expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
   });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(

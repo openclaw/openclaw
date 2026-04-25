@@ -1,5 +1,9 @@
-import { embeddedAgentLog, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
   requestPluginApproval,
   type AppServerApprovalOutcome,
@@ -19,6 +23,35 @@ type BridgeableApprovalElicitation = {
   requestedSchema: JsonObject;
   meta: JsonObject;
 };
+
+const MCP_TOOL_APPROVAL_KIND = "mcp_tool_call";
+const MCP_TOOL_APPROVAL_KIND_KEY = "codex_approval_kind";
+const MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY = "connector_name";
+const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY = "tool_title";
+const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY = "tool_description";
+const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY = "tool_params_display";
+const MAX_DISPLAY_PARAM_ENTRIES = 8;
+const MAX_DISPLAY_PARAM_VALUE_LENGTH = 120;
+const MAX_DISPLAY_VALUE_ARRAY_ITEMS = 8;
+const MAX_DISPLAY_VALUE_OBJECT_KEYS = 8;
+const MAX_DISPLAY_VALUE_DEPTH = 3;
+const DISPLAY_TEXT_SCAN_MAX_LENGTH = 4096;
+const ANSI_OSC_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
+  "g",
+);
+const ANSI_CONTROL_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|\u001b[@-Z\\-_])`,
+  "g",
+);
+const CONTROL_CHARACTER_RE = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]+`, "g");
+const INVISIBLE_FORMATTING_CONTROL_RE = new RegExp(
+  String.raw`[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufe00-\ufe0f\u{e0100}-\u{e01ef}]`,
+  "gu",
+);
+const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
+  String.raw`(?:\u001b\][^\u001b\u009c\u0007]*|\u009d[^\u001b\u009c\u0007]*|\u001b\[[0-?]*[ -/]*|\u009b[0-?]*[ -/]*|\u001b)$`,
+);
 
 export async function handleCodexAppServerElicitationRequest(params: {
   requestParams: JsonValue | undefined;
@@ -71,7 +104,7 @@ function readBridgeableApprovalElicitation(
     !requestParams ||
     readString(requestParams, "mode") !== "form" ||
     !isJsonObject(requestParams._meta) ||
-    requestParams._meta.codex_approval_kind !== "mcp_tool_call" ||
+    requestParams._meta[MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND ||
     !isJsonObject(requestParams.requestedSchema)
   ) {
     return undefined;
@@ -80,33 +113,181 @@ function readBridgeableApprovalElicitation(
   const requestedSchema = requestParams.requestedSchema;
   if (
     readString(requestedSchema, "type") !== "object" ||
-    !isJsonObject(requestedSchema.properties) ||
-    Object.keys(requestedSchema.properties).length === 0
+    !isJsonObject(requestedSchema.properties)
   ) {
     return undefined;
   }
 
-  const title = readString(requestParams, "message") ?? "Codex MCP tool approval";
-  const propertyLines = Object.entries(requestedSchema.properties)
+  const title =
+    sanitizeDisplayText(readString(requestParams, "message") ?? "") || "Codex MCP tool approval";
+  return {
+    title,
+    description: buildApprovalDescription({
+      title,
+      meta: requestParams._meta,
+      requestedSchema,
+      serverName: sanitizeOptionalDisplayText(readString(requestParams, "serverName")),
+    }),
+    requestedSchema,
+    meta: requestParams._meta,
+  };
+}
+
+function buildApprovalDescription(params: {
+  title: string;
+  meta: JsonObject;
+  requestedSchema: JsonObject;
+  serverName: string | undefined;
+}): string {
+  const connectorName = sanitizeOptionalDisplayText(
+    readString(params.meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY),
+  );
+  const toolTitle = sanitizeOptionalDisplayText(
+    readString(params.meta, MCP_TOOL_APPROVAL_TOOL_TITLE_KEY),
+  );
+  const toolDescription = sanitizeOptionalDisplayText(
+    readString(params.meta, MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY),
+  );
+  const summaryLines = [
+    connectorName && `App: ${connectorName}`,
+    toolTitle && `Tool: ${toolTitle}`,
+    params.serverName && `MCP server: ${params.serverName}`,
+    toolDescription,
+  ].filter((line): line is string => Boolean(line));
+  const paramLines = readDisplayParamLines(params.meta);
+  const propertyLines = readPropertyDescriptionLines(params.requestedSchema);
+  return [
+    params.title,
+    summaryLines.join("\n"),
+    paramLines.length > 0 ? ["Parameters:", ...paramLines].join("\n") : "",
+    propertyLines.length > 0 ? ["Fields:", ...propertyLines].join("\n") : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function readPropertyDescriptionLines(requestedSchema: JsonObject): string[] {
+  const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : {};
+  return Object.entries(properties)
     .map(([name, value]) => {
       const schema = isJsonObject(value) ? value : undefined;
       if (!schema) {
         return undefined;
       }
-      const propTitle = readString(schema, "title") ?? name;
-      const description = readString(schema, "description");
+      const propTitle =
+        sanitizeDisplayText(readString(schema, "title") ?? "") ||
+        sanitizeDisplayText(name) ||
+        "field";
+      const description = sanitizeOptionalDisplayText(readString(schema, "description"));
       return description ? `- ${propTitle}: ${description}` : `- ${propTitle}`;
     })
     .filter((line): line is string => Boolean(line));
+}
 
-  return {
-    title,
-    description: [title, propertyLines.length > 0 ? ["Fields:", ...propertyLines].join("\n") : ""]
-      .filter(Boolean)
-      .join("\n\n"),
-    requestedSchema,
-    meta: requestParams._meta,
-  };
+function readDisplayParamLines(meta: JsonObject): string[] {
+  const displayParams = meta[MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY];
+  if (!Array.isArray(displayParams)) {
+    return [];
+  }
+  const lines = displayParams
+    .slice(0, MAX_DISPLAY_PARAM_ENTRIES)
+    .map((entry) => {
+      const param = isJsonObject(entry) ? entry : undefined;
+      if (!param) {
+        return undefined;
+      }
+      const name =
+        sanitizeOptionalDisplayText(readString(param, "display_name")) ??
+        sanitizeOptionalDisplayText(readString(param, "name"));
+      if (!name) {
+        return undefined;
+      }
+      return `- ${name}: ${formatDisplayParamValue(param.value)}`;
+    })
+    .filter((line): line is string => Boolean(line));
+  const remaining = displayParams.length - MAX_DISPLAY_PARAM_ENTRIES;
+  return remaining > 0 ? [...lines, `- Additional parameters: ${remaining} more`] : lines;
+}
+
+function formatDisplayParamValue(value: JsonValue | undefined): string {
+  const formatted = typeof value === "string" ? value : formatDisplayJsonValue(value ?? null);
+  return truncateDisplayText(sanitizeDisplayText(formatted), MAX_DISPLAY_PARAM_VALUE_LENGTH);
+}
+
+function formatDisplayJsonValue(value: JsonValue, depth = MAX_DISPLAY_VALUE_DEPTH): string {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(truncateDisplayText(sanitizeDisplayText(value), 80));
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (depth <= 0) {
+      return "[truncated]";
+    }
+    const parts: string[] = [];
+    const limit = Math.min(value.length, MAX_DISPLAY_VALUE_ARRAY_ITEMS);
+    for (let i = 0; i < limit; i += 1) {
+      parts.push(formatDisplayJsonValue(value[i] ?? null, depth - 1));
+    }
+    if (value.length > MAX_DISPLAY_VALUE_ARRAY_ITEMS) {
+      parts.push("...");
+    }
+    return `[${parts.join(",")}]`;
+  }
+  if (typeof value === "object") {
+    if (depth <= 0) {
+      return "{truncated}";
+    }
+    const parts: string[] = [];
+    let count = 0;
+    let truncated = false;
+    for (const key in value) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) {
+        continue;
+      }
+      if (count >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {
+        truncated = true;
+        break;
+      }
+      const safeKey = truncateDisplayText(sanitizeDisplayText(key), 80);
+      parts.push(
+        `${JSON.stringify(safeKey)}:${formatDisplayJsonValue(value[key] ?? null, depth - 1)}`,
+      );
+      count += 1;
+    }
+    if (truncated) {
+      parts.push("...");
+    }
+    return `{${parts.join(",")}}`;
+  }
+  return "null";
+}
+
+function sanitizeOptionalDisplayText(value: string | undefined): string | undefined {
+  const sanitized = value === undefined ? "" : sanitizeDisplayText(value);
+  return sanitized || undefined;
+}
+
+function sanitizeDisplayText(value: string): string {
+  const scanned = value.slice(0, DISPLAY_TEXT_SCAN_MAX_LENGTH);
+  const clipped = value.length > DISPLAY_TEXT_SCAN_MAX_LENGTH;
+  const sanitized = scanned
+    .replace(ANSI_OSC_SEQUENCE_RE, "")
+    .replace(ANSI_CONTROL_SEQUENCE_RE, "")
+    .replace(DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE, "")
+    .replace(INVISIBLE_FORMATTING_CONTROL_RE, " ")
+    .replace(CONTROL_CHARACTER_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clipped ? `${sanitized}...` : sanitized;
+}
+
+function truncateDisplayText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 async function requestPluginApprovalOutcome(params: {
@@ -129,8 +310,8 @@ async function requestPluginApprovalOutcome(params: {
       return "unavailable";
     }
 
-    const decision = Object.prototype.hasOwnProperty.call(requestResult, "decision")
-      ? requestResult.decision
+    const decision = approvalRequestExplicitlyUnavailable(requestResult)
+      ? null
       : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
     return mapExecDecisionToOutcome(decision);
   } catch {
@@ -152,14 +333,21 @@ function buildElicitationResponse(
 
   const content = buildAcceptedContent(requestedSchema, meta, outcome);
   if (!content) {
+    if (hasNoSchemaProperties(requestedSchema)) {
+      return {
+        action: "accept",
+        content: null,
+        _meta: buildAcceptedMeta(meta, outcome),
+      };
+    }
     embeddedAgentLog.warn("codex MCP approval elicitation approved without a mappable response", {
-      approvalKind: meta.codex_approval_kind,
+      approvalKind: meta[MCP_TOOL_APPROVAL_KIND_KEY],
       fields: Object.keys(requestedSchema.properties ?? {}),
       outcome,
     });
     return { action: "decline", content: null, _meta: null };
   }
-  return { action: "accept", content, _meta: null };
+  return { action: "accept", content, _meta: buildAcceptedMeta(meta, outcome) };
 }
 
 function buildAcceptedContent(
@@ -248,15 +436,14 @@ function readPersistFieldValue(
   if (options.length === 0) {
     return undefined;
   }
-  for (const preferred of persistHints) {
+  const preferred = choosePersistHint(persistHints);
+  if (preferred) {
     const match = options.find(
       (option) => option.value === preferred || option.label === preferred,
     );
-    if (match) {
-      return match.value;
-    }
+    return match?.value;
   }
-  return options.find((option) => option.value === "session" || option.label === "session")?.value;
+  return undefined;
 }
 
 function readDefaultValue(schema: JsonObject): JsonValue | undefined {
@@ -302,6 +489,29 @@ function readPersistHints(meta: JsonObject): string[] {
     return raw.filter((entry): entry is string => typeof entry === "string");
   }
   return ["session", "always"];
+}
+
+function buildAcceptedMeta(meta: JsonObject, outcome: AppServerApprovalOutcome): JsonObject | null {
+  if (outcome !== "approved-session") {
+    return null;
+  }
+  const persist = choosePersistHint(readPersistHints(meta));
+  return persist ? { persist } : null;
+}
+
+function choosePersistHint(persistHints: string[]): "always" | "session" | undefined {
+  if (persistHints.includes("always")) {
+    return "always";
+  }
+  if (persistHints.includes("session")) {
+    return "session";
+  }
+  return undefined;
+}
+
+function hasNoSchemaProperties(requestedSchema: JsonObject): boolean {
+  const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : {};
+  return Object.keys(properties).length === 0;
 }
 
 function readEnumOptions(schema: JsonObject): Array<{ value: string; label: string }> {

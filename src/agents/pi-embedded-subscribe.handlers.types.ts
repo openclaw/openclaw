@@ -60,6 +60,8 @@ export type EmbeddedPiSubscribeState = {
   assistantTextBaseline: number;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
+  pendingAssistantUsage?: NormalizedUsage;
+  assistantUsageCommitted: boolean;
 
   compactionInFlight: boolean;
   pendingCompactionRetry: number;
@@ -133,6 +135,7 @@ export type EmbeddedPiSubscribeContext = {
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;
+  commitAssistantUsage: () => void;
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;

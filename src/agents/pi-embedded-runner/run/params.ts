@@ -78,6 +78,8 @@ export type RunEmbeddedPiAgentParams = {
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
+  /** User-visible prompt body to persist instead of runtime-enriched prompt text. */
+  transcriptPrompt?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
@@ -86,6 +88,8 @@ export type RunEmbeddedPiAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  agentHarnessId?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
@@ -105,7 +109,10 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
   bootstrapPromptWarningSignature?: string;
-  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+  execOverrides?: Pick<
+    ExecToolDefaults,
+    "host" | "security" | "ask" | "node" | "notifyOnExit" | "notifyOnExitEmptySuccess"
+  >;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
   runId: string;

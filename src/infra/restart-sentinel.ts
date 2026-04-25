@@ -62,6 +62,9 @@ export type RestartSentinel = {
   payload: RestartSentinelPayload;
 };
 
+export const DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE =
+  "The gateway restart completed successfully. Tell the user OpenClaw restarted successfully and continue any pending work.";
+
 const SENTINEL_FILENAME = "restart-sentinel.json";
 
 export function formatDoctorNonInteractiveHint(
@@ -80,8 +83,28 @@ export async function writeRestartSentinel(
 ) {
   const filePath = resolveRestartSentinelPath(env);
   const data: RestartSentinel = { version: 1, payload };
-  await writeJsonAtomic(filePath, data, { trailingNewline: true });
+  await writeJsonAtomic(filePath, data, { trailingNewline: true, ensureDirMode: 0o700 });
   return filePath;
+}
+
+export async function removeRestartSentinelFile(filePath: string | null | undefined) {
+  if (!filePath) {
+    return;
+  }
+  await fs.unlink(filePath).catch(() => {});
+}
+
+export function buildRestartSuccessContinuation(params: {
+  sessionKey?: string;
+  continuationMessage?: string | null;
+}): RestartSentinelContinuation | null {
+  const message = params.continuationMessage?.trim();
+  if (message) {
+    return { kind: "agentTurn", message };
+  }
+  return params.sessionKey?.trim()
+    ? { kind: "agentTurn", message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE }
+    : null;
 }
 
 export async function readRestartSentinel(
@@ -124,7 +147,7 @@ export async function consumeRestartSentinel(
   if (!parsed) {
     return null;
   }
-  await fs.unlink(filePath).catch(() => {});
+  await removeRestartSentinelFile(filePath);
   return parsed;
 }
 

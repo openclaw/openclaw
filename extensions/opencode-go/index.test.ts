@@ -1,10 +1,31 @@
 import { getModels } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
 import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import plugin from "./index.js";
 
 describe("opencode-go provider plugin", () => {
+  it("registers image media understanding through the OpenCode Go plugin", async () => {
+    const { mediaProviders } = await registerProviderPlugin({
+      plugin,
+      id: "opencode-go",
+      name: "OpenCode Go Provider",
+    });
+
+    expect(mediaProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "opencode-go",
+          capabilities: ["image"],
+          defaultModels: { image: "kimi-k2.6" },
+          describeImage: expect.any(Function),
+          describeImages: expect.any(Function),
+        }),
+      ]),
+    );
+  });
+
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
     await expectPassthroughReplayPolicy({
       plugin,
@@ -34,6 +55,8 @@ describe("opencode-go provider plugin", () => {
       "kimi-k2.6",
       "mimo-v2-omni",
       "mimo-v2-pro",
+      "mimo-v2.5",
+      "mimo-v2.5-pro",
       "minimax-m2.5",
       "minimax-m2.7",
       "qwen3.5-plus",
@@ -61,13 +84,13 @@ describe("opencode-go provider plugin", () => {
       input: ["text"],
       reasoning: true,
       contextWindow: 1_048_576,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
     });
     expect(models.get("mimo-v2-omni")).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
       contextWindow: 262_144,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
     });
   });
 

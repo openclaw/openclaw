@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw agent` (send one agent turn via the Gateway)"
 read_when:
   - You want to run one agent turn from scripts (optionally deliver reply)
-title: "agent"
+title: "Agent"
 ---
 
 # `openclaw agent`
@@ -53,5 +53,11 @@ openclaw agent --agent ops --message "Run locally" --local
 - Gateway mode falls back to the embedded agent when the Gateway request fails. Use `--local` to force embedded execution up front.
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
+- `--json` keeps stdout reserved for the JSON response. Gateway, plugin, and embedded-fallback diagnostics are routed to stderr so scripts can parse stdout directly.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
 - Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.
+
+## Related
+
+- [CLI reference](/cli)
+- [Agent runtime](/concepts/agent)

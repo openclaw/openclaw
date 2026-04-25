@@ -10,7 +10,9 @@ import {
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
+  restoreLegacyUpdaterCompatSidecars,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { NPM_UPDATE_COMPAT_SIDECARS } from "../../src/infra/npm-update-compat-sidecars.ts";
 import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -306,6 +308,22 @@ describe("bundled plugin postinstall", () => {
         encoding: "utf8",
       }),
     ).resolves.toBe("export {};\n");
+  });
+
+  it("keeps postinstall QA compat sidecars aligned with update verification metadata", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-qa-compat-");
+
+    const restored = restoreLegacyUpdaterCompatSidecars({
+      packageRoot,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(restored).toEqual(NPM_UPDATE_COMPAT_SIDECARS.map((sidecar) => sidecar.path));
+    for (const sidecar of NPM_UPDATE_COMPAT_SIDECARS) {
+      await expect(fs.readFile(path.join(packageRoot, sidecar.path), "utf8")).resolves.toBe(
+        sidecar.content,
+      );
+    }
   });
 
   it("keeps packaged postinstall non-fatal when the dist inventory is missing", async () => {

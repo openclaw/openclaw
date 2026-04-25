@@ -4,11 +4,9 @@ read_when:
   - Looking up a specific onboarding step or flag
   - Automating onboarding with non-interactive mode
   - Debugging onboarding behavior
-title: "Onboarding Reference"
+title: "Onboarding reference"
 sidebarTitle: "Onboarding Reference"
 ---
-
-# Onboarding Reference
 
 This is the full reference for `openclaw onboard`.
 For a high-level overview, see [Onboarding (CLI)](/start/wizard).
@@ -33,9 +31,10 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - **Anthropic API key**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
     - **Anthropic API key**: preferred Anthropic assistant choice in onboarding/configure.
     - **Anthropic setup-token**: still available in onboarding/configure, though OpenClaw now prefers Claude CLI reuse when available.
-    - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, onboarding can reuse it. Reused Codex CLI credentials stay managed by Codex CLI; on expiry OpenClaw re-reads that source first and, when the provider can refresh it, writes the refreshed credential back to Codex storage instead of taking ownership itself.
     - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
-      - Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
+      - Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
+    - **OpenAI Code (Codex) subscription (device pairing)**: browser pairing flow with a short-lived device code.
+      - Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
       - Sets `agents.defaults.model` to `openai/gpt-5.4` when model is unset, `openai/*`, or `openai-codex/*`.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.

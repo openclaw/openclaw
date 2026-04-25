@@ -45,9 +45,25 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "npx",
-      ["-y", "example-mcp"],
+    const [command, args, options] = spawnMock.mock.calls[0] as [
+      string,
+      string[],
+      { env?: NodeJS.ProcessEnv },
+    ];
+    if (process.platform === "linux") {
+      expect(command).toBe("/bin/sh");
+      expect(args).toEqual([
+        "-c",
+        'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+        "npx",
+        "-y",
+        "example-mcp",
+      ]);
+    } else {
+      expect(command).toBe("npx");
+      expect(args).toEqual(["-y", "example-mcp"]);
+    }
+    expect(options).toEqual(
       expect.objectContaining({
         cwd: "/tmp/example",
         detached: process.platform !== "win32",
@@ -55,6 +71,7 @@ describe("OpenClawStdioClientTransport", () => {
         stdio: ["pipe", "pipe", "pipe"],
       }),
     );
+    expect(options.env).toEqual(expect.objectContaining({ EXAMPLE: "1" }));
     expect(transport.pid).toBe(4321);
     expect(transport.stderr).toBeInstanceOf(PassThrough);
   });

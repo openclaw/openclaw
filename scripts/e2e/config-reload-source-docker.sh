@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="${OPENCLAW_CONFIG_RELOAD_E2E_IMAGE:-openclaw-config-reload-e2e}"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-config-reload-e2e" OPENCLAW_CONFIG_RELOAD_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_CONFIG_RELOAD_E2E_SKIP_BUILD:-0}"
 PORT="18789"
 TOKEN="reload-e2e-token"
@@ -15,12 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ "$SKIP_BUILD" = "1" ]; then
-  echo "Reusing Docker image: $IMAGE_NAME"
-else
-  echo "Building Docker image..."
-  run_logged config-reload-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
-fi
+docker_e2e_build_or_reuse "$IMAGE_NAME" config-reload "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
 
 echo "Starting gateway container..."
 docker run -d \
@@ -112,7 +107,7 @@ echo "Checking initial RPC status..."
 docker exec "$CONTAINER_NAME" bash -lc "
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
-node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 5000 >/tmp/config-reload-status-before.log
+node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-before.log
 "
 
 echo "Mutating plugin install timestamp metadata..."
@@ -140,7 +135,7 @@ echo "Checking post-write RPC status..."
 docker exec "$CONTAINER_NAME" bash -lc "
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
-node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 5000 >/tmp/config-reload-status-after.log
+node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-after.log
 "
 
 echo "Checking reload log..."

@@ -358,7 +358,7 @@ function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionCo
       if (!hasInlineValue) {
         redactNext = true;
       }
-      return hasInlineValue ? arg.replace(/=.*/u, "=<redacted>") : arg;
+      return hasInlineValue ? arg.replace(/[=].*/u, "=<redacted>") : arg;
     }
     return redactSupportString(arg, redaction);
   });

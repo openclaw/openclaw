@@ -18,10 +18,14 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "feishu",
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "qrcode-terminal"],
+    mirroredRootRuntimeDeps: ["typebox"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
+  {
+    pluginId: "google-meet",
+    mirroredRootRuntimeDeps: ["commander", "typebox"],
+  },
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
@@ -44,7 +48,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "diffs",
     pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme", "playwright-core"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox"],
+    mirroredRootRuntimeDeps: ["typebox"],
   },
   {
     pluginId: "matrix",
@@ -62,7 +66,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "memory-lancedb",
     pluginLocalRuntimeDeps: ["@lancedb/lancedb"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "openai"],
+    mirroredRootRuntimeDeps: ["typebox", "openai"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -74,7 +78,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "jsonwebtoken",
       "jwks-rsa",
     ],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "express"],
+    mirroredRootRuntimeDeps: ["typebox", "express"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
@@ -105,7 +109,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "whatsapp",
     pluginLocalRuntimeDeps: ["@whiskeysockets/baileys", "jimp"],
-    mirroredRootRuntimeDeps: ["qrcode-terminal"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },
