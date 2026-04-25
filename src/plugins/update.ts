@@ -14,7 +14,6 @@ import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-st
 import {
   getExternalizedBundledPluginLookupIds,
   getExternalizedBundledPluginTargetId,
-  listExternalizedBundledPluginBridges,
   type ExternalizedBundledPluginBridge,
 } from "./externalized-bundled-plugins.js";
 import {
@@ -863,8 +862,7 @@ export async function syncPluginsForUpdateChannel(params: {
       changed = true;
     }
   } else {
-    const bridges =
-      params.externalizedBundledPluginBridges ?? listExternalizedBundledPluginBridges();
+    const bridges = params.externalizedBundledPluginBridges ?? [];
     for (const bridge of bridges) {
       const targetPluginId = getExternalizedBundledPluginTargetId(bridge);
       const bundledInfo = bundled.get(bridge.bundledPluginId);
