@@ -360,7 +360,10 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../docs-path.js", () => ({
-    resolveOpenClawDocsPath: vi.fn(async () => undefined),
+    resolveOpenClawReferencePaths: vi.fn(async () => ({
+      docsPath: undefined,
+      sourcePath: undefined,
+    })),
   }));
 
   vi.doMock("../channel-tools.js", () => ({

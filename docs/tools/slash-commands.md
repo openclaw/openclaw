@@ -107,6 +107,7 @@ Built-in commands available today:
 - `/commands` shows the generated command catalog.
 - `/tools [compact|verbose]` shows what the current agent can use right now.
 - `/status` shows execution/runtime status, including `Execution`/`Runtime` labels and provider usage/quota when available.
+- `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
 - `/tasks` lists active/recent background tasks for the current session.
 - `/context [list|detail|json]` explains how context is assembled.
 - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
@@ -194,6 +195,9 @@ Notes:
 - If the agent is idle, the next run uses it right away.
 - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
 - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
+- In the local TUI, `/crestodian [request]` returns from the normal agent TUI to
+  Crestodian. This is separate from message-channel rescue mode and does not
+  grant remote config authority.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
 - **Group mention gating:** command-only messages from allowlisted senders bypass mention requirements.
 - **Inline shortcuts (allowlisted senders only):** certain commands also work when embedded in a normal message and are stripped before the model sees the remaining text.
