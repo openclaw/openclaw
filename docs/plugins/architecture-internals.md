@@ -905,7 +905,7 @@ normalized facts warn if the parsed npm package name drifts from that identity.
 They also warn when `defaultChoice` is invalid or points at a source that is
 not available, and when npm integrity metadata is present without a valid npm
 source. Consumers should treat `installSource` as an additive optional field so
-older hand-built entries and compatibility shims do not have to synthesize it.
+hand-built entries and catalog shims do not have to synthesize it.
 This lets onboarding and diagnostics explain source-plane state without
 importing plugin runtime.
 
@@ -914,17 +914,13 @@ Official external npm entries should prefer an exact `npmSpec` plus
 compatibility, but they surface source-plane warnings so the catalog can move
 toward pinned, integrity-checked installs without breaking existing plugins.
 When onboarding installs from a local catalog path, it records a managed plugin
-install ledger entry with `source: "path"` and a workspace-relative
+plugin index entry with `source: "path"` and a workspace-relative
 `sourcePath` when possible. The absolute operational load path stays in
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. Legacy `plugins.installs` config entries are still read as a
-compatibility fallback while the state-managed `plugins/installs.json` ledger
-becomes the install source of truth.
-`openclaw doctor --fix` migrates those legacy config entries into the managed
-ledger and refreshes the cold registry index without loading plugin runtime
-modules.
+surface. The persisted `plugins/installs.json` plugin index is the install
+source of truth and can be refreshed without loading plugin runtime modules.
 
 ## Context engine plugins
 
