@@ -6,7 +6,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { handleModelsCommand } from "./commands-models.js";
+import { buildModelsProviderData, handleModelsCommand } from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({
@@ -170,6 +170,49 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("Add: /models add");
   });
 
+  it("hides legacy runtime providers from /models provider lists", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus" },
+      { provider: "google-gemini-cli", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus" },
+      { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("- anthropic (1)");
+    expect(result?.reply?.text).toContain("- google (1)");
+    expect(result?.reply?.text).toContain("- openai (1)");
+    expect(result?.reply?.text).not.toContain("- codex");
+    expect(result?.reply?.text).not.toContain("- codex-cli");
+    expect(result?.reply?.text).not.toContain("- claude-cli");
+    expect(result?.reply?.text).not.toContain("- google-gemini-cli");
+  });
+
+  it("labels the default runtime choice as OpenClaw Pi", async () => {
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
+  });
+
   it("keeps the telegram provider picker browse-only", async () => {
     const params = buildParams("/models");
     params.ctx.Surface = "telegram";
@@ -205,28 +248,6 @@ describe("handleModelsCommand", () => {
         labels: ["anthropic:2", "google:1", "openai:2"],
       },
     });
-  });
-
-  it("hides the virtual Codex harness provider from /models menus", async () => {
-    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-      { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
-      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
-    ]);
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "codex/gpt-5.5": { alias: "legacy-codex" },
-            "openai/gpt-5.5": { alias: "gpt" },
-          },
-        },
-      },
-    } satisfies Partial<OpenClawConfig>;
-
-    const result = await handleModelsCommand(buildParams("/models", cfg), true);
-
-    expect(result?.reply?.text).toContain("- openai (1)");
-    expect(result?.reply?.text).not.toContain("- codex");
   });
 
   it("lists models for /models <provider>", async () => {

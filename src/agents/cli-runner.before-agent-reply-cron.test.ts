@@ -19,6 +19,7 @@ const {
   runBeforeAgentReplyMock,
   executePreparedCliRunMock,
   prepareCliRunContextMock,
+  closeClaudeLiveSessionForContextMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
@@ -28,6 +29,7 @@ const {
     text: "",
   })),
   prepareCliRunContextMock: vi.fn(),
+  closeClaudeLiveSessionForContextMock: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -43,6 +45,10 @@ vi.mock("./cli-runner/prepare.runtime.js", () => ({
 
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executePreparedCliRunMock,
+}));
+
+vi.mock("./cli-runner/claude-live-session.js", () => ({
+  closeClaudeLiveSessionForContext: closeClaudeLiveSessionForContextMock,
 }));
 
 const baseRunParams = {
@@ -86,6 +92,7 @@ beforeEach(() => {
   prepareCliRunContextMock.mockImplementation(async (params) =>
     makeStubContext(params as typeof baseRunParams & { trigger?: string }),
   );
+  closeClaudeLiveSessionForContextMock.mockReset();
 });
 
 afterEach(() => {
@@ -163,5 +170,18 @@ describe("runCliAgent cron before_agent_reply seam", () => {
 
     expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).toHaveBeenCalled();
+  });
+
+  it("can close temporary CLI live sessions after a run", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+
+    await runCliAgent({ ...baseRunParams, cleanupCliLiveSessionOnRunEnd: true });
+
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+    expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledTimes(1);
+    expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledWith(
+      await prepareCliRunContextMock.mock.results[0].value,
+    );
   });
 });

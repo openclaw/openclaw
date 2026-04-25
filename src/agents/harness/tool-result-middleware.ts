@@ -122,8 +122,9 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
 
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
-  handlers: AgentToolResultMiddleware[] = listAgentToolResultMiddlewares(ctx.harness),
+  handlers: AgentToolResultMiddleware[] = listAgentToolResultMiddlewares(ctx.runtime),
 ) {
+  const middlewareContext = { ...ctx, harness: ctx.harness ?? ctx.runtime };
   return {
     async applyToolResultMiddleware(
       event: AgentToolResultMiddlewareEvent,
@@ -131,7 +132,7 @@ export function createAgentToolResultMiddlewareRunner(
       let current = event.result;
       for (const handler of handlers) {
         try {
-          const next = await handler({ ...event, result: current }, ctx);
+          const next = await handler({ ...event, result: current }, middlewareContext);
           // Middleware may mutate event.result in place for legacy Pi parity.
           // Validate the current object after every handler so in-place writes
           // cannot bypass the same shape and size bounds as returned results.
@@ -140,7 +141,7 @@ export function createAgentToolResultMiddlewareRunner(
             current = candidate;
           } else {
             log.warn(
-              `[${ctx.harness}] discarded invalid tool result middleware output for ${truncateUtf16Safe(
+              `[${ctx.runtime}] discarded invalid tool result middleware output for ${truncateUtf16Safe(
                 event.toolName,
                 120,
               )}`,
@@ -149,7 +150,7 @@ export function createAgentToolResultMiddlewareRunner(
           }
         } catch {
           log.warn(
-            `[${ctx.harness}] tool result middleware failed for ${truncateUtf16Safe(
+            `[${ctx.runtime}] tool result middleware failed for ${truncateUtf16Safe(
               event.toolName,
               120,
             )}`,

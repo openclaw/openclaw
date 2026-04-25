@@ -23,7 +23,11 @@ import {
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
-import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import {
+  getGlobalHookRunner,
+  getGlobalPluginRegistry,
+  resetGlobalHookRunner,
+} from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import {
   clearPluginInteractiveHandlerRegistrations,
@@ -935,9 +939,16 @@ module.exports = {
       "utf-8",
     );
     const installedSpecs: string[] = [];
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      logger,
       config: {
         plugins: {
           enabled: true,
@@ -949,6 +960,9 @@ module.exports = {
         },
       },
       bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
+        expect(logger.info).toHaveBeenCalledWith(
+          "[plugins] discord staging bundled runtime deps (1 missing, 1 install specs): discord-runtime@1.0.0",
+        );
         installedSpecs.push(...missingSpecs);
         expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(plugin.dir));
         fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
@@ -964,6 +978,11 @@ module.exports = {
 
     expect(installedSpecs).toEqual(["discord-runtime@1.0.0"]);
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[plugins\] discord installed bundled runtime deps in \d+ms: discord-runtime@1\.0\.0$/u,
+      ),
+    );
   });
 
   it("keeps bundled runtime dep install logs off non-activating loads", () => {
@@ -1035,6 +1054,9 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
     expect(logger.info).not.toHaveBeenCalledWith(
       "[plugins] discord installed bundled runtime deps: discord-runtime@1.0.0",
+    );
+    expect(logger.info).not.toHaveBeenCalledWith(
+      "[plugins] discord staging bundled runtime deps (1 missing, 1 install specs): discord-runtime@1.0.0",
     );
   });
 
@@ -1477,6 +1499,60 @@ module.exports = {
           "utf-8",
         );
       },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
+  });
+
+  it("loads bundled plugins from symlinked package roots with an external stage dir", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    const aliasRoot = path.join(makeTempDir(), "openclaw-alias");
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const plugin = writePlugin({
+      id: "alpha",
+      dir: path.join(bundledDir, "alpha"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "alpha", register(api) { api.registerCommand({ name: "alpha", handler: () => "ok" }); } };`,
+    });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25", type: "module" }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/alpha",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "alpha",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.symlinkSync(packageRoot, aliasRoot, "dir");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(aliasRoot, "dist", "extensions");
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: { plugins: { enabled: true } },
     });
 
     expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
@@ -3592,6 +3668,66 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("preserves the gateway-bindable hook runner across later default-mode activating loads", () => {
+    useNoBundledPlugins();
+    const gatewayPlugin = writePlugin({
+      id: "gateway-hook-surface",
+      filename: "gateway-hook-surface.cjs",
+      body: `module.exports = { id: "gateway-hook-surface", register(api) {
+        api.on("subagent_ended", () => undefined);
+      } };`,
+    });
+    const defaultPlugin = writePlugin({
+      id: "default-hook-surface",
+      filename: "default-hook-surface.cjs",
+      body: `module.exports = { id: "default-hook-surface", register(api) {
+        api.on("message_sent", () => undefined);
+      } };`,
+    });
+
+    const gatewayRegistry = loadOpenClawPlugins({
+      workspaceDir: gatewayPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [gatewayPlugin.file] },
+          allow: ["gateway-hook-surface"],
+          entries: {
+            "gateway-hook-surface": {
+              enabled: true,
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
+
+    const defaultRegistry = loadOpenClawPlugins({
+      workspaceDir: defaultPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [defaultPlugin.file] },
+          allow: ["default-hook-surface"],
+          entries: {
+            "default-hook-surface": {
+              enabled: true,
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(getActivePluginRegistry()).toBe(defaultRegistry);
+    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
+    expect(getGlobalHookRunner()?.hasHooks("message_sent")).toBe(false);
   });
 
   it.each([

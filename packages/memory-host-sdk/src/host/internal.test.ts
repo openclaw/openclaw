@@ -265,26 +265,31 @@ describe("buildFileEntry", () => {
     expect(built?.structuredInputBytes).toBeGreaterThan(0);
   });
 
-  it("skips lazy multimodal indexing when the file grows after discovery", async () => {
-    const tmpDir = getTmpDir();
-    const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
+  it("skips lazy multimodal indexing when file state changes after discovery", async () => {
+    for (const testCase of [
+      {
+        name: "grows",
+        mutate: async (target: string, entrySize: number) => {
+          await fs.writeFile(target, Buffer.alloc(entrySize + 32, 1));
+        },
+      },
+      {
+        name: "bytes change",
+        mutate: async (target: string) => {
+          await fs.writeFile(target, Buffer.from("gif"));
+        },
+      },
+    ] as const) {
+      const tmpDir = getTmpDir();
+      const target = path.join(tmpDir, `${testCase.name}.png`);
+      await fs.writeFile(target, Buffer.from("png"));
 
-    const entry = await buildFileEntry(target, tmpDir, multimodal);
-    await fs.writeFile(target, Buffer.alloc(entry!.size + 32, 1));
+      const entry = await buildFileEntry(target, tmpDir, multimodal);
+      expect(entry, testCase.name).not.toBeNull();
+      await testCase.mutate(target, entry!.size);
 
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
-  });
-
-  it("skips lazy multimodal indexing when file bytes change after discovery", async () => {
-    const tmpDir = getTmpDir();
-    const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
-
-    const entry = await buildFileEntry(target, tmpDir, multimodal);
-    await fs.writeFile(target, Buffer.from("gif"));
-
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
+      await expect(buildMultimodalChunkForIndexing(entry!), testCase.name).resolves.toBeNull();
+    }
   });
 });
 

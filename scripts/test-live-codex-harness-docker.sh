@@ -75,8 +75,10 @@ if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
 fi
 
 PROFILE_MOUNT=()
+PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  PROFILE_STATUS="$PROFILE_FILE"
 fi
 
 AUTH_FILES=()
@@ -203,6 +205,7 @@ echo "==> Image probe: ${OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE:-1}"
 echo "==> MCP probe: ${OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE:-1}"
 echo "==> Guardian probe: ${OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE:-1}"
 echo "==> Auth mode: $CODEX_HARNESS_AUTH_MODE"
+echo "==> Profile file: $PROFILE_STATUS"
 echo "==> CI-safe Codex config: ${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}"
 echo "==> Test files: ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}"
 echo "==> Harness fallback: none"

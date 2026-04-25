@@ -18,8 +18,16 @@ import type {
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
-import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import {
+  resolveConfiguredMediaMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/image-ops.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
@@ -33,6 +41,7 @@ import {
   isCapabilityProviderConfigured,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
+  resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -158,6 +167,19 @@ const ImageGenerateToolSchema = Type.Object({
 
 function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
   return getProviderEnvVars(providerId);
+}
+
+function formatImageGenerationAuthHint(provider: {
+  id: string;
+  authEnvVars: readonly string[];
+}): string | undefined {
+  if (provider.id === "openai") {
+    return "set OPENAI_API_KEY or configure OpenAI Codex OAuth for openai/gpt-image-2";
+  }
+  if (provider.authEnvVars.length === 0) {
+    return undefined;
+  }
+  return `set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`;
 }
 
 export function resolveImageGenerationModelConfigForTool(params: {
@@ -398,6 +420,7 @@ async function loadReferenceImages(params: {
   maxBytes?: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<
   Array<{
     sourceImage: ImageGenerationSourceImage;
@@ -413,16 +436,15 @@ async function loadReferenceImages(params: {
 
   for (const imageRawInput of params.imageInputs) {
     const trimmed = imageRawInput.trim();
-    const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    const imageRaw = normalizeMediaReferenceSource(
+      trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
+    );
     if (!imageRaw) {
       throw new ToolInputError("image required (empty string in array)");
     }
-    const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
-    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
-    const isFileUrl = /^file:/i.test(imageRaw);
-    const isHttpUrl = /^https?:\/\//i.test(imageRaw);
-    const isDataUrl = /^data:/i.test(imageRaw);
-    if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
+    const refInfo = classifyMediaReferenceSource(imageRaw);
+    const { isDataUrl, isHttpUrl } = refInfo;
+    if (refInfo.hasUnsupportedScheme) {
       throw new ToolInputError(
         `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
       );
@@ -475,6 +497,7 @@ async function loadReferenceImages(params: {
         : await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
             localRoots,
+            ssrfPolicy: params.ssrfPolicy,
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -533,6 +556,7 @@ export function createImageGenerateTool(options?: {
   }
   const effectiveCfg =
     applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
+  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -592,13 +616,12 @@ export function createImageGenerateTool(options?: {
             provider.models.length > 0
               ? `models: ${provider.models.join(", ")}`
               : "models: unknown";
+          const authHint = formatImageGenerationAuthHint(provider);
           return [
             `${provider.id}${provider.defaultModel ? ` (default ${provider.defaultModel})` : ""}`,
             `  ${modelLine}`,
             `  configured: ${provider.configured ? "yes" : "no"}`,
-            ...(provider.authEnvVars.length > 0
-              ? [`  auth: set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`]
-              : []),
+            ...(authHint ? [`  auth: ${authHint}`] : []),
             ...(caps.length > 0 ? [`  capabilities: ${caps.join("; ")}`] : []),
           ];
         });
@@ -626,11 +649,13 @@ export function createImageGenerateTool(options?: {
       });
       const count = resolveRequestedCount(params);
       const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
+      const mediaMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
         maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
       const modeCaps =
@@ -707,7 +732,7 @@ export function createImageGenerateTool(options?: {
             image.buffer,
             image.mimeType,
             "tool-image-generation",
-            configuredMediaMaxBytes,
+            mediaMaxBytes,
             filename || image.fileName,
           ),
         ),

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
 import { isLoopbackHost } from "./net.js";
@@ -46,14 +47,14 @@ export type GatewayProbeResult = {
 };
 
 export const MIN_PROBE_TIMEOUT_MS = 250;
-export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+export const MAX_TIMER_DELAY_MS = MAX_SAFE_TIMEOUT_DELAY_MS;
 const PAIRING_REQUIRED_PATTERN = /\bpairing required\b/i;
 const OPERATOR_READ_SCOPE = "operator.read";
 const OPERATOR_WRITE_SCOPE = "operator.write";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 
 export function clampProbeTimeoutMs(timeoutMs: number): number {
-  return Math.min(MAX_TIMER_DELAY_MS, Math.max(MIN_PROBE_TIMEOUT_MS, timeoutMs));
+  return resolveSafeTimeoutDelayMs(timeoutMs, { minMs: MIN_PROBE_TIMEOUT_MS });
 }
 
 function formatProbeCloseError(close: GatewayProbeClose): string {

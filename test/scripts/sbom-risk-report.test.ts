@@ -118,4 +118,62 @@ snapshots:
       "root dependency 'missing-owner' is missing from scripts/lib/dependency-ownership.json",
     ]);
   });
+
+  it("does not mark plugin importer dependencies as stale ownership records", () => {
+    const repoRoot = makeTempRepo();
+    writeRepoFile(
+      repoRoot,
+      "package.json",
+      JSON.stringify({
+        dependencies: {
+          "core-lib": "1.0.0",
+        },
+      }),
+    );
+    writeRepoFile(
+      repoRoot,
+      "pnpm-lock.yaml",
+      `
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      core-lib:
+        specifier: 1.0.0
+        version: 1.0.0
+  extensions/web-readability:
+    dependencies:
+      plugin-readable:
+        specifier: 2.0.0
+        version: 2.0.0
+packages:
+  core-lib@1.0.0: {}
+  plugin-readable@2.0.0: {}
+snapshots:
+  core-lib@1.0.0: {}
+  plugin-readable@2.0.0: {}
+`,
+    );
+    writeRepoFile(
+      repoRoot,
+      "scripts/lib/dependency-ownership.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        dependencies: {
+          "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
+          "plugin-readable": {
+            owner: "plugin:web-readability",
+            class: "plugin-runtime",
+            risk: ["html"],
+          },
+          "removed-lib": { owner: "core:test", class: "core-runtime", risk: ["unused"] },
+        },
+      }),
+    );
+
+    const report = collectSbomRiskReport({ repoRoot });
+
+    expect(report.ownershipGaps).toEqual([]);
+    expect(report.staleOwnershipRecords).toEqual(["removed-lib"]);
+  });
 });

@@ -723,17 +723,26 @@ public struct AgentIdentityResult: Codable, Sendable {
     public let agentid: String
     public let name: String?
     public let avatar: String?
+    public let avatarsource: String?
+    public let avatarstatus: String?
+    public let avatarreason: String?
     public let emoji: String?
 
     public init(
         agentid: String,
         name: String?,
         avatar: String?,
+        avatarsource: String?,
+        avatarstatus: String?,
+        avatarreason: String?,
         emoji: String?)
     {
         self.agentid = agentid
         self.name = name
         self.avatar = avatar
+        self.avatarsource = avatarsource
+        self.avatarstatus = avatarstatus
+        self.avatarreason = avatarreason
         self.emoji = emoji
     }
 
@@ -741,6 +750,9 @@ public struct AgentIdentityResult: Codable, Sendable {
         case agentid = "agentId"
         case name
         case avatar
+        case avatarsource = "avatarSource"
+        case avatarstatus = "avatarStatus"
+        case avatarreason = "avatarReason"
         case emoji
     }
 }

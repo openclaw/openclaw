@@ -165,6 +165,13 @@ function stripPromptThinkingDirectives(body: string): string {
     .join("\n");
 }
 
+function hasInboundHistoryBody(ctx: TemplateContext): boolean {
+  return (
+    Array.isArray(ctx.InboundHistory) &&
+    ctx.InboundHistory.some((entry) => entry.body.replaceAll("\u0000", "").trim().length > 0)
+  );
+}
+
 type RunPreparedReplyParams = {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -455,7 +462,10 @@ export async function runPreparedReply(
         .filter(Boolean)
         .join("\n\n")
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
-  const hasUserBody = baseBodyFinal.trim().length > 0 || softResetTail.length > 0;
+  const hasUserBody =
+    baseBodyFinal.trim().length > 0 ||
+    softResetTail.length > 0 ||
+    hasInboundHistoryBody(sessionCtx);
   const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
   if (!hasUserBody && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —

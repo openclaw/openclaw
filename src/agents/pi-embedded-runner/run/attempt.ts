@@ -72,7 +72,7 @@ import {
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import { resolveOpenClawDocsPath } from "../../docs-path.js";
+import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -83,6 +83,7 @@ import { supportsModelTools } from "../../model-tool-support.js";
 import { releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
+import { TOOL_NAME_SEPARATOR } from "../../pi-bundle-mcp-names.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
@@ -108,6 +109,11 @@ import {
   toClientToolDefinitions,
 } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicyForSession,
+} from "../../pi-tools.policy.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
@@ -126,10 +132,18 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../../subagent-capabilities.js";
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import {
+  buildEmptyExplicitToolAllowlistError,
+  collectExplicitToolAllowlistSources,
+} from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   resolveTranscriptPolicy,
@@ -239,6 +253,7 @@ import {
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  hasPromptSubmissionContent,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -449,6 +464,93 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   }
   const allowSet = new Set(toolsAllow);
   return tools.filter((tool) => allowSet.has(tool.name));
+}
+
+export function shouldCreateBundleMcpRuntimeForAttempt(params: {
+  toolsEnabled: boolean;
+  disableTools?: boolean;
+  toolsAllow?: string[];
+}): boolean {
+  if (!params.toolsEnabled || params.disableTools === true) {
+    return false;
+  }
+  if (!params.toolsAllow || params.toolsAllow.length === 0) {
+    return true;
+  }
+  return params.toolsAllow.some((toolName) => toolName.includes(TOOL_NAME_SEPARATOR));
+}
+
+function collectAttemptExplicitToolAllowlistSources(params: {
+  config?: EmbeddedRunAttemptParams["config"];
+  sessionKey?: string;
+  sandboxSessionKey?: string;
+  agentId?: string;
+  modelProvider?: string;
+  modelId?: string;
+  messageProvider?: string;
+  agentAccountId?: string | null;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
+  toolsAllow?: string[];
+}) {
+  const { agentId, globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
+    resolveEffectiveToolPolicy({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+    });
+  const groupPolicy = resolveGroupToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    spawnedBy: params.spawnedBy,
+    messageProvider: params.messageProvider,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    accountId: params.agentAccountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  const subagentStore = resolveSubagentCapabilityStore(params.sandboxSessionKey, {
+    cfg: params.config,
+  });
+  const subagentPolicy =
+    params.sandboxSessionKey &&
+    isSubagentEnvelopeSession(params.sandboxSessionKey, {
+      cfg: params.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(params.config, params.sandboxSessionKey, {
+          store: subagentStore,
+        })
+      : undefined;
+  return collectExplicitToolAllowlistSources([
+    { label: "tools.allow", allow: globalPolicy?.allow },
+    { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
+    {
+      label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+      allow: agentPolicy?.allow,
+    },
+    {
+      label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+      allow: agentProviderPolicy?.allow,
+    },
+    { label: "group tools.allow", allow: groupPolicy?.allow },
+    { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
+    { label: "subagent tools.allow", allow: subagentPolicy?.allow },
+    { label: "runtime toolsAllow", allow: params.toolsAllow },
+  ]);
 }
 
 export async function runEmbeddedAttempt(
@@ -748,7 +850,12 @@ export async function runEmbeddedAttempt(
         model: params.model,
       });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
-    const bundleMcpSessionRuntime = toolsEnabled
+    const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
+      toolsEnabled,
+      disableTools: params.disableTools,
+      toolsAllow: params.toolsAllow,
+    });
+    const bundleMcpSessionRuntime = bundleMcpEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
@@ -801,6 +908,32 @@ export async function runEmbeddedAttempt(
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
+    });
+    const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      sandboxSessionKey,
+      agentId: sessionAgentId,
+      modelProvider: params.provider,
+      modelId: params.modelId,
+      messageProvider: params.messageChannel ?? params.messageProvider,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      sandboxToolPolicy: sandbox?.tools,
+      toolsAllow: params.toolsAllow,
+    });
+    const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
+      sources: explicitToolAllowlistSources,
+      callableToolNames: effectiveTools.map((tool) => tool.name),
+      toolsEnabled,
+      disableTools: params.disableTools,
     });
     if (params.runtimePlan) {
       params.runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
@@ -920,7 +1053,7 @@ export async function runEmbeddedAttempt(
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
     const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
-    const docsPath = await resolveOpenClawDocsPath({
+    const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveWorkspace,
@@ -977,7 +1110,8 @@ export async function runEmbeddedAttempt(
         reasoningTagHint,
         heartbeatPrompt,
         skillsPrompt: effectiveSkillsPrompt,
-        docsPath: docsPath ?? undefined,
+        docsPath: openClawReferences.docsPath ?? undefined,
+        sourcePath: openClawReferences.sourcePath ?? undefined,
         ttsHint,
         workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,
@@ -1080,6 +1214,12 @@ export async function runEmbeddedAttempt(
         contextWindowTokens: params.contextTokenBudget,
         inputProvenance: params.inputProvenance,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        missingToolResultText:
+          params.model.api === "openai-responses" ||
+          params.model.api === "azure-openai-responses" ||
+          params.model.api === "openai-codex-responses"
+            ? "aborted"
+            : undefined,
         allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
@@ -1254,6 +1394,7 @@ export async function runEmbeddedAttempt(
           await baseConvertToLlm(normalizeAssistantReplayContent(messages));
       }
       let prePromptMessageCount = activeSession.messages.length;
+      let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
@@ -1726,6 +1867,7 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated, {
               erroredAssistantResultPolicy: "drop",
+              ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
             })
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
@@ -1735,6 +1877,7 @@ export async function runEmbeddedAttempt(
 
         if (params.contextEngine) {
           try {
+            unwindowedContextEngineMessagesForPrecheck = activeSession.messages.slice();
             const assembled = await assembleAttemptContextEngine({
               contextEngine: params.contextEngine,
               sessionId: params.sessionId,
@@ -2031,6 +2174,12 @@ export async function runEmbeddedAttempt(
       let skipPromptSubmission = false;
       try {
         const promptStartedAt = Date.now();
+        if (emptyExplicitToolAllowlistError) {
+          promptError = emptyExplicitToolAllowlistError;
+          promptErrorSource = "precheck";
+          skipPromptSubmission = true;
+          log.warn(`[tools] ${emptyExplicitToolAllowlistError.message}`);
+        }
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
@@ -2255,6 +2404,28 @@ export async function runEmbeddedAttempt(
             transcriptLeafId,
           });
 
+          if (
+            !skipPromptSubmission &&
+            !hasPromptSubmissionContent({
+              prompt: effectivePrompt,
+              messages: activeSession.messages,
+              imageCount: imageResult.images.length,
+            })
+          ) {
+            skipPromptSubmission = true;
+            log.info(
+              `embedded run prompt skipped: empty prompt/history/images ` +
+                `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
+                `provider=${params.provider}/${params.modelId}`,
+            );
+            trajectoryRecorder?.recordEvent("prompt.skipped", {
+              reason: "empty_prompt_history_images",
+              prompt: effectivePrompt,
+              messages: activeSession.messages,
+              imagesCount: imageResult.images.length,
+            });
+          }
+
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
           if (log.isEnabled("debug")) {
             const msgCount = activeSession.messages.length;
@@ -2305,29 +2476,19 @@ export async function runEmbeddedAttempt(
 
           const reserveTokens = settingsManager.getCompactionReserveTokens();
           const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
-          const preemptiveCompaction =
-            params.contextEngine?.info?.ownsCompaction === true
-              ? {
-                  route: "fits" as const,
-                  shouldCompact: false,
-                  estimatedPromptTokens: 0,
-                  promptBudgetBeforeReserve: 0,
-                  overflowTokens: 0,
-                  toolResultReducibleChars: 0,
-                  effectiveReserveTokens: reserveTokens,
-                }
-              : shouldPreemptivelyCompactBeforePrompt({
-                  messages: activeSession.messages,
-                  systemPrompt: systemPromptText,
-                  prompt: effectivePrompt,
-                  contextTokenBudget,
-                  reserveTokens,
-                  toolResultMaxChars: resolveLiveToolResultMaxChars({
-                    contextWindowTokens: contextTokenBudget,
-                    cfg: params.config,
-                    agentId: sessionAgentId,
-                  }),
-                });
+          const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
+            messages: activeSession.messages,
+            unwindowedMessages: unwindowedContextEngineMessagesForPrecheck,
+            systemPrompt: systemPromptText,
+            prompt: effectivePrompt,
+            contextTokenBudget,
+            reserveTokens,
+            toolResultMaxChars: resolveLiveToolResultMaxChars({
+              contextWindowTokens: contextTokenBudget,
+              cfg: params.config,
+              agentId: sessionAgentId,
+            }),
+          });
           if (preemptiveCompaction.route === "truncate_tool_results_only") {
             const toolResultMaxChars = resolveLiveToolResultMaxChars({
               contextWindowTokens: contextTokenBudget,
@@ -2829,6 +2990,8 @@ export async function runEmbeddedAttempt(
       const observedReplayMetadata = buildAttemptReplayMetadata({
         toolMetas: toolMetasNormalized,
         didSendViaMessagingTool: didSendViaMessagingTool(),
+        messagingToolSentTexts: getMessagingToolSentTexts(),
+        messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         successfulCronAdds: getSuccessfulCronAdds(),
       });
       const replayMetadata = replayMetadataFromState(
@@ -2957,6 +3120,7 @@ export async function runEmbeddedAttempt(
           allowWsSessionPool:
             !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
           sessionId: params.sessionId,
+          bundleMcpRuntime,
           bundleLspRuntime,
           sessionLock,
         });

@@ -35,6 +35,12 @@ prefer `openclaw/plugin-sdk/channel-core`; keep `openclaw/plugin-sdk/core` for
 the broader umbrella surface and shared helpers such as
 `buildChannelConfigSchema`.
 
+For channel config, publish the channel-owned JSON Schema through
+`openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
+subpath is for shared schema primitives and the generic builder. Any
+bundled-channel-named schema exports on that subpath are legacy compatibility
+exports, not a pattern for new plugins.
+
 <Warning>
   Do not import provider- or channel-branded convenience seams (for example
   `openclaw/plugin-sdk/slack`, `.../discord`, `.../signal`, `.../whatsapp`).
@@ -90,19 +96,18 @@ methods:
 
 ### Infrastructure
 
-| Method                                          | What it registers                       |
-| ----------------------------------------------- | --------------------------------------- |
-| `api.registerHook(events, handler, opts?)`      | Event hook                              |
-| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                   |
-| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                      |
-| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser      |
-| `api.registerCli(registrar, opts?)`             | CLI subcommand                          |
-| `api.registerService(service)`                  | Background service                      |
-| `api.registerInteractiveHandler(registration)`  | Interactive handler                     |
-| `api.registerAgentToolResultMiddleware(...)`    | Harness tool-result middleware          |
-| `api.registerEmbeddedExtensionFactory(factory)` | Deprecated PI extension factory         |
-| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section |
-| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus      |
+| Method                                         | What it registers                       |
+| ---------------------------------------------- | --------------------------------------- |
+| `api.registerHook(events, handler, opts?)`     | Event hook                              |
+| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
+| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
+| `api.registerGatewayDiscoveryService(service)` | Local Gateway discovery advertiser      |
+| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
+| `api.registerService(service)`                 | Background service                      |
+| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
+| `api.registerAgentToolResultMiddleware(...)`   | Runtime tool-result middleware          |
+| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
+| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
 <Note>
   Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
@@ -113,21 +118,15 @@ methods:
 
 <Accordion title="When to use tool-result middleware">
   Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when
-  they need to rewrite a tool result after execution and before the harness
-  feeds that result back into the model. This is the trusted harness-neutral
+  they need to rewrite a tool result after execution and before the runtime
+  feeds that result back into the model. This is the trusted runtime-neutral
   seam for async output reducers such as tokenjuice.
 
 Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
-targeted harness, for example `["pi", "codex-app-server"]`. External plugins
+targeted runtime, for example `["pi", "codex"]`. External plugins
 cannot register this middleware; keep normal OpenClaw plugin hooks for work
-that does not need pre-model tool-result timing.
-</Accordion>
-
-<Accordion title="Legacy Pi extension factories">
-  `api.registerEmbeddedExtensionFactory(...)` is deprecated. It remains a
-  compatibility seam for bundled plugins that still need direct Pi
-  embedded-runner events. New tool-result transforms should use
-  `api.registerAgentToolResultMiddleware(...)` instead.
+that does not need pre-model tool-result timing. The old Pi-only embedded
+extension factory registration path has been removed.
 </Accordion>
 
 ### Gateway discovery registration

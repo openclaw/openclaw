@@ -18,6 +18,7 @@ import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 export type {
   ChannelOutboundAdapter,
+  ChannelOutboundChunkContext,
   ChannelOutboundContext,
   ChannelOutboundFormattedContext,
   ChannelOutboundPayloadContext,

@@ -90,6 +90,7 @@ import { resolveModelAsync } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
+import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
@@ -669,16 +670,11 @@ export async function runEmbeddedPiAgent(
           modelId: failure.modelId,
         });
       };
-      const resolveAuthProfileFailureReason = (
-        failoverReason: FailoverReason | null,
-      ): AuthProfileFailureReason | null => {
-        // Timeouts are transport/model-path failures, not auth health signals,
-        // so they should not persist auth-profile failure state.
-        if (!failoverReason || failoverReason === "timeout") {
-          return null;
-        }
-        return failoverReason;
-      };
+      const resolveRunAuthProfileFailureReason = (failoverReason: FailoverReason | null) =>
+        resolveAuthProfileFailureReason({
+          failoverReason,
+          policy: params.authProfileFailurePolicy,
+        });
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
         if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
           return;
@@ -777,6 +773,7 @@ export async function runEmbeddedPiAgent(
                 sessionId: params.sessionId,
                 provider,
                 model: model.id,
+                contextTokens: ctxInfo.tokens,
                 usageAccumulator,
                 lastRunPromptUsage,
                 lastTurnTotal,
@@ -1371,6 +1368,7 @@ export async function runEmbeddedPiAgent(
                   sessionId: sessionIdUsed,
                   provider,
                   model: model.id,
+                  contextTokens: ctxInfo.tokens,
                   usageAccumulator,
                   lastRunPromptUsage,
                   lastAssistant: sessionLastAssistant,
@@ -1426,6 +1424,7 @@ export async function runEmbeddedPiAgent(
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
+                    contextTokens: ctxInfo.tokens,
                     usageAccumulator,
                     lastRunPromptUsage,
                     lastAssistant: sessionLastAssistant,
@@ -1465,6 +1464,7 @@ export async function runEmbeddedPiAgent(
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
+                    contextTokens: ctxInfo.tokens,
                     usageAccumulator,
                     lastRunPromptUsage,
                     lastAssistant: sessionLastAssistant,
@@ -1481,7 +1481,7 @@ export async function runEmbeddedPiAgent(
             const promptFailoverReason =
               promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
             const promptProfileFailureReason =
-              resolveAuthProfileFailureReason(promptFailoverReason);
+              resolveRunAuthProfileFailureReason(promptFailoverReason);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
@@ -1626,7 +1626,7 @@ export async function runEmbeddedPiAgent(
             },
           );
           const assistantProfileFailureReason =
-            resolveAuthProfileFailureReason(assistantFailoverReason);
+            resolveRunAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(
             assistantForFailover?.errorMessage ?? "",
@@ -1776,6 +1776,7 @@ export async function runEmbeddedPiAgent(
             sessionId: sessionIdUsed,
             provider: sessionLastAssistant?.provider ?? provider,
             model: sessionLastAssistant?.model ?? model.id,
+            contextTokens: ctxInfo.tokens,
             agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
@@ -2042,7 +2043,7 @@ export async function runEmbeddedPiAgent(
             if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
-                reason: resolveAuthProfileFailureReason(assistantFailoverReason),
+                reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
               });
             }
             return {
@@ -2152,7 +2153,7 @@ export async function runEmbeddedPiAgent(
             if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
-                reason: resolveAuthProfileFailureReason(assistantFailoverReason),
+                reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
               });
             }
 

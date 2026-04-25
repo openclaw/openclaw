@@ -458,6 +458,90 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("allows pending inbound history to trigger a bare mention turn", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Chat history since last reply (untrusted, for context):",
+        "```json",
+        JSON.stringify(
+          [{ sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "what changed?" }],
+          null,
+          2,
+        ),
+        "```",
+      ].join("\n"),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ChatType: "group",
+          WasMentioned: true,
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "feishu",
+          OriginatingChannel: "feishu",
+          OriginatingTo: "chat-1",
+          ChatType: "group",
+          WasMentioned: true,
+          InboundHistory: [
+            { sender: "Alice", timestamp: 1_700_000_000_000, body: "what changed?" },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.prompt).toContain("Chat history since last reply");
+    expect(call?.followupRun.prompt).toContain("what changed?");
+    expect(call?.followupRun.prompt).not.toContain("[User sent media without caption]");
+  });
+
+  it("does not treat blank pending inbound history as user input", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Chat history since last reply (untrusted, for context):",
+        "```json",
+        JSON.stringify([{ sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "" }], null, 2),
+        "```",
+      ].join("\n"),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ChatType: "group",
+          WasMentioned: true,
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "feishu",
+          OriginatingChannel: "feishu",
+          OriginatingTo: "chat-1",
+          ChatType: "group",
+          WasMentioned: true,
+          InboundHistory: [{ sender: "Alice", timestamp: 1_700_000_000_000, body: "\u0000  " }],
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      text: "I didn't receive any text in your message. Please resend or add a caption.",
+    });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
   it("allows webchat pure-image turns when image content is carried outside MediaPath", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [

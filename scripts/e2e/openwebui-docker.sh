@@ -19,8 +19,8 @@ ADMIN_PASSWORD="${OPENCLAW_OPENWEBUI_ADMIN_PASSWORD:-OpenWebUI-E2E-Password-$(da
 NET_NAME="openclaw-openwebui-e2e-$$"
 GW_NAME="openclaw-openwebui-gateway-$$"
 OW_NAME="openclaw-openwebui-$$"
-DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-300s}"
-DOCKER_PULL_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_PULL_TIMEOUT:-300s}"
+DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-600s}"
+DOCKER_PULL_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_PULL_TIMEOUT:-600s}"
 
 docker_cmd() {
   timeout "$DOCKER_COMMAND_TIMEOUT" "$@"
@@ -152,7 +152,7 @@ docker_cmd docker run -d \
   --network "$NET_NAME" \
   -e ENV=prod \
   -e WEBUI_NAME="OpenClaw E2E" \
-  -e WEBUI_SECRET_KEY="openclaw-openwebui-e2e-secret" \
+  -e WEBUI_SECRET_KEY="openclaw-openwebui-e2e-secret-key-v1" \
   -e OFFLINE_MODE=True \
   -e ENABLE_VERSION_UPDATE_CHECK=False \
   -e ENABLE_PERSISTENT_CONFIG=False \

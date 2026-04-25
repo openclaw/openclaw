@@ -368,18 +368,22 @@ public contract.
 
 `api.registrationMode` tells a plugin why its entry is being loaded:
 
-| Mode            | Meaning                                                                                                |
-| --------------- | ------------------------------------------------------------------------------------------------------ |
-| `full`          | Runtime activation. Register tools, hooks, services, commands, routes, and other live side effects.    |
-| `discovery`     | Read-only capability discovery. Register providers and metadata, but skip expensive live side effects. |
-| `setup-only`    | Channel setup metadata loading through a lightweight setup entry.                                      |
-| `setup-runtime` | Channel setup loading that also needs the runtime entry.                                               |
-| `cli-metadata`  | CLI command metadata collection only.                                                                  |
+| Mode            | Meaning                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `full`          | Runtime activation. Register tools, hooks, services, commands, routes, and other live side effects.                              |
+| `discovery`     | Read-only capability discovery. Register providers and metadata; trusted plugin entry code may load, but skip live side effects. |
+| `setup-only`    | Channel setup metadata loading through a lightweight setup entry.                                                                |
+| `setup-runtime` | Channel setup loading that also needs the runtime entry.                                                                         |
+| `cli-metadata`  | CLI command metadata collection only.                                                                                            |
 
 Plugin entries that open sockets, databases, background workers, or long-lived
 clients should guard those side effects with `api.registrationMode === "full"`.
 Discovery loads are cached separately from activating loads and do not replace
-the running Gateway registry.
+the running Gateway registry. Discovery is non-activating, not import-free:
+OpenClaw may evaluate the trusted plugin entry or channel plugin module to build
+the snapshot. Keep module top levels lightweight and side-effect-free, and move
+network clients, subprocesses, listeners, credential reads, and service startup
+behind full-runtime paths.
 
 Common registration methods:
 
@@ -416,15 +420,16 @@ Native Codex app-server runs bridge Codex-native tool events back into this
 hook surface. Plugins can block native Codex tools through `before_tool_call`,
 observe results through `after_tool_call`, and participate in Codex
 `PermissionRequest` approvals. The bridge does not rewrite Codex-native tool
-arguments yet.
+arguments yet. The exact Codex runtime support boundary lives in the
+[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
 
-For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
+For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 
-- [Building Plugins](/plugins/building-plugins) — create your own plugin
-- [Plugin Bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
-- [Plugin Manifest](/plugins/manifest) — manifest schema
-- [Registering Tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
-- [Plugin Internals](/plugins/architecture) — capability model and load pipeline
-- [Community Plugins](/plugins/community) — third-party listings
+- [Building plugins](/plugins/building-plugins) — create your own plugin
+- [Plugin bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
+- [Plugin manifest](/plugins/manifest) — manifest schema
+- [Registering tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
+- [Plugin internals](/plugins/architecture) — capability model and load pipeline
+- [Community plugins](/plugins/community) — third-party listings
