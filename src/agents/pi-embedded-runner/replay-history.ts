@@ -461,6 +461,16 @@ export async function sanitizeSessionHistory(params: {
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
     params.modelApi === "azure-openai-responses";
+  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
+  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
+  const modelChanged = priorSnapshot
+    ? !isSameModelSnapshot(priorSnapshot, {
+        timestamp: 0,
+        provider: params.provider,
+        modelApi: params.modelApi,
+        modelId: params.modelId,
+      })
+    : false;
   const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
     normalizedAssistantReplay,
@@ -494,7 +504,9 @@ export async function sanitizeSessionHistory(params: {
       : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls),
+        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
+          dropReplayableReasoning: modelChanged,
+        }),
       )
     : sanitizedToolCalls;
   const sanitizedToolIds =
@@ -515,16 +527,6 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
   );
-  const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
-  const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
-  const modelChanged = priorSnapshot
-    ? !isSameModelSnapshot(priorSnapshot, {
-        timestamp: 0,
-        provider: params.provider,
-        modelApi: params.modelApi,
-        modelId: params.modelId,
-      })
-    : false;
   const provider = params.provider?.trim();
   let providerSanitized: AgentMessage[] | undefined;
   if (provider && provider.length > 0) {
