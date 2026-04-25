@@ -182,6 +182,8 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
 const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => {
   const toolMetas = overrides.toolMetas ?? [];
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
+  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
@@ -202,11 +204,13 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
       buildAttemptReplayMetadata({
         toolMetas,
         didSendViaMessagingTool,
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
         successfulCronAdds,
       }),
     didSendViaMessagingTool,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
+    messagingToolSentTexts,
+    messagingToolSentMediaUrls,
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
