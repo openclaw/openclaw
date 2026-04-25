@@ -737,6 +737,14 @@
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
     },
+    "./plugin-sdk/session-transcript-hit": {
+      "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",
+      "default": "./dist/plugin-sdk/session-transcript-hit.js"
+    },
+    "./plugin-sdk/session-visibility": {
+      "types": "./dist/plugin-sdk/session-visibility.d.ts",
+      "default": "./dist/plugin-sdk/session-visibility.js"
+    },
     "./plugin-sdk/ssrf-dispatcher": {
       "types": "./dist/plugin-sdk/ssrf-dispatcher.d.ts",
       "default": "./dist/plugin-sdk/ssrf-dispatcher.js"
