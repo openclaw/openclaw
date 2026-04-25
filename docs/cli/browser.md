@@ -164,6 +164,7 @@ Navigate/click/type (ref-based UI automation):
 ```bash
 openclaw browser navigate https://example.com
 openclaw browser click <ref>
+openclaw browser click-coords 120 340
 openclaw browser type <ref> "hello"
 openclaw browser press Enter
 openclaw browser hover <ref>

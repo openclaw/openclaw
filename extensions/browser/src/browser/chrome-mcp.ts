@@ -824,6 +824,65 @@ export async function clickChromeMcpElement(params: {
   );
 }
 
+export async function clickChromeMcpCoords(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  x: number;
+  y: number;
+  doubleClick?: boolean;
+  button?: "left" | "right" | "middle";
+  delayMs?: number;
+}): Promise<void> {
+  const button = params.button ?? "left";
+  const buttonCode = button === "middle" ? 1 : button === "right" ? 2 : 0;
+  const pressedButtons = button === "middle" ? 4 : button === "right" ? 2 : 1;
+  const x = JSON.stringify(params.x);
+  const y = JSON.stringify(params.y);
+  const delayMs = JSON.stringify(Math.max(0, Math.floor(params.delayMs ?? 0)));
+  const doubleClick = params.doubleClick ? "true" : "false";
+  await evaluateChromeMcpScript({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    fn: `async () => {
+      const x = ${x};
+      const y = ${y};
+      const delayMs = ${delayMs};
+      const doubleClick = ${doubleClick};
+      const target = document.elementFromPoint(x, y) ?? document.body ?? document.documentElement ?? document;
+      const base = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        screenX: window.screenX + x,
+        screenY: window.screenY + y,
+        button: ${buttonCode},
+      };
+      const pressedButtons = ${pressedButtons};
+      const dispatch = (type, buttons, detail) => {
+        target.dispatchEvent(new MouseEvent(type, { ...base, buttons, detail }));
+      };
+      dispatch("mousemove", 0, 0);
+      dispatch("mousedown", pressedButtons, 1);
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      dispatch("mouseup", 0, 1);
+      dispatch("click", 0, 1);
+      if (doubleClick) {
+        dispatch("mousedown", pressedButtons, 2);
+        dispatch("mouseup", 0, 2);
+        dispatch("click", 0, 2);
+        dispatch("dblclick", 0, 2);
+      }
+      return true;
+    }`,
+  });
+}
+
 export async function fillChromeMcpElement(params: {
   profileName: string;
   userDataDir?: string;

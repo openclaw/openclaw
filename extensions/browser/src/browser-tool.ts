@@ -147,6 +147,8 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "doubleClick",
   "button",
   "modifiers",
+  "x",
+  "y",
   "text",
   "submit",
   "slowly",
