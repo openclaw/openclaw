@@ -689,12 +689,29 @@ resources separate, `--late-after-minutes` to tune late detection, and
 `--early-before-minutes` to tune early-leave detection.
 
 `export` writes a folder containing `summary.md`, `attendance.csv`,
-`transcript.md`, `artifacts.json`, and `attendance.json`. Pass `--zip` to also
-write a portable archive next to the folder. Pass `--include-doc-bodies` to
-export linked transcript and smart-note Google Docs text through Google Drive
-`files.export`; this requires a fresh OAuth login that includes the Drive Meet
-readonly scope. Without `--include-doc-bodies`, exports include Meet metadata
-and structured transcript entries only.
+`transcript.md`, `artifacts.json`, `attendance.json`, and `manifest.json`.
+`manifest.json` records the chosen input, export options, conference records,
+output files, counts, token source, Calendar event when one was used, and any
+partial retrieval warnings. Pass `--zip` to also write a portable archive next
+to the folder. Pass `--include-doc-bodies` to export linked transcript and
+smart-note Google Docs text through Google Drive `files.export`; this requires a
+fresh OAuth login that includes the Drive Meet readonly scope. Without
+`--include-doc-bodies`, exports include Meet metadata and structured transcript
+entries only. If Google returns a partial artifact failure, such as a smart-note
+listing, transcript-entry, or Drive document-body error, the summary and
+manifest keep the warning instead of failing the whole export.
+
+Agents can also create the same bundle through the `google_meet` tool:
+
+```json
+{
+  "action": "export",
+  "conferenceRecord": "conferenceRecords/abc123",
+  "includeDocumentBodies": true,
+  "outputDir": "meet-export",
+  "zip": true
+}
+```
 
 Run the guarded live smoke against a real retained meeting:
 
@@ -703,6 +720,27 @@ OPENCLAW_LIVE_TEST=1 \
 OPENCLAW_GOOGLE_MEET_LIVE_MEETING=https://meet.google.com/abc-defg-hij \
 pnpm test:live -- extensions/google-meet/google-meet.live.test.ts
 ```
+
+Live smoke environment:
+
+- `OPENCLAW_LIVE_TEST=1` enables guarded live tests.
+- `OPENCLAW_GOOGLE_MEET_LIVE_MEETING` points at a retained Meet URL, code, or
+  `spaces/{id}`.
+- `OPENCLAW_GOOGLE_MEET_CLIENT_ID` or `GOOGLE_MEET_CLIENT_ID` provides the OAuth
+  client id.
+- `OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN` or `GOOGLE_MEET_REFRESH_TOKEN` provides
+  the refresh token.
+- Optional: `OPENCLAW_GOOGLE_MEET_CLIENT_SECRET`,
+  `OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN`, and
+  `OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT` use the same fallback names
+  without the `OPENCLAW_` prefix.
+
+The base artifact/attendance live smoke needs
+`https://www.googleapis.com/auth/meetings.space.readonly` and
+`https://www.googleapis.com/auth/meetings.conference.media.readonly`. Calendar
+lookup needs `https://www.googleapis.com/auth/calendar.events.readonly`. Drive
+document-body export needs
+`https://www.googleapis.com/auth/drive.meet.readonly`.
 
 Create a fresh Meet space:
 
