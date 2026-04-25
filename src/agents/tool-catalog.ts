@@ -42,6 +42,7 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
   { id: "web", label: "Web" },
   { id: "memory", label: "Memory" },
   { id: "sessions", label: "Sessions" },
+  { id: "skills", label: "Skills" },
   { id: "ui", label: "UI" },
   { id: "messaging", label: "Messaging" },
   { id: "automation", label: "Automation" },
@@ -195,6 +196,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "skills_manage",
+    label: "skills_manage",
+    description: "Gated SKILL.md propose, patch, and approve",
+    sectionId: "skills",
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {

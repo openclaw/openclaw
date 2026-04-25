@@ -978,6 +978,23 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        manage: z
+          .object({
+            enabled: z.boolean().optional(),
+            proposalTtlMs: z.number().int().positive().optional(),
+            maxPendingProposals: z.number().int().positive().optional(),
+            autoPropose: z
+              .object({
+                enabled: z.boolean().optional(),
+                maxPerSession: z.number().int().min(0).optional(),
+                cooldownMinutes: z.number().int().min(0).optional(),
+                minToolCalls: z.number().int().min(0).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
         entries: z.record(z.string(), SkillEntrySchema).optional(),
       })
       .strict()

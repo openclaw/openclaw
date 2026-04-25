@@ -163,6 +163,32 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   return redactText(text, resolved.patterns);
 }
 
+/**
+ * Detect-only scan for sensitive patterns (skills_manage / policy). Never returns matched secrets.
+ */
+export function detectSensitivePatterns(
+  text: string,
+  options?: RedactOptions,
+): { blocked: boolean; ruleIds: string[] } {
+  if (!text) {
+    return { blocked: false, ruleIds: [] };
+  }
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off" || !resolved.patterns.length) {
+    return { blocked: false, ruleIds: [] };
+  }
+  const ruleIds: string[] = [];
+  for (let i = 0; i < resolved.patterns.length; i += 1) {
+    const pattern = resolved.patterns[i];
+    pattern.lastIndex = 0;
+    if (pattern.test(text)) {
+      ruleIds.push(`redact-pattern-${i}`);
+    }
+    pattern.lastIndex = 0;
+  }
+  return { blocked: ruleIds.length > 0, ruleIds };
+}
+
 export function redactToolDetail(detail: string): string {
   const resolved = resolveConfigRedaction();
   if (normalizeMode(resolved.mode) !== "tools") {

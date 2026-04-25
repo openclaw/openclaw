@@ -135,6 +135,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { maybeAutoProposeSkillAfterRun } from "../../skills/skills-manage-proposals.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -2942,6 +2943,22 @@ export async function runEmbeddedAttempt(
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
+
+      const loadedSkillNamesForAutoPropose =
+        shouldLoadSkillEntries && skillEntries
+          ? skillEntries.map((e) => e.skill.name).filter((n) => n.trim().length > 0)
+          : [];
+      maybeAutoProposeSkillAfterRun({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        agentId: sessionAgentId,
+        sessionKey: params.sessionKey,
+        toolCallCount: toolMetas.length,
+        runSucceeded:
+          !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
+        runFailed: Boolean(promptError) || aborted || timedOut || idleTimedOut,
+        loadedSkillNames: loadedSkillNamesForAutoPropose,
+      });
       if (cacheObservabilityEnabled) {
         if (cacheBreak) {
           const changeSummary =

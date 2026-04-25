@@ -37,11 +37,29 @@ export type SkillsLimitsConfig = {
   maxSkillFileBytes?: number;
 };
 
+export type SkillsManageAutoProposeConfig = {
+  enabled?: boolean;
+  maxPerSession?: number;
+  cooldownMinutes?: number;
+  minToolCalls?: number;
+};
+
+export type SkillsManageConfig = {
+  /** When false, the skills_manage tool is omitted from the tool list. */
+  enabled?: boolean;
+  /** TTL for in-memory pending proposals (ms). */
+  proposalTtlMs?: number;
+  maxPendingProposals?: number;
+  autoPropose?: SkillsManageAutoProposeConfig;
+};
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;
+  /** Gated skill proposals (skills_manage) and optional auto-propose evaluator. */
+  manage?: SkillsManageConfig;
   entries?: Record<string, SkillConfig>;
 };

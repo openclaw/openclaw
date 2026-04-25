@@ -127,7 +127,7 @@ const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 
-type ResolvedSkillsLimits = {
+export type ResolvedSkillsLimits = {
   maxCandidatesPerRoot: number;
   maxSkillsLoadedPerSource: number;
   maxSkillsInPrompt: number;
@@ -140,7 +140,10 @@ type LoadedSkillRecord = {
   frontmatter?: ParsedSkillFrontmatter;
 };
 
-function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): ResolvedSkillsLimits {
+export function resolveSkillsLimits(
+  config?: OpenClawConfig,
+  agentId?: string,
+): ResolvedSkillsLimits {
   const limits = config?.skills?.limits;
   const agentSkillsLimits = resolveEffectiveAgentSkillsLimits(config, agentId);
   return {
@@ -742,6 +745,57 @@ export function buildWorkspaceSkillsPrompt(
   return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
 }
 
+export type SkillsPromptBudgetPreview = {
+  withinLimits: boolean;
+  compact: boolean;
+  truncated: boolean;
+};
+
+/**
+ * Simulate adding or replacing one skill entry for prompt-budget preflight.
+ * `withinLimits` is false when prompt limits would drop an eligible skill from the catalog block.
+ */
+export function previewSkillsPromptImpact(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  eligibility?: SkillEligibilityContext;
+  simulationMode: "propose" | "replace";
+  syntheticEntry: SkillEntry;
+}): SkillsPromptBudgetPreview {
+  const baseline = resolveWorkspaceSkillPromptState(params.workspaceDir, {
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: params.eligibility,
+  });
+  const baseEntries = loadWorkspaceSkillEntries(params.workspaceDir, {
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: params.eligibility,
+  });
+  const merged =
+    params.simulationMode === "propose"
+      ? [...baseEntries, params.syntheticEntry]
+      : [
+          ...baseEntries.filter((e) => e.skill.name !== params.syntheticEntry.skill.name),
+          params.syntheticEntry,
+        ];
+  const projected = resolveWorkspaceSkillPromptState(params.workspaceDir, {
+    entries: merged,
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: params.eligibility,
+  });
+  const droppedBaseline = baseline.skillsEligibleForPromptCount - baseline.skillsInPromptCount;
+  const droppedProjected = projected.skillsEligibleForPromptCount - projected.skillsInPromptCount;
+  const withinLimits = droppedProjected <= droppedBaseline;
+  return {
+    withinLimits,
+    compact: projected.compact,
+    truncated: projected.truncated,
+  };
+}
+
 type WorkspaceSkillBuildOptions = {
   config?: OpenClawConfig;
   managedSkillsDir?: string;
@@ -772,6 +826,10 @@ function resolveWorkspaceSkillPromptState(
   eligible: SkillEntry[];
   prompt: string;
   resolvedSkills: Skill[];
+  truncated: boolean;
+  compact: boolean;
+  skillsInPromptCount: number;
+  skillsEligibleForPromptCount: number;
 } {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
@@ -808,7 +866,15 @@ function resolveWorkspaceSkillPromptState(
   ]
     .filter(Boolean)
     .join("\n");
-  return { eligible, prompt, resolvedSkills };
+  return {
+    eligible,
+    prompt,
+    resolvedSkills,
+    truncated,
+    compact,
+    skillsInPromptCount: skillsForPrompt.length,
+    skillsEligibleForPromptCount: resolvedSkills.length,
+  };
 }
 
 export function resolveSkillsPromptForRun(params: {
