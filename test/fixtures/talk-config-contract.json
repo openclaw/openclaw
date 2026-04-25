@@ -7,7 +7,7 @@
       "expectedSelection": {
         "provider": "elevenlabs",
         "normalizedPayload": true,
-        "voiceId": "voice-normalized",
+        "voiceId": "voice-resolved",
         "apiKey": "xxxxx"
       },
       "talk": {
@@ -32,12 +32,8 @@
     {
       "id": "normalized_missing_resolved",
       "defaultProvider": "elevenlabs",
-      "payloadValid": true,
-      "expectedSelection": {
-        "provider": "elevenlabs",
-        "normalizedPayload": true,
-        "voiceId": "voice-normalized"
-      },
+      "payloadValid": false,
+      "expectedSelection": null,
       "talk": {
         "provider": "elevenlabs",
         "providers": {

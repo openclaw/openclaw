@@ -1,16 +1,16 @@
-import XCTest
+import Testing
 @testable import OpenClawKit
 
-final class TalkHistoryTimestampTests: XCTestCase {
-    func testSecondsTimestampsAreAcceptedWithSmallTolerance() {
-        XCTAssertTrue(TalkHistoryTimestamp.isAfter(999.6, sinceSeconds: 1000))
-        XCTAssertFalse(TalkHistoryTimestamp.isAfter(999.4, sinceSeconds: 1000))
+struct TalkHistoryTimestampTests {
+    @Test func secondsTimestampsAreAcceptedWithSmallTolerance() {
+        #expect(TalkHistoryTimestamp.isAfter(999.6, sinceSeconds: 1000))
+        #expect(!TalkHistoryTimestamp.isAfter(999.4, sinceSeconds: 1000))
     }
 
-    func testMillisecondsTimestampsAreAcceptedWithSmallTolerance() {
+    @Test func millisecondsTimestampsAreAcceptedWithSmallTolerance() {
         let sinceSeconds = 1_700_000_000.0
         let sinceMs = sinceSeconds * 1000
-        XCTAssertTrue(TalkHistoryTimestamp.isAfter(sinceMs - 500, sinceSeconds: sinceSeconds))
-        XCTAssertFalse(TalkHistoryTimestamp.isAfter(sinceMs - 501, sinceSeconds: sinceSeconds))
+        #expect(TalkHistoryTimestamp.isAfter(sinceMs - 500, sinceSeconds: sinceSeconds))
+        #expect(!TalkHistoryTimestamp.isAfter(sinceMs - 501, sinceSeconds: sinceSeconds))
     }
 }

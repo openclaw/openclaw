@@ -1,45 +1,45 @@
-import XCTest
+import Testing
 @testable import OpenClawKit
 
 @MainActor
-final class TalkSystemSpeechSynthesizerTests: XCTestCase {
-    func testWatchdogTimeoutDefaultsToLatinProfile() {
+struct TalkSystemSpeechSynthesizerTests {
+    @Test func watchdogTimeoutDefaultsToLatinProfile() {
         let timeout = TalkSystemSpeechSynthesizer.watchdogTimeoutSeconds(
             text: String(repeating: "a", count: 100),
             language: nil)
 
-        XCTAssertEqual(timeout, 24.0, accuracy: 0.001)
+        #expect(abs(timeout - 24.0) < 0.001)
     }
 
-    func testWatchdogTimeoutUsesKoreanProfile() {
+    @Test func watchdogTimeoutUsesKoreanProfile() {
         let timeout = TalkSystemSpeechSynthesizer.watchdogTimeoutSeconds(
             text: String(repeating: "가", count: 100),
             language: "ko-KR")
 
-        XCTAssertEqual(timeout, 75.0, accuracy: 0.001)
+        #expect(abs(timeout - 75.0) < 0.001)
     }
 
-    func testWatchdogTimeoutUsesChineseProfile() {
+    @Test func watchdogTimeoutUsesChineseProfile() {
         let timeout = TalkSystemSpeechSynthesizer.watchdogTimeoutSeconds(
             text: String(repeating: "你", count: 100),
             language: "zh-CN")
 
-        XCTAssertEqual(timeout, 84.0, accuracy: 0.001)
+        #expect(abs(timeout - 84.0) < 0.001)
     }
 
-    func testWatchdogTimeoutUsesJapaneseProfile() {
+    @Test func watchdogTimeoutUsesJapaneseProfile() {
         let timeout = TalkSystemSpeechSynthesizer.watchdogTimeoutSeconds(
             text: String(repeating: "あ", count: 100),
             language: "ja-JP")
 
-        XCTAssertEqual(timeout, 60.0, accuracy: 0.001)
+        #expect(abs(timeout - 60.0) < 0.001)
     }
 
-    func testWatchdogTimeoutClampsVeryLongUtterances() {
+    @Test func watchdogTimeoutClampsVeryLongUtterances() {
         let timeout = TalkSystemSpeechSynthesizer.watchdogTimeoutSeconds(
             text: String(repeating: "a", count: 10_000),
             language: "en-US")
 
-        XCTAssertEqual(timeout, 900.0, accuracy: 0.001)
+        #expect(abs(timeout - 900.0) < 0.001)
     }
 }
