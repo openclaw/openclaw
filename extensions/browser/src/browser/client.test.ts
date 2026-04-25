@@ -123,11 +123,11 @@ describe("browser client", () => {
   });
 
   it("uses the expected endpoints + methods for common calls", async () => {
-    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
         calls.push({ url, init });
         if (url.endsWith("/tabs") && (!init || init.method === undefined)) {
           return {
@@ -302,7 +302,10 @@ describe("browser client", () => {
       path: "/tmp/a.pdf",
     });
     await expect(
-      browserScreenshotAction("http://127.0.0.1:18791", { fullPage: true }),
+      browserScreenshotAction("http://127.0.0.1:18791", { fullPage: true, timeoutMs: 12_345 }),
+    ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
+    await expect(
+      browserScreenshotAction("http://127.0.0.1:18791", { targetId: "t-default" }),
     ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
 
     expect(calls.some((c) => c.url.endsWith("/tabs"))).toBe(true);
@@ -310,7 +313,25 @@ describe("browser client", () => {
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
 
-    const screenshot = calls.find((c) => c.url.endsWith("/screenshot"));
+    const screenshotCalls = calls.filter((c) => c.url.endsWith("/screenshot"));
+    const screenshot = screenshotCalls[0];
     expect(screenshot?.init?.method).toBe("POST");
+    expect(screenshot?.init?.timeoutMs).toBe(12_345);
+    expect(
+      JSON.parse(typeof screenshot?.init?.body === "string" ? screenshot.init.body : "{}"),
+    ).toMatchObject({
+      fullPage: true,
+      timeoutMs: 12_345,
+    });
+    const defaultScreenshot = screenshotCalls[1];
+    expect(defaultScreenshot?.init?.timeoutMs).toBe(20_000);
+    expect(
+      JSON.parse(
+        typeof defaultScreenshot?.init?.body === "string" ? defaultScreenshot.init.body : "{}",
+      ),
+    ).toMatchObject({
+      targetId: "t-default",
+      timeoutMs: 20_000,
+    });
   });
 });

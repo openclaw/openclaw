@@ -43,6 +43,7 @@ import {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
+import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 
 const browserToolDeps = {
   browserAct,
@@ -621,11 +622,17 @@ export function createBrowserTool(opts?: {
           const element = readStringParam(params, "element");
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const type = params.type === "jpeg" ? "jpeg" : "png";
+          const timeoutMs =
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+              ? Math.max(1, Math.floor(params.timeoutMs))
+              : undefined;
+          const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
                 path: "/screenshot",
                 profile,
+                timeoutMs: effectiveTimeoutMs,
                 body: {
                   targetId,
                   fullPage,
@@ -633,6 +640,7 @@ export function createBrowserTool(opts?: {
                   element,
                   type,
                   labels,
+                  timeoutMs: effectiveTimeoutMs,
                 },
               })) as Awaited<ReturnType<typeof browserScreenshotAction>>)
             : await browserToolDeps.browserScreenshotAction(baseUrl, {
@@ -642,6 +650,7 @@ export function createBrowserTool(opts?: {
                 element,
                 type,
                 labels,
+                timeoutMs: effectiveTimeoutMs,
                 profile,
               });
           return await browserToolDeps.imageResultFromFile({

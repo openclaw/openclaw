@@ -547,15 +547,22 @@ export async function takeChromeMcpScreenshot(params: {
   uid?: string;
   fullPage?: boolean;
   format?: "png" | "jpeg";
+  timeoutMs?: number;
 }): Promise<Buffer> {
   return await withTempFile(async (filePath) => {
-    await callTool(params.profileName, params.userDataDir, "take_screenshot", {
-      pageId: parsePageId(params.targetId),
-      filePath,
-      format: params.format ?? "png",
-      ...(params.uid ? { uid: params.uid } : {}),
-      ...(params.fullPage ? { fullPage: true } : {}),
-    });
+    await callTool(
+      params.profileName,
+      params.userDataDir,
+      "take_screenshot",
+      {
+        pageId: parsePageId(params.targetId),
+        filePath,
+        format: params.format ?? "png",
+        ...(params.uid ? { uid: params.uid } : {}),
+        ...(params.fullPage ? { fullPage: true } : {}),
+      },
+      { timeoutMs: params.timeoutMs },
+    );
     return await fs.readFile(filePath);
   });
 }
