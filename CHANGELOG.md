@@ -84,6 +84,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI-compatible: skip null or non-object streaming chunks from custom providers instead of failing the turn after partial output. Fixes #51112.
 - Providers/OpenAI-compatible: treat singular MLX-style `finish_reason: "tool_call"` as tool use instead of a provider error. Fixes #61499.
 - Providers/ElevenLabs: omit the MP3-only `Accept` header for PCM telephony synthesis, so Voice Call requests for `pcm_22050` no longer receive MP3 audio. Fixes #67340. Thanks @marcchabot.
+- Providers/Microsoft TTS: keep allowlisted bundled speech providers discoverable even when another speech plugin has already registered, so Edge/Microsoft TTS is available alongside OpenAI. Fixes #62117 and #66850.
 - Providers/Microsoft TTS: honor legacy `messages.tts.providers.edge` voice settings after normalizing Edge TTS to the Microsoft provider. Fixes #64153.
 - macOS Talk Mode: retry failed local ElevenLabs stream playback through gateway `talk.speak` before falling back to the system voice, so configured ElevenLabs voices still play when streaming playback fails. Fixes #65662.
 - Plugins/Voice Call: reap stale pre-answer calls by default, honor configured TTS timeouts for Twilio media-stream playback, and fail empty telephony audio instead of completing as silence. Fixes #42071; supersedes #60957. Thanks @Ryce and @sliekens.
