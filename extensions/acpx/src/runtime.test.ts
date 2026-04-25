@@ -10,6 +10,7 @@ type TestSessionStore = {
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
 const CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@^0.11.1";
+const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 
 function makeRuntime(
   baseStore: TestSessionStore,
@@ -110,12 +111,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     expect(ensure).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.4/medium",
+        model: "gpt-5.4",
       }),
     );
   });
 
-  it("uses a safe gpt-5.4 default for Codex ACP startup when no model is provided", async () => {
+  it("leaves Codex ACP startup defaults alone when no model or thinking is provided", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -140,9 +141,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     expect(ensure).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "gpt-5.4/medium",
+        agent: "codex",
       }),
     );
+    expect(ensure.mock.calls[0]?.[0]).not.toHaveProperty("model");
+    expect(ensure.mock.calls[0]?.[0]).not.toHaveProperty("thinking");
   });
 
   it("does not normalize model startup for non-Codex ACP agents", async () => {
@@ -179,6 +182,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
   it("injects Codex ACP startup config into the scoped registry", () => {
     expect(__testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
+    expect(__testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);
     expect(
       __testing.appendCodexAcpConfigOverrides(CODEX_ACP_COMMAND, {
         model: "gpt-5.4",
@@ -190,7 +194,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(__testing.isCodexAcpCommand("openclaw acp")).toBe(false);
   });
 
-  it("rejects gpt-5.5 Codex ACP startup with a clear runtime error", async () => {
+  it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -201,20 +205,56 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         list: () => ["codex", "openclaw"],
       },
     });
-    const ensure = vi.spyOn(delegate, "ensureSession");
-
-    await expect(
-      runtime.ensureSession({
-        sessionKey: "agent:codex:acp:test",
-        agent: "codex",
-        mode: "persistent",
-        model: "openai-codex/gpt-5.5",
-      }),
-    ).rejects.toMatchObject({
-      code: "ACP_INVALID_RUNTIME_OPTION",
-      message: expect.stringContaining("gpt-5.5"),
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
     });
-    expect(ensure).not.toHaveBeenCalled();
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.5",
+    });
+
+    expect(ensure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.5",
+      }),
+    );
+  });
+
+  it("maps explicit Codex ACP thinking to startup reasoning effort", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.4",
+      thinking: "x-high",
+    });
+
+    expect(ensure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.4/xhigh",
+      }),
+    );
   });
 
   it("normalizes Codex ACP model config controls to adapter ids", async () => {
@@ -245,10 +285,71 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       key: "model",
       value: "gpt-5.4",
     });
+    expect(setConfigOption).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes Codex ACP slash reasoning suffixes to config controls", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "model",
+      value: "openai-codex/gpt-5.4/high",
+    });
+
+    expect(setConfigOption).toHaveBeenNthCalledWith(1, {
+      handle,
+      key: "model",
+      value: "gpt-5.4",
+    });
     expect(setConfigOption).toHaveBeenNthCalledWith(2, {
       handle,
       key: "reasoning_effort",
-      value: "medium",
+      value: "high",
+    });
+  });
+
+  it("normalizes Codex ACP thinking config controls to reasoning effort", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "thinking",
+      value: "minimal",
+    });
+
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "reasoning_effort",
+      value: "low",
     });
   });
 

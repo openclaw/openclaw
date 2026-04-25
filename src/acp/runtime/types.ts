@@ -38,6 +38,8 @@ export type AcpRuntimeEnsureInput = {
   resumeSessionId?: string;
   /** Optional runtime model override that must be available during session creation. */
   model?: string;
+  /** Optional runtime thinking/reasoning override that must be available during session creation. */
+  thinking?: string;
   cwd?: string;
   env?: Record<string, string>;
 };

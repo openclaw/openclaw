@@ -62,13 +62,24 @@ function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSes
 const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
-const CODEX_ACP_SAFE_MODEL = "gpt-5.4";
-const CODEX_ACP_SAFE_REASONING_EFFORT = "medium";
 const CODEX_ACP_OPENCLAW_PREFIX = "openai-codex/";
 const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
+  ["off", undefined],
+  ["minimal", "low"],
+  ["low", "low"],
+  ["medium", "medium"],
+  ["high", "high"],
+  ["x-high", "xhigh"],
+  ["x_high", "xhigh"],
+  ["extra-high", "xhigh"],
+  ["extra_high", "xhigh"],
+  ["extra high", "xhigh"],
+  ["xhigh", "xhigh"],
+]);
 
 type CodexAcpModelOverride = {
-  model: string;
+  model?: string;
   reasoningEffort?: string;
 };
 
@@ -209,71 +220,79 @@ function isCodexAcpCommand(command: string | undefined): boolean {
     return false;
   }
   const scriptName = basename(parts[1] ?? "");
-  return /^codex-acp(?:\.[cm]?js)?$/i.test(scriptName);
+  return /^codex-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
 }
 
 function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
     detail ??
-      `Codex ACP cannot reliably start sessions with ${rawModel}; use openai-codex/gpt-5.4 or gpt-5.4/medium until gpt-5.5 session/new support is stable.`,
+      `Codex ACP model "${rawModel}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
   );
+}
+
+function failUnsupportedCodexAcpThinking(rawThinking: string): never {
+  throw new AcpRuntimeError(
+    "ACP_INVALID_RUNTIME_OPTION",
+    `Codex ACP thinking level "${rawThinking}" is not supported. Use off, minimal, low, medium, high, or xhigh.`,
+  );
+}
+
+function normalizeCodexAcpReasoningEffort(rawThinking: string | undefined): string | undefined {
+  const normalized = rawThinking?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (!CODEX_ACP_THINKING_ALIASES.has(normalized)) {
+    failUnsupportedCodexAcpThinking(rawThinking ?? "");
+  }
+  return CODEX_ACP_THINKING_ALIASES.get(normalized);
 }
 
 function normalizeCodexAcpModelOverride(
   rawModel: string | undefined,
-  options: { defaultWhenMissing?: boolean } = {},
+  rawThinking?: string,
 ): CodexAcpModelOverride | undefined {
   const raw = rawModel?.trim();
+  const thinkingReasoningEffort = normalizeCodexAcpReasoningEffort(rawThinking);
+
   if (!raw) {
-    return options.defaultWhenMissing
-      ? {
-          model: CODEX_ACP_SAFE_MODEL,
-          reasoningEffort: CODEX_ACP_SAFE_REASONING_EFFORT,
-        }
-      : undefined;
+    return thinkingReasoningEffort ? { reasoningEffort: thinkingReasoningEffort } : undefined;
   }
 
   let value = raw;
   if (value.toLowerCase().startsWith(CODEX_ACP_OPENCLAW_PREFIX)) {
     value = value.slice(CODEX_ACP_OPENCLAW_PREFIX.length);
   }
-
   const parts = value.split("/");
   if (parts.length > 2) {
     failUnsupportedCodexAcpModel(
       raw,
-      `Codex ACP model "${raw}" is not supported. Use openai-codex/gpt-5.4 or gpt-5.4/medium.`,
+      `Codex ACP model "${raw}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
     );
   }
   const model = (parts[0] ?? "").trim();
-  const reasoningEffort = (parts[1] ?? "").trim().toLowerCase();
+  const modelReasoningEffort = normalizeCodexAcpReasoningEffort(parts[1]);
   if (!model) {
     failUnsupportedCodexAcpModel(
       raw,
-      `Codex ACP model "${raw}" is not supported. Use openai-codex/gpt-5.4 or gpt-5.4/medium.`,
+      `Codex ACP model "${raw}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
     );
   }
+  const reasoningEffort = thinkingReasoningEffort ?? modelReasoningEffort;
   if (reasoningEffort && !CODEX_ACP_REASONING_EFFORTS.has(reasoningEffort)) {
-    failUnsupportedCodexAcpModel(
-      raw,
-      `Codex ACP reasoning effort "${reasoningEffort}" is not supported. Use gpt-5.4/medium, /low, /high, or /xhigh.`,
-    );
-  }
-  if (/^gpt-5\.5(?:$|[-/])/i.test(model)) {
-    failUnsupportedCodexAcpModel(raw);
+    failUnsupportedCodexAcpThinking(reasoningEffort);
   }
   return {
     model,
-    ...(reasoningEffort
-      ? { reasoningEffort }
-      : model === CODEX_ACP_SAFE_MODEL
-        ? { reasoningEffort: CODEX_ACP_SAFE_REASONING_EFFORT }
-        : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   };
 }
 
 function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
+  if (!override.model) {
+    return "";
+  }
   return override.reasoningEffort
     ? `${override.model}/${override.reasoningEffort}`
     : override.model;
@@ -287,9 +306,12 @@ function quoteShellArg(value: string): string {
 }
 
 function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelOverride): string {
-  const configArgs = [`model=${override.model}`];
+  const configArgs = override.model ? [`model=${override.model}`] : [];
   if (override.reasoningEffort) {
     configArgs.push(`model_reasoning_effort=${override.reasoningEffort}`);
+  }
+  if (configArgs.length === 0) {
+    return command;
   }
   return `${command} ${configArgs.map((arg) => `-c ${quoteShellArg(arg)}`).join(" ")}`;
 }
@@ -445,7 +467,7 @@ export class AcpxRuntime implements AcpRuntime {
     const delegate = this.resolveDelegateForCommand(command);
     const codexModelOverride =
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
-        ? normalizeCodexAcpModelOverride(input.model, { defaultWhenMissing: true })
+        ? normalizeCodexAcpModelOverride(input.model, input.thinking)
         : undefined;
 
     if (!codexModelOverride) {
@@ -454,7 +476,9 @@ export class AcpxRuntime implements AcpRuntime {
 
     const normalizedInput = {
       ...input,
-      model: codexAcpSessionModelId(codexModelOverride),
+      ...(codexAcpSessionModelId(codexModelOverride)
+        ? { model: codexAcpSessionModelId(codexModelOverride) }
+        : {}),
     };
     return this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
       delegate.ensureSession(normalizedInput),
@@ -486,13 +510,28 @@ export class AcpxRuntime implements AcpRuntime {
   ): Promise<void> {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
-    if (input.key === "model" && isCodexAcpCommand(command)) {
-      const override = normalizeCodexAcpModelOverride(input.value);
+    if (
+      (input.key === "model" ||
+        input.key === "thinking" ||
+        input.key === "thought_level" ||
+        input.key === "reasoning_effort") &&
+      isCodexAcpCommand(command)
+    ) {
+      const override =
+        input.key === "model"
+          ? normalizeCodexAcpModelOverride(input.value)
+          : normalizeCodexAcpModelOverride(undefined, input.value);
+      if (!override && input.key !== "model") {
+        return;
+      }
       if (override) {
-        await delegate.setConfigOption({
-          ...input,
-          value: override.model,
-        });
+        if (override.model) {
+          await delegate.setConfigOption({
+            ...input,
+            key: "model",
+            value: override.model,
+          });
+        }
         if (override.reasoningEffort) {
           await delegate.setConfigOption({
             ...input,
