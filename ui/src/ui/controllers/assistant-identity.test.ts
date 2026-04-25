@@ -1,45 +1,42 @@
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { loadLocalAssistantIdentity } from "../storage.ts";
 import { setAssistantAvatarOverride } from "./assistant-identity.ts";
 
 describe("setAssistantAvatarOverride", () => {
-  it("writes the assistant avatar override through config.patch", async () => {
-    const request = vi.fn().mockResolvedValue({});
-
-    await setAssistantAvatarOverride(
-      {
-        client: { request } as never,
-        connected: true,
-        applySessionKey: "agent:main",
-        configSnapshot: { hash: "config-hash" },
-      },
-      "data:image/png;base64,YXZhdGFy",
-    );
-
-    expect(request).toHaveBeenCalledWith("config.patch", {
-      baseHash: "config-hash",
-      raw: JSON.stringify({ ui: { assistant: { avatar: "data:image/png;base64,YXZhdGFy" } } }),
-      sessionKey: "agent:main",
-      note: "Assistant avatar override updated from Control UI.",
-    });
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("clears the assistant avatar override through config.patch", async () => {
-    const request = vi.fn().mockResolvedValue({});
+  it("persists the assistant avatar locally and mirrors the user avatar pattern", () => {
+    const state: Parameters<typeof setAssistantAvatarOverride>[0] = {};
 
-    await setAssistantAvatarOverride(
-      {
-        client: { request } as never,
-        connected: true,
-        configSnapshot: { hash: "config-hash" },
-      },
-      null,
-    );
+    setAssistantAvatarOverride(state, "data:image/png;base64,YXZhdGFy");
 
-    expect(request).toHaveBeenCalledWith("config.patch", {
-      baseHash: "config-hash",
-      raw: JSON.stringify({ ui: { assistant: { avatar: null } } }),
-      sessionKey: undefined,
-      note: "Assistant avatar override cleared from Control UI.",
-    });
+    expect(state.assistantAvatar).toBe("data:image/png;base64,YXZhdGFy");
+    expect(state.assistantAvatarSource).toBe("data:image/png;base64,YXZhdGFy");
+    expect(state.assistantAvatarStatus).toBe("data");
+    expect(state.assistantAvatarReason).toBeNull();
+    expect(loadLocalAssistantIdentity().avatar).toBe("data:image/png;base64,YXZhdGFy");
+  });
+
+  it("clears the local override", () => {
+    const state: Parameters<typeof setAssistantAvatarOverride>[0] = {
+      assistantAvatar: "data:image/png;base64,YXZhdGFy",
+      assistantAvatarSource: "data:image/png;base64,YXZhdGFy",
+      assistantAvatarStatus: "data",
+    };
+    setAssistantAvatarOverride(state, "data:image/png;base64,YXZhdGFy");
+
+    setAssistantAvatarOverride(state, null);
+
+    expect(state.assistantAvatarSource).toBeNull();
+    expect(state.assistantAvatarStatus).toBeNull();
+    expect(state.assistantAvatarReason).toBeNull();
+    expect(loadLocalAssistantIdentity().avatar).toBeNull();
   });
 });

@@ -146,6 +146,7 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+.vmux*
 .artifacts/
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/

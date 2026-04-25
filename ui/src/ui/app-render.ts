@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
+import { refreshChat } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -1038,49 +1038,23 @@ export function renderApp(state: AppViewState) {
             assistantAvatarOverride,
             assistantAvatarUploadBusy: state.assistantAvatarUploadBusy,
             assistantAvatarUploadError: state.assistantAvatarUploadError,
-            onAssistantAvatarOverrideChange: async (dataUrl) => {
-              state.assistantAvatarUploadBusy = true;
+            onAssistantAvatarOverrideChange: (dataUrl) => {
+              setAssistantAvatarOverride(state, dataUrl);
+              state.chatAvatarUrl = dataUrl;
+              state.chatAvatarSource = dataUrl;
+              state.chatAvatarStatus = "data";
+              state.chatAvatarReason = null;
               state.assistantAvatarUploadError = null;
               requestHostUpdate?.();
-              try {
-                await setAssistantAvatarOverride(state, dataUrl);
-                state.assistantAvatar = dataUrl;
-                state.assistantAvatarSource = dataUrl;
-                state.assistantAvatarStatus = "data";
-                state.assistantAvatarReason = null;
-                state.chatAvatarUrl = dataUrl;
-                state.chatAvatarSource = dataUrl;
-                state.chatAvatarStatus = "data";
-                state.chatAvatarReason = null;
-                await loadConfig(state);
-                await state.loadAssistantIdentity();
-                await refreshChatAvatar(state);
-              } catch (err) {
-                state.assistantAvatarUploadError = err instanceof Error ? err.message : String(err);
-              } finally {
-                state.assistantAvatarUploadBusy = false;
-                requestHostUpdate?.();
-              }
             },
-            onAssistantAvatarClearOverride: async () => {
-              state.assistantAvatarUploadBusy = true;
+            onAssistantAvatarClearOverride: () => {
+              setAssistantAvatarOverride(state, null);
+              state.chatAvatarUrl = null;
+              state.chatAvatarSource = null;
+              state.chatAvatarStatus = null;
+              state.chatAvatarReason = null;
               state.assistantAvatarUploadError = null;
               requestHostUpdate?.();
-              try {
-                await setAssistantAvatarOverride(state, null);
-                state.chatAvatarUrl = null;
-                state.chatAvatarSource = null;
-                state.chatAvatarStatus = null;
-                state.chatAvatarReason = null;
-                await loadConfig(state);
-                await state.loadAssistantIdentity();
-                await refreshChatAvatar(state);
-              } catch (err) {
-                state.assistantAvatarUploadError = err instanceof Error ? err.message : String(err);
-              } finally {
-                state.assistantAvatarUploadBusy = false;
-                requestHostUpdate?.();
-              }
             },
             basePath: state.basePath ?? "",
             configObject: configObj,
