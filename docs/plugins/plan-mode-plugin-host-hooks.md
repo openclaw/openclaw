@@ -53,6 +53,25 @@ OpenClaw. The host PR should not merge Plan Mode behavior into core. It should
 expose the runtime, session, command, UI, event, and scheduler hooks that let a
 bundled plugin own the behavior without patching unrelated core files.
 
+These hooks are SDK work first and Plan Mode enablement second. Plan Mode is
+the large feature used to prove the seams, but the same contracts support other
+bundled or external plugins that need durable session state, scoped commands,
+trusted tool policy, UI descriptors, lifecycle cleanup, and safe runtime event
+handling.
+
+## Reusable Plugin Examples
+
+| Plugin type                     | Hook families it can reuse                                                                                 | What the SDK hooks enable                                                                                     |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Human approval workflow         | Session extensions, patch actions, command continuation, UI approval descriptors, scheduler cleanup.       | Persist approvals, block sensitive tools, render approval cards, and resume the agent after a decision.       |
+| Deployment and release workflow | Session state, next-turn injections, trusted tool policy, scoped commands, UI status, scheduler lifecycle. | Gate deploy tools, show rollout progress, continue after approval, and schedule smoke-test follow-ups.        |
+| Cost or budget governor         | Session state, trusted policy, command scopes, UI warning descriptors, event subscriptions.                | Track spend, block expensive actions, expose scoped overrides, and warn users before continuing.              |
+| Memory or context manager       | Session extensions, turn preparation, event subscriptions, run context, UI status.                         | Store plugin-owned context, inject selected memories once, update derived context, and show visibility state. |
+| Review or CI gate               | Session state, tool policy, slash commands, UI cards, scheduler and event subscriptions.                   | Track findings or CI runs, block merge/deploy actions, rerun checks, and nudge stale reviews.                 |
+| Incident or ticket bot          | Session state, next-turn injections, scoped commands, UI banners, scheduler lifecycle.                     | Track incidents, escalate on SLA timers, sync ticket actions, and inject handoff instructions.                |
+| Channel integration             | Channel session state, command scopes, UI delivery descriptors, event subscriptions, scheduled retries.    | Bind Telegram/Slack/email threads, show delivery/auth state, and schedule retry or handoff behavior.          |
+| Workspace policy plugin         | Session policy state, trusted tool policy, scoped commands, UI warnings, lifecycle cleanup.                | Enforce path/data rules before tools run, explain policy failures, and clear temporary grants on reset.       |
+
 ## Problem
 
 PR #71676 proves the behavior, but it does so by embedding Plan Mode across

@@ -86,31 +86,99 @@ Concrete existing-code anchors for the audit:
   `src/infra/heartbeat-runner.ts`, but the current plugin SDK does not expose
   the requested typed lifecycle-owned helper surfaces.
 
+## Reusable SDK Capability Matrix
+
+Plan Mode is the pressure test because it currently costs roughly a large
+feature PR worth of host edits. It should not be the only beneficiary. The hook
+families below are SDK primitives that let other plugins become first-class
+without copying the same host patches.
+
+| RFC | SDK primitive                                                             | Public, bundled, or protocol surface                                                                                                    | Plan Mode proof case                                                                                      | Other plugin families enabled                                                                                                                                     |
+| --- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A   | Plugin session extensions and patch actions                               | Public SDK registration plus gateway protocol patch method/envelope. Patch actions may declare gateway scopes.                          | Store plan mode, approval status, question state, pending injection ids, and nudge job ids.               | Memory/context managers, deployment workflows, incident/ticket bots, budget governors, channel preference plugins, long-running job monitors.                     |
+| B   | Durable next-turn injection queue and agent turn preparation              | Public enqueue API plus host-owned runner dequeue boundary. Turn hooks may be public; queue storage is host-owned.                      | Continue after approval, revise a plan, answer a question, inject scheduled nudges exactly once.          | CI triage follow-ups, code review bots, release handoff prompts, memory recall injectors, incident escalation prompts, customer-support workflow plugins.         |
+| C   | Trusted tool policy and plugin tool metadata                              | Normal metadata is public; pre-plugin policy is bundled/trusted-only; tool display is a gateway/UI descriptor contract.                 | Block mutating tools while approval is pending and publish Plan Mode tool display/safety metadata.        | Cost/budget limiters, workspace policy plugins, dangerous action approval wrappers, deployment freeze gates, data egress guards, sandbox/tool visibility plugins. |
+| D   | Scoped commands, trusted command ownership, and continuation              | Public command SDK for scopes/continuation; reserved roots require bundled/trusted manifest ownership.                                  | `/plan accept` patches state, enqueues continuation, and resumes the agent.                               | `/deploy approve`, `/review ship`, `/incident ack`, `/budget override`, `/memory pin`, `/ticket close`, and channel-specific command adapters.                    |
+| E   | Control UI contribution descriptors                                       | Gateway projection plus data-only UI descriptor contract. Arbitrary plugin browser JavaScript is out of scope for the first version.    | Plan/Plan Auto modes, approval/question cards, composer guards, and status indicators without UI patches. | Release dashboards, budget warnings, incident banners, review gates, memory/context panels, channel-auth cards, human approval cards.                             |
+| F   | Agent events, run context, session scheduler, and heartbeat contributions | Public typed event/scheduler helpers plus host-owned lifecycle cleanup. Some event categories may be bundled/trusted-only if sensitive. | Persist plan snapshots, track subagents, schedule nudges, and add heartbeat reminders.                    | Telemetry exporters, audit logs, SLA escalators, background sync plugins, recurring check-ins, CI/deploy monitors, memory indexers.                               |
+
+## Plugin Archetype Matrix
+
+These examples are intentionally not Plan Mode-specific. They show why the
+proposed hooks belong in the OpenClaw SDK rather than in one bundled plugin.
+
+| Plugin archetype           | Session extension                                           | Next-turn injection                                        | Tool policy and metadata                                                 | Scoped commands                                                         | UI contribution                                     | Events, scheduler, heartbeat                                        |
+| -------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------- |
+| Human approval workflow    | Approval state, approver, deadline, decision history.       | Continue after approval or inject revision instructions.   | Block risky tools until approved; mark approval tools as state-mutating. | `/approve`, `/reject`, `/revise` with approval scopes and continuation. | Approval cards, pending banners, composer guards.   | Expire stale approvals and nudge approvers.                         |
+| Deployment/release plugin  | Release candidate, environment, rollout phase, rollback id. | Inject release checklist or post-approval deploy command.  | Gate deploy/rollback tools during freeze windows.                        | `/deploy approve`, `/rollback`, `/release status`.                      | Release status panel and deploy approval card.      | Watch CI/deploy events, schedule smoke-test follow-ups.             |
+| Cost/budget governor       | Per-session budget, model/tool spend, override state.       | Inject budget warning or downgrade guidance on next turn.  | Block expensive tools/models or require override approval.               | `/budget status`, `/budget override`.                                   | Budget meter, warning card, blocked-input hint.     | Heartbeat reminders when budget is near limit; export spend events. |
+| Memory/context manager     | Pins, recall cursors, source visibility, compaction policy. | Inject selected memories/context once at turn start.       | Decorate memory tools with display/safety metadata.                      | `/memory pin`, `/memory forget`, `/context refresh`.                    | Context panel and memory-selection cards.           | Index agent events and schedule background refresh.                 |
+| Code review/PR gate        | Review checklist, unresolved findings, approval state.      | Inject review summary or required fix list.                | Block merge/push/deploy tools until findings are resolved.               | `/review approve`, `/review request-changes`, `/review rerun`.          | Review gate card, status chips, finding summary.    | Watch test/review events and schedule bot rechecks.                 |
+| Incident/ticket workflow   | Incident id, severity, owner, SLA, ticket sync cursor.      | Inject handoff, escalation, or ticket-update instructions. | Gate risky remediation tools behind incident role/scope.                 | `/incident ack`, `/incident escalate`, `/ticket close`.                 | Incident banner, SLA countdown, ticket action card. | Schedule escalations and export timeline events.                    |
+| Channel integration plugin | Channel thread state, auth handoff, delivery preferences.   | Inject deferred replies or cross-channel follow-ups.       | Mark channel tools with delivery/safety metadata.                        | `/telegram approve`, `/slack handoff`, `/email summarize`.              | Auth cards, channel delivery status, input guards.  | Track delivery events and retry scheduled sends.                    |
+| Workspace policy plugin    | Workspace rules, allowed paths, exception grants.           | Inject policy explanation or remediation steps.            | Block or require approval for policy-violating tools.                    | `/policy explain`, `/policy grant`, `/policy revoke`.                   | Policy warning card and blocked-action explanation. | Audit tool events and clear grants on session reset.                |
+| Telemetry/export plugin    | Export cursor, sink status, redaction mode.                 | Rare; may inject diagnostic summary after failure.         | Add metadata to telemetry/export tools.                                  | `/telemetry status`, `/telemetry retry`.                                | Export status panel and failure card.               | Subscribe to agent/tool events and schedule retries.                |
+| Long-running job monitor   | Job ids, progress, owner, cancellation state.               | Inject completion/failure summary into next active turn.   | Decorate job tools and gate cancellation.                                | `/job status`, `/job cancel`, `/job follow`.                            | Progress card and completion notification.          | Poll jobs, emit heartbeats, clean up on session close.              |
+
+## How The Hooks Enter The SDK
+
+The implementation should land as SDK infrastructure, not as Plan Mode code.
+Each hook family should have an explicit layer so plugin authors know which
+parts are stable public API, which parts are trusted-only, and which parts are
+gateway/UI protocol contracts.
+
+| SDK layer                  | What changes                                                                                                                                                                                                                                                                          | Hook families involved                     | Review requirement                                                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Public plugin API          | Add typed registration functions such as `registerSessionExtension`, `enqueueNextTurnInjection`, command `requiredScopes`, command `continueAgent`, UI contribution registration, typed event subscription, run-context helpers, scheduler helpers, and heartbeat contribution hooks. | A, B, D, E, F plus public metadata from C. | Additive TypeScript types, plugin SDK docs, generated API reference if applicable, and compile-time fixture plugin usage. |
+| Trusted/bundled plugin API | Add privileged registration for pre-plugin tool policy and reserved command ownership.                                                                                                                                                                                                | C and D.                                   | Manifest trust declaration, bundled-only enforcement, negative tests for external plugins, and clear security docs.       |
+| Manifest/schema            | Declare trusted capabilities, command roots, UI contribution ids, optional required scopes, and any cold-discovery metadata that should be visible before runtime activation.                                                                                                         | C, D, E, possibly F.                       | Manifest validation tests and disabled-plugin behavior tests.                                                             |
+| Gateway protocol           | Add plugin session patch route/envelope, public session projection, UI contribution projection, tool metadata/catalog projection, and stable error codes.                                                                                                                             | A, C, E.                                   | Backward-compatible schema changes, scope enforcement tests, and client compatibility notes.                              |
+| Agent runner boundary      | Add durable injection dequeue and `agent_turn_prepare` ordering before retry/fallback/provider transforms.                                                                                                                                                                            | B and F.                                   | Retry/fallback exactly-once tests and deterministic prompt ordering tests.                                                |
+| Control UI contract        | Consume descriptor-only plugin contributions for chat modes, generic cards, status surfaces, event classifiers, and input guards.                                                                                                                                                     | E plus metadata from C.                    | No arbitrary plugin browser code in the first version; descriptor sanitization and enable/disable tests.                  |
+| Lifecycle cleanup          | Clean plugin-owned state, injections, run context, scheduler jobs, UI descriptors, policies, tools, and commands on plugin disablement, session reset, session delete, compaction, and gateway restart.                                                                               | A through F.                               | Fixture tests for disablement, reset, delete, restart, and projection cleanup.                                            |
+| Fixture plugin tests       | Add a tiny plugin that exercises every new seam without product behavior.                                                                                                                                                                                                             | A through F.                               | The fixture is the contract guardrail for Plan Mode and future third-party plugins.                                       |
+
+Plugin authors should be able to answer six questions from the SDK docs after
+these hooks land:
+
+1. Where do I store per-session plugin state without adding fields to core
+   `SessionEntry`?
+2. How do I schedule exactly-once instructions for the next agent turn?
+3. How do I enforce trusted tool policy before ordinary plugin hooks and explain
+   tool risk in UI/catalogs?
+4. How do my slash commands declare required scopes, patch state, and
+   optionally resume the agent?
+5. How do I project mode, status, cards, and input guards into Control UI
+   without shipping arbitrary browser code?
+6. How do I subscribe to run events, keep run-scoped data, schedule
+   session-owned work, and clean it up on reset, delete, and plugin
+   disablement?
+
 ## Maintainer Decision To Make
 
 The decision is not "merge PR #71676 or reject Plan Mode." The useful decision
-is:
+is broader:
 
 > Which host seams must OpenClaw expose so Plan Mode can be implemented as a
 > first-class bundled plugin without reversible installer patches or scattered
-> core edits?
+> core edits, and so future plugins can reuse the same SDK primitives?
 
 The proposed answer is six hook families:
 
-| RFC | Hook family                                                  | Required before Plan Mode plugin parity? | Why                                                                                            |
-| --- | ------------------------------------------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| A   | Plugin session extensions and patch actions                  | Yes                                      | Plan Mode is fundamentally durable per-session state.                                          |
-| B   | Durable next-turn injections and agent turn preparation      | Yes                                      | Approvals, revisions, question answers, and nudges must feed the next run exactly once.        |
-| C   | Trusted tool policy and plugin tool metadata                 | Yes                                      | Mutation blocking must run before ordinary tool hooks; plugin tools need first-class metadata. |
-| D   | Scoped plugin commands and command continuation              | Yes                                      | `/plan accept` and related commands must mutate state and resume execution.                    |
-| E   | Control UI contribution slots                                | Yes for first-class UX                   | Plan/Plan Auto mode, approval cards, and input guards must not patch UI files.                 |
-| F   | Agent event, run context, scheduler, and heartbeat lifecycle | Yes for full parity                      | Snapshot persistence, subagent gates, nudges, and lifecycle cleanup depend on runtime events.  |
+| RFC | Hook family                                                  | Required before Plan Mode plugin parity? | Reusable SDK reason                                                                                                                           |
+| --- | ------------------------------------------------------------ | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| A   | Plugin session extensions and patch actions                  | Yes                                      | Any plugin with durable per-session workflow state needs host storage, projection, patch authorization, and lifecycle cleanup.                |
+| B   | Durable next-turn injections and agent turn preparation      | Yes                                      | Any plugin that converts a later approval, event, timer, or channel callback into the next agent turn needs exactly-once turn preparation.    |
+| C   | Trusted tool policy and plugin tool metadata                 | Yes                                      | Any plugin enforcing workspace, budget, approval, release, or safety policy needs a non-bypassable policy tier and explainable tool metadata. |
+| D   | Scoped plugin commands and command continuation              | Yes                                      | Any plugin with mutating slash commands needs host-enforced scopes and the option to resume the agent after command-side state changes.       |
+| E   | Control UI contribution slots                                | Yes for first-class UX                   | Any plugin with modes, approvals, warnings, status, or input guards needs a data-driven UI slot instead of checked-in UI patches.             |
+| F   | Agent event, run context, scheduler, and heartbeat lifecycle | Yes for full parity                      | Any plugin that reacts to runs, tools, subagents, timers, or recurring reminders needs typed event subscriptions and host-owned cleanup.      |
 
 The hook PR should implement those seams with a tiny fixture plugin. The Plan
 Mode plugin should come after the hook PR and use PR #71676 as its parity
 oracle.
 
-## Why A Plugin-Only Port Is Not Enough
+## Why Current SDK Surfaces Are Not Enough
 
 OpenClaw already has a useful plugin system:
 
@@ -361,6 +429,23 @@ type PlanModeSessionState = {
 
 This state should live under a plugin namespace, not on the root session entry.
 
+### RFC A Reusable SDK Scenarios
+
+Session extensions are useful for any plugin that owns durable per-session
+workflow state:
+
+- review gates can store PR id, unresolved findings, reviewer decisions, and
+  merge gate state
+- release plugins can store environment, rollout phase, freeze window, and
+  rollback id
+- memory managers can store pins, recall cursors, compaction policy, and source
+  visibility
+- budget governors can store spend counters, thresholds, override decisions,
+  and expiry
+- channel plugins can store thread bindings, delivery preferences, and auth
+  handoff state
+- incident bots can store severity, owner, ticket sync cursor, and SLA deadline
+
 ### RFC A Fixture Tests
 
 Required fixture coverage:
@@ -468,6 +553,20 @@ Plan Mode uses next-turn injections for:
 - scheduled plan nudges
 - subagent finished-follow-up instructions
 - "continue after approval" command flow
+
+### RFC B Reusable SDK Scenarios
+
+Durable next-turn injections are useful for any plugin that receives a decision,
+event, timer, or channel callback outside the current model call and needs to
+feed the next agent turn exactly once:
+
+- review plugins can inject required fixes after an asynchronous review pass
+- deployment plugins can inject a release checklist after human approval
+- memory managers can hydrate selected context before the next model call
+- incident plugins can inject escalation or handoff instructions after an SLA
+  timer fires
+- CI plugins can inject the next diagnostic step after log fetching completes
+- channel plugins can inject deferred replies or cross-channel follow-ups
 
 ### RFC B Failure Behavior
 
@@ -590,6 +689,21 @@ Plan Mode uses tool metadata for:
 - `plan_mode_status`
 - any future plan artifact export tool
 
+### RFC C Reusable SDK Scenarios
+
+Trusted tool policy and tool metadata are useful for any plugin that needs both
+policy enforcement and explainable tool presentation:
+
+- budget plugins can block or require approval for expensive tools or models
+- workspace policy plugins can block filesystem, browser, or network tools that
+  violate path or data-egress rules
+- deployment plugins can gate deploy and rollback tools during freeze windows
+- dangerous-action wrappers can require scoped approval for high-risk mutation
+  tools
+- compliance plugins can add audit and safety labels to plugin-owned tools
+- tool catalog extensions can publish display, risk, category, and ownership
+  metadata without hardcoding host display maps
+
 ### RFC C Fixture Tests
 
 Required fixture coverage:
@@ -676,6 +790,19 @@ Plan Mode commands would:
 - enqueue next-turn injections when needed
 - return `continueAgent: true` when execution should resume
 - return read-only status without continuation for `/plan status`
+
+### RFC D Reusable SDK Scenarios
+
+Scoped command continuation is useful for any plugin whose slash commands mutate
+state and then optionally resume the agent:
+
+- `/review approve`, `/review request-changes`, and `/review rerun`
+- `/deploy approve`, `/deploy pause`, `/rollback`, and `/release status`
+- `/budget override`, `/budget reset`, and `/budget status`
+- `/incident ack`, `/incident escalate`, and `/ticket close`
+- `/memory pin`, `/memory forget`, and `/context refresh`
+- `/policy grant`, `/policy revoke`, and `/policy explain`
+- `/telegram approve`, `/slack handoff`, and `/email summarize`
 
 ### RFC D Fixture Tests
 
@@ -779,6 +906,23 @@ Plan Mode UI contribution should replace host patches for:
 - approval event parsing
 - session status badge or sidebar section
 - composer guard when approval is pending
+
+### RFC E Reusable SDK Scenarios
+
+Control UI contribution slots are useful for any plugin that needs visible state
+or safe user interaction without patching the web app:
+
+- human approval plugins can render approval cards and pending banners
+- release plugins can show rollout progress, deploy approval cards, and freeze
+  banners
+- budget governors can show spend meters, override cards, and blocked-input
+  hints
+- memory/context plugins can show context panels, source visibility cards, and
+  memory pickers
+- incident plugins can show severity banners, SLA countdowns, and ticket action
+  cards
+- channel plugins can show auth cards, delivery status, and channel-specific
+  input guards
 
 ### RFC E Fixture Tests
 
@@ -895,6 +1039,22 @@ Plan Mode uses this hook family for:
 - creating and cancelling auto-nudge jobs
 - adding heartbeat prompt nudges
 - cleaning up jobs when session state resets
+
+### RFC F Reusable SDK Scenarios
+
+Agent events, run context, scheduler lifecycle, and heartbeat contributions are
+useful for any plugin that reacts to runtime facts or owns background work:
+
+- telemetry exporters can subscribe to sanitized events and batch scheduled
+  exports
+- memory indexers can observe run/tool events and refresh derived context
+- CI watchers can poll workflows and inject completion or failure summaries
+- incident bots can schedule SLA escalations and heartbeat unresolved incidents
+- channel plugins can track delivery events and retry failed sends
+- long-running job monitors can poll job state, emit progress, and clean up on
+  session close
+- subagent coordinators can store per-run state and inject follow-up once
+  subagents settle
 
 ### RFC F Fixture Tests
 
