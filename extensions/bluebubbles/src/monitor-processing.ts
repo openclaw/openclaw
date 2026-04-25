@@ -60,6 +60,7 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import { fetchBlueBubblesReplyContext } from "./monitor-reply-fetch.js";
 import {
   hasBlueBubblesSelfChatCopy,
   rememberBlueBubblesSelfChatCopy,
@@ -1275,6 +1276,45 @@ async function processMessageAfterDedupe(
           core,
           runtime,
           `reply-context cache hit replyToId=${replyToId} sender=${replyToSender ?? ""} body="${preview}"`,
+        );
+      }
+    }
+  }
+
+  // Opt-in fallback: if the in-memory cache missed and the BB credentials are
+  // available, ask the BlueBubbles HTTP API for the original message. Useful
+  // when multiple OpenClaw instances share one BB account, after a restart,
+  // or when the cache TTL has evicted the message. Best-effort, never throws.
+  if (
+    replyToId &&
+    (!replyToBody || !replyToSender) &&
+    baseUrl &&
+    password &&
+    account.config.replyContextApiFallback === true
+  ) {
+    const fetched = await fetchBlueBubblesReplyContext({
+      accountId: account.accountId,
+      replyToId,
+      baseUrl,
+      password,
+      accountConfig: account.config,
+      chatGuid: message.chatGuid,
+      chatIdentifier: message.chatIdentifier,
+      chatId: message.chatId,
+    });
+    if (fetched) {
+      if (!replyToBody && fetched.body) {
+        replyToBody = fetched.body;
+      }
+      if (!replyToSender && fetched.sender) {
+        replyToSender = fetched.sender;
+      }
+      if (core.logging.shouldLogVerbose()) {
+        const preview = (fetched.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+        logVerbose(
+          core,
+          runtime,
+          `reply-context API fallback replyToId=${replyToId} sender=${fetched.sender ?? ""} body="${preview}"`,
         );
       }
     }

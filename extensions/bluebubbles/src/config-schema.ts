@@ -93,6 +93,14 @@ const bluebubblesAccountSchema = z
     network: bluebubblesNetworkSchema,
     catchup: bluebubblesCatchupSchema,
     blockStreaming: z.boolean().optional(),
+    /**
+     * When an inbound reply lands without `replyToBody`/`replyToSender` and the
+     * in-memory reply cache misses (e.g., multi-instance deployments sharing
+     * one BlueBubbles account, after process restarts, or after long-lived
+     * cache eviction), opt in to fetching the original message from the
+     * BlueBubbles HTTP API as a best-effort fallback. Off by default.
+     */
+    replyContextApiFallback: z.boolean().optional().default(false),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
     coalesceSameSenderDms: z.boolean().optional(),
   })
