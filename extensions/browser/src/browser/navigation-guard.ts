@@ -115,6 +115,16 @@ export async function assertBrowserNavigationAllowed(
   //   1. Private-network navigation is explicitly enabled by policy, OR
   //   2. The target URL matches NO_PROXY, meaning the proxy will not be used
   //      for this request and SSRF checks remain enforceable.
+  //
+  // Security note: matchesNoProxy mirrors undici's EnvHttpProxyAgent semantics.
+  // Chromium has its own NO_PROXY parser which may diverge on edge cases (e.g.
+  // leading-dot handling, wildcard syntax, IPv6 bracket forms). In the unlikely
+  // event Chromium's bypass logic is stricter than undici's (i.e. Chromium still
+  // routes through the proxy for a URL that matchesNoProxy considers bypassed),
+  // the SSRF gap could theoretically reopen. In practice, the overlap is high
+  // for common patterns (*, hostname, .domain, IP:port) and the
+  // resolvePinnedHostnameWithPolicy check below provides a secondary guard
+  // against private-IP destinations after Node-side DNS resolution.
   if (
     hasProxyEnvConfigured() &&
     !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) &&
