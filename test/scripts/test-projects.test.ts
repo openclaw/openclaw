@@ -323,6 +323,22 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes memory doctor and embedding default edits to focused tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/commands/doctor-memory-search.ts",
+        "src/memory-host-sdk/host/embedding-defaults.ts",
+        "src/memory-host-sdk/host/embeddings.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/commands/doctor-memory-search.test.ts",
+        "src/memory-host-sdk/host/embeddings.test.ts",
+      ],
+    });
+  });
+
   it("routes changed utils and shared files to their light scoped lanes", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/shared/string-normalization.ts",
