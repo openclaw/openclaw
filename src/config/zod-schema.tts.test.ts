@@ -82,7 +82,7 @@ describe("TtsConfigSchema openai speed and instructions", () => {
       TtsConfigSchema.parse({
         personas: {
           alfred: {
-            ["rewrite"]: {
+            rewrite: {
               enabled: true,
             },
           },
