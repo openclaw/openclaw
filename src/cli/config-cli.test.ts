@@ -274,26 +274,6 @@ describe("config cli", () => {
     });
 
     it("rejects plugin install record config updates", async () => {
-      const resolved = {
-        plugins: {
-          installs: {
-            "openclaw-web-search": {
-              source: "npm",
-              spec: "@ollama/openclaw-web-search",
-              installPath: "/tmp/openclaw-web-search",
-              version: "0.2.2",
-              resolvedName: "@ollama/openclaw-web-search",
-              resolvedVersion: "0.2.2",
-              resolvedSpec: "@ollama/openclaw-web-search@0.2.2",
-              integrity: "sha512-test",
-              resolvedAt: "2026-04-22T10:33:58.083Z",
-              installedAt: "2026-04-22T10:33:58.240Z",
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
-
       await expect(
         runConfigCommand([
           "config",
@@ -306,7 +286,12 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Unrecognized key"));
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw plugins install <spec>"),
+      );
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw plugins update <plugin-id>"),
+      );
     });
 
     it("rejects protected model map replacement unless explicitly requested", async () => {
