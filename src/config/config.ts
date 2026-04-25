@@ -21,6 +21,7 @@ export {
   recoverConfigFromJsonRootSuffix,
   resetConfigRuntimeState,
   resolveConfigSnapshotHash,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   writeConfigFile,
