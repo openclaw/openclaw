@@ -13,6 +13,7 @@ import {
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
+  isSameMeetUrlForReuse,
   readBrowserTab,
   resolveChromeNode,
   type BrowserTab,
@@ -305,7 +306,7 @@ async function openMeetWithBrowserProxy(params: {
         timeoutMs: Math.min(timeoutMs, 5_000),
       }),
     );
-    tab = tabs.find((entry) => entry.url === params.url);
+    tab = tabs.find((entry) => isSameMeetUrlForReuse(entry.url, params.url));
     targetId = tab?.targetId;
     if (targetId) {
       await callBrowserProxyOnNode({

@@ -10,6 +10,31 @@ export type BrowserTab = {
   url?: string;
 };
 
+export function normalizeMeetUrlForReuse(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "meet.google.com") {
+      return undefined;
+    }
+    const match = parsed.pathname.match(/^\/(new|[a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/)?$/i);
+    if (!match?.[1]) {
+      return undefined;
+    }
+    return `https://meet.google.com/${match[1].toLowerCase()}`;
+  } catch {
+    return undefined;
+  }
+}
+
+export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefined): boolean {
+  const normalizedA = normalizeMeetUrlForReuse(a);
+  const normalizedB = normalizeMeetUrlForReuse(b);
+  return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
+}
+
 export type GoogleMeetNodeInfo = {
   caps?: string[];
   commands?: string[];
