@@ -2,6 +2,7 @@ export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forw
 export { resolveOutboundSendDep, type OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export { resolveAgentOutboundIdentity, type OutboundIdentity } from "../infra/outbound/identity.js";
 export type { OutboundDeliveryFormattingOptions } from "../infra/outbound/formatting.js";
+export { createReplyToFanout, type ReplyToResolution } from "../infra/outbound/reply-policy.js";
 export {
   deliverOutboundPayloads,
   type DeliverOutboundPayloadsParams,

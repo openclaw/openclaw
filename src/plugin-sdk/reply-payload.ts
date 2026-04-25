@@ -1,6 +1,6 @@
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
-import { isSingleUseReplyToMode } from "../auto-reply/reply/reply-reference.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
+import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
@@ -38,26 +38,6 @@ type SendPayloadAdapter = Pick<
 >;
 
 const REASONING_PREFIX = "reasoning:";
-
-function createSendPayloadReplyToFanout(ctx: SendPayloadContext): () => string | undefined {
-  const replyToId = ctx.replyToId ?? undefined;
-  if (!replyToId) {
-    return () => undefined;
-  }
-  const singleUse =
-    ctx.replyToIdSource !== "explicit" &&
-    ctx.replyToMode !== undefined &&
-    isSingleUseReplyToMode(ctx.replyToMode);
-  if (!singleUse) {
-    return () => replyToId;
-  }
-  let current: string | undefined = replyToId;
-  return () => {
-    const value = current;
-    current = undefined;
-    return value;
-  };
-}
 
 function trimLeadingMarkdownQuoteMarkers(text: string): string {
   let candidate = text.trimStart();
@@ -310,7 +290,7 @@ export async function sendTextMediaPayload(params: {
   if (!text && urls.length === 0) {
     return { channel: params.channel, messageId: "" };
   }
-  const nextReplyToId = createSendPayloadReplyToFanout(params.ctx);
+  const nextReplyToId = createReplyToFanout(params.ctx);
   if (urls.length > 0) {
     const lastResult = await sendPayloadMediaSequence({
       text,
