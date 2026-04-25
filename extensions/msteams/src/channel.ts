@@ -1131,5 +1131,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         sendMedia: { resolve: (runtime) => runtime.msteamsOutbound.sendMedia },
         sendPoll: { resolve: (runtime) => runtime.msteamsOutbound.sendPoll },
       }),
+      sendPayload: async (ctx) => {
+        const runtime = await loadMSTeamsChannelRuntime();
+        return await runtime.msteamsOutbound.sendPayload!(ctx);
+      },
     },
   });
