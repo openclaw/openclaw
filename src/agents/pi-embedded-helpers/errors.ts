@@ -753,11 +753,18 @@ function isProvider(provider: string | undefined, match: string): boolean {
   return Boolean(normalized && normalized.includes(match));
 }
 
-function isAnthropicGenericUnknownError(raw: string, provider?: string): boolean {
-  return (
-    isProvider(provider, "anthropic") &&
-    (normalizeOptionalLowercaseString(raw)?.includes("an unknown error occurred") ?? false)
-  );
+function isProviderScopedGenericUnknownError(raw: string, provider?: string): boolean {
+  const normalizedMessage = normalizeOptionalLowercaseString(raw);
+  const normalizedProvider = normalizeOptionalLowercaseString(provider);
+  if (!normalizedMessage?.includes("an unknown error occurred")) {
+    return false;
+  }
+  if (!normalizedProvider) {
+    return false;
+  }
+  // OpenRouter uses this generic phrase for multiple upstream states and keeps
+  // an explicit provider-specific matcher ("Provider returned error").
+  return !normalizedProvider.includes("openrouter");
 }
 
 function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
@@ -833,7 +840,7 @@ function classifyFailoverClassificationFromMessage(
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
-  if (isAnthropicGenericUnknownError(raw, provider)) {
+  if (isProviderScopedGenericUnknownError(raw, provider)) {
     return toReasonClassification("timeout");
   }
   if (isOpenRouterProviderReturnedError(raw, provider)) {

@@ -450,6 +450,12 @@ describe("failover-error", () => {
     ).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({
+        provider: "google",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
         provider: "openrouter",
         message: "Provider returned error",
       }),

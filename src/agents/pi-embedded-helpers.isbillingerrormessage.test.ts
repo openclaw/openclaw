@@ -743,6 +743,9 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("An unknown error occurred", { provider: "anthropic" })).toBe(
       "timeout",
     );
+    expect(classifyFailoverReason("An unknown error occurred", { provider: "google" })).toBe(
+      "timeout",
+    );
     expect(classifyFailoverReason("Provider returned error", { provider: "openrouter" })).toBe(
       "timeout",
     );
