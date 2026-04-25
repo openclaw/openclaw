@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/OTEL: add the GenAI `gen_ai.client.operation.duration` histogram for model-call latency in seconds with bounded provider/model/API and error attributes. Thanks @vincentkoc.
 - Diagnostics/OTEL: add GenAI usage token attributes to model-usage spans, including cache read/write input token counts without session identifiers or prompt/response content. Thanks @vincentkoc.
 - Diagnostics/OTEL: include bounded GenAI operation, provider, and request-model attributes on model-usage spans so token usage remains self-describing without diagnostic identifiers. Thanks @vincentkoc.
+- Diagnostics/OTEL: keep model-usage span GenAI provider attributes aligned with the existing semantic-convention opt-in policy, using legacy `gen_ai.system` unless latest experimental GenAI conventions are enabled. Thanks @vincentkoc.
 - Diagnostics/OTEL: add bounded outbound message delivery lifecycle diagnostics and export them as low-cardinality delivery spans/metrics without message body, recipient, room, or media-path data. (#71471) Thanks @vincentkoc and @jlapenna.
 - Diagnostics/OTEL: emit bounded exec-process diagnostics and export them as `openclaw.exec` spans without exposing command text, working directories, or container identifiers. (#71451) Thanks @vincentkoc and @jlapenna.
 - Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#71450) Thanks @vincentkoc and @jlapenna.

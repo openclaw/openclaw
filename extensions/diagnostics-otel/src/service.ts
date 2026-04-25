@@ -192,17 +192,26 @@ function assignPositiveNumberAttr(
   }
 }
 
+function assignGenAiSpanIdentityAttrs(
+  attrs: Record<string, string | number | boolean>,
+  input: { api?: string; model?: string; provider?: string },
+): void {
+  if (emitLatestGenAiSemconv()) {
+    attrs["gen_ai.provider.name"] = lowCardinalityAttr(input.provider);
+  } else {
+    attrs["gen_ai.system"] = lowCardinalityAttr(input.provider);
+  }
+  if (input.model) {
+    attrs["gen_ai.request.model"] = lowCardinalityAttr(input.model);
+  }
+  attrs["gen_ai.operation.name"] = genAiOperationName(input.api);
+}
+
 function assignGenAiModelCallAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: ModelCallLifecycleDiagnosticEvent,
 ): void {
-  if (emitLatestGenAiSemconv()) {
-    attrs["gen_ai.provider.name"] = evt.provider;
-  } else {
-    attrs["gen_ai.system"] = evt.provider;
-  }
-  attrs["gen_ai.request.model"] = evt.model;
-  attrs["gen_ai.operation.name"] = genAiOperationName(evt.api);
+  assignGenAiSpanIdentityAttrs(attrs, evt);
 }
 
 function addUpstreamRequestIdSpanEvent(
@@ -953,13 +962,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
         const spanAttrs: Record<string, string | number> = {
           ...attrs,
-          ...genAiAttrs,
           "openclaw.tokens.input": usage.input ?? 0,
           "openclaw.tokens.output": usage.output ?? 0,
           "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
         };
+        assignGenAiSpanIdentityAttrs(spanAttrs, evt);
         assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
         assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
         assignPositiveNumberAttr(

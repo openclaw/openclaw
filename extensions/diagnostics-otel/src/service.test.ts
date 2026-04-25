@@ -769,7 +769,7 @@ describe("diagnostics-otel service", () => {
     expect(modelUsageCall?.[1]).toMatchObject({
       attributes: {
         "gen_ai.operation.name": "chat",
-        "gen_ai.provider.name": "anthropic",
+        "gen_ai.system": "anthropic",
         "gen_ai.request.model": "claude-sonnet-4.6",
         "gen_ai.usage.input_tokens": 150,
         "gen_ai.usage.output_tokens": 40,
@@ -781,6 +781,7 @@ describe("diagnostics-otel service", () => {
       attributes: expect.not.objectContaining({
         "openclaw.sessionKey": expect.anything(),
         "openclaw.sessionId": expect.anything(),
+        "gen_ai.provider.name": expect.anything(),
         "gen_ai.input.messages": expect.anything(),
         "gen_ai.output.messages": expect.anything(),
       }),
@@ -1082,6 +1083,13 @@ describe("diagnostics-otel service", () => {
       api: "openai-completions",
       durationMs: 80,
     });
+    emitDiagnosticEvent({
+      type: "model.usage",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 3, output: 2 },
+      durationMs: 10,
+    });
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
@@ -1095,6 +1103,22 @@ describe("diagnostics-otel service", () => {
       },
     });
     expect(modelCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "gen_ai.system": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    const modelUsage = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.usage",
+    );
+    expect(modelUsage?.[1]).toMatchObject({
+      attributes: {
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-5.4",
+        "gen_ai.operation.name": "chat",
+      },
+    });
+    expect(modelUsage?.[1]).toEqual({
       attributes: expect.not.objectContaining({
         "gen_ai.system": expect.anything(),
       }),
