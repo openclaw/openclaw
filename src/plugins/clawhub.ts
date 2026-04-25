@@ -138,7 +138,7 @@ function isClawHubInstallFailure(value: unknown): value is ClawHubInstallFailure
     value &&
     typeof value === "object" &&
     "ok" in value &&
-    (value as { ok?: unknown }).ok === false &&
+    Object.is((value as { ok?: unknown }).ok, false) &&
     "error" in value,
   );
 }

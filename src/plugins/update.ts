@@ -295,7 +295,7 @@ function isBridgeChannelEnabledByConfig(params: {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
     }
-    if ((entry as Record<string, unknown>).enabled === true) {
+    if (Object.is((entry as Record<string, unknown>).enabled, true)) {
       return true;
     }
   }
@@ -314,7 +314,8 @@ function isExternalizedBundledPluginEnabled(params: {
   if (
     pluginIds.some(
       (pluginId) =>
-        normalized.deny.includes(pluginId) || normalized.entries[pluginId]?.enabled === false,
+        normalized.deny.includes(pluginId) ||
+        Object.is(normalized.entries[pluginId]?.enabled, false),
     )
   ) {
     return false;
