@@ -1059,6 +1059,8 @@ export async function compactEmbeddedPiSessionDirect(
             try {
               const hardenedBoundary = await hardenManualCompactionBoundary({
                 sessionFile: params.sessionFile,
+                preserveRecentTail:
+                  typeof params.config?.agents?.defaults?.compaction?.keepRecentTokens === "number",
               });
               if (hardenedBoundary.applied) {
                 effectiveFirstKeptEntryId =
