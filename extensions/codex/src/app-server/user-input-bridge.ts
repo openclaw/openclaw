@@ -35,6 +35,8 @@ type UserInputOption = {
 
 const USER_INPUT_PROMPT_MAX_LENGTH = 4096;
 const USER_INPUT_TEXT_SCAN_MAX_LENGTH = 4096;
+const USER_INPUT_MAX_QUESTIONS = 20;
+const USER_INPUT_MAX_OPTIONS_PER_QUESTION = 50;
 const USER_INPUT_HEADER_MAX_LENGTH = 80;
 const USER_INPUT_QUESTION_MAX_LENGTH = 500;
 const USER_INPUT_OPTION_LABEL_MAX_LENGTH = 120;
@@ -169,6 +171,7 @@ function readUserInputParams(value: JsonValue | undefined):
     return undefined;
   }
   const questions = questionsRaw
+    .slice(0, USER_INPUT_MAX_QUESTIONS)
     .map(readQuestion)
     .filter((question): question is UserInputQuestion => Boolean(question));
   return { threadId, turnId, itemId, questions };
@@ -199,6 +202,7 @@ function readOptions(value: JsonValue | undefined): UserInputOption[] | null {
     return null;
   }
   const options = value
+    .slice(0, USER_INPUT_MAX_OPTIONS_PER_QUESTION)
     .map(readOption)
     .filter((option): option is UserInputOption => Boolean(option));
   return options.length > 0 ? options : null;
@@ -226,8 +230,21 @@ async function deliverUserInputPrompt(
 }
 
 function formatUserInputPrompt(questions: UserInputQuestion[]): string {
-  const lines = ["Codex needs input:"];
-  questions.forEach((question, index) => {
+  const lines: string[] = [];
+  let promptLength = 0;
+  let omitted = false;
+  const pushLine = (line: string): boolean => {
+    const cost = line.length + (lines.length > 0 ? 1 : 0);
+    if (promptLength + cost > USER_INPUT_PROMPT_MAX_LENGTH) {
+      omitted = true;
+      return false;
+    }
+    lines.push(line);
+    promptLength += cost;
+    return true;
+  };
+  pushLine("Codex needs input:");
+  for (const [index, question] of questions.entries()) {
     const header =
       sanitizePromptDisplayText(question.header, USER_INPUT_HEADER_MAX_LENGTH) ??
       `Question ${index + 1}`;
@@ -235,14 +252,21 @@ function formatUserInputPrompt(questions: UserInputQuestion[]): string {
       sanitizePromptDisplayText(question.question, USER_INPUT_QUESTION_MAX_LENGTH) ??
       "Input requested.";
     if (questions.length > 1) {
-      lines.push("", `${index + 1}. ${header}`, prompt);
+      if (!pushLine("") || !pushLine(`${index + 1}. ${header}`) || !pushLine(prompt)) {
+        break;
+      }
     } else {
-      lines.push("", header, prompt);
+      if (!pushLine("") || !pushLine(header) || !pushLine(prompt)) {
+        break;
+      }
     }
     if (question.isSecret) {
-      lines.push("This channel may show your reply to other participants.");
+      if (!pushLine("This channel may show your reply to other participants.")) {
+        break;
+      }
     }
-    question.options?.forEach((option, optionIndex) => {
+    let exhausted = false;
+    for (const [optionIndex, option] of (question.options ?? []).entries()) {
       const label =
         sanitizePromptDisplayText(option.label, USER_INPUT_OPTION_LABEL_MAX_LENGTH) ??
         `Option ${optionIndex + 1}`;
@@ -250,13 +274,21 @@ function formatUserInputPrompt(questions: UserInputQuestion[]): string {
         option.description,
         USER_INPUT_OPTION_DESCRIPTION_MAX_LENGTH,
       );
-      lines.push(`${optionIndex + 1}. ${label}${description ? ` - ${description}` : ""}`);
-    });
-    if (question.isOther) {
-      lines.push("Other: reply with your own answer.");
+      if (!pushLine(`${optionIndex + 1}. ${label}${description ? ` - ${description}` : ""}`)) {
+        exhausted = true;
+        break;
+      }
     }
-  });
-  return truncatePrompt(lines.join("\n"), USER_INPUT_PROMPT_MAX_LENGTH);
+    if (exhausted) {
+      break;
+    }
+    if (question.isOther) {
+      if (!pushLine("Other: reply with your own answer.")) {
+        break;
+      }
+    }
+  }
+  return finishPrompt(lines.join("\n"), omitted);
 }
 
 function sanitizePromptDisplayText(value: string, maxLength: number): string | undefined {
@@ -264,8 +296,8 @@ function sanitizePromptDisplayText(value: string, maxLength: number): string | u
   const clipped = value.length > USER_INPUT_TEXT_SCAN_MAX_LENGTH;
   const sanitized = scanned
     .replace(ANSI_OSC_SEQUENCE_RE, "")
-    .replace(ANSI_CONTROL_SEQUENCE_RE, "")
     .replace(DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE, "")
+    .replace(ANSI_CONTROL_SEQUENCE_RE, "")
     .replace(INVISIBLE_FORMATTING_CONTROL_RE, " ")
     .replace(CONTROL_CHARACTER_RE, " ")
     .replace(/\s+/g, " ")
@@ -281,12 +313,18 @@ function truncateText(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
-function truncatePrompt(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
+function finishPrompt(value: string, omitted: boolean): string {
+  if (!omitted && value.length <= USER_INPUT_PROMPT_MAX_LENGTH) {
     return value;
   }
   const suffix = `\n${USER_INPUT_PROMPT_OMITTED}`;
-  return `${value.slice(0, Math.max(0, maxLength - suffix.length))}${suffix}`;
+  if (value.endsWith(suffix)) {
+    return value;
+  }
+  if (value.length + suffix.length <= USER_INPUT_PROMPT_MAX_LENGTH) {
+    return `${value}${suffix}`;
+  }
+  return `${value.slice(0, Math.max(0, USER_INPUT_PROMPT_MAX_LENGTH - suffix.length))}${suffix}`;
 }
 
 function buildUserInputResponse(questions: UserInputQuestion[], inputText: string): JsonObject {

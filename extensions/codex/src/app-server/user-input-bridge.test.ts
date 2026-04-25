@@ -1,24 +1,23 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
-type TestParams = EmbeddedRunAttemptParams & {
-  onBlockReply: NonNullable<EmbeddedRunAttemptParams["onBlockReply"]>;
-};
-
-function createParams(): TestParams {
+function createParams() {
+  const onBlockReply = vi.fn();
   return {
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
-    onBlockReply: vi.fn(),
-  } as unknown as TestParams;
+    paramsForRun: {
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      onBlockReply,
+    } as unknown as Parameters<typeof createCodexUserInputBridge>[0]["paramsForRun"],
+    onBlockReply,
+  };
 }
 
 describe("Codex app-server user input bridge", () => {
   it("prompts the originating chat and resolves request_user_input from the next queued message", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
+      paramsForRun: params.paramsForRun,
       threadId: "thread-1",
       turnId: "turn-1",
     });
@@ -59,7 +58,7 @@ describe("Codex app-server user input bridge", () => {
   it("maps keyed multi-question replies to Codex answer ids", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
+      paramsForRun: params.paramsForRun,
       threadId: "thread-1",
       turnId: "turn-1",
     });
@@ -105,7 +104,7 @@ describe("Codex app-server user input bridge", () => {
   it("clears pending prompts when Codex resolves the server request itself", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
+      paramsForRun: params.paramsForRun,
       threadId: "thread-1",
       turnId: "turn-1",
     });
@@ -142,7 +141,7 @@ describe("Codex app-server user input bridge", () => {
   it("sanitizes untrusted request_user_input prompt text before forwarding to chat", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
+      paramsForRun: params.paramsForRun,
       threadId: "thread-1",
       turnId: "turn-1",
     });
@@ -157,7 +156,8 @@ describe("Codex app-server user input bridge", () => {
           {
             id: "answer",
             header: "Mode\u202Eevil",
-            question: "Open \u001b]8;;https://example.invalid\u0007visible\u001b]8;;\u0007?",
+            question:
+              "Open \u001b]8;;https://example.invalid\u0007visible\u001b]8;;\u0007? dangling \u001b]8;;https://evil.example",
             isOther: true,
             isSecret: false,
             options: [
@@ -174,10 +174,11 @@ describe("Codex app-server user input bridge", () => {
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
     const text = vi.mocked(params.onBlockReply).mock.calls[0]?.[0].text ?? "";
     expect(text).toContain("Mode evil");
-    expect(text).toContain("Open visible?");
+    expect(text).toContain("Open visible? dangling");
     expect(text).toContain("Fast");
     expect(text).toContain("Use less reasoning");
     expect(text).not.toContain("https://example.invalid");
+    expect(text).not.toContain("https://evil.example");
     const unsafeDisplayControls = new RegExp(
       String.raw`[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u200b-\u200f]`,
     );
@@ -187,7 +188,7 @@ describe("Codex app-server user input bridge", () => {
   it("caps oversized request_user_input prompt fields before forwarding to chat", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({
-      paramsForRun: params,
+      paramsForRun: params.paramsForRun,
       threadId: "thread-1",
       turnId: "turn-1",
     });
@@ -217,5 +218,50 @@ describe("Codex app-server user input bridge", () => {
     expect(text.length).toBeLessThan(1200);
     expect(text).toContain("...");
     expect(text).not.toContain("A".repeat(1000));
+  });
+
+  it("bounds request_user_input question and option counts before prompt formatting", async () => {
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params.paramsForRun,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const options = Array.from({ length: 60 }, (_, index) => ({
+      label: `Option ${index + 1}`,
+      description: "",
+    }));
+    const questions = Array.from({ length: 25 }, (_, index) => ({
+      id: `q${index + 1}`,
+      header: `Header ${index + 1}`,
+      question: `Question ${index + 1}`,
+      isOther: false,
+      isSecret: false,
+      options: index === 0 ? options : null,
+    }));
+
+    const response = bridge.handleRequest({
+      id: "input-6",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-1",
+        questions,
+      },
+    });
+
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
+    const text = vi.mocked(params.onBlockReply).mock.calls[0]?.[0].text ?? "";
+    expect(text.length).toBeLessThanOrEqual(4096);
+    expect(text).toContain("Header 20");
+    expect(text).not.toContain("Header 21");
+    expect(text).toContain("Option 50");
+    expect(text).not.toContain("Option 51");
+    expect(bridge.handleQueuedMessage("q20: final\nq21: ignored")).toBe(true);
+    await expect(response).resolves.toMatchObject({
+      answers: {
+        q20: { answers: ["final"] },
+      },
+    });
   });
 });
