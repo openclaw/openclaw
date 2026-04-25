@@ -14,6 +14,7 @@ import {
   POSIX_OPENCLAW_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -71,7 +72,30 @@ export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
-const externalTransports = new Set<LogTransport>();
+const LOG_TRANSPORT_STATE_KEY = Symbol.for("openclaw.logging.transports");
+
+type LogTransportGlobalState = {
+  transports: Set<LogTransport>;
+  loggers: Set<TsLogger<LogObj>>;
+  attachedTransports: WeakMap<TsLogger<LogObj>, Set<LogTransport>>;
+};
+
+function getLogTransportGlobalState(): LogTransportGlobalState {
+  const processStore = process as NodeJS.Process & Record<PropertyKey, unknown>;
+  const existing = processStore[LOG_TRANSPORT_STATE_KEY];
+  if (existing) {
+    return existing as LogTransportGlobalState;
+  }
+  const created = resolveGlobalSingleton<LogTransportGlobalState>(LOG_TRANSPORT_STATE_KEY, () => ({
+    transports: new Set<LogTransport>(),
+    loggers: new Set<TsLogger<LogObj>>(),
+    attachedTransports: new WeakMap<TsLogger<LogObj>, Set<LogTransport>>(),
+  }));
+  processStore[LOG_TRANSPORT_STATE_KEY] = created;
+  return created;
+}
+
+const externalTransports = getLogTransportGlobalState().transports;
 
 type DiagnosticLogCode = {
   line?: number;
@@ -88,6 +112,16 @@ const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
+  const state = getLogTransportGlobalState();
+  let attached = state.attachedTransports.get(logger);
+  if (!attached) {
+    attached = new Set<LogTransport>();
+    state.attachedTransports.set(logger, attached);
+  }
+  if (attached.has(transport)) {
+    return;
+  }
+  attached.add(transport);
   logger.attachTransport((logObj: LogObj) => {
     if (!externalTransports.has(transport)) {
       return;
@@ -98,6 +132,21 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
       // never block on logging failures
     }
   });
+}
+
+function registerLoggerForExternalTransports(logger: TsLogger<LogObj>): void {
+  const state = getLogTransportGlobalState();
+  state.loggers.add(logger);
+  for (const transport of state.transports) {
+    attachExternalTransport(logger, transport);
+  }
+}
+
+function unregisterLoggerForExternalTransports(logger: TsLogger<LogObj> | null): void {
+  if (!logger) {
+    return;
+  }
+  getLogTransportGlobalState().loggers.delete(logger);
 }
 
 function clampDiagnosticLogText(value: string, maxChars: number): string {
@@ -425,9 +474,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   // Silent logging does not write files; skip all filesystem setup in this path.
   if (settings.level === "silent") {
     attachDiagnosticEventTransport(logger);
-    for (const transport of externalTransports) {
-      attachExternalTransport(logger, transport);
-    }
+    registerLoggerForExternalTransports(logger);
     return logger;
   }
 
@@ -470,9 +517,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     }
   });
   attachDiagnosticEventTransport(logger);
-  for (const transport of externalTransports) {
-    attachExternalTransport(logger, transport);
-  }
+  registerLoggerForExternalTransports(logger);
 
   return logger;
 }
@@ -506,6 +551,7 @@ export function getLogger(): TsLogger<LogObj> {
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   const cachedSettings = loggingState.cachedSettings as ResolvedSettings | null;
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
+    unregisterLoggerForExternalTransports(cachedLogger);
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
   }
@@ -566,6 +612,7 @@ export function getResolvedLoggerSettings(): LoggerResolvedSettings {
 
 // Test helpers
 export function setLoggerOverride(settings: LoggerSettings | null) {
+  unregisterLoggerForExternalTransports(loggingState.cachedLogger as TsLogger<LogObj> | null);
   loggingState.overrideSettings = settings;
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
@@ -573,6 +620,7 @@ export function setLoggerOverride(settings: LoggerSettings | null) {
 }
 
 export function resetLogger() {
+  unregisterLoggerForExternalTransports(loggingState.cachedLogger as TsLogger<LogObj> | null);
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
@@ -580,13 +628,13 @@ export function resetLogger() {
 }
 
 export function registerLogTransport(transport: LogTransport): () => void {
-  externalTransports.add(transport);
-  const logger = loggingState.cachedLogger as TsLogger<LogObj> | null;
-  if (logger) {
+  const state = getLogTransportGlobalState();
+  state.transports.add(transport);
+  for (const logger of state.loggers) {
     attachExternalTransport(logger, transport);
   }
   return () => {
-    externalTransports.delete(transport);
+    state.transports.delete(transport);
   };
 }
 
