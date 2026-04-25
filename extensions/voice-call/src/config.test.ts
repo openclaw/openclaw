@@ -314,4 +314,14 @@ describe("resolveVoiceCallConfig", () => {
 
     expect(resolved.responseModel).toBeUndefined();
   });
+
+  it("preserves the configured voice response agent id", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "voice",
+    });
+
+    expect(resolved.agentId).toBe("voice");
+  });
 });
