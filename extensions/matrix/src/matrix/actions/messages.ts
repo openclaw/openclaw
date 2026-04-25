@@ -12,6 +12,34 @@ import {
   type MatrixRawEvent,
 } from "./types.js";
 
+const MATRIX_THREAD_RELATION_TYPE = "m.thread";
+const MAIN_TIMELINE_FETCH_MULTIPLIER = 3;
+const MAX_MAIN_TIMELINE_FETCH_PAGES = 3;
+
+function isThreadEvent(event: MatrixRawEvent): boolean {
+  const relatesTo = event.content?.["m.relates_to"];
+  return (
+    typeof relatesTo === "object" &&
+    relatesTo !== null &&
+    "rel_type" in relatesTo &&
+    relatesTo.rel_type === MATRIX_THREAD_RELATION_TYPE
+  );
+}
+
+function appendUniqueEvent(
+  events: MatrixRawEvent[],
+  event: MatrixRawEvent | null | undefined,
+): void {
+  if (!event) {
+    return;
+  }
+  const eventId = event.event_id;
+  if (eventId && events.some((existing) => existing.event_id === eventId)) {
+    return;
+  }
+  events.push(event);
+}
+
 export async function sendMatrixMessage(
   to: string,
   content: string | undefined,
@@ -76,6 +104,7 @@ export async function readMatrixMessages(
     limit?: number;
     before?: string;
     after?: string;
+    threadId?: string;
   } = {},
 ): Promise<{
   messages: MatrixMessageSummary[];
@@ -84,22 +113,78 @@ export async function readMatrixMessages(
 }> {
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     const limit = resolveMatrixActionLimit(opts.limit, 20);
-    const token = normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after);
-    const dir = opts.after ? "f" : "b";
-    // Room history is queried via the low-level endpoint for compatibility.
-    const res = (await client.doRequest(
-      "GET",
-      `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
-      {
-        dir,
-        limit,
-        from: token,
-      },
-    )) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
-    const hydratedChunk = await client.hydrateEvents(resolvedRoom, res.chunk);
+
+    let res: { chunk: MatrixRawEvent[]; start?: string; end?: string };
+    let hydratedChunk: MatrixRawEvent[];
+
+    if (opts.threadId) {
+      res = (await client.doRequest(
+        "GET",
+        `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(opts.threadId)}/${MATRIX_THREAD_RELATION_TYPE}/m.room.message`,
+        {
+          dir: opts.after ? "f" : "b",
+          limit,
+          from: normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after),
+        },
+      )) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
+      const rawThreadEvents: MatrixRawEvent[] = [];
+      if (!opts.before && !opts.after) {
+        appendUniqueEvent(
+          rawThreadEvents,
+          (await client.getEvent(resolvedRoom, opts.threadId)) as MatrixRawEvent | null,
+        );
+      }
+      for (const event of res.chunk) {
+        appendUniqueEvent(rawThreadEvents, event);
+      }
+      hydratedChunk = await client.hydrateEvents(resolvedRoom, rawThreadEvents);
+    } else {
+      let token = normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after);
+      const dir = opts.after ? "f" : "b";
+      const mainEvents: MatrixRawEvent[] = [];
+      res = { chunk: [], start: token, end: token };
+      for (
+        let page = 0;
+        page < MAX_MAIN_TIMELINE_FETCH_PAGES && mainEvents.length < limit;
+        page += 1
+      ) {
+        const fetchLimit =
+          page === 0
+            ? limit
+            : Math.max(limit, Math.min(limit * MAIN_TIMELINE_FETCH_MULTIPLIER, 100));
+        res = (await client.doRequest(
+          "GET",
+          `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
+          {
+            dir,
+            limit: fetchLimit,
+            from: token,
+          },
+        )) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
+        const hydratedPage = await client.hydrateEvents(resolvedRoom, res.chunk);
+        for (const event of hydratedPage) {
+          if (!isThreadEvent(event)) {
+            mainEvents.push(event);
+          }
+        }
+        if (
+          !res.end ||
+          res.end === token ||
+          res.chunk.length === 0 ||
+          res.chunk.length < fetchLimit
+        ) {
+          break;
+        }
+        token = res.end;
+      }
+      hydratedChunk = mainEvents;
+    }
+
+    const processedChunk = hydratedChunk.slice(0, limit);
+
     const seenPollRoots = new Set<string>();
     const messages: MatrixMessageSummary[] = [];
-    for (const event of hydratedChunk) {
+    for (const event of processedChunk) {
       if (event.unsigned?.redacted_because) {
         continue;
       }
