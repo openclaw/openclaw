@@ -106,6 +106,40 @@ function renderAssistantMessage(
   renderGroupedMessage(container, message, "assistant", opts);
 }
 
+function renderAssistantMessages(
+  container: HTMLElement,
+  messages: unknown[],
+  opts: Partial<RenderMessageGroupOptions> = {},
+) {
+  const timestamp =
+    typeof messages[0] === "object" &&
+    messages[0] !== null &&
+    typeof (messages[0] as { timestamp?: unknown }).timestamp === "number"
+      ? (messages[0] as { timestamp: number }).timestamp
+      : Date.now();
+  const group: MessageGroup = {
+    kind: "group",
+    key: "assistant-group",
+    role: "assistant",
+    messages: messages.map((message, index) => ({
+      key: `assistant-message-${index}`,
+      message,
+    })),
+    timestamp,
+    isStreaming: false,
+  };
+  render(
+    renderMessageGroup(group, {
+      showReasoning: true,
+      showToolCalls: true,
+      assistantName: "OpenClaw",
+      assistantAvatar: null,
+      ...opts,
+    }),
+    container,
+  );
+}
+
 function renderGroupedMessage(
   container: HTMLElement,
   message: unknown,
@@ -316,6 +350,32 @@ describe("grouped chat rendering", () => {
       10_000,
     );
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+  });
+
+  it("uses the largest single assistant call for grouped context usage", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessages(
+      container,
+      [
+        {
+          role: "assistant",
+          content: "Checking",
+          usage: { input: 105_944, output: 100 },
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: "Done",
+          usage: { input: 108_577, output: 100 },
+          timestamp: 1001,
+        },
+      ],
+      { contextWindow: 258_400 },
+    );
+
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("42% ctx");
+    expect(container.textContent).toContain("↑214.5k");
   });
 
   it("renders full dates with message and streaming timestamps", () => {

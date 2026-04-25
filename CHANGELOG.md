@@ -64,6 +64,8 @@ Docs: https://docs.openclaw.ai
   block. Fixes #71572. (#71627) Thanks @openperf.
 - Browser/CDP: make readiness diagnostics use the same discovery-first fallback as reachability for bare `ws://` Browserless and Browserbase CDP URLs. Fixes #69532.
 - Browser/CDP: explain that loopback Browserless or other externally managed CDP services need `attachOnly: true` and matching Browserless `EXTERNAL` endpoint when reporting local port ownership conflicts, and fall back to the configured bare WebSocket root when a discovered Browserless endpoint rejects CDP. Fixes #49815.
+- Gateway/reload: preserve indefinite `gateway.reload.deferralTimeoutMs: 0` semantics for channel hot reload deferrals so active agent runs are not interrupted by a forced channel restart. (#71637) Thanks @Poo-Squirry.
+- Agents/tool results: cap persisted Pi tool-result details and strip hidden diagnostics before provider conversion, preventing large debug payloads from bloating session transcripts. (#71637) Thanks @Poo-Squirry.
 - ACP/OpenCode: update the bundled acpx runtime to 0.6.0 and cover the OpenCode ACP bind path in Docker live tests.
 - Providers/OpenCode Go: add DeepSeek V4 Pro and DeepSeek V4 Flash to the Go catalog while the bundled Pi registry catches up. Fixes #71587.
 - Providers/OpenCode Go: route DeepSeek V4 Pro/Flash through the OpenAI-compatible Go endpoint and suppress invalid `reasoning_effort: "off"` payloads, fixing tool-enabled requests for `opencode-go/deepseek-v4-flash`. Fixes #71683.

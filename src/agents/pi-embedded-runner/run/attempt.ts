@@ -121,7 +121,10 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import {
+  sanitizeToolUseResultPairing,
+  stripToolResultDetails,
+} from "../../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -464,6 +467,10 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   }
   const allowSet = new Set(toolsAllow);
   return tools.filter((tool) => allowSet.has(tool.name));
+}
+
+export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
+  return stripToolResultDetails(normalizeAssistantReplayContent(messages));
 }
 
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
@@ -1391,7 +1398,7 @@ export async function runEmbeddedAttempt(
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
         activeSession.agent.convertToLlm = async (messages) =>
-          await baseConvertToLlm(normalizeAssistantReplayContent(messages));
+          await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages));
       }
       let prePromptMessageCount = activeSession.messages.length;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
