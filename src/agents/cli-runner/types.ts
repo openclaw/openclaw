@@ -15,6 +15,8 @@ export type RunCliAgentParams = {
   sessionKey?: string;
   agentId?: string;
   trigger?: EmbeddedRunTrigger;
+  /** Stable cron job id; only set when trigger === "cron". (#71826) */
+  jobId?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;

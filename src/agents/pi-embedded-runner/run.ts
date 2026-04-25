@@ -335,6 +335,7 @@ export async function runEmbeddedPiAgent(
         messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        jobId: params.jobId,
       };
       if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
         const hookResult = await hookRunner.runBeforeAgentReply(

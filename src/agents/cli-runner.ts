@@ -77,6 +77,7 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         messageProvider: params.messageProvider,
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider,
+        jobId: params.jobId,
       } as const;
       const hookResult = await hookRunner.runBeforeAgentReply(
         { cleanedBody: params.prompt },
@@ -150,6 +151,7 @@ export async function runPreparedCliAgent(
     messageProvider: params.messageProvider,
     trigger: params.trigger,
     channelId: params.messageChannel ?? params.messageProvider,
+    jobId: params.jobId,
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [

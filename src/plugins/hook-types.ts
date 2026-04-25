@@ -168,6 +168,14 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  /**
+   * Stable cron job identifier for cron-triggered runs. Distinct from
+   * `runId`, which is the per-execution identifier (e.g.
+   * `cron:<jobId>:<startedAt>`). Plugins that want to apply per-job logic
+   * can match on this without parsing opaque execution ids. Undefined for
+   * non-cron flows. (#71826)
+   */
+  jobId?: string;
 };
 
 export type PluginHookBeforeAgentReplyEvent = {

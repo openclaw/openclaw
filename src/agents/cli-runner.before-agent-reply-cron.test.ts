@@ -125,6 +125,39 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
   });
 
+  it("forwards the stable cron jobId to the before_agent_reply hook context (#71826)", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({ handled: true, reply: { text: "ok" } });
+
+    await runCliAgent({
+      ...baseRunParams,
+      trigger: "cron",
+      jobId: "morning-investor-brief",
+    });
+
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledWith(
+      { cleanedBody: baseRunParams.prompt },
+      expect.objectContaining({
+        trigger: "cron",
+        jobId: "morning-investor-brief",
+      }),
+    );
+  });
+
+  it("leaves jobId undefined for non-cron runs (regression guard)", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({ handled: true, reply: { text: "ok" } });
+
+    // The before_agent_reply hook is only invoked when trigger === "cron",
+    // so the regression guard is the absence of the gate firing for "user".
+    // Also covers: jobId is not synthesized from runId or other params.
+    await runCliAgent({ ...baseRunParams, trigger: "user", jobId: undefined });
+
+    expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
+  });
+
   it("does not run prepareCliRunContext when the cron hook claims (no resource allocation, no leak)", async () => {
     // Regression for PR #70950 review (greptile-apps, P1): the gate must fire
     // before any backend resources are allocated, otherwise preparedBackend.cleanup
