@@ -360,6 +360,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     } as Partial<ReplyDispatcherArgs>;
     const { options } = createDispatcherHarness(overrides);
     await options.deliver({ text: "```md\nanswer\n```" }, { kind: "final" });
+    await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\nanswer\n```", {
