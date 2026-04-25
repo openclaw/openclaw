@@ -113,6 +113,9 @@ export async function sendTelegramText(
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number> {
+  // Log the attempt to send a message
+  runtime.log?.(`telegram attempting to send message to chat=${chatId}, text length=${text.length}`);
+  
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     thread: opts?.thread,
@@ -126,6 +129,7 @@ export async function sendTelegramText(
   const fallbackText = opts?.plainText ?? text;
   const hasFallbackText = fallbackText.trim().length > 0;
   const sendPlainFallback = async () => {
+    runtime.log?.(`telegram sending message with plain text fallback to chat=${chatId}`);
     const res = await sendTelegramWithThreadFallback({
       operation: "sendMessage",
       runtime,
@@ -145,8 +149,11 @@ export async function sendTelegramText(
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
   if (!htmlText.trim()) {
     if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
+      const errorMsg = "telegram sendMessage failed: empty formatted text and empty plain fallback";
+      runtime.log?.(errorMsg);
+      throw new Error(errorMsg);
     }
+    runtime.log?.(`telegram formatted text is empty, sending plain text fallback to chat=${chatId}`);
     return await sendPlainFallback();
   }
   try {
@@ -173,11 +180,13 @@ export async function sendTelegramText(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
       if (!hasFallbackText) {
+        runtime.log?.(`telegram formatted send failed with no fallback available: ${errText}`);
         throw err;
       }
       runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
       return await sendPlainFallback();
     }
+    runtime.log?.(`telegram sendMessage failed for chat=${chatId}: ${errText}`);
     throw err;
   }
 }
