@@ -251,6 +251,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.provider = event.provider;
       record.model = event.model;
       record.count = event.messageCount;
+      record.bytes = event.promptChars;
       record.context =
         event.contextTokenBudget !== undefined ? { limit: event.contextTokenBudget } : undefined;
       break;
@@ -317,13 +318,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.model = event.model;
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
-      break;
-    case "context.assembled":
-      record.provider = event.provider;
-      record.model = event.model;
-      record.channel = event.channel;
-      record.count = event.messageCount;
-      record.bytes = event.promptChars;
       break;
     case "log.record":
       record.level = event.level;
