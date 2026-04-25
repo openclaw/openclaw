@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mergeStreamingText, resolveStreamingCardSendMode } from "./streaming-card.js";
+import {
+  FeishuStreamingSession,
+  mergeStreamingText,
+  resolveStreamingCardSendMode,
+} from "./streaming-card.js";
 
 describe("mergeStreamingText", () => {
   it("prefers the latest full text when it already includes prior text", () => {
@@ -50,5 +54,46 @@ describe("resolveStreamingCardSendMode", () => {
         replyInThread: true,
       }),
     ).toBe("create");
+  });
+});
+
+describe("FeishuStreamingSession.clearText", () => {
+  it("drops buffered text so recovered finals can overwrite stale partials", async () => {
+    const session = new FeishuStreamingSession({} as never, {
+      appId: "app_id",
+      appSecret: "app_secret",
+    });
+    const state = session as unknown as {
+      state: {
+        cardId: string;
+        messageId: string;
+        sequence: number;
+        currentText: string;
+        hasNote: boolean;
+      } | null;
+      pendingText: string | null;
+      queue: Promise<void>;
+      flushTimer: ReturnType<typeof setTimeout> | null;
+      lastUpdateTime: number;
+    };
+
+    state.state = {
+      cardId: "card_1",
+      messageId: "om_1",
+      sequence: 1,
+      currentText: "partial answer",
+      hasNote: false,
+    };
+    state.pendingText = "partial answer with pending suffix";
+    state.lastUpdateTime = Date.now();
+    state.flushTimer = setTimeout(() => undefined, 1000);
+    state.queue = Promise.resolve();
+
+    await session.clearText();
+
+    expect(state.state?.currentText).toBe("");
+    expect(state.pendingText).toBeNull();
+    expect(state.lastUpdateTime).toBe(0);
+    expect(state.flushTimer).toBeNull();
   });
 });

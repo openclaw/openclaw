@@ -17,6 +17,71 @@ type CardState = {
   hasNote: boolean;
 };
 
+/**
+ * Sanitize markdown text for Feishu Card Kit streaming mode.
+ *
+ * Card Kit's streaming renderer parses markdown incrementally. Unmatched
+ * backticks (`` ` `` or ` ``` `) cause the renderer to treat everything
+ * after the opener as code, effectively truncating visible output.
+ * Similarly, bare angle brackets (`<` / `>`) can be misinterpreted as
+ * unclosed HTML tags, also causing truncation.
+ *
+ * This function:
+ *  1. Balances triple-backtick fences so an unclosed fence is closed.
+ *  2. Balances inline backtick spans so an unmatched `` ` `` is closed.
+ *  3. Escapes angle brackets that are NOT inside a balanced code span/fence
+ *     and do NOT look like a well-formed HTML tag or Feishu mention tag.
+ */
+export function sanitizeCardKitMarkdown(text: string): string {
+  if (!text) {
+    return text;
+  }
+
+  let result = text;
+
+  // --- 1. Balance triple-backtick fences ---
+  const fencePattern = /^```/gm;
+  const fenceMatches = result.match(fencePattern);
+  if (fenceMatches && fenceMatches.length % 2 !== 0) {
+    result += "\n```";
+  }
+
+  // --- 2. Balance inline backticks (outside of fenced blocks) ---
+  const fencedParts = result.split(/(^```[\s\S]*?^```)/m);
+  for (let i = 0; i < fencedParts.length; i++) {
+    if (i % 2 === 0) {
+      const segment = fencedParts[i];
+      const inlineTicks = segment.replace(/\\`/g, "").match(/`/g);
+      if (inlineTicks && inlineTicks.length % 2 !== 0) {
+        fencedParts[i] = segment + "`";
+      }
+    }
+  }
+  result = fencedParts.join("");
+
+  // --- 3. Escape problematic angle brackets outside code spans/fences ---
+  const codeBlocks: string[] = [];
+  result = result.replace(/```[\s\S]*?```/g, (match) => {
+    codeBlocks.push(match);
+    return `\uE001CODEBLOCK${codeBlocks.length - 1}\uE001`;
+  });
+  const codeSpans: string[] = [];
+  result = result.replace(/`[^`\n]*`/g, (match) => {
+    codeSpans.push(match);
+    return `\uE002CODESPAN${codeSpans.length - 1}\uE002`;
+  });
+  result = result.replace(
+    /<(?!\/?(?:a|b|i|em|strong|br|p|div|span|img|at|code|pre)\b)[^>\n]*$/gm,
+    (m) => {
+      return m.replace(/</g, "\\<");
+    },
+  );
+  result = result.replace(/\uE002CODESPAN(\d+)\uE002/g, (_, idx) => codeSpans[Number(idx)]);
+  result = result.replace(/\uE001CODEBLOCK(\d+)\uE001/g, (_, idx) => codeBlocks[Number(idx)]);
+
+  return result;
+}
+
 /** Options for customising the initial streaming card appearance. */
 export type StreamingCardOptions = {
   /** Optional header with title and color template. */
@@ -104,11 +169,13 @@ async function getToken(creds: Credentials): Promise<string> {
   return data.tenant_access_token;
 }
 
-function truncateSummary(text: string, max = 50): string {
+function truncateSummary(text: string | undefined, max = 50): string {
   if (!text) {
     return "";
   }
-  const clean = text.replace(/\n/g, " ").trim();
+  // Strip backticks and angle brackets from summary to prevent Card Kit
+  // from interpreting them as markdown / HTML in the summary line.
+  const clean = text.replace(/\n/g, " ").replace(/[`<>]/g, "").trim();
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
@@ -328,6 +395,8 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
+    // Sanitize markdown to prevent Card Kit streaming truncation (#26708)
+    text = sanitizeCardKitMarkdown(text);
     const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
     if (!mergedInput || mergedInput === this.state.currentText) {
       return;
@@ -358,6 +427,20 @@ export class FeishuStreamingSession {
       await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
     await this.queue;
+  }
+
+  async clearText(): Promise<void> {
+    if (!this.state || this.closed) {
+      return;
+    }
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    await this.queue;
+    this.pendingText = null;
+    this.lastUpdateTime = 0;
+    this.state.currentText = "";
   }
 
   private async updateNoteContent(note: string): Promise<void> {
