@@ -170,4 +170,33 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
       await bridge.close();
     }
   });
+
+  test("sweeper self-terminates once both maps drain, restoring lazy-init", async () => {
+    const bridge = makeBridge();
+    try {
+      await bridge.handleClaudePermissionRequest({
+        requestId: "abcde",
+        toolName: "Bash",
+        description: "run npm test",
+        inputPreview: "{}",
+      });
+      expect(bridge.pendingSweepInterval).not.toBeNull();
+
+      vi.advanceTimersByTime(ONE_HOUR_MS + SWEEP_INTERVAL_MS);
+      expect(bridge.pendingClaudePermissions.size).toBe(0);
+      expect(bridge.pendingApprovals.size).toBe(0);
+      expect(bridge.pendingSweepInterval).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+
+      await bridge.handleClaudePermissionRequest({
+        requestId: "fghij",
+        toolName: "Bash",
+        description: "second request after drain",
+        inputPreview: "{}",
+      });
+      expect(bridge.pendingSweepInterval).not.toBeNull();
+    } finally {
+      await bridge.close();
+    }
+  });
 });

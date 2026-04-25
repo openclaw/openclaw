@@ -471,6 +471,14 @@ export class OpenClawChannelBridge {
         this.pendingApprovals.delete(id);
       }
     }
+    if (
+      this.pendingSweepInterval &&
+      this.pendingClaudePermissions.size === 0 &&
+      this.pendingApprovals.size === 0
+    ) {
+      clearInterval(this.pendingSweepInterval);
+      this.pendingSweepInterval = null;
+    }
   }
 
   private resolveTrackedApproval(payload: Record<string, unknown>): void {
