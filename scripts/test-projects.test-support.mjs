@@ -747,7 +747,7 @@ function classifyTarget(arg, cwd) {
   if (relative.startsWith("src/plugins/")) {
     return "plugin";
   }
-  if (relative.startsWith("ui/src/ui/")) {
+  if (relative.startsWith("ui/src/")) {
     return "ui";
   }
   if (relative.startsWith("src/utils/")) {
@@ -774,6 +774,17 @@ function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
     return includePattern ? [includePattern] : null;
   }
   return null;
+}
+
+function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
+  if (isVitestConfigTargetForKind(kind, targetArg, cwd)) {
+    return true;
+  }
+  if (kind !== "ui") {
+    return false;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd);
+  return relative.startsWith("ui/src/") && !relative.startsWith("ui/src/ui/");
 }
 
 function createVitestArgs(params) {
@@ -956,7 +967,7 @@ export function buildVitestRunPlans(
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>
-      isVitestConfigTargetForKind(kind, targetArg, cwd),
+      shouldUseWholeConfigTarget(kind, targetArg, cwd),
     );
     const includePatterns = useCliTargetArgs
       ? null

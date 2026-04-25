@@ -491,6 +491,7 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: () => false,
     });
 
+    expect(container.querySelector(".chat-bubble--tool-shell")).not.toBeNull();
     const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
     expect(summary?.textContent).toContain("Tool call");
     expect(container.textContent).not.toContain('"thread": true');
