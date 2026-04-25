@@ -5,7 +5,11 @@ import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./co
 import {
   buildGoogleMeetPreflightReport,
   createGoogleMeetSpace,
+  fetchGoogleMeetArtifacts,
+  fetchGoogleMeetAttendance,
   fetchGoogleMeetSpace,
+  type GoogleMeetArtifactsResult,
+  type GoogleMeetAttendanceResult,
 } from "./meet.js";
 import {
   buildGoogleMeetAuthUrl,
@@ -42,6 +46,11 @@ type ResolveSpaceOptions = {
   clientSecret?: string;
   expiresAt?: string;
   json?: boolean;
+};
+
+type MeetArtifactOptions = ResolveSpaceOptions & {
+  conferenceRecord?: string;
+  pageSize?: string;
 };
 
 type SetupOptions = {
@@ -251,6 +260,38 @@ function resolveCreateTokenOptions(
   };
 }
 
+function resolveArtifactTokenOptions(
+  config: GoogleMeetConfig,
+  options: MeetArtifactOptions,
+): {
+  meeting?: string;
+  conferenceRecord?: string;
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+  accessToken?: string;
+  expiresAt?: number;
+  pageSize?: number;
+} {
+  const meeting = options.meeting?.trim() || config.defaults.meeting;
+  const conferenceRecord = options.conferenceRecord?.trim();
+  if (!meeting && !conferenceRecord) {
+    throw new Error(
+      "Meeting input or conference record is required. Pass --meeting, --conference-record, or configure defaults.meeting.",
+    );
+  }
+  return {
+    meeting,
+    conferenceRecord,
+    clientId: options.clientId?.trim() || config.oauth.clientId,
+    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
+    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
+    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
+    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
+    pageSize: parseOptionalNumber(options.pageSize),
+  };
+}
+
 function hasCreateOAuth(config: GoogleMeetConfig, options: CreateOptions): boolean {
   return Boolean(
     options.accessToken?.trim() ||
@@ -258,6 +299,67 @@ function hasCreateOAuth(config: GoogleMeetConfig, options: CreateOptions): boole
     config.oauth.accessToken ||
     config.oauth.refreshToken,
   );
+}
+
+function writeArtifactsSummary(result: GoogleMeetArtifactsResult): void {
+  if (result.input) {
+    writeStdoutLine("input: %s", result.input);
+  }
+  if (result.space) {
+    writeStdoutLine("space: %s", result.space.name);
+  }
+  writeStdoutLine("conference records: %d", result.conferenceRecords.length);
+  for (const entry of result.artifacts) {
+    writeStdoutLine("");
+    writeStdoutLine("record: %s", entry.conferenceRecord.name);
+    writeStdoutLine("started: %s", formatOptional(entry.conferenceRecord.startTime));
+    writeStdoutLine("ended: %s", formatOptional(entry.conferenceRecord.endTime));
+    writeStdoutLine("participants: %d", entry.participants.length);
+    writeStdoutLine("recordings: %d", entry.recordings.length);
+    writeStdoutLine("transcripts: %d", entry.transcripts.length);
+    writeStdoutLine("smart notes: %d", entry.smartNotes.length);
+    if (entry.smartNotesError) {
+      writeStdoutLine("smart notes warning: %s", entry.smartNotesError);
+    }
+    for (const recording of entry.recordings) {
+      writeStdoutLine("- recording: %s", recording.name);
+    }
+    for (const transcript of entry.transcripts) {
+      writeStdoutLine("- transcript: %s", transcript.name);
+    }
+    for (const smartNote of entry.smartNotes) {
+      writeStdoutLine("- smart note: %s", smartNote.name);
+    }
+  }
+}
+
+function writeAttendanceSummary(result: GoogleMeetAttendanceResult): void {
+  if (result.input) {
+    writeStdoutLine("input: %s", result.input);
+  }
+  if (result.space) {
+    writeStdoutLine("space: %s", result.space.name);
+  }
+  writeStdoutLine("conference records: %d", result.conferenceRecords.length);
+  writeStdoutLine("attendance rows: %d", result.attendance.length);
+  for (const row of result.attendance) {
+    const identity = row.displayName || row.user || row.participant;
+    writeStdoutLine("");
+    writeStdoutLine("participant: %s", identity);
+    writeStdoutLine("record: %s", row.conferenceRecord);
+    writeStdoutLine("resource: %s", row.participant);
+    writeStdoutLine("first joined: %s", formatOptional(row.earliestStartTime));
+    writeStdoutLine("last left: %s", formatOptional(row.latestEndTime));
+    writeStdoutLine("sessions: %d", row.sessions.length);
+    for (const session of row.sessions) {
+      writeStdoutLine(
+        "- %s: %s -> %s",
+        session.name,
+        formatOptional(session.startTime),
+        formatOptional(session.endTime),
+      );
+    }
+  }
 }
 
 export function registerGoogleMeetCli(params: {
@@ -568,6 +670,76 @@ export function registerGoogleMeetCli(params: {
       for (const blocker of report.blockers) {
         writeStdoutLine("- %s", blocker);
       }
+    });
+
+  root
+    .command("artifacts")
+    .description("List Meet conference records and available participant/artifact metadata")
+    .option("--meeting <value>", "Meet URL, meeting code, or spaces/{id}")
+    .option("--conference-record <name>", "Conference record name or id")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--page-size <n>", "Max resources per Meet API page")
+    .option("--json", "Print JSON output", false)
+    .action(async (options: MeetArtifactOptions) => {
+      const resolved = resolveArtifactTokenOptions(params.config, options);
+      const token = await resolveGoogleMeetAccessToken(resolved);
+      const result = await fetchGoogleMeetArtifacts({
+        accessToken: token.accessToken,
+        meeting: resolved.meeting,
+        conferenceRecord: resolved.conferenceRecord,
+        pageSize: resolved.pageSize,
+      });
+      if (options.json) {
+        writeStdoutJson({
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
+      writeArtifactsSummary(result);
+      writeStdoutLine(
+        "token source: %s",
+        token.refreshed ? "refresh-token" : "cached-access-token",
+      );
+    });
+
+  root
+    .command("attendance")
+    .description("List Meet participants and participant sessions")
+    .option("--meeting <value>", "Meet URL, meeting code, or spaces/{id}")
+    .option("--conference-record <name>", "Conference record name or id")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--page-size <n>", "Max resources per Meet API page")
+    .option("--json", "Print JSON output", false)
+    .action(async (options: MeetArtifactOptions) => {
+      const resolved = resolveArtifactTokenOptions(params.config, options);
+      const token = await resolveGoogleMeetAccessToken(resolved);
+      const result = await fetchGoogleMeetAttendance({
+        accessToken: token.accessToken,
+        meeting: resolved.meeting,
+        conferenceRecord: resolved.conferenceRecord,
+        pageSize: resolved.pageSize,
+      });
+      if (options.json) {
+        writeStdoutJson({
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
+      writeAttendanceSummary(result);
+      writeStdoutLine(
+        "token source: %s",
+        token.refreshed ? "refresh-token" : "cached-access-token",
+      );
     });
 
   root
