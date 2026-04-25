@@ -63,7 +63,7 @@ describe("basic browser routes", () => {
   it("maps existing-session status failures to JSON browser errors", async () => {
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
-        isHttpReachable: async () => {
+        isTransportAvailable: async () => {
           throw new BrowserProfileUnavailableError("attach failed");
         },
       }),
@@ -107,6 +107,27 @@ describe("basic browser routes", () => {
       transport: "chrome-mcp",
       running: true,
       cdpReady: true,
+    });
+  });
+
+  it("probes Chrome MCP transport only once for status", async () => {
+    const isHttpReachable = vi.fn(async () => true);
+    const isTransportAvailable = vi.fn(async () => true);
+
+    const response = await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isHttpReachable,
+        isTransportAvailable,
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(isTransportAvailable).toHaveBeenCalledTimes(1);
+    expect(isHttpReachable).not.toHaveBeenCalled();
+    expect(response.body).toMatchObject({
+      cdpHttp: true,
+      cdpReady: true,
+      running: true,
     });
   });
 });
