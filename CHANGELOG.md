@@ -53,6 +53,9 @@ Docs: https://docs.openclaw.ai
 - Tooling/check:changed: pass parent heavy-check lock markers to lint lanes so
   `pnpm check:changed` no longer waits on its own `lint:extensions` child.
   Thanks @steipete.
+- CLI/completion: dedupe provider auth flags before registering `openclaw onboard`
+  options, so completion-cache refresh during update no longer fails when stale
+  core fallback flags overlap plugin manifest flags. Fixes #71667.
 - Plugins/Bonjour: stop the gateway from crash-looping on `CIAO PROBING CANCELLED` when the mDNS watchdog cancels a stuck probe. Restores the rejection-handler wiring dropped during the bonjour plugin migration and shares unhandled-rejection state across module instances so plugin-staged copies of `openclaw/plugin-sdk/runtime` register into the same handler set the host consults. Especially affects Docker on macOS, where mDNS probing reliably hits the watchdog. Thanks @troyhitch.
 - Google Meet: report pinned Chrome nodes as offline or missing capabilities in
   setup/join diagnostics, keep inaccessible nodes out of auto-selection, and
