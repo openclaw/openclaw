@@ -56,7 +56,7 @@ let mockedResolveAuthProfileOrder: ReturnType<
 >;
 let runWithModelFallback: ModelFallbackModule["runWithModelFallback"];
 let _probeThrottleInternals: ModelFallbackModule["_probeThrottleInternals"];
-let registerLogTransport: LoggerModule["registerLogTransport"];
+let registerLogTransportForTest: LoggerModule["__test__"]["registerLogTransportForTest"];
 let resetLogger: LoggerModule["resetLogger"];
 let setLoggerOverride: LoggerModule["setLoggerOverride"];
 
@@ -82,7 +82,7 @@ async function loadModelFallbackProbeModules() {
   mockedResolveAuthProfileOrder = vi.mocked(authProfilesOrderModule.resolveAuthProfileOrder);
   runWithModelFallback = modelFallbackModule.runWithModelFallback;
   _probeThrottleInternals = modelFallbackModule._probeThrottleInternals;
-  registerLogTransport = loggerModule.registerLogTransport;
+  registerLogTransportForTest = loggerModule.__test__.registerLogTransportForTest;
   resetLogger = loggerModule.resetLogger;
   setLoggerOverride = loggerModule.setLoggerOverride;
 }
@@ -282,7 +282,7 @@ describe("runWithModelFallback – probe logic", () => {
       consoleLevel: "silent",
       file: path.join(os.tmpdir(), `openclaw-model-fallback-probe-${Date.now()}.log`),
     });
-    unregisterLogTransport = registerLogTransport((record) => {
+    unregisterLogTransport = registerLogTransportForTest((record) => {
       records.push(record);
     });
 

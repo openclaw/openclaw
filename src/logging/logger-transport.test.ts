@@ -49,7 +49,7 @@ describe("logger transport registry", () => {
     const records: unknown[] = [];
 
     unsubscribeCallbacks.push(
-      pluginLoggerModule.registerLogTransport((record) => {
+      pluginLoggerModule.__test__.registerLogTransportForTest((record) => {
         records.push(record);
       }),
     );
@@ -58,5 +58,13 @@ describe("logger transport registry", () => {
     pluginLogger.info("plugin message");
 
     expect(records).toHaveLength(2);
+  });
+
+  it("does not expose production log transport registration", async () => {
+    const loggerModule = await importLoggerModule("public-api");
+
+    expect(
+      (loggerModule as unknown as Record<string, unknown>).registerLogTransport,
+    ).toBeUndefined();
   });
 });

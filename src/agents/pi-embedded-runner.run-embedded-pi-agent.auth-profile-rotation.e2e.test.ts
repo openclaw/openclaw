@@ -107,7 +107,7 @@ const installRunEmbeddedMocks = () => {
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 let unregisterLogTransport: (() => void) | undefined;
-let registerLogTransportFn: typeof import("../logging/logger.js").registerLogTransport;
+let registerLogTransportForTestFn: typeof import("../logging/logger.js").__test__.registerLogTransportForTest;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
 const originalFetch = globalThis.fetch;
@@ -117,7 +117,7 @@ beforeAll(async () => {
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
   ({
-    registerLogTransport: registerLogTransportFn,
+    __test__: { registerLogTransportForTest: registerLogTransportForTestFn },
     resetLogger: resetLoggerFn,
     setLoggerOverride: setLoggerOverrideFn,
   } = await import("../logging/logger.js"));
@@ -870,7 +870,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       consoleLevel: "silent",
       file: path.join(os.tmpdir(), `openclaw-auth-rotation-${Date.now()}.log`),
     });
-    unregisterLogTransport = registerLogTransportFn((record) => {
+    unregisterLogTransport = registerLogTransportForTestFn((record) => {
       records.push(record);
     });
 

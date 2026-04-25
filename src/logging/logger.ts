@@ -76,7 +76,9 @@ const LOG_TRANSPORT_STATE_KEY = Symbol.for("openclaw.logging.transports");
 
 type LogTransportGlobalState = {
   transports: Set<LogTransport>;
-  loggers: Set<TsLogger<LogObj>>;
+  loggerRefs: Set<WeakRef<TsLogger<LogObj>>>;
+  loggerRefByLogger: WeakMap<TsLogger<LogObj>, WeakRef<TsLogger<LogObj>>>;
+  finalizer: FinalizationRegistry<WeakRef<TsLogger<LogObj>>>;
   attachedTransports: WeakMap<TsLogger<LogObj>, Set<LogTransport>>;
 };
 
@@ -88,7 +90,11 @@ function getLogTransportGlobalState(): LogTransportGlobalState {
   }
   const created = resolveGlobalSingleton<LogTransportGlobalState>(LOG_TRANSPORT_STATE_KEY, () => ({
     transports: new Set<LogTransport>(),
-    loggers: new Set<TsLogger<LogObj>>(),
+    loggerRefs: new Set<WeakRef<TsLogger<LogObj>>>(),
+    loggerRefByLogger: new WeakMap<TsLogger<LogObj>, WeakRef<TsLogger<LogObj>>>(),
+    finalizer: new FinalizationRegistry<WeakRef<TsLogger<LogObj>>>((ref) => {
+      getLogTransportGlobalState().loggerRefs.delete(ref);
+    }),
     attachedTransports: new WeakMap<TsLogger<LogObj>, Set<LogTransport>>(),
   }));
   processStore[LOG_TRANSPORT_STATE_KEY] = created;
@@ -136,7 +142,13 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
 
 function registerLoggerForExternalTransports(logger: TsLogger<LogObj>): void {
   const state = getLogTransportGlobalState();
-  state.loggers.add(logger);
+  let ref = state.loggerRefByLogger.get(logger);
+  if (!ref) {
+    ref = new WeakRef(logger);
+    state.loggerRefByLogger.set(logger, ref);
+    state.loggerRefs.add(ref);
+    state.finalizer.register(logger, ref, ref);
+  }
   for (const transport of state.transports) {
     attachExternalTransport(logger, transport);
   }
@@ -146,7 +158,25 @@ function unregisterLoggerForExternalTransports(logger: TsLogger<LogObj> | null):
   if (!logger) {
     return;
   }
-  getLogTransportGlobalState().loggers.delete(logger);
+  const state = getLogTransportGlobalState();
+  const ref = state.loggerRefByLogger.get(logger);
+  if (!ref) {
+    return;
+  }
+  state.loggerRefs.delete(ref);
+  state.finalizer.unregister(ref);
+}
+
+function forEachRegisteredLogger(callback: (logger: TsLogger<LogObj>) => void): void {
+  const state = getLogTransportGlobalState();
+  for (const ref of state.loggerRefs) {
+    const logger = ref.deref();
+    if (!logger) {
+      state.loggerRefs.delete(ref);
+      continue;
+    }
+    callback(logger);
+  }
 }
 
 function clampDiagnosticLogText(value: string, maxChars: number): string {
@@ -627,12 +657,12 @@ export function resetLogger() {
   loggingState.overrideSettings = null;
 }
 
-export function registerLogTransport(transport: LogTransport): () => void {
+function registerLogTransport(transport: LogTransport): () => void {
   const state = getLogTransportGlobalState();
   state.transports.add(transport);
-  for (const logger of state.loggers) {
+  forEachRegisteredLogger((logger) => {
     attachExternalTransport(logger, transport);
-  }
+  });
   return () => {
     state.transports.delete(transport);
   };
@@ -640,6 +670,12 @@ export function registerLogTransport(transport: LogTransport): () => void {
 
 export const __test__ = {
   shouldSkipMutatingLoggingConfigRead,
+  registerLogTransportForTest(transport: LogTransport): () => void {
+    if (process.env.VITEST !== "true") {
+      throw new Error("registerLogTransportForTest is only available in tests");
+    }
+    return registerLogTransport(transport);
+  },
 };
 
 function formatLocalDate(date: Date): string {

@@ -1,11 +1,6 @@
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import {
-  registerLogTransport,
-  resetLogger,
-  setLoggerOverride,
-  type LogTransportRecord,
-} from "../logger.js";
+import { __test__, resetLogger, setLoggerOverride, type LogTransportRecord } from "../logger.js";
 
 export function createWarnLogCapture(prefix: string) {
   const records: LogTransportRecord[] = [];
@@ -14,7 +9,7 @@ export function createWarnLogCapture(prefix: string) {
     consoleLevel: "silent",
     file: path.join(resolvePreferredOpenClawTmpDir(), `${prefix}-${process.pid}-${Date.now()}.log`),
   });
-  const unregister = registerLogTransport((record) => {
+  const unregister = __test__.registerLogTransportForTest((record) => {
     records.push(record);
   });
   return {
