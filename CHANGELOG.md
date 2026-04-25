@@ -69,6 +69,16 @@ Docs: https://docs.openclaw.ai
   packaged plugin directory resolver used by plugin loading, so published
   installs keep Matrix DM allowlist repairs on `channels.matrix.dm.*` instead
   of writing invalid top-level `dmPolicy` keys. Fixes #71757.
+- Plugins/Windows: keep bundled plugin Jiti loaders off the native import path
+  on Windows so channel plugins such as Telegram no longer crash with
+  `ERR_UNSUPPORTED_ESM_URL_SCHEME` on `C:\...` paths. Fixes #71749. Thanks
+  @smeyer9.
+- Providers/Ollama: use Ollama's current `/api/web_search` endpoint and honor
+  `https://ollama.com` model-provider base URLs for Ollama Web Search. Fixes
+  #71741. Thanks @madhvidua.
+- CLI/agents: keep `openclaw agents list --json` on the config-only path by
+  default, avoiding bundled plugin loading unless callers request
+  `--bindings`. Fixes #71739. Thanks @kaloster.
 - Providers/Google: transcode Gemini TTS PCM to Opus for voice-note targets so
   WhatsApp and other native voice-note replies can play as voice messages.
 - Plugins/runtime deps: reuse existing external bundled-plugin stage roots when
