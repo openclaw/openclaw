@@ -351,14 +351,14 @@ function createOccurrenceAwareResolver(
 
   const preserveAssistantId = (id: string): string => {
     const normalizedId = normalizeMangledToolCallId(id);
-    used.add(normalizedId);
+    used.add(id);
     const pending = pendingByRawId.get(normalizedId);
     if (pending) {
-      pending.push(normalizedId);
+      pending.push(id);
     } else {
-      pendingByRawId.set(normalizedId, [normalizedId]);
+      pendingByRawId.set(normalizedId, [id]);
     }
-    return normalizedId;
+    return id;
   };
 
   return { resolveAssistantId, resolveToolResultId, preserveAssistantId };

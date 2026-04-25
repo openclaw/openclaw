@@ -437,6 +437,38 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
     });
 
+    it("keeps replay-safe mangled tool ids raw while pairing results", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+            { type: "toolCall", id: "functions exec:0", name: "exec", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "functions.exec:0",
+          toolName: "exec",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
+        preserveReplaySafeThinkingToolCallIds: true,
+        allowedToolNames: ["exec"],
+      });
+
+      expect(out).not.toBe(input);
+      expect(
+        ((out[0] as Extract<AgentMessage, { role: "assistant" }>).content?.[1] as { id?: string })
+          .id,
+      ).toBe("functions exec:0");
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        "functions exec:0",
+      );
+    });
+
     it("rewrites earlier mutable ids away from later preserved signed ids", () => {
       const input = castAgentMessages([
         {
