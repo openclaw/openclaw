@@ -439,7 +439,7 @@ describe("google-meet plugin", () => {
     );
   });
 
-  it("lists Meet artifact metadata for conference records", async () => {
+  it("lists Meet artifact metadata for the latest conference record by default", async () => {
     const fetchMock = stubMeetArtifactsApi();
 
     await expect(
@@ -483,7 +483,7 @@ describe("google-meet plugin", () => {
     }
     const listUrl = requestUrl(listCall[0]);
     expect(listUrl.searchParams.get("filter")).toBe('space.name = "spaces/abc-defg-hij"');
-    expect(listUrl.searchParams.get("pageSize")).toBe("2");
+    expect(listUrl.searchParams.get("pageSize")).toBe("1");
     expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://meet.googleapis.com/v2/conferenceRecords/rec-1/smartNotes?pageSize=2",
@@ -496,6 +496,28 @@ describe("google-meet plugin", () => {
         auditContext: "google-meet.conferenceRecords.transcripts.entries.list",
       }),
     );
+  });
+
+  it("keeps all conference records available when requested", async () => {
+    const fetchMock = stubMeetArtifactsApi();
+
+    await fetchGoogleMeetArtifacts({
+      accessToken: "token",
+      meeting: "abc-defg-hij",
+      pageSize: 2,
+      allConferenceRecords: true,
+    });
+
+    const listCall = fetchMock.mock.calls.find(([input]) => {
+      const url = requestUrl(input);
+      return url.pathname === "/v2/conferenceRecords";
+    });
+    if (!listCall) {
+      throw new Error("Expected conferenceRecords.list fetch call");
+    }
+    const listUrl = requestUrl(listCall[0]);
+    expect(listUrl.searchParams.get("pageSize")).toBe("2");
+    expect(listUrl.searchParams.get("filter")).toBe('space.name = "spaces/abc-defg-hij"');
   });
 
   it("fetches only the latest Meet conference record for a meeting", async () => {
