@@ -176,6 +176,61 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("uses the first allowed ACP agent as the default probe agent", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    ctx.config = {
+      acp: {
+        allowedAgents: ["  OpenCode  ", "codex"],
+      },
+    };
+    const runtime = createMockRuntime();
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          probeAgent: "opencode",
+        }),
+      }),
+    );
+
+    await service.stop?.(ctx);
+  });
+
+  it("keeps explicit probeAgent ahead of acp.allowedAgents", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    ctx.config = {
+      acp: {
+        allowedAgents: ["opencode"],
+      },
+    };
+    const runtime = createMockRuntime();
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService({
+      pluginConfig: { probeAgent: "codex" },
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          probeAgent: "codex",
+        }),
+      }),
+    );
+
+    await service.stop?.(ctx);
+  });
+
   it("warns when legacy compatibility config is explicitly ignored", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);

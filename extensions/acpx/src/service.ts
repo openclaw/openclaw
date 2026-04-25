@@ -84,6 +84,21 @@ function formatDoctorFailureMessage(report: { message: string; details?: string[
   return detailText ? `${report.message} (${detailText})` : report.message;
 }
 
+function normalizeProbeAgent(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): string | undefined {
+  for (const agent of ctx.config.acp?.allowedAgents ?? []) {
+    const normalized = normalizeProbeAgent(agent);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -102,8 +117,12 @@ export function createAcpxRuntimeService(
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
+      const effectiveBasePluginConfig: ResolvedAcpxPluginConfig = {
+        ...basePluginConfig,
+        probeAgent: basePluginConfig.probeAgent ?? resolveAllowedAgentsProbeAgent(ctx),
+      };
       const pluginConfig = await prepareAcpxCodexAuthConfig({
-        pluginConfig: basePluginConfig,
+        pluginConfig: effectiveBasePluginConfig,
         stateDir: ctx.stateDir,
         logger: ctx.logger,
       });
