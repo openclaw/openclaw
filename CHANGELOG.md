@@ -632,6 +632,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/env: import each missing expected login-shell env var independently,
+  so an existing gateway token no longer prevents `env.shellEnv` from loading
+  plugin credentials such as `TWILIO_*` from `.profile`. Thanks @steipete.
 - macOS/Gateway pairing: silently accept same-host native app
   `metadata-upgrade` reconnects, so macOS patch-version changes update paired
   metadata instead of spamming security audit warnings and `pairing required`
