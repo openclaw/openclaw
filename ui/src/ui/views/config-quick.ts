@@ -8,15 +8,15 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 import type { BorderRadiusStop } from "../storage.ts";
+import { normalizeOptionalString } from "../string-coerce.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import {
-  hasLocalUserIdentity,
   normalizeLocalUserIdentity,
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
-  resolveLocalUserName,
 } from "../user-identity.ts";
+import { assistantAvatarFallbackUrl, resolveAssistantTextAvatar } from "./agents-utils.ts";
 import {
   CONFIG_PRESETS,
   detectActivePreset,
@@ -78,9 +78,7 @@ export type QuickSettingsProps = {
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setBorderRadius: (value: number) => void;
-  userName?: string | null;
   userAvatar?: string | null;
-  onUserNameChange?: (next: string) => void;
   onUserAvatarChange?: (next: string | null) => void;
 
   // Presets
@@ -102,6 +100,9 @@ export type QuickSettingsProps = {
   connected: boolean;
   gatewayUrl: string;
   assistantName: string;
+  assistantAvatar?: string | null;
+  assistantAvatarUrl?: string | null;
+  basePath?: string | null;
   version: string;
 };
 
@@ -123,6 +124,7 @@ const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
 ];
 
 const THINKING_LEVELS = ["off", "low", "medium", "high"];
+const LOCAL_USER_LABEL = "You";
 // Keep raw uploads comfortably below the 2 MB persisted data URL limit after
 // base64 expansion and a small MIME/header prefix are added.
 const MAX_LOCAL_USER_AVATAR_FILE_BYTES = 1_500_000;
@@ -136,26 +138,51 @@ function renderDefaultUserAvatar() {
   `;
 }
 
-function renderLocalUserAvatarPreview(
-  name: string | null | undefined,
-  avatar: string | null | undefined,
-) {
-  const identity = normalizeLocalUserIdentity({ name, avatar });
-  const label = resolveLocalUserName(identity);
+function renderLocalUserAvatarPreview(avatar: string | null | undefined) {
+  const identity = normalizeLocalUserIdentity({ name: null, avatar });
   const avatarUrl = resolveLocalUserAvatarUrl(identity);
   const avatarText = resolveLocalUserAvatarText(identity);
   if (avatarUrl) {
-    return html`<img class="qs-user-avatar" src=${avatarUrl} alt=${label} />`;
+    return html`<img class="qs-user-avatar" src=${avatarUrl} alt=${LOCAL_USER_LABEL} />`;
   }
   if (avatarText) {
-    return html`<div class="qs-user-avatar qs-user-avatar--text" aria-label=${label}>
+    return html`<div class="qs-user-avatar qs-user-avatar--text" aria-label=${LOCAL_USER_LABEL}>
       ${avatarText}
     </div>`;
   }
   return html`
-    <div class="qs-user-avatar qs-user-avatar--default" aria-label=${label}>
+    <div class="qs-user-avatar qs-user-avatar--default" aria-label=${LOCAL_USER_LABEL}>
       ${renderDefaultUserAvatar()}
     </div>
+  `;
+}
+
+function isRenderableAssistantPreviewUrl(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("blob:") || /^data:image\//i.test(trimmed);
+}
+
+function renderAssistantAvatarPreview(props: QuickSettingsProps) {
+  const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
+  const assistantAvatarUrl = normalizeOptionalString(props.assistantAvatarUrl);
+  if (assistantAvatarUrl && isRenderableAssistantPreviewUrl(assistantAvatarUrl)) {
+    return html`<img class="qs-assistant-avatar" src=${assistantAvatarUrl} alt=${assistantName} />`;
+  }
+  const assistantAvatarText = resolveAssistantTextAvatar(props.assistantAvatar);
+  if (assistantAvatarText) {
+    return html`<div
+      class="qs-assistant-avatar qs-assistant-avatar--text"
+      aria-label=${assistantName}
+    >
+      ${assistantAvatarText}
+    </div>`;
+  }
+  return html`
+    <img
+      class="qs-assistant-avatar qs-assistant-avatar--fallback"
+      src=${assistantAvatarFallbackUrl(props.basePath ?? "")}
+      alt=${assistantName}
+    />
   `;
 }
 
@@ -498,34 +525,42 @@ function renderAppearanceCard(props: QuickSettingsProps) {
 
 function renderPersonalCard(props: QuickSettingsProps) {
   const identity = normalizeLocalUserIdentity({
-    name: props.userName ?? null,
+    name: null,
     avatar: props.userAvatar ?? null,
   });
   const avatarText = resolveLocalUserAvatarText(identity) ?? "";
-  const label = resolveLocalUserName(identity);
+  const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
+  const assistantAvatarUrl = normalizeOptionalString(props.assistantAvatarUrl);
+  const assistantAvatarRendered = Boolean(
+    (assistantAvatarUrl && isRenderableAssistantPreviewUrl(assistantAvatarUrl)) ||
+    resolveAssistantTextAvatar(props.assistantAvatar),
+  );
   return html`
     <div class="qs-card">
       ${renderCardHeader(icons.image, "Personal")}
       <div class="qs-card__body">
-        <div class="qs-personal-preview">
-          ${renderLocalUserAvatarPreview(props.userName, props.userAvatar)}
-          <div class="qs-personal-preview__copy">
-            <div class="qs-personal-preview__title">${label}</div>
-            <div class="muted">This browser only</div>
-          </div>
-        </div>
-        <div class="qs-row">
-          <label class="qs-field">
-            <span class="qs-row__label">Name</span>
-            <input
-              class="qs-field__input"
-              type="text"
-              maxlength="50"
-              .value=${props.userName ?? ""}
-              placeholder="You"
-              @input=${(e: Event) => props.onUserNameChange?.((e.target as HTMLInputElement).value)}
-            />
-          </label>
+        <div class="qs-identity-grid">
+          <section class="qs-identity-card" aria-label="Your local chat identity">
+            ${renderLocalUserAvatarPreview(props.userAvatar)}
+            <div class="qs-identity-card__copy">
+              <div class="qs-identity-card__eyebrow">User</div>
+              <div class="qs-identity-card__title">${LOCAL_USER_LABEL}</div>
+              <div class="qs-identity-card__sub">Avatar is browser-local</div>
+            </div>
+          </section>
+          <section
+            class="qs-identity-card qs-identity-card--assistant"
+            aria-label="Assistant identity"
+          >
+            ${renderAssistantAvatarPreview(props)}
+            <div class="qs-identity-card__copy">
+              <div class="qs-identity-card__eyebrow">Assistant</div>
+              <div class="qs-identity-card__title">${assistantName}</div>
+              <div class="qs-identity-card__sub">
+                ${assistantAvatarRendered ? "From IDENTITY.md" : "Fallback logo"}
+              </div>
+            </div>
+          </section>
         </div>
         <div class="qs-row">
           <label class="qs-field">
@@ -556,13 +591,12 @@ function renderPersonalCard(props: QuickSettingsProps) {
           <button
             type="button"
             class="btn btn--sm btn--ghost"
-            ?disabled=${!hasLocalUserIdentity(identity)}
+            ?disabled=${!identity.avatar}
             @click=${() => {
-              props.onUserNameChange?.("");
               props.onUserAvatarChange?.(null);
             }}
           >
-            Clear
+            Clear avatar
           </button>
         </div>
       </div>

@@ -37,9 +37,7 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
     setBorderRadius: vi.fn(),
-    userName: "Val",
     userAvatar: null,
-    onUserNameChange: vi.fn(),
     onUserAvatarChange: vi.fn(),
     configObject: {},
     onSelectPreset: vi.fn(),
@@ -47,6 +45,9 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     connected: true,
     gatewayUrl: "ws://localhost:18789",
     assistantName: "OpenClaw",
+    assistantAvatar: null,
+    assistantAvatarUrl: null,
+    basePath: "",
     version: "2026.4.22",
     ...overrides,
   };
@@ -60,6 +61,34 @@ describe("renderQuickSettings", () => {
 
     expect(container.querySelectorAll(".qs-stack")).toHaveLength(4);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
+  });
+
+  it("keeps the local user name fixed and shows the assistant identity", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "assets/avatars/nova-portrait.png",
+          assistantAvatarUrl: "blob:nova",
+        }),
+      ),
+      container,
+    );
+
+    const titles = Array.from(container.querySelectorAll(".qs-identity-card__title")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(titles).toContain("You");
+    expect(titles).toContain("Nova");
+    expect(container.querySelector('input[placeholder="You"]')).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll(".qs-row__label")).some(
+        (node) => node.textContent?.trim() === "Name",
+      ),
+    ).toBe(false);
+    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe("blob:nova");
   });
 
   it("rejects oversized avatar uploads before reading them", () => {

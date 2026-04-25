@@ -214,41 +214,97 @@
   color: var(--muted);
 }
 
-.qs-personal-preview {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.qs-identity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   padding: 14px 16px 10px;
 }
 
-.qs-personal-preview__copy {
+.qs-identity-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-md);
+  background:
+    radial-gradient(
+      circle at 18% 18%,
+      color-mix(in srgb, var(--accent) 10%, transparent),
+      transparent 46%
+    ),
+    color-mix(in srgb, var(--bg-elevated) 42%, var(--card) 58%);
+}
+
+.qs-identity-card--assistant {
+  background:
+    radial-gradient(
+      circle at 82% 12%,
+      color-mix(in srgb, var(--accent) 14%, transparent),
+      transparent 48%
+    ),
+    color-mix(in srgb, var(--bg-elevated) 52%, var(--card) 48%);
+}
+
+.qs-identity-card__copy {
   min-width: 0;
 }
 
-.qs-personal-preview__title {
-  font-size: 0.95rem;
-  font-weight: 650;
-  color: var(--text-strong);
+.qs-identity-card__eyebrow {
+  margin-bottom: 2px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
-.qs-user-avatar {
-  width: 40px;
-  height: 40px;
+.qs-identity-card__title {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qs-identity-card__sub {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.qs-user-avatar,
+.qs-assistant-avatar {
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
-  border-radius: var(--radius-md);
+  border-radius: calc(var(--radius-md) + 2px);
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
   object-fit: cover;
   object-position: center;
 }
 
 .qs-user-avatar--text,
-.qs-user-avatar--default {
+.qs-user-avatar--default,
+.qs-assistant-avatar--text {
   display: grid;
   place-items: center;
   background: var(--accent-subtle);
   color: var(--accent);
   font-size: 0.875rem;
   font-weight: 650;
+}
+
+.qs-assistant-avatar--fallback {
+  padding: 7px;
+  background: color-mix(in srgb, var(--bg) 84%, var(--bg-elevated) 16%);
+  object-fit: contain;
 }
 
 .qs-user-avatar--default svg {
@@ -621,12 +677,11 @@
   grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.9fr);
   gap: 18px;
   padding: 18px 16px 16px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent-subtle) 18%, transparent) 0%,
-      transparent 36%
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-subtle) 18%, transparent) 0%,
+    transparent 36%
+  );
 }
 
 .qs-profiles__copy {
@@ -949,6 +1004,10 @@
 @media (max-width: 480px) {
   .qs-container {
     padding: 20px 0 40px;
+  }
+
+  .qs-identity-grid {
+    grid-template-columns: 1fr;
   }
 
   .qs-header {

@@ -989,10 +989,11 @@ export function renderApp(state: AppViewState) {
             },
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
-            userName: state.userName ?? null,
             userAvatar: state.userAvatar ?? null,
-            onUserNameChange: (name) => state.applyLocalUserIdentity?.({ name }),
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
+            assistantAvatar: state.assistantAvatar,
+            assistantAvatarUrl: chatAvatarUrl,
+            basePath: state.basePath ?? "",
             configObject: configObj,
             savedConfigObject:
               (state.configSnapshot?.config as Record<string, unknown> | null) ?? {},
