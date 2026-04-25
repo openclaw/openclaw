@@ -63,6 +63,10 @@ Docs: https://docs.openclaw.ai
 - Windows/native: keep CLI startup and bundled provider plugin loading off
   Windows ESM raw-path failure paths, fixing native onboarding/install smoke on
   Node 24. Thanks @steipete.
+- Plugins/doctor: read bundled channel doctor capabilities through the same
+  packaged plugin directory resolver used by plugin loading, so published
+  installs keep Matrix DM allowlist repairs on `channels.matrix.dm.*` instead
+  of writing invalid top-level `dmPolicy` keys. Fixes #71757.
 - Providers/Google: transcode Gemini TTS PCM to Opus for voice-note targets so
   WhatsApp and other native voice-note replies can play as voice messages.
 - Plugins/runtime deps: reuse existing external bundled-plugin stage roots when
