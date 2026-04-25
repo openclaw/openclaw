@@ -1,5 +1,9 @@
 import type { CronConfig } from "../../config/types.cron.js";
-import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import type {
+  HeartbeatRunResult,
+  HeartbeatWakeOverride,
+  HeartbeatWakeRequest,
+} from "../../infra/heartbeat-wake.js";
 import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
@@ -74,7 +78,7 @@ export type CronServiceDeps = {
     agentId?: string;
     sessionKey?: string;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
-    heartbeat?: { target?: string };
+    heartbeat?: HeartbeatWakeOverride;
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning

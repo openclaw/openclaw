@@ -68,6 +68,66 @@ describe("heartbeat-wake", () => {
     expect(hasPendingHeartbeatWake()).toBe(false);
   });
 
+  it("preserves explicit heartbeat route clears when coalescing same-target wakes", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({
+      reason: "exec-event",
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      heartbeat: { target: "last", to: undefined, accountId: undefined, isolatedSession: false },
+      coalesceMs: 200,
+    });
+    requestHeartbeatNow({
+      reason: "exec-event",
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      heartbeat: { target: "last" },
+      coalesceMs: 200,
+    });
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      heartbeat: { target: "last", to: undefined, accountId: undefined, isolatedSession: false },
+    });
+  });
+
+  it("keeps high-priority heartbeat clears when later lower-priority wakes coalesce", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({
+      reason: "wake",
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      heartbeat: { target: "last" },
+      coalesceMs: 200,
+    });
+    requestHeartbeatNow({
+      reason: "exec-event",
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      heartbeat: { target: "last", to: undefined, accountId: undefined, isolatedSession: false },
+      coalesceMs: 200,
+    });
+    requestHeartbeatNow({
+      reason: "wake",
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      heartbeat: { target: "last", to: "configured-destination", accountId: "configured-account" },
+      coalesceMs: 200,
+    });
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:telegram:group:-1003774691294:topic:47",
+      heartbeat: { target: "last", to: undefined, accountId: undefined, isolatedSession: false },
+    });
+  });
+
   it("retries requests-in-flight after the default retry delay", async () => {
     vi.useFakeTimers();
     const handler = vi
