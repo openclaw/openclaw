@@ -757,6 +757,61 @@ describe("Codex app-server approval bridge", () => {
         },
       },
     });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["decline"] },
+        "approved-once",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["decline"] },
+        "approved-session",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
+    expect(
+      buildApprovalResponse("item/commandExecution/requestApproval", undefined, "approved-once"),
+    ).toEqual({
+      decision: "accept",
+    });
+    expect(
+      buildApprovalResponse("item/commandExecution/requestApproval", undefined, "approved-session"),
+    ).toEqual({
+      decision: "acceptForSession",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["cancel"] },
+        "approved-once",
+      ),
+    ).toEqual({
+      decision: "cancel",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["accept", "cancel"] },
+        "denied",
+      ),
+    ).toEqual({
+      decision: "cancel",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["decline"] },
+        "cancelled",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
     expect(buildApprovalResponse("item/fileChange/requestApproval", undefined, "denied")).toEqual({
       decision: "decline",
     });

@@ -207,6 +207,26 @@ function resolveTelegramReasoningLevel(params: {
   return "off";
 }
 
+const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
+const MAX_PROGRESS_MARKDOWN_FENCE_CHARS = 10;
+
+function clipProgressMarkdownText(text: string): string {
+  if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, MAX_PROGRESS_MARKDOWN_TEXT_CHARS - 1).trimEnd()}…`;
+}
+
+function formatProgressAsMarkdownCode(text: string): string {
+  const clipped = clipProgressMarkdownText(text);
+  const maxBacktickRun = Math.max(
+    0,
+    ...Array.from(clipped.matchAll(/`+/g), (match) => match[0].length),
+  );
+  const fence = "`".repeat(Math.min(maxBacktickRun + 1, MAX_PROGRESS_MARKDOWN_FENCE_CHARS));
+  return `${fence}${clipped}${fence}`;
+}
+
 export const dispatchTelegramMessage = async ({
   context,
   bot,
@@ -388,7 +408,7 @@ export const dispatchTelegramMessage = async ({
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
   const previewToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg, false);
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
   const pushPreviewToolProgress = (line?: string) => {
@@ -404,9 +424,10 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
-    const previewText = ["Working…", ...previewToolProgressLines.map((entry) => `• ${entry}`)].join(
-      "\n",
-    );
+    const previewText = [
+      "Working…",
+      ...previewToolProgressLines.map((entry) => `• ${formatProgressAsMarkdownCode(entry)}`),
+    ].join("\n");
     answerLane.lastPartialText = previewText;
     answerLane.stream.update(previewText);
   };
@@ -966,7 +987,7 @@ export const dispatchTelegramMessage = async ({
                   previewToolProgressLines = [];
                 })
             : undefined,
-          suppressDefaultToolProgressMessages: previewToolProgressEnabled ? true : undefined,
+          suppressDefaultToolProgressMessages: true,
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
             if (statusReactionController && toolName) {

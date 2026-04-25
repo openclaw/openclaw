@@ -789,7 +789,42 @@ describe("sanitizeSessionHistory", () => {
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        usage: makeZeroUsageSnapshot(),
+      },
+    ]);
+  });
+
+  it("keeps paired openai reasoning when the model snapshot stays the same", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({
+      thinkingSignature: "json",
+      includeText: true,
+    });
+
+    const result = await sanitizeWithOpenAIResponses({
+      sanitizeSessionHistory,
+      messages,
+      modelId: "gpt-5.4",
+      sessionManager,
+    });
+
+    expect(result).toEqual([
+      {
+        ...(messages[0] as Record<string, unknown>),
+        usage: makeZeroUsageSnapshot(),
+      },
+    ]);
   });
 
   it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {

@@ -252,6 +252,39 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("passes web_fetch SSRF policy when loading remote PDFs", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      const cfg: OpenClawConfig = {
+        ...withPdfModel(ANTHROPIC_PDF_MODEL),
+        tools: {
+          web: {
+            fetch: {
+              ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+            },
+          },
+        },
+      };
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "http://198.18.0.153/doc.pdf",
+      });
+
+      expect(loadSpy).toHaveBeenCalledWith(
+        "http://198.18.0.153/doc.pdf",
+        expect.objectContaining({
+          ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+        }),
+      );
+    });
+  });
+
   it("allows managed inbound absolute PDF paths when workspaceOnly is enabled", async () => {
     await withManagedInboundPdf(async ({ mediaPath }) => {
       await withTempPdfAgentDir(async (agentDir) => {

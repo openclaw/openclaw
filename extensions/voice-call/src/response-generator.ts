@@ -4,6 +4,7 @@
  */
 
 import crypto from "node:crypto";
+import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { SessionEntry } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
@@ -202,6 +203,7 @@ export async function generateVoiceResponse(
   const sessionStore = agentRuntime.session.loadSessionStore(storePath);
   const now = Date.now();
   let sessionEntry = sessionStore[sessionKey] as SessionEntry | undefined;
+  let sessionEntryUpdated = false;
 
   if (!sessionEntry) {
     sessionEntry = {
@@ -209,16 +211,29 @@ export async function generateVoiceResponse(
       updatedAt: now,
     };
     sessionStore[sessionKey] = sessionEntry;
-    await agentRuntime.session.saveSessionStore(storePath, sessionStore);
+    sessionEntryUpdated = true;
   }
 
   const sessionId = sessionEntry.sessionId;
-  const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
-    agentId,
-  });
 
   // Resolve model from config
   const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+  if (voiceConfig.responseModel) {
+    sessionEntryUpdated =
+      applyModelOverrideToSessionEntry({
+        entry: sessionEntry,
+        selection: { provider, model },
+        selectionSource: "auto",
+      }).updated || sessionEntryUpdated;
+  }
+
+  if (sessionEntryUpdated) {
+    await agentRuntime.session.saveSessionStore(storePath, sessionStore);
+  }
+
+  const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
+    agentId,
+  });
 
   // Resolve thinking level
   const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });

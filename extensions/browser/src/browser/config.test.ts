@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -58,6 +60,12 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
+    expect(resolved.tabCleanup).toEqual({
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    });
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
@@ -114,6 +122,63 @@ describe("browser config", () => {
     });
     expect(resolved.remoteCdpTimeoutMs).toBe(2200);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
+  });
+
+  it("supports custom browser tab cleanup policy", () => {
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        enabled: false,
+        idleMinutes: 0,
+        maxTabsPerSession: 0,
+        sweepMinutes: 15,
+      },
+    });
+    expect(resolved.tabCleanup).toEqual({
+      enabled: false,
+      idleMinutes: 0,
+      maxTabsPerSession: 0,
+      sweepMinutes: 15,
+    });
+  });
+
+  it("expands tilde-prefixed executablePath with the OS home directory", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: " ~/.local/bin/chromium ",
+    });
+
+    expect(resolved.executablePath).toBe(path.resolve(os.homedir(), ".local/bin/chromium"));
+  });
+
+  it("keeps non-tilde executablePath values unchanged after trimming", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: " ./local-chromium ",
+    });
+
+    expect(resolved.executablePath).toBe("./local-chromium");
+  });
+
+  it("normalizes blank executablePath to undefined", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "   ",
+    });
+
+    expect(resolved.executablePath).toBeUndefined();
+  });
+
+  it("normalizes invalid browser tab cleanup numbers to defaults", () => {
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        idleMinutes: -1,
+        maxTabsPerSession: -2,
+        sweepMinutes: 0,
+      },
+    });
+    expect(resolved.tabCleanup).toEqual({
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    });
   });
 
   it("falls back to default color for invalid hex", () => {

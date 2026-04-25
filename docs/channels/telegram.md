@@ -273,7 +273,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
     - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
-    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
+    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `false`). Set `true` only when visible Telegram progress updates are desired.
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
 
     For text-only replies:

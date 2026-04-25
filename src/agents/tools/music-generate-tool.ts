@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import {
@@ -24,6 +25,7 @@ import type {
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -36,6 +38,7 @@ import {
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
+  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import { type ToolModelConfig } from "./model-config.helpers.js";
@@ -63,6 +66,7 @@ import {
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
 const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
+const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
 
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -236,6 +240,8 @@ async function loadReferenceImages(params: {
   inputs: string[];
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  ssrfPolicy?: SsrFPolicy;
+  timeoutMs?: number;
 }): Promise<
   Array<{
     sourceImage: MusicGenerationSourceImage;
@@ -301,9 +307,20 @@ async function loadReferenceImages(params: {
             sandboxValidated: true,
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
           })
-        : await loadWebMedia(resolvedPath ?? resolvedInput, {
-            localRoots,
-          });
+        : await (async () => {
+            const { signal, cleanup } = buildTimeoutAbortSignal({
+              timeoutMs: params.timeoutMs ?? DEFAULT_REFERENCE_FETCH_TIMEOUT_MS,
+            });
+            try {
+              return await loadWebMedia(resolvedPath ?? resolvedInput, {
+                localRoots,
+                requestInit: signal ? { signal } : undefined,
+                ssrfPolicy: params.ssrfPolicy,
+              });
+            } finally {
+              cleanup();
+            }
+          })();
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind ?? "unknown"}`);
     }
@@ -540,10 +557,13 @@ export function createMusicGenerateTool(options?: {
         musicGenerationModelConfig,
         modelOverride: model,
       });
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         inputs: imageInputs,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
+        ssrfPolicy: remoteMediaSsrfPolicy,
+        timeoutMs,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,

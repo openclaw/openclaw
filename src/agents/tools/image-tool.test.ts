@@ -1172,6 +1172,33 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("passes web_fetch SSRF policy to remote image references", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith("http://198.18.0.153/")) {
+        return new Response(Buffer.from(ONE_PIXEL_PNG_B64, "base64"), {
+          headers: { "content-type": "image/png" },
+        });
+      }
+      return new Response(
+        JSON.stringify({ content: "ok", base_resp: { status_code: 0, status_msg: "" } }),
+      );
+    });
+    global.fetch = withFetchPreconnect(fetch);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        ...createMinimaxImageConfig(),
+        tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+
+      await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
+      expect(fetch).toHaveBeenCalledWith("http://198.18.0.153/reference.png", expect.any(Object));
+    });
+  });
+
   it("sandboxes image paths like the read tool", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
       await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");

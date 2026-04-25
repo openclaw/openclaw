@@ -7,6 +7,10 @@ import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
+  normalizeCommandDescriptorName,
+  sanitizeCommandDescriptorDescription,
+} from "../cli/program/command-descriptor-utils.js";
+import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
 } from "../context-engine/registry.js";
@@ -1003,19 +1007,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registrar: OpenClawPluginCliRegistrar,
     opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
   ) => {
+    const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
+      const normalized = normalizeCommandDescriptorName(raw);
+      if (!normalized) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `invalid cli ${source} name: ${JSON.stringify(raw.trim())}`,
+        });
+      }
+      return normalized;
+    };
     const descriptors = (opts?.descriptors ?? [])
-      .map((descriptor) => ({
-        name: descriptor.name.trim(),
-        description: descriptor.description.trim(),
-        hasSubcommands: descriptor.hasSubcommands,
-      }))
-      .filter((descriptor) => descriptor.name && descriptor.description);
+      .map((descriptor) => {
+        const name = normalizeCommandRoot(descriptor.name, "descriptor");
+        const description = sanitizeCommandDescriptorDescription(descriptor.description);
+        return name && description
+          ? {
+              name,
+              description,
+              hasSubcommands: descriptor.hasSubcommands,
+            }
+          : null;
+      })
+      .filter(
+        (descriptor): descriptor is OpenClawPluginCliCommandDescriptor => descriptor !== null,
+      );
     const commands = [
       ...(opts?.commands ?? []),
       ...descriptors.map((descriptor) => descriptor.name),
     ]
-      .map((cmd) => cmd.trim())
-      .filter(Boolean);
+      .map((cmd) => normalizeCommandRoot(cmd, "command"))
+      .filter((command): command is string => command !== null);
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",

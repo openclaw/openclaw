@@ -29,6 +29,7 @@ export type BrowserServerState = {
   port: number;
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;
+  stopTrackedTabCleanup?: () => void;
 };
 
 type BrowserProfileActions = {

@@ -368,18 +368,22 @@ public contract.
 
 `api.registrationMode` tells a plugin why its entry is being loaded:
 
-| Mode            | Meaning                                                                                                |
-| --------------- | ------------------------------------------------------------------------------------------------------ |
-| `full`          | Runtime activation. Register tools, hooks, services, commands, routes, and other live side effects.    |
-| `discovery`     | Read-only capability discovery. Register providers and metadata, but skip expensive live side effects. |
-| `setup-only`    | Channel setup metadata loading through a lightweight setup entry.                                      |
-| `setup-runtime` | Channel setup loading that also needs the runtime entry.                                               |
-| `cli-metadata`  | CLI command metadata collection only.                                                                  |
+| Mode            | Meaning                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `full`          | Runtime activation. Register tools, hooks, services, commands, routes, and other live side effects.                              |
+| `discovery`     | Read-only capability discovery. Register providers and metadata; trusted plugin entry code may load, but skip live side effects. |
+| `setup-only`    | Channel setup metadata loading through a lightweight setup entry.                                                                |
+| `setup-runtime` | Channel setup loading that also needs the runtime entry.                                                                         |
+| `cli-metadata`  | CLI command metadata collection only.                                                                                            |
 
 Plugin entries that open sockets, databases, background workers, or long-lived
 clients should guard those side effects with `api.registrationMode === "full"`.
 Discovery loads are cached separately from activating loads and do not replace
-the running Gateway registry.
+the running Gateway registry. Discovery is non-activating, not import-free:
+OpenClaw may evaluate the trusted plugin entry or channel plugin module to build
+the snapshot. Keep module top levels lightweight and side-effect-free, and move
+network clients, subprocesses, listeners, credential reads, and service startup
+behind full-runtime paths.
 
 Common registration methods:
 

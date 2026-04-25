@@ -5,7 +5,7 @@ import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
-import { resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
+import { isSameMeetUrlForReuse, resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
 import { launchChromeMeet, launchChromeMeetOnNode } from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
@@ -126,7 +126,7 @@ export class GoogleMeetRuntime {
     const reusable = this.list().find(
       (session) =>
         session.state === "active" &&
-        session.url === url &&
+        isSameMeetUrlForReuse(session.url, url) &&
         session.transport === transport &&
         session.mode === mode,
     );

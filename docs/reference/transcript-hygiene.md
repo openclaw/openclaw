@@ -112,7 +112,7 @@ external end-user instructions.
 **OpenAI / OpenAI Codex**
 
 - Image sanitization only.
-- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
+- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts, and drop replayable OpenAI reasoning after a model route switch.
 - No tool call id sanitization.
 - No tool result pairing repair.
 - No turn validation or reordering.
