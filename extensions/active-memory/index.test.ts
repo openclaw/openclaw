@@ -162,6 +162,24 @@ describe("active-memory plugin", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
   });
 
+  it("runs recall without recording shared auth-profile failures", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileFailurePolicy: "local",
+      }),
+    );
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
