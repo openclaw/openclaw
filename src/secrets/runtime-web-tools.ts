@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { loadPluginInstallRecordsSync } from "../plugins/install-ledger-store.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -124,6 +125,14 @@ async function hasCustomWebSearchPluginRisk(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<boolean> {
+  const installRecords = loadPluginInstallRecordsSync({
+    config: params.config,
+    env: params.env,
+  });
+  if (Object.keys(installRecords).length > 0) {
+    return true;
+  }
+
   const plugins = params.config.plugins;
   if (!plugins) {
     return false;
@@ -131,10 +140,6 @@ async function hasCustomWebSearchPluginRisk(params: {
   if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
     return true;
   }
-  if (plugins.installs && Object.keys(plugins.installs).length > 0) {
-    return true;
-  }
-
   const { resolveManifestContractPluginIds } = await loadRuntimeWebToolsManifest();
   const bundledPluginIds = new Set<string>(
     resolveManifestContractPluginIds({

@@ -62,6 +62,9 @@ const {
       )[value],
   ),
 }));
+const { loadPluginInstallRecordsSyncMock } = vi.hoisted(() => ({
+  loadPluginInstallRecordsSyncMock: vi.fn(() => ({})),
+}));
 let secretResolve: typeof import("./resolve.js");
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
@@ -101,6 +104,16 @@ vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
   resolveManifestContractPluginIdsByCompatibilityRuntimePath:
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
 }));
+
+vi.mock("../plugins/install-ledger-store.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/install-ledger-store.js")>(
+    "../plugins/install-ledger-store.js",
+  );
+  return {
+    ...actual,
+    loadPluginInstallRecordsSync: loadPluginInstallRecordsSyncMock,
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -322,6 +335,8 @@ describe("runtime web tools resolution", () => {
     resolveManifestContractOwnerPluginIdMock.mockClear();
     resolveManifestContractPluginIdsMock.mockClear();
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock.mockClear();
+    loadPluginInstallRecordsSyncMock.mockReset();
+    loadPluginInstallRecordsSyncMock.mockReturnValue({});
   });
 
   afterEach(() => {
@@ -1072,6 +1087,38 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.search.selectedProvider).toBe("brave");
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("uses runtime web search discovery when the managed plugin install ledger is populated", async () => {
+    loadPluginInstallRecordsSyncMock.mockReturnValue({
+      "external-search": {
+        source: "npm",
+        spec: "@openclaw/external-search",
+      },
+    });
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY: "brave-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledAllowlistCompat: true,
+      }),
+    );
   });
 
   it("uses bundled public artifacts for bundled web fetch provider discovery", async () => {
