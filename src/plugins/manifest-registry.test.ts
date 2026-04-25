@@ -508,6 +508,8 @@ describe("loadPluginManifestRegistry", () => {
                     {
                       input: 0.6,
                       output: 2.5,
+                      cacheRead: 0.15,
+                      cacheWrite: 0.6,
                       range: [0, 256000],
                     },
                   ],
@@ -582,6 +584,8 @@ describe("loadPluginManifestRegistry", () => {
                   {
                     input: 0.6,
                     output: 2.5,
+                    cacheRead: 0.15,
+                    cacheWrite: 0.6,
                     range: [0, 256000],
                   },
                 ],

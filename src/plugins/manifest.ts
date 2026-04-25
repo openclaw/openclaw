@@ -717,7 +717,15 @@ function normalizeModelCatalogTieredCost(
     }
     const input = normalizeModelCatalogNumber(entry.input);
     const output = normalizeModelCatalogNumber(entry.output);
-    if (input === undefined || output === undefined || !Array.isArray(entry.range)) {
+    const cacheRead = normalizeModelCatalogNumber(entry.cacheRead);
+    const cacheWrite = normalizeModelCatalogNumber(entry.cacheWrite);
+    if (
+      input === undefined ||
+      output === undefined ||
+      cacheRead === undefined ||
+      cacheWrite === undefined ||
+      !Array.isArray(entry.range)
+    ) {
       continue;
     }
     const rangeValues = entry.range
@@ -732,13 +740,11 @@ function normalizeModelCatalogTieredCost(
     if (!range) {
       continue;
     }
-    const cacheRead = normalizeModelCatalogNumber(entry.cacheRead);
-    const cacheWrite = normalizeModelCatalogNumber(entry.cacheWrite);
     normalized.push({
       input,
       output,
-      ...(cacheRead !== undefined ? { cacheRead } : {}),
-      ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+      cacheRead,
+      cacheWrite,
       range,
     });
   }
