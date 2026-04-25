@@ -341,7 +341,11 @@ export function resolveProviderEndpoint(
   return { endpointClass: "custom", hostname: host };
 }
 
-function resolveKnownProviderFamily(provider: string | undefined): string {
+function resolveKnownProviderFamily(provider: string | undefined, modelId?: string | null): string {
+  const normalizedModelId = normalizeOptionalLowercaseString(modelId);
+  if (normalizedModelId?.includes("deepseek")) {
+    return "deepseek";
+  }
   switch (provider) {
     case "openai":
     case "openai-codex":
@@ -584,7 +588,7 @@ export function resolveProviderRequestPolicy(
     policy,
     endpointClass,
     usesConfiguredBaseUrl,
-    knownProviderFamily: resolveKnownProviderFamily(provider || undefined),
+    knownProviderFamily: resolveKnownProviderFamily(provider || undefined, input.modelId),
     attributionProvider,
     attributionHeaders,
     allowsHiddenAttribution:

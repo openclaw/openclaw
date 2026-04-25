@@ -1468,6 +1468,122 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
+  it("adds blank reasoning_content to DeepSeek thinking tool-call replay payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "ollama/deepseek-v4-flash-cn-think",
+        name: "DeepSeek V4 Flash Think",
+        api: "openai-completions",
+        provider: "ollama",
+        baseUrl: "http://localhost:11434/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        messages: [
+          { role: "user", content: "call a tool", timestamp: 1 },
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "ollama",
+            model: "ollama/deepseek-v4-flash-cn-think",
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 2,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup data",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      { reasoning: "high" } as never,
+    ) as { messages?: Array<Record<string, unknown>> };
+
+    expect(params.messages?.[1]).toMatchObject({
+      role: "assistant",
+      reasoning_content: "",
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "lookup", arguments: "{}" },
+        },
+      ],
+    });
+  });
+
+  it("does not add DeepSeek reasoning_content when thinking is disabled", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "ollama/deepseek-v4-flash-cn-think",
+        name: "DeepSeek V4 Flash Think",
+        api: "openai-completions",
+        provider: "ollama",
+        baseUrl: "http://localhost:11434/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        messages: [
+          { role: "user", content: "call a tool", timestamp: 1 },
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "ollama",
+            model: "ollama/deepseek-v4-flash-cn-think",
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 2,
+          },
+        ],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup data",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      { reasoning: "off" } as never,
+    ) as { messages?: Array<Record<string, unknown>> };
+
+    expect(params.messages?.[1]).not.toHaveProperty("reasoning_content");
+  });
+
   it("uses shared stream reasoning as OpenAI completions effort", () => {
     const params = buildOpenAICompletionsParams(
       {

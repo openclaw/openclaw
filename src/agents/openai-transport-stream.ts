@@ -1614,6 +1614,21 @@ function convertTools(
   }));
 }
 
+function ensureDeepSeekToolCallReasoningContent(messages: unknown[]): void {
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant" || !Array.isArray(record.tool_calls)) {
+      continue;
+    }
+    if (!("reasoning_content" in record)) {
+      record.reasoning_content = "";
+    }
+  }
+}
+
 function extractGoogleThoughtSignature(toolCall: unknown): string | undefined {
   const tc = toolCall as Record<string, unknown> | undefined;
   if (!tc) {
@@ -1722,6 +1737,23 @@ export function buildOpenAICompletionsParams(
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
+  const resolvedCompletionsReasoningEffort = completionsReasoningEffort
+    ? resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: completionsReasoningEffort,
+        fallbackMap: compat.reasoningEffortMap,
+      })
+    : undefined;
+  if (
+    compat.thinkingFormat === "deepseek" &&
+    model.reasoning &&
+    completionsReasoningEffort !== "none" &&
+    completionsReasoningEffort !== "off" &&
+    resolvedCompletionsReasoningEffort
+  ) {
+    ensureDeepSeekToolCallReasoningContent(messages as unknown[]);
+  }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
@@ -1755,14 +1787,6 @@ export function buildOpenAICompletionsParams(
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
   }
-  const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
-  const resolvedCompletionsReasoningEffort = completionsReasoningEffort
-    ? resolveOpenAIReasoningEffortForModel({
-        model,
-        effort: completionsReasoningEffort,
-        fallbackMap: compat.reasoningEffortMap,
-      })
-    : undefined;
   if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&

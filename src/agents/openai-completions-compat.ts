@@ -72,9 +72,9 @@ export function resolveOpenAICompletionsCompatDefaults(
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
-  const isDeepSeek =
-    endpointClass === "deepseek-native" ||
-    (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
+  const providerOrFamilyIsDeepSeek =
+    isDefaultRouteProvider(input.provider, "deepseek") || knownProviderFamily === "deepseek";
+  const isDeepSeek = endpointClass === "deepseek-native" || providerOrFamilyIsDeepSeek;
   const isNonStandard =
     endpointClass === "cerebras-native" ||
     endpointClass === "chutes-native" ||
