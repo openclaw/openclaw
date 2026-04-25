@@ -103,4 +103,82 @@ describe("resolveDirectStatusReplyForSession", () => {
       resolvedReasoningLevel: "off",
     });
   });
+
+  it("allows configured reasoning defaults for authorized direct /status senders", async () => {
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: {
+          defaults: {
+            reasoningDefault: "stream",
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+    resolveCurrentDirectiveLevels.mockResolvedValueOnce({
+      currentThinkLevel: "off",
+      currentFastMode: false,
+      currentVerboseLevel: "off",
+      currentReasoningLevel: "stream",
+      currentElevatedLevel: "off",
+    });
+
+    const result = await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "cli",
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      isGroup: false,
+      defaultGroupActivation: () => "always",
+    });
+
+    expect(result).toMatchObject({
+      resolvedReasoningLevel: "stream",
+    });
+  });
+
+  it("hides configured reasoning defaults from unauthorized direct /status senders", async () => {
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: {
+          defaults: {
+            reasoningDefault: "stream",
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+    resolveCurrentDirectiveLevels.mockResolvedValueOnce({
+      currentThinkLevel: "off",
+      currentFastMode: false,
+      currentVerboseLevel: "off",
+      currentReasoningLevel: "stream",
+      currentElevatedLevel: "off",
+    });
+
+    const result = await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "cli",
+      senderIsOwner: false,
+      isAuthorizedSender: false,
+      isGroup: false,
+      defaultGroupActivation: () => "always",
+    });
+
+    expect(result).toMatchObject({
+      resolvedReasoningLevel: "off",
+    });
+  });
 });

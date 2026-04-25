@@ -440,6 +440,7 @@ export async function resolveReplyDirectives(params: {
     sessionReasoningLevel == null &&
     configuredReasoningDefault != null;
   const canUseConfiguredReasoningDefault =
+    command.isAuthorizedSender ||
     command.senderIsOwner ||
     (Array.isArray(ctx.GatewayClientScopes) && ctx.GatewayClientScopes.includes("operator.admin"));
   let resolvedReasoningLevel: ReasoningLevel =
