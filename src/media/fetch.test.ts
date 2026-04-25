@@ -291,6 +291,44 @@ describe("fetchRemoteMedia", () => {
     await expectBoundedErrorBodyCase(testCase.fetchImpl);
   });
 
+  it("decodes RFC 5987 content-disposition filenames with language tags", async () => {
+    const fetchImpl = async () =>
+      new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+        status: 200,
+        headers: {
+          "content-disposition": "attachment; filename*=UTF-8'en'%E2%9C%93-report.txt",
+          "content-type": "text/plain",
+        },
+      });
+
+    const result = await fetchRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+    });
+
+    expect(result.fileName).toBe("✓-report.txt");
+  });
+
+  it("reduces backslash-separated content-disposition filenames to a basename", async () => {
+    const fetchImpl = async () =>
+      new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+        status: 200,
+        headers: {
+          "content-disposition": String.raw`attachment; filename="C:\temp\photo.jpg"`,
+          "content-type": "image/jpeg",
+        },
+      });
+
+    const result = await fetchRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+    });
+
+    expect(result.fileName).toBe("photo.jpg");
+  });
+
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
 

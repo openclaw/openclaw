@@ -7,6 +7,7 @@ import {
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { decodeContentDispositionFilename } from "./filename.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 
@@ -55,31 +56,6 @@ type FetchMediaOptions = {
    */
   trustExplicitProxyDns?: boolean;
 };
-
-function stripQuotes(value: string): string {
-  return value.replace(/^["']|["']$/g, "");
-}
-
-function parseContentDispositionFileName(header?: string | null): string | undefined {
-  if (!header) {
-    return undefined;
-  }
-  const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
-  if (starMatch?.[1]) {
-    const cleaned = stripQuotes(starMatch[1].trim());
-    const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
-    try {
-      return path.basename(decodeURIComponent(encoded));
-    } catch {
-      return path.basename(encoded);
-    }
-  }
-  const match = /filename\s*=\s*([^;]+)/i.exec(header);
-  if (match?.[1]) {
-    return path.basename(stripQuotes(match[1].trim()));
-  }
-  return undefined;
-}
 
 async function readErrorBodySnippet(
   res: Response,
@@ -251,7 +227,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       // ignore parse errors; leave undefined
     }
 
-    const headerFileName = parseContentDispositionFileName(res.headers.get("content-disposition"));
+    const headerFileName = decodeContentDispositionFilename(res.headers.get("content-disposition"));
     let fileName =
       headerFileName || fileNameFromUrl || (filePathHint ? path.basename(filePathHint) : undefined);
 
