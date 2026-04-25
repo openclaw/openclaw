@@ -260,13 +260,38 @@ function resolveProviderTransport(params: {
   };
 }
 
+function matchesProviderScopedModelId(params: {
+  candidateId?: string;
+  provider: string;
+  modelId: string;
+}): boolean {
+  const { candidateId, provider, modelId } = params;
+  if (candidateId === modelId) {
+    return true;
+  }
+  const slashIndex = candidateId?.indexOf("/") ?? -1;
+  if (!candidateId || slashIndex <= 0) {
+    return false;
+  }
+  const candidateProvider = candidateId.slice(0, slashIndex);
+  const candidateModelId = candidateId.slice(slashIndex + 1);
+  return (
+    candidateModelId === modelId &&
+    normalizeProviderId(candidateProvider) === normalizeProviderId(provider)
+  );
+}
+
 function findInlineModelMatch(params: {
   providers: Record<string, InlineProviderConfig>;
   provider: string;
   modelId: string;
 }) {
   const matchesModelId = (entry: { provider: string; id?: string }) =>
-    entry.id === params.modelId || entry.id === `${entry.provider}/${params.modelId}`;
+    matchesProviderScopedModelId({
+      candidateId: entry.id,
+      provider: entry.provider,
+      modelId: params.modelId,
+    });
   const inlineModels = buildInlineProviderModels(params.providers);
   const exact = inlineModels.find(
     (entry) => entry.provider === params.provider && matchesModelId(entry),
@@ -312,8 +337,12 @@ function findConfiguredProviderModel(
   provider: string,
   modelId: string,
 ) {
-  return providerConfig?.models?.find(
-    (candidate) => candidate.id === modelId || candidate.id === `${provider}/${modelId}`,
+  return providerConfig?.models?.find((candidate) =>
+    matchesProviderScopedModelId({
+      candidateId: candidate.id,
+      provider,
+      modelId,
+    }),
   );
 }
 
