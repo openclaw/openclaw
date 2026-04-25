@@ -1198,6 +1198,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       service,
       source: record.source,
+      origin: record.origin,
       rootDir: record.rootDir,
     });
   };

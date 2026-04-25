@@ -111,6 +111,10 @@ vi.mock("@opentelemetry/semantic-conventions", () => ({
   ATTR_SERVICE_NAME: "service.name",
 }));
 
+import {
+  emitTrustedDiagnosticEvent,
+  onInternalDiagnosticEvent,
+} from "../../../src/infra/diagnostic-events.js";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
@@ -122,6 +126,7 @@ const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "1111111111111111";
 const GRANDCHILD_SPAN_ID = "2222222222222222";
+const TOOL_SPAN_ID = "3333333333333333";
 const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 4096;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
@@ -165,6 +170,7 @@ function createOtelContext(
     },
     logger: createLogger(),
     stateDir: OTEL_TEST_STATE_DIR,
+    internalDiagnostics: { onEvent: onInternalDiagnosticEvent },
   };
 }
 
@@ -174,11 +180,13 @@ function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext 
 
 async function emitAndCaptureLog(
   event: Omit<Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "log.record" }>, "type">,
+  options: { trusted?: boolean } = {},
 ) {
   const service = createDiagnosticsOtelService();
   const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
   await service.start(ctx);
-  emitDiagnosticEvent({
+  const emit = options.trusted ? emitTrustedDiagnosticEvent : emitDiagnosticEvent;
+  emit({
     type: "log.record",
     ...event,
   });
@@ -499,7 +507,7 @@ describe("diagnostics-otel service", () => {
     }
   });
 
-  test("attaches diagnostic trace context to exported logs", async () => {
+  test("does not attach untrusted diagnostic trace context to exported logs", async () => {
     const emitCall = await emitAndCaptureLog({
       level: "INFO",
       message: "traceable log",
@@ -513,15 +521,31 @@ describe("diagnostics-otel service", () => {
       },
     });
 
-    expect(emitCall?.attributes).toMatchObject({
-      "openclaw.traceFlags": "01",
-    });
     expect(emitCall?.attributes).toEqual(
       expect.not.objectContaining({
         "openclaw.traceId": expect.anything(),
         "openclaw.spanId": expect.anything(),
+        "openclaw.traceFlags": expect.anything(),
       }),
     );
+    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    expect(emitCall?.context).toBeUndefined();
+  });
+
+  test("attaches trusted diagnostic trace context to exported logs", async () => {
+    const emitCall = await emitAndCaptureLog(
+      {
+        level: "INFO",
+        message: "traceable log",
+        trace: {
+          traceId: TRACE_ID,
+          spanId: SPAN_ID,
+          traceFlags: "01",
+        },
+      },
+      { trusted: true },
+    );
+
     expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -814,6 +838,75 @@ describe("diagnostics-otel service", () => {
     });
     expect(toolSpan?.end).toHaveBeenCalledWith(expect.any(Number));
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    await service.stop?.(ctx);
+  });
+
+  test("parents trusted diagnostic lifecycle spans from explicit parent ids", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      outcome: "completed",
+      durationMs: 100,
+      trace: {
+        traceId: TRACE_ID,
+        spanId: CHILD_SPAN_ID,
+        parentSpanId: SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      trace: {
+        traceId: TRACE_ID,
+        spanId: GRANDCHILD_SPAN_ID,
+        parentSpanId: CHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.error",
+      runId: "run-1",
+      toolName: "read",
+      durationMs: 20,
+      errorCategory: "TypeError",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: TOOL_SPAN_ID,
+        parentSpanId: GRANDCHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledTimes(3);
+    expect(telemetryState.tracer.setSpanContext.mock.calls.map((call) => call[1])).toEqual([
+      expect.objectContaining({ traceId: TRACE_ID, spanId: SPAN_ID }),
+      expect.objectContaining({ traceId: TRACE_ID, spanId: CHILD_SPAN_ID }),
+      expect.objectContaining({ traceId: TRACE_ID, spanId: GRANDCHILD_SPAN_ID }),
+    ]);
+
+    const parentBySpanName = Object.fromEntries(
+      telemetryState.tracer.startSpan.mock.calls.map((call) => [
+        call[0],
+        (call[2] as { spanContext?: { spanId?: string } } | undefined)?.spanContext?.spanId,
+      ]),
+    );
+    expect(parentBySpanName).toMatchObject({
+      "openclaw.run": SPAN_ID,
+      "openclaw.model.call": CHILD_SPAN_ID,
+      "openclaw.tool.execution": GRANDCHILD_SPAN_ID,
+    });
     await service.stop?.(ctx);
   });
 
