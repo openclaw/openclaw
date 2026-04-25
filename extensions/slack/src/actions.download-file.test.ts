@@ -12,6 +12,7 @@ vi.mock("./monitor/media.js", () => ({
 vi.mock("./client.js", () => ({
   createSlackWebClient: createSlackWebClientMock,
   createSlackWriteClient: createSlackWebClientMock,
+  getSlackWriteClient: createSlackWebClientMock,
 }));
 
 let downloadSlackFile: typeof import("./actions.js").downloadSlackFile;
