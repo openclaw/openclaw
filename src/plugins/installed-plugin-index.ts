@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { listPluginCompatRecords, type PluginCompatCode } from "./compat/registry.js";
 import {
@@ -43,11 +44,36 @@ export type InstalledPluginIndexContributions = {
   contracts: readonly string[];
 };
 
+export type InstalledPluginInstallRecordInfo = Pick<
+  PluginInstallRecord,
+  | "source"
+  | "spec"
+  | "sourcePath"
+  | "installPath"
+  | "version"
+  | "resolvedName"
+  | "resolvedVersion"
+  | "resolvedSpec"
+  | "integrity"
+  | "shasum"
+  | "resolvedAt"
+  | "installedAt"
+  | "clawhubUrl"
+  | "clawhubPackage"
+  | "clawhubFamily"
+  | "clawhubChannel"
+  | "marketplaceName"
+  | "marketplaceSource"
+  | "marketplacePlugin"
+>;
+
 export type InstalledPluginIndexRecord = {
   pluginId: string;
   packageName?: string;
   packageVersion?: string;
-  sourceFacts?: PluginInstallSourceInfo;
+  installRecord?: InstalledPluginInstallRecordInfo;
+  installRecordHash?: string;
+  packageInstall?: PluginInstallSourceInfo;
   manifestPath: string;
   manifestHash: string;
   packageJsonPath?: string;
@@ -215,6 +241,50 @@ function describePackageInstallSource(
   });
 }
 
+function setInstallStringField<Key extends keyof Omit<InstalledPluginInstallRecordInfo, "source">>(
+  target: InstalledPluginInstallRecordInfo,
+  key: Key,
+  value: PluginInstallRecord[Key],
+): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = value.trim();
+  if (normalized) {
+    target[key] = normalized as InstalledPluginInstallRecordInfo[Key];
+  }
+}
+
+function normalizeInstallRecord(
+  record: PluginInstallRecord | undefined,
+): InstalledPluginInstallRecordInfo | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const normalized: InstalledPluginInstallRecordInfo = {
+    source: record.source,
+  };
+  setInstallStringField(normalized, "spec", record.spec);
+  setInstallStringField(normalized, "sourcePath", record.sourcePath);
+  setInstallStringField(normalized, "installPath", record.installPath);
+  setInstallStringField(normalized, "version", record.version);
+  setInstallStringField(normalized, "resolvedName", record.resolvedName);
+  setInstallStringField(normalized, "resolvedVersion", record.resolvedVersion);
+  setInstallStringField(normalized, "resolvedSpec", record.resolvedSpec);
+  setInstallStringField(normalized, "integrity", record.integrity);
+  setInstallStringField(normalized, "shasum", record.shasum);
+  setInstallStringField(normalized, "resolvedAt", record.resolvedAt);
+  setInstallStringField(normalized, "installedAt", record.installedAt);
+  setInstallStringField(normalized, "clawhubUrl", record.clawhubUrl);
+  setInstallStringField(normalized, "clawhubPackage", record.clawhubPackage);
+  setInstallStringField(normalized, "clawhubFamily", record.clawhubFamily);
+  setInstallStringField(normalized, "clawhubChannel", record.clawhubChannel);
+  setInstallStringField(normalized, "marketplaceName", record.marketplaceName);
+  setInstallStringField(normalized, "marketplaceSource", record.marketplaceSource);
+  setInstallStringField(normalized, "marketplacePlugin", record.marketplacePlugin);
+  return normalized;
+}
+
 function buildCandidateLookup(
   candidates: readonly PluginCandidate[],
 ): Map<string, PluginCandidate> {
@@ -288,7 +358,8 @@ function buildInstalledPluginIndex(
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateByRootDir.get(record.rootDir);
     const packageJsonPath = resolvePackageJsonPath(candidate);
-    const sourceFacts = describePackageInstallSource(candidate);
+    const installRecord = normalizeInstallRecord(params.config?.plugins?.installs?.[record.id]);
+    const packageInstall = describePackageInstallSource(candidate);
     const manifestHash =
       safeHashFile({
         filePath: record.manifestPath,
@@ -328,8 +399,12 @@ function buildInstalledPluginIndex(
     if (candidate?.packageVersion) {
       indexRecord.packageVersion = candidate.packageVersion;
     }
-    if (sourceFacts) {
-      indexRecord.sourceFacts = sourceFacts;
+    if (installRecord) {
+      indexRecord.installRecord = installRecord;
+      indexRecord.installRecordHash = hashJson(installRecord);
+    }
+    if (packageInstall) {
+      indexRecord.packageInstall = packageInstall;
     }
     if (packageJsonPath) {
       indexRecord.packageJsonPath = packageJsonPath;
@@ -462,7 +537,8 @@ export function diffInstalledPluginIndexInvalidationReasons(
     }
     if (
       previousPlugin.rootDir !== currentPlugin.rootDir ||
-      previousPlugin.manifestPath !== currentPlugin.manifestPath
+      previousPlugin.manifestPath !== currentPlugin.manifestPath ||
+      previousPlugin.installRecordHash !== currentPlugin.installRecordHash
     ) {
       reasons.add("source-changed");
     }
