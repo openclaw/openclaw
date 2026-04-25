@@ -3880,6 +3880,17 @@ td.data-table-key-col {
   box-shadow: var(--focus-ring);
 }
 
+.agent-tools-runtime-chip--more {
+  color: var(--muted);
+  cursor: default;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+}
+
+.agent-tools-runtime-chip--more:hover {
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  border-color: var(--border);
+}
+
 .agent-tools-runtime-chip__meta {
   color: var(--muted);
   font-size: 11px;
@@ -3905,7 +3916,7 @@ td.data-table-key-col {
 
 .agent-tools-group__summary {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   justify-content: space-between;
   padding: 12px 14px;
@@ -3921,6 +3932,7 @@ td.data-table-key-col {
   content: "▸";
   color: var(--muted);
   font-size: 11px;
+  line-height: 20px;
   transition: transform var(--duration-fast) var(--ease-in-out);
 }
 
@@ -3947,7 +3959,34 @@ td.data-table-key-col {
   gap: 8px;
   min-width: 0;
   font-weight: 600;
+}
+
+.agent-tools-group__summary-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
   flex: 1;
+}
+
+.agent-tools-group__preview {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.agent-tools-group__preview > span {
+  min-width: 0;
+  max-width: min(180px, 100%);
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-tools-group__counts {
@@ -4195,6 +4234,16 @@ td.data-table-key-col {
   .agent-tools-group__summary {
     flex-wrap: wrap;
     align-items: flex-start;
+  }
+
+  .agent-tools-group__summary::before {
+    line-height: 18px;
+  }
+
+  .agent-tools-group__counts {
+    justify-content: flex-start;
+    width: 100%;
+    padding-left: 24px;
   }
 
   .agent-tool-summary {

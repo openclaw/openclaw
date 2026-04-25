@@ -132,6 +132,8 @@ function flattenEffectiveTools(groups: ToolsEffectiveResult["groups"] | null | u
   return (groups ?? []).flatMap((group) => group.tools);
 }
 
+const MAX_RUNTIME_TOOL_CHIPS = 12;
+
 function handleToolGroupToggle(event: Event) {
   const group = event.currentTarget;
   if (!(group instanceof HTMLDetailsElement) || group.open) {
@@ -140,6 +142,35 @@ function handleToolGroupToggle(event: Event) {
   for (const tool of group.querySelectorAll<HTMLDetailsElement>(".agent-tool-card[open]")) {
     tool.open = false;
   }
+}
+
+function handleRuntimeToolJump(event: Event, anchorId: string) {
+  const target = document.getElementById(anchorId);
+  if (!(target instanceof HTMLDetailsElement)) {
+    return;
+  }
+
+  event.preventDefault();
+  const parentGroup = target.closest<HTMLDetailsElement>(".agent-tools-group");
+  if (parentGroup) {
+    parentGroup.open = true;
+  }
+  target.open = true;
+
+  const nextUrl = new URL(window.location.href);
+  nextUrl.hash = anchorId;
+  window.history.replaceState(null, "", nextUrl);
+
+  requestAnimationFrame(() => {
+    const reducedMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView?.({
+      block: "center",
+      behavior: reducedMotion ? "auto" : "smooth",
+    });
+    target.querySelector<HTMLElement>("summary")?.focus();
+  });
 }
 
 function renderEffectiveToolBadge(tool: {
@@ -227,6 +258,11 @@ export function renderAgentTools(params: {
       : [];
   const uniqueEffectiveTools = Array.from(
     new Map(effectiveTools.map((tool) => [normalizeToolName(tool.id), tool])).values(),
+  );
+  const visibleEffectiveTools = uniqueEffectiveTools.slice(0, MAX_RUNTIME_TOOL_CHIPS);
+  const hiddenEffectiveToolCount = Math.max(
+    0,
+    uniqueEffectiveTools.length - visibleEffectiveTools.length,
   );
   const liveToolCount = uniqueEffectiveTools.length;
   const activeToolMap = new Map(
@@ -401,10 +437,14 @@ export function renderAgentTools(params: {
                       `
                     : html`
                         <div class="agent-tools-runtime">
-                          ${uniqueEffectiveTools.map((tool) => {
+                          ${visibleEffectiveTools.map((tool) => {
                             const anchorId = toToolAnchorId(tool.id);
                             return html`
-                              <a class="agent-tools-runtime-chip" href="#${anchorId}">
+                              <a
+                                class="agent-tools-runtime-chip"
+                                href="#${anchorId}"
+                                @click=${(event: Event) => handleRuntimeToolJump(event, anchorId)}
+                              >
                                 <span class="mono" translate="no">${tool.label}</span>
                                 <span class="agent-tools-runtime-chip__meta"
                                   >${renderEffectiveToolBadge(tool)}</span
@@ -412,6 +452,16 @@ export function renderAgentTools(params: {
                               </a>
                             `;
                           })}
+                          ${hiddenEffectiveToolCount > 0
+                            ? html`
+                                <span
+                                  class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
+                                  title=${`${hiddenEffectiveToolCount} more live tools are available in the groups below.`}
+                                >
+                                  +${hiddenEffectiveToolCount} more live tools
+                                </span>
+                              `
+                            : nothing}
                         </div>
                       `}
           </div>
@@ -476,18 +526,29 @@ export function renderAgentTools(params: {
           const activeSectionCount = section.tools.filter((tool) =>
             activeToolIds.has(normalizeToolName(tool.id)),
           ).length;
+          const previewTools = sortedTools.slice(0, 4);
+          const remainingPreviewCount = Math.max(0, sortedTools.length - previewTools.length);
           return html`
-            <details
-              class="agent-tools-group"
-              ?open=${activeSectionCount > 0}
-              @toggle=${handleToolGroupToggle}
-            >
+            <details class="agent-tools-group" @toggle=${handleToolGroupToggle}>
               <summary class="agent-tools-group__summary">
-                <span class="agent-tools-group__title">
-                  ${section.label}
-                  ${section.source === "plugin" && section.pluginId
-                    ? html`<span class="agent-pill">Plugin: ${section.pluginId}</span>`
-                    : nothing}
+                <span class="agent-tools-group__summary-main">
+                  <span class="agent-tools-group__title">
+                    ${section.label}
+                    ${section.source === "plugin" && section.pluginId
+                      ? html`<span class="agent-pill">Plugin: ${section.pluginId}</span>`
+                      : nothing}
+                  </span>
+                  <span class="agent-tools-group__preview" aria-label="Tool preview">
+                    ${previewTools.map(
+                      (tool) =>
+                        html`<span class="mono" translate="no" title=${tool.label}
+                          >${tool.label}</span
+                        >`,
+                    )}
+                    ${remainingPreviewCount > 0
+                      ? html`<span>+${remainingPreviewCount} more</span>`
+                      : nothing}
+                  </span>
                 </span>
                 <span class="agent-tools-group__counts">
                   <span>${formatCountLabel(section.tools.length, "Tool")}</span>

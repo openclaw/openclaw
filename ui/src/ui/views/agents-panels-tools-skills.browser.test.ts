@@ -179,4 +179,83 @@ describe("agents tools panel (browser)", () => {
 
     expect(tool.open).toBe(false);
   });
+
+  it("opens the collapsed group and tool row from a live tool chip", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderAgentTools(
+        createBaseParams({
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "full", label: "Full" }],
+            groups: [
+              {
+                id: "files",
+                label: "Files",
+                source: "core",
+                tools: [
+                  {
+                    id: "read",
+                    label: "read",
+                    description: "Read file contents",
+                    source: "core",
+                    defaultProfiles: ["full"],
+                  },
+                ],
+              },
+            ],
+          },
+          toolsEffectiveResult: {
+            agentId: "main",
+            profile: "full",
+            groups: [
+              {
+                id: "core",
+                label: "Built-in tools",
+                source: "core",
+                tools: [
+                  {
+                    id: "read",
+                    label: "read",
+                    description: "Read file contents",
+                    rawDescription: "Read file contents",
+                    source: "core",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const group = container.querySelector<HTMLDetailsElement>(".agent-tools-group");
+    const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
+    const chip = container.querySelector<HTMLAnchorElement>(
+      '.agent-tools-runtime-chip[href="#agent-tool-read"]',
+    );
+
+    expect(group).not.toBeNull();
+    expect(tool).not.toBeNull();
+    expect(chip).not.toBeNull();
+
+    if (!group || !tool || !chip) {
+      container.remove();
+      return;
+    }
+
+    expect(group.open).toBe(false);
+    expect(tool.open).toBe(false);
+
+    chip.click();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    expect(group.open).toBe(true);
+    expect(tool.open).toBe(true);
+
+    container.remove();
+  });
 });
