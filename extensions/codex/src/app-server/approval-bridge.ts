@@ -431,7 +431,12 @@ function sanitizePermissionHostValue(value: string): string {
 }
 
 function sanitizePermissionPathValue(value: string): string {
-  return truncate(sanitizePermissionScalar(value), PERMISSION_VALUE_MAX_LENGTH);
+  const normalized = sanitizePermissionScalar(value);
+  const homeCompacted = normalized
+    .replace(/^\/home\/(?!\.{1,2}(?=\/|$))[^/]+(?=\/|$)/, "~")
+    .replace(/^\/Users\/(?!\.{1,2}(?=\/|$))[^/]+(?=\/|$)/, "~")
+    .replace(/^[A-Za-z]:[\\/]Users[\\/](?!\.{1,2}(?=[\\/]|$))[^\\/]+(?=[\\/]|$)/i, "~");
+  return truncate(homeCompacted, PERMISSION_VALUE_MAX_LENGTH);
 }
 
 function sanitizePermissionScalar(value: string): string {
@@ -455,16 +460,6 @@ function permissionPathRisks(value: string): string[] {
   const risks: string[] = [];
   if (normalized === "/" || normalized === "\\" || /^[A-Za-z]:[\\/]*$/.test(normalized)) {
     risks.push("filesystem root");
-  }
-  if (
-    normalized === "~" ||
-    normalized === "~/" ||
-    normalized === "~\\" ||
-    /^\/home\/[^/]+\/?$/.test(normalized) ||
-    /^\/Users\/[^/]+\/?$/.test(normalized) ||
-    /^[A-Za-z]:[\\/]Users[\\/][^\\/]+[\\/]?$/i.test(normalized)
-  ) {
-    risks.push("home directory");
   }
   return risks;
 }
