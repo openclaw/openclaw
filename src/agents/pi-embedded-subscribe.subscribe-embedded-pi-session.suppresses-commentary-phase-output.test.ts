@@ -7,6 +7,38 @@ type AssistantMessageWithPhase = AssistantMessage & {
 };
 
 describe("subscribeEmbeddedPiSession", () => {
+  it("suppresses assistant messages that continue into tool use without phase metadata", () => {
+    const onBlockReply = vi.fn();
+    const onPartialReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onBlockReply,
+      onPartialReply,
+      blockReplyBreak: "message_end",
+    });
+
+    const toolUseMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "I'll check this now." },
+        { type: "toolCall", id: "call-1", name: "read", input: { path: "README.md" } },
+      ],
+      stopReason: "toolUse",
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: toolUseMessage });
+    emit({
+      type: "message_update",
+      message: toolUseMessage,
+      assistantMessageEvent: { type: "text_delta", delta: "I'll check this now." },
+    });
+    emit({ type: "message_end", message: toolUseMessage });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(subscription.assistantTexts).toEqual([]);
+  });
+
   it("suppresses commentary-phase assistant messages before tool use", () => {
     const onBlockReply = vi.fn();
     const onPartialReply = vi.fn();

@@ -37,8 +37,37 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
+const TOOL_CALL_CONTENT_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+function hasToolUseContinuation(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  if ((message as { stopReason?: unknown }).stopReason === "toolUse") {
+    return true;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return typeof type === "string" && TOOL_CALL_CONTENT_TYPES.has(type);
+  });
+}
+
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
-  return resolveAssistantMessagePhase(message) === "commentary";
+  const phase = resolveAssistantMessagePhase(message);
+  if (phase === "commentary") {
+    return true;
+  }
+  if (phase === "final_answer") {
+    return false;
+  }
+  return hasToolUseContinuation(message);
 }
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
@@ -503,7 +532,7 @@ export function handleMessageUpdate(
     }
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
-  if (deliveryPhase === "commentary") {
+  if (shouldSuppressAssistantVisibleOutput(partialAssistant)) {
     return;
   }
   if (isPhasePendingOpenAiResponsesTextItem) {
