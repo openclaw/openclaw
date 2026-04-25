@@ -33,6 +33,30 @@ type UserInputOption = {
   description: string;
 };
 
+const USER_INPUT_PROMPT_MAX_LENGTH = 4096;
+const USER_INPUT_TEXT_SCAN_MAX_LENGTH = 4096;
+const USER_INPUT_HEADER_MAX_LENGTH = 80;
+const USER_INPUT_QUESTION_MAX_LENGTH = 500;
+const USER_INPUT_OPTION_LABEL_MAX_LENGTH = 120;
+const USER_INPUT_OPTION_DESCRIPTION_MAX_LENGTH = 200;
+const USER_INPUT_PROMPT_OMITTED = "[additional prompt text omitted]";
+const ANSI_OSC_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
+  "g",
+);
+const ANSI_CONTROL_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|\u001b[@-Z\\-_])`,
+  "g",
+);
+const CONTROL_CHARACTER_RE = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]+`, "g");
+const INVISIBLE_FORMATTING_CONTROL_RE = new RegExp(
+  String.raw`[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufe00-\ufe0f\u{e0100}-\u{e01ef}]`,
+  "gu",
+);
+const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
+  String.raw`(?:\u001b\][^\u001b\u009c\u0007]*|\u009d[^\u001b\u009c\u0007]*|\u001b\[[0-?]*[ -/]*|\u009b[0-?]*[ -/]*|\u001b)$`,
+);
+
 export type CodexUserInputBridge = {
   handleRequest: (request: {
     id: number | string;
@@ -204,24 +228,65 @@ async function deliverUserInputPrompt(
 function formatUserInputPrompt(questions: UserInputQuestion[]): string {
   const lines = ["Codex needs input:"];
   questions.forEach((question, index) => {
+    const header =
+      sanitizePromptDisplayText(question.header, USER_INPUT_HEADER_MAX_LENGTH) ??
+      `Question ${index + 1}`;
+    const prompt =
+      sanitizePromptDisplayText(question.question, USER_INPUT_QUESTION_MAX_LENGTH) ??
+      "Input requested.";
     if (questions.length > 1) {
-      lines.push("", `${index + 1}. ${question.header}`, question.question);
+      lines.push("", `${index + 1}. ${header}`, prompt);
     } else {
-      lines.push("", question.header, question.question);
+      lines.push("", header, prompt);
     }
     if (question.isSecret) {
       lines.push("This channel may show your reply to other participants.");
     }
     question.options?.forEach((option, optionIndex) => {
-      lines.push(
-        `${optionIndex + 1}. ${option.label}${option.description ? ` - ${option.description}` : ""}`,
+      const label =
+        sanitizePromptDisplayText(option.label, USER_INPUT_OPTION_LABEL_MAX_LENGTH) ??
+        `Option ${optionIndex + 1}`;
+      const description = sanitizePromptDisplayText(
+        option.description,
+        USER_INPUT_OPTION_DESCRIPTION_MAX_LENGTH,
       );
+      lines.push(`${optionIndex + 1}. ${label}${description ? ` - ${description}` : ""}`);
     });
     if (question.isOther) {
       lines.push("Other: reply with your own answer.");
     }
   });
-  return lines.join("\n");
+  return truncatePrompt(lines.join("\n"), USER_INPUT_PROMPT_MAX_LENGTH);
+}
+
+function sanitizePromptDisplayText(value: string, maxLength: number): string | undefined {
+  const scanned = value.slice(0, USER_INPUT_TEXT_SCAN_MAX_LENGTH);
+  const clipped = value.length > USER_INPUT_TEXT_SCAN_MAX_LENGTH;
+  const sanitized = scanned
+    .replace(ANSI_OSC_SEQUENCE_RE, "")
+    .replace(ANSI_CONTROL_SEQUENCE_RE, "")
+    .replace(DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE, "")
+    .replace(INVISIBLE_FORMATTING_CONTROL_RE, " ")
+    .replace(CONTROL_CHARACTER_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  const truncated = truncateText(sanitized, maxLength);
+  return clipped && truncated.length === sanitized.length ? `${truncated}...` : truncated;
+}
+
+function truncateText(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function truncatePrompt(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  const suffix = `\n${USER_INPUT_PROMPT_OMITTED}`;
+  return `${value.slice(0, Math.max(0, maxLength - suffix.length))}${suffix}`;
 }
 
 function buildUserInputResponse(questions: UserInputQuestion[], inputText: string): JsonObject {
