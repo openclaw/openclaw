@@ -333,6 +333,9 @@ Model usage:
   `openclaw.provider`, `openclaw.model`)
 - `openclaw.context.tokens` (histogram, attrs: `openclaw.context`,
   `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
+- `gen_ai.client.token.usage` (histogram, GenAI semantic-conventions metric,
+  attrs: `gen_ai.token.type` = `input`/`output`, `gen_ai.system`,
+  `gen_ai.operation.name`, `gen_ai.request.model`)
 
 Message flow:
 
@@ -371,6 +374,16 @@ Exec:
 - `openclaw.exec.duration_ms` (histogram, attrs: `openclaw.exec.target`,
   `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`)
 
+Diagnostics internals (memory + tool loop):
+
+- `openclaw.memory.heap_used_bytes` (histogram, attrs: `openclaw.memory.kind`)
+- `openclaw.memory.rss_bytes` (histogram)
+- `openclaw.memory.pressure` (counter, attrs: `openclaw.memory.level`)
+- `openclaw.tool.loop.iterations` (counter, attrs: `openclaw.toolName`,
+  `openclaw.outcome`)
+- `openclaw.tool.loop.duration_ms` (histogram, attrs: `openclaw.toolName`,
+  `openclaw.outcome`)
+
 ### Exported spans (names + key attributes)
 
 - `openclaw.model.usage`
@@ -382,7 +395,9 @@ Exec:
 - `openclaw.model.call`
   - `gen_ai.system`, `gen_ai.request.model`, `gen_ai.operation.name`,
     `openclaw.provider`, `openclaw.model`, `openclaw.api`,
-    `openclaw.transport`
+    `openclaw.transport`, `openclaw.provider.request_id_hash` (bounded
+    SHA-based hash of the upstream provider request id; raw ids are not
+    exported)
 - `openclaw.tool.execution`
   - `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.errorCategory`,
     `openclaw.tool.params.*`
@@ -403,6 +418,16 @@ Exec:
     `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
   - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
+- `openclaw.context.assembled`
+  - `openclaw.prompt.size`, `openclaw.history.size`,
+    `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt,
+    history, response, or session-key content)
+- `openclaw.tool.loop`
+  - `openclaw.toolName`, `openclaw.outcome`, `openclaw.iterations`,
+    `openclaw.errorCategory` (no loop messages, params, or tool output)
+- `openclaw.memory.pressure`
+  - `openclaw.memory.level`, `openclaw.memory.heap_used_bytes`,
+    `openclaw.memory.rss_bytes`
 
 When content capture is explicitly enabled, model/tool spans can also include
 bounded, redacted `openclaw.content.*` attributes for the specific content
