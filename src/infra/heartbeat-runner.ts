@@ -373,6 +373,14 @@ function resolveHeartbeatSession(
   };
 }
 
+function isHeartbeatSuffixChain(value: string) {
+  return /^(:heartbeat)+$/i.test(value);
+}
+
+function hasHeartbeatSuffixChain(value: string) {
+  return /:heartbeat(?::heartbeat)*$/i.test(value);
+}
+
 function resolveIsolatedHeartbeatSessionKey(params: {
   sessionKey: string;
   configuredSessionKey: string;
@@ -384,7 +392,7 @@ function resolveIsolatedHeartbeatSessionKey(params: {
     if (
       params.sessionKey.startsWith(storedBaseSessionKey) &&
       suffix.length > 0 &&
-      /^(:heartbeat)+$/.test(suffix)
+      isHeartbeatSuffixChain(suffix)
     ) {
       return {
         isolatedSessionKey: `${storedBaseSessionKey}:heartbeat`,
@@ -402,8 +410,8 @@ function resolveIsolatedHeartbeatSessionKey(params: {
   const configuredSuffix = params.sessionKey.slice(params.configuredSessionKey.length);
   if (
     params.sessionKey.startsWith(params.configuredSessionKey) &&
-    /^(:heartbeat)+$/.test(configuredSuffix) &&
-    !params.configuredSessionKey.endsWith(":heartbeat")
+    isHeartbeatSuffixChain(configuredSuffix) &&
+    !params.configuredSessionKey.toLowerCase().endsWith(":heartbeat")
   ) {
     return {
       isolatedSessionKey: `${params.configuredSessionKey}:heartbeat`,
@@ -532,7 +540,7 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
   inspectionSessionKey: string;
   inspectionSessionEntry?: ReturnType<typeof resolveHeartbeatSession>["entry"];
-  isolationSourceSessionKey: string;
+  busySessionKeys: string[];
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
   hasTaggedCronEvents: boolean;
@@ -567,11 +575,11 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat?.isolatedSession === true &&
     forcedSession !== undefined &&
     forcedSession.sessionKey.startsWith(configuredSession.sessionKey) &&
-    /^(:heartbeat)+$/.test(forcedSession.sessionKey.slice(configuredSession.sessionKey.length));
+    isHeartbeatSuffixChain(forcedSession.sessionKey.slice(configuredSession.sessionKey.length));
   const forcedIsRealHeartbeatSession =
     params.heartbeat?.isolatedSession === true &&
     forcedSession !== undefined &&
-    /:heartbeat(?:[:][Hh]eartbeat)*$/i.test(forcedSession.sessionKey) &&
+    hasHeartbeatSuffixChain(forcedSession.sessionKey) &&
     !forcedIsConfiguredIsolatedLane;
   const forcedTargetsDistinctSession =
     forcedSession !== undefined && forcedSession.sessionKey !== configuredSession.sessionKey;
@@ -600,13 +608,20 @@ async function resolveHeartbeatPreflight(params: {
       : (forcedSession ?? configuredSession);
   const inspectionSession =
     params.heartbeat?.isolatedSession === true && shouldUseForcedDistinctSession
-      ? forcedSession
-      : (forcedIsConfiguredIsolatedLane || forcedIsRealHeartbeatSession) && forcedSession
-        ? forcedSession
-        : session;
+      ? (forcedSession ?? session)
+      : session;
   const inspectionSessionKey = inspectionSession.sessionKey;
   const inspectionSessionEntry = inspectionSession.entry;
-  const isolationSourceSessionKey = inspectionSessionKey;
+  const busySessionKeys = Array.from(
+    new Set([
+      session.sessionKey,
+      ...(params.heartbeat?.isolatedSession === true &&
+      forcedSession !== undefined &&
+      forcedSession.sessionKey !== session.sessionKey
+        ? [forcedSession.sessionKey]
+        : []),
+    ]),
+  );
   const pendingEventEntries = peekSystemEventEntries(inspectionSessionKey);
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
@@ -643,7 +658,7 @@ async function resolveHeartbeatPreflight(params: {
     session,
     inspectionSessionKey,
     inspectionSessionEntry,
-    isolationSourceSessionKey,
+    busySessionKeys,
     pendingEventEntries,
     turnSourceDeliveryContext,
     hasTaggedCronEvents,
@@ -831,7 +846,7 @@ export async function runHeartbeatOnce(opts: {
         return {
           configuredSession,
           ...resolveIsolatedHeartbeatSessionKey({
-            sessionKey: preflight.isolationSourceSessionKey,
+            sessionKey: preflight.inspectionSessionKey,
             configuredSessionKey: configuredSession.sessionKey,
             sessionEntry: preflight.inspectionSessionEntry,
           }),
@@ -839,14 +854,15 @@ export async function runHeartbeatOnce(opts: {
       })()
     : undefined;
 
-  // Check the resolved session lane — if it is busy, skip to avoid interrupting
-  // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
-  // re-schedule this wake automatically.  See #14396 (closed without merge).
-  const sessionLaneKey = resolveEmbeddedSessionLane(
-    isolatedSessionResolution?.isolatedSessionKey ?? sessionKey,
-  );
-  const sessionLaneSize = (opts.deps?.getQueueSize ?? getQueueSize)(sessionLaneKey);
-  if (sessionLaneSize > 0) {
+  // Check the pre-isolation session lanes — if any are busy, skip to avoid
+  // interrupting an active streaming turn that shares the same delivery context.
+  // The wake-layer retry (heartbeat-wake.ts) will re-schedule this wake automatically.
+  // See #14396 (closed without merge).
+  const resolveQueueSize = opts.deps?.getQueueSize ?? getQueueSize;
+  const busySessionLaneKey = preflight.busySessionKeys
+    .map((busySessionKey) => resolveEmbeddedSessionLane(busySessionKey))
+    .find((laneKey) => resolveQueueSize(laneKey) > 0);
+  if (busySessionLaneKey) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: "requests-in-flight",
@@ -936,7 +952,7 @@ export async function runHeartbeatOnce(opts: {
       forceNew: true,
     });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
-      sessionKey: preflight.isolationSourceSessionKey,
+      sessionKey: preflight.inspectionSessionKey,
       isolatedSessionKey,
       isolatedBaseSessionKey,
     });

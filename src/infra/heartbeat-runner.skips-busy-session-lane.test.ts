@@ -125,6 +125,71 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
+  it("skips isolated heartbeat when the configured base lane is busy", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig(true);
+      const baseSessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+
+      const getQueueSize = vi.fn((lane?: string) => {
+        if (!lane || lane === "main") {
+          return 0;
+        }
+        return lane === `session:${baseSessionKey}` ? 1 : 0;
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("skipped");
+      if (result.status === "skipped") {
+        expect(result.reason).toBe("requests-in-flight");
+      }
+      expect(getQueueSize).toHaveBeenCalledWith(`session:${baseSessionKey}`);
+      expect(getQueueSize).not.toHaveBeenCalledWith(`session:${baseSessionKey}:heartbeat`);
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("skips isolated heartbeat when a forced live session lane is busy", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig(true);
+      const baseSessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+      const forcedLiveSessionKey = "agent:main:cloud-codex";
+
+      const getQueueSize = vi.fn((lane?: string) => {
+        if (!lane || lane === "main") {
+          return 0;
+        }
+        return lane === `session:${forcedLiveSessionKey}` ? 1 : 0;
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey: forcedLiveSessionKey,
+        deps: {
+          getQueueSize,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("skipped");
+      if (result.status === "skipped") {
+        expect(result.reason).toBe("requests-in-flight");
+      }
+      expect(getQueueSize).toHaveBeenCalledWith(`session:${baseSessionKey}`);
+      expect(getQueueSize).toHaveBeenCalledWith(`session:${forcedLiveSessionKey}`);
+      expect(getQueueSize).not.toHaveBeenCalledWith(`session:${forcedLiveSessionKey}:heartbeat`);
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("checks the isolated heartbeat lane when wake re-enters on an active :heartbeat session", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig(true);
