@@ -129,11 +129,21 @@ export function createPendingDescendantCounter(runsSnapshot?: Map<string, Subage
   };
 }
 
+/** Default staleness threshold: matches DEFAULT_AGENT_TIMEOUT_SECONDS (48 h). */
+const STALE_RUN_THRESHOLD_MS = 48 * 60 * 60 * 1000;
+
 export function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
-) {
-  return !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
+): boolean {
+  if (entry.endedAt) {
+    return pendingDescendantCount(entry.childSessionKey) > 0;
+  }
+  const startedAt = entry.startedAt ?? entry.createdAt;
+  if (startedAt && Date.now() - startedAt > STALE_RUN_THRESHOLD_MS) {
+    return false;
+  }
+  return pendingDescendantCount(entry.childSessionKey) > 0 || !entry.endedAt;
 }
 
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
@@ -143,6 +153,10 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendan
     return `active (waiting on ${pendingDescendants} ${childLabel})`;
   }
   if (!entry.endedAt) {
+    const startedAt = entry.startedAt ?? entry.createdAt;
+    if (startedAt && Date.now() - startedAt > STALE_RUN_THRESHOLD_MS) {
+      return "stale";
+    }
     return "running";
   }
   const status = entry.outcome?.status ?? "done";
