@@ -3193,7 +3193,7 @@ export async function loadOpenClawPluginCliRegistry(
       candidate.origin === "bundled"
         ? cliMetadataSource
           ? safeRealpathOrResolve(cliMetadataSource)
-          : safeRealpathOrResolve(candidate.source)
+          : null
         : (cliMetadataSource ?? candidate.source);
     if (!sourceForCliMetadata) {
       record.status = "loaded";
