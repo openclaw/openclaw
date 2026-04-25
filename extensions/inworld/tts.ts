@@ -1,5 +1,5 @@
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
 export const DEFAULT_INWORLD_VOICE_ID = "Sarah";
@@ -25,6 +25,18 @@ export type InworldAudioEncoding =
 export function normalizeInworldBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   return trimmed?.replace(/\/+$/, "") || DEFAULT_INWORLD_BASE_URL;
+}
+
+function ssrfPolicyFromInworldBaseUrl(baseUrl: string): SsrFPolicy | undefined {
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return { hostnameAllowlist: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -71,6 +83,7 @@ export async function inworldTTS(params: {
       body: requestBody,
     },
     timeoutMs: params.timeoutMs,
+    policy: ssrfPolicyFromInworldBaseUrl(baseUrl),
     auditContext: "inworld-tts",
   });
 
@@ -139,6 +152,7 @@ export async function listInworldVoices(params: {
       },
     },
     timeoutMs: params.timeoutMs,
+    policy: ssrfPolicyFromInworldBaseUrl(baseUrl),
     auditContext: "inworld-voices",
   });
 

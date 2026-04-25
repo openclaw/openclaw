@@ -1,5 +1,6 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
+  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
@@ -62,10 +63,49 @@ function readInworldOverrides(
     return {};
   }
   return {
-    voiceId: trimToUndefined(overrides.voiceId),
-    modelId: trimToUndefined(overrides.modelId),
+    voiceId: trimToUndefined(overrides.voiceId ?? overrides.voice),
+    modelId: trimToUndefined(overrides.modelId ?? overrides.model),
     temperature: asFiniteNumber(overrides.temperature),
   };
+}
+
+function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
+  handled: boolean;
+  overrides?: SpeechProviderOverrides;
+  warnings?: string[];
+} {
+  switch (ctx.key) {
+    case "voice":
+    case "voiceid":
+    case "voice_id":
+    case "inworld_voice":
+    case "inworldvoice":
+      if (!ctx.policy.allowVoice) {
+        return { handled: true };
+      }
+      return { handled: true, overrides: { voiceId: ctx.value } };
+    case "model":
+    case "modelid":
+    case "model_id":
+    case "inworld_model":
+    case "inworldmodel":
+      if (!ctx.policy.allowModelId) {
+        return { handled: true };
+      }
+      return { handled: true, overrides: { modelId: ctx.value } };
+    case "temperature": {
+      if (!ctx.policy.allowVoiceSettings) {
+        return { handled: true };
+      }
+      const temperature = Number(ctx.value);
+      if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+        return { handled: true, warnings: [`invalid Inworld temperature "${ctx.value}"`] };
+      }
+      return { handled: true, overrides: { temperature } };
+    }
+    default:
+      return { handled: false };
+  }
 }
 
 export function buildInworldSpeechProvider(): SpeechProviderPlugin {
@@ -75,6 +115,7 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
     autoSelectOrder: 30,
     models: INWORLD_TTS_MODELS,
     resolveConfig: ({ rawConfig }) => normalizeInworldProviderConfig(rawConfig),
+    parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeInworldProviderConfig(baseTtsConfig);
       const resolvedApiKey =

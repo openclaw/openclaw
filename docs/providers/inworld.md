@@ -14,13 +14,13 @@ OpenClaw posts to Inworld's streaming TTS endpoint, concatenates the
 returned base64 audio chunks into a single buffer, and hands the result to
 the standard reply-audio pipeline.
 
-| Detail        | Value                                                                          |
-| ------------- | ------------------------------------------------------------------------------ |
-| Website       | [inworld.ai](https://inworld.ai)                                               |
-| Docs          | [docs.inworld.ai/docs/tts-overview](https://docs.inworld.ai/docs/tts-overview) |
-| Auth          | `INWORLD_API_KEY` (HTTP Basic, Base64 dashboard credential)                    |
-| Default voice | `Sarah`                                                                        |
-| Default model | `inworld-tts-1.5-max`                                                          |
+| Detail        | Value                                                       |
+| ------------- | ----------------------------------------------------------- |
+| Website       | [inworld.ai](https://inworld.ai)                            |
+| Docs          | [docs.inworld.ai/tts/tts](https://docs.inworld.ai/tts/tts)  |
+| Auth          | `INWORLD_API_KEY` (HTTP Basic, Base64 dashboard credential) |
+| Default voice | `Sarah`                                                     |
+| Default model | `inworld-tts-1.5-max`                                       |
 
 ## Getting started
 
