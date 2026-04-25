@@ -58,6 +58,38 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("reenables local check policy for local Vitest children", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_LOCAL_CHECK: "0",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toMatchObject({
+      OPENCLAW_LOCAL_CHECK: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("preserves explicit local-check disablement in CI", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          CI: "true",
+          OPENCLAW_LOCAL_CHECK: "0",
+          PATH: "/usr/bin",
+        },
+        "linux",
+      ).env,
+    ).toMatchObject({
+      CI: "true",
+      OPENCLAW_LOCAL_CHECK: "0",
+      PATH: "/usr/bin",
+    });
+  });
+
   it("caps native Rust worker pools for serial Vitest runs", () => {
     expect(
       resolveVitestSpawnParams(

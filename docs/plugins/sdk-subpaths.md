@@ -112,7 +112,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
   <Accordion title="Auth and security subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
+    | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers including dynamic argument menu formatting, sender-authorization helpers |
     | `plugin-sdk/command-status` | Command/help message builders such as `buildCommandsMessagePaginated` and `buildHelpMessage` |
     | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
     | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
@@ -125,7 +125,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
     | `plugin-sdk/reply-dedupe` | Narrow inbound reply dedupe reset helpers |
     | `plugin-sdk/channel-contract-testing` | Narrow channel contract test helpers without the broad testing barrel |
-    | `plugin-sdk/command-auth-native` | Native command auth + native session-target helpers |
+    | `plugin-sdk/command-auth-native` | Native command auth, dynamic argument menu formatting, and native session-target helpers |
     | `plugin-sdk/command-detection` | Shared command detection helpers |
     | `plugin-sdk/command-primitives-runtime` | Lightweight command text predicates for hot channel paths |
     | `plugin-sdk/command-surface` | Command-body normalization and command-surface helpers |
@@ -152,7 +152,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/hook-runtime` | Shared webhook/internal hook pipeline helpers |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
     | `plugin-sdk/process-runtime` | Process exec helpers |
-    | `plugin-sdk/cli-runtime` | CLI formatting, wait, and version helpers |
+    | `plugin-sdk/cli-runtime` | CLI formatting, wait, version, argument-invocation, and lazy command-group helpers |
     | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
     | `plugin-sdk/config-runtime` | Config load/write helpers and plugin-config lookup helpers |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |

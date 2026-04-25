@@ -17,20 +17,22 @@ Running `openclaw crestodian` starts the same helper explicitly.
 
 ## What Crestodian shows
 
-On startup, Crestodian prints a compact system overview:
+On startup, interactive Crestodian opens the same TUI shell used by
+`openclaw tui`, with a Crestodian chat backend. The chat log starts with a short
+greeting:
 
-- config path and validity
-- configured agents and the default agent
-- default model
-- local Codex and Claude Code CLI availability
-- OpenAI and Anthropic API-key presence
-- planner mode (`deterministic` or model-assisted through the configured model)
-- local docs path or the public docs URL
-- local source path for Git checkouts, otherwise the OpenClaw GitHub source URL
-- gateway reachability
-- the immediate recommended next step
+- when to start Crestodian
+- the model or deterministic planner path Crestodian is actually using
+- config validity and the default agent
+- Gateway reachability from the first startup probe
+- the next debug action Crestodian can take
 
-It does not dump secrets or load plugin CLI commands just to start.
+It does not dump secrets or load plugin CLI commands just to start. The TUI
+still provides the normal header, chat log, status line, footer, autocomplete,
+and editor controls.
+
+Use `status` for the detailed inventory with config path, docs/source paths,
+local CLI probes, API-key presence, agents, model, and Gateway details.
 
 Crestodian uses the same OpenClaw reference discovery as regular agents. In a Git checkout,
 it points itself at local `docs/` and the local source tree. In an npm package install, it
@@ -51,7 +53,7 @@ openclaw crestodian --message "set default model openai/gpt-5.5" --yes
 openclaw onboard --modern
 ```
 
-Inside the interactive prompt:
+Inside the Crestodian TUI:
 
 ```text
 status
@@ -105,7 +107,7 @@ Read-only operations can run immediately:
 - show the audit-log path
 
 Persistent operations require conversational approval in interactive mode unless
-you pass `--yes` for a one-shot command:
+you pass `--yes` for a direct command:
 
 - write config
 - run `config set`
@@ -153,14 +155,22 @@ model unset. Install or log into Codex/Claude Code, or expose
 
 ## Model-Assisted Planner
 
-Crestodian always starts in deterministic mode. Once a valid OpenClaw model is
-configured, local Crestodian can make one bounded model call for fuzzy commands
-that the deterministic parser does not understand.
+Crestodian always starts in deterministic mode. For fuzzy commands that the
+deterministic parser does not understand, local Crestodian can make one bounded
+planner turn through OpenClaw's normal runtime paths. It first uses the
+configured OpenClaw model. If no configured model is usable yet, it can fall
+back to local runtimes already present on the machine:
+
+- Claude Code CLI: `claude-cli/claude-opus-4-7`
+- Codex app-server harness: `openai/gpt-5.5` with `embeddedHarness.runtime: "codex"`
+- Codex CLI: `codex-cli/gpt-5.5`
 
 The model-assisted planner cannot mutate config directly. It must translate the
 request into one of Crestodian's typed commands, then the normal approval and
 audit rules apply. Crestodian prints the model it used and the interpreted
-command before it runs anything.
+command before it runs anything. Configless fallback planner turns are
+temporary, tool-disabled where the runtime supports it, and use a temporary
+workspace/session.
 
 Message-channel rescue mode does not use the model-assisted planner. Remote
 rescue stays deterministic so a broken or compromised normal agent path cannot
@@ -273,6 +283,19 @@ Remote rescue is covered by the Docker lane:
 
 ```bash
 pnpm test:docker:crestodian-rescue
+```
+
+Configless local planner fallback is covered by:
+
+```bash
+pnpm test:docker:crestodian-planner
+```
+
+An opt-in live channel command-surface smoke checks `/crestodian status` plus a
+persistent approval roundtrip through the rescue handler:
+
+```bash
+pnpm test:live:crestodian-rescue-channel
 ```
 
 Fresh configless setup through Crestodian is covered by:

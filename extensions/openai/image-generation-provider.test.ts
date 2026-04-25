@@ -643,7 +643,7 @@ describe("openai image generation provider", () => {
         url: "https://chatgpt.com/backend-api/codex/responses",
         timeoutMs: 180_000,
         body: expect.objectContaining({
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           instructions: "You are an image generation assistant.",
           stream: true,
           store: false,
@@ -664,7 +664,7 @@ describe("openai image generation provider", () => {
     );
     expect(postMultipartRequestMock).not.toHaveBeenCalled();
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai-codex mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.4 timeoutMs=180000",
+      "image auth selected: provider=openai-codex mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
     );
     expect(result.images).toEqual([
       {
@@ -724,7 +724,7 @@ describe("openai image generation provider", () => {
       }),
     );
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai-codex mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.4 timeoutMs=180000",
+      "image auth selected: provider=openai-codex mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
     );
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
   });
@@ -841,7 +841,7 @@ describe("openai image generation provider", () => {
     });
 
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai-codex mode=oauth fakeignored transport=codex-responses requestedModel=gpt-image-2 forged=true next responsesModel=gpt-5.4 timeoutMs=180000",
+      "image auth selected: provider=openai-codex mode=oauth fakeignored transport=codex-responses requestedModel=gpt-image-2 forged=true next responsesModel=gpt-5.5 timeoutMs=180000",
     );
   });
 
@@ -1181,6 +1181,38 @@ describe("openai image generation provider", () => {
       );
     });
 
+    it("omits model from Azure generation body because deployment is URL-scoped", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2-1",
+        prompt: "Azure cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.openai.azure.com/openai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2-1/images/generations?api-version=2024-12-01-preview",
+          body: {
+            prompt: "Azure cat",
+            n: 1,
+            size: "1024x1024",
+          },
+        }),
+      );
+    });
+
     it("uses api-key header and deployment-scoped URL for .cognitiveservices.azure.com hosts", async () => {
       mockGeneratedPngResponse();
 
@@ -1306,6 +1338,41 @@ describe("openai image generation provider", () => {
           body: expect.any(FormData),
         }),
       );
+    });
+
+    it("omits model from Azure edit form because deployment is URL-scoped", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2-1",
+        prompt: "Change background",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.openai.azure.com/openai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        inputImages: [
+          {
+            buffer: Buffer.from("png-bytes"),
+            mimeType: "image/png",
+            fileName: "reference.png",
+          },
+        ],
+      });
+
+      const editCallArgs = postMultipartRequestMock.mock.calls[0]?.[0] as {
+        body: FormData;
+      };
+      expect(editCallArgs.body.has("model")).toBe(false);
+      expect(editCallArgs.body.get("prompt")).toBe("Change background");
+      expect(editCallArgs.body.get("size")).toBe("1024x1024");
     });
 
     it("strips trailing /v1 from Azure base URL", async () => {

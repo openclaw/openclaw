@@ -187,6 +187,40 @@ Cron jobs panel notes:
   - Gateway persists aborted partial assistant text into transcript history when buffered output exists
   - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output
 
+## PWA install and web push
+
+The Control UI ships a `manifest.webmanifest` and a service worker, so
+modern browsers can install it as a standalone PWA. Web Push lets the
+Gateway wake the installed PWA with notifications even when the tab or
+browser window is not open.
+
+| Surface                                               | What it does                                                       |
+| ----------------------------------------------------- | ------------------------------------------------------------------ |
+| `ui/public/manifest.webmanifest`                      | PWA manifest. Browsers offer "Install app" once it is reachable.   |
+| `ui/public/sw.js`                                     | Service worker that handles `push` events and notification clicks. |
+| `push/vapid-keys.json` (under the OpenClaw state dir) | Auto-generated VAPID keypair used to sign Web Push payloads.       |
+| `push/web-push-subscriptions.json`                    | Persisted browser subscription endpoints.                          |
+
+Override the VAPID keypair through env vars on the Gateway process when
+you want to pin keys (for multi-host deployments, secrets rotation, or
+tests):
+
+- `OPENCLAW_VAPID_PUBLIC_KEY`
+- `OPENCLAW_VAPID_PRIVATE_KEY`
+- `OPENCLAW_VAPID_SUBJECT` (defaults to `mailto:openclaw@localhost`)
+
+The Control UI uses these scope-gated Gateway methods to register and
+test browser subscriptions:
+
+- `push.web.vapidPublicKey` — fetches the active VAPID public key.
+- `push.web.subscribe` — registers an `endpoint` plus `keys.p256dh`/`keys.auth`.
+- `push.web.unsubscribe` — removes a registered endpoint.
+- `push.web.test` — sends a test notification to the caller's subscription.
+
+Web Push is independent of the iOS APNS relay path
+(see [Configuration](/gateway/configuration) for relay-backed push) and
+the existing `push.test` method, which target native mobile pairing.
+
 ## Hosted embeds
 
 Assistant messages can render hosted web content inline with the `[embed ...]`
@@ -324,12 +358,13 @@ See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
 ## Content Security Policy
 
-The Control UI ships with a tight `img-src` policy: only **same-origin** assets and `data:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and do not issue network fetches.
+The Control UI ships with a tight `img-src` policy: only **same-origin** assets, `data:` URLs, and locally generated `blob:` URLs are allowed. Remote `http(s)` and protocol-relative image URLs are rejected by the browser and do not issue network fetches.
 
 What this means in practice:
 
-- Avatars and images served under relative paths (for example `/avatars/<id>`) still render.
+- Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes that the UI fetches and converts into local `blob:` URLs.
 - Inline `data:image/...` URLs still render (useful for in-protocol payloads).
+- Local `blob:` URLs created by the Control UI still render.
 - Remote avatar URLs emitted by channel metadata are stripped at the Control UI's avatar helpers and replaced with the built-in logo/badge, so a compromised or malicious channel cannot force arbitrary remote image fetches from an operator browser.
 
 You do not need to change anything to get this behavior — it is always on and not configurable.

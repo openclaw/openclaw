@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.24",
+  "version": "2026.4.25",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -1130,13 +1130,13 @@
       "types": "./dist/plugin-sdk/provider-usage.d.ts",
       "default": "./dist/plugin-sdk/provider-usage.js"
     },
-    "./plugin-sdk/web-content-extractor": {
-      "types": "./dist/plugin-sdk/web-content-extractor.d.ts",
-      "default": "./dist/plugin-sdk/web-content-extractor.js"
-    },
     "./plugin-sdk/document-extractor": {
       "types": "./dist/plugin-sdk/document-extractor.d.ts",
       "default": "./dist/plugin-sdk/document-extractor.js"
+    },
+    "./plugin-sdk/web-content-extractor": {
+      "types": "./dist/plugin-sdk/web-content-extractor.d.ts",
+      "default": "./dist/plugin-sdk/web-content-extractor.js"
     },
     "./plugin-sdk/provider-web-fetch-contract": {
       "types": "./dist/plugin-sdk/provider-web-fetch-contract.d.ts",
@@ -1299,7 +1299,7 @@
     "build": "node scripts/build-all.mjs",
     "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
-    "build:plugin-sdk:dts": "tsgo -p tsconfig.plugin-sdk.dts.json",
+    "build:plugin-sdk:dts": "node scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true",
     "build:plugin-sdk:strict-smoke": "pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
     "canon:check": "node scripts/canon.mjs check",
@@ -1479,6 +1479,7 @@
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
     "test:docker:config-reload": "bash scripts/e2e/config-reload-source-docker.sh",
     "test:docker:crestodian-first-run": "bash scripts/e2e/crestodian-first-run-docker.sh",
+    "test:docker:crestodian-planner": "bash scripts/e2e/crestodian-planner-docker.sh",
     "test:docker:crestodian-rescue": "bash scripts/e2e/crestodian-rescue-docker.sh",
     "test:docker:cron-mcp-cleanup": "bash scripts/e2e/cron-mcp-cleanup-docker.sh",
     "test:docker:doctor-switch": "bash scripts/e2e/doctor-install-switch-docker.sh",
@@ -1543,6 +1544,7 @@
     "test:live": "node scripts/test-live.mjs",
     "test:live:cache": "bun scripts/check-live-cache.ts",
     "test:live:codex-harness": "OPENCLAW_LIVE_CODEX_HARNESS=1 node scripts/test-live.mjs -- src/gateway/gateway-codex-harness.live.test.ts",
+    "test:live:crestodian-rescue-channel": "OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL=1 node scripts/test-live.mjs -- src/crestodian/rescue-channel.live.test.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:media": "node --import tsx scripts/test-live-media.ts",
     "test:live:media:image": "node --import tsx scripts/test-live-media.ts image",
@@ -1640,6 +1642,7 @@
     "tslog": "^4.10.2",
     "typebox": "1.1.31",
     "undici": "8.1.0",
+    "web-push": "^3.6.7",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
@@ -1654,7 +1657,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "25.6.0",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260423.1",
+    "@typescript/native-preview": "7.0.0-dev.20260421.2",
     "@vitest/coverage-v8": "^4.1.5",
     "jscpd": "4.0.9",
     "jsdom": "^29.0.2",

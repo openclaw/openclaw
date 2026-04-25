@@ -1,5 +1,6 @@
 import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
 import { BrowserError, toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -7,7 +8,13 @@ import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  getProfileContext,
+  jsonError,
+  toBoolean,
+  toStringOrEmpty,
+} from "./utils.js";
 
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
@@ -83,6 +90,17 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
   } catch (err) {
     detectError = String(err);
   }
+  const configuredHeadlessMode = resolveManagedBrowserHeadlessMode(
+    current.resolved,
+    profileCtx.profile,
+  );
+  const headlessMode =
+    typeof profileState?.running?.headless === "boolean"
+      ? {
+          headless: profileState.running.headless,
+          source: profileState.running.headlessSource ?? configuredHeadlessMode.source,
+        }
+      : configuredHeadlessMode;
 
   return {
     enabled: current.resolved.enabled,
@@ -103,11 +121,48 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     detectError,
     userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
     color: profileCtx.profile.color,
-    headless: profileCtx.profile.headless,
+    headless: headlessMode.headless,
+    headlessSource: headlessMode.source,
     noSandbox: current.resolved.noSandbox,
     executablePath: profileCtx.profile.executablePath ?? null,
     attachOnly: profileCtx.profile.attachOnly,
   };
+}
+
+function hasQueryKey(query: BrowserRequest["query"], key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(query ?? {}, key);
+}
+
+function parseHeadlessStartOverride(params: {
+  req: BrowserRequest;
+  res: BrowserResponse;
+  profileCtx: ProfileContext;
+}): { ok: true; headless?: boolean } | { ok: false } {
+  if (!hasQueryKey(params.req.query, "headless")) {
+    return { ok: true };
+  }
+
+  const headless = toBoolean(params.req.query.headless);
+  if (typeof headless !== "boolean") {
+    jsonError(params.res, 400, 'Invalid headless value. Use "true" or "false".');
+    return { ok: false };
+  }
+
+  const capabilities = getBrowserProfileCapabilities(params.profileCtx.profile);
+  if (
+    params.profileCtx.profile.driver !== "openclaw" ||
+    params.profileCtx.profile.attachOnly ||
+    capabilities.isRemote
+  ) {
+    jsonError(
+      params.res,
+      400,
+      `Headless start override is only supported for locally launched openclaw profiles. Profile "${params.profileCtx.profile.name}" is attach-only, remote, or existing-session.`,
+    );
+    return { ok: false };
+  }
+
+  return { ok: true, headless };
 }
 
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
@@ -166,7 +221,11 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         res,
         ctx,
         run: async (profileCtx) => {
-          await profileCtx.ensureBrowserAvailable();
+          const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });
+          if (!headlessOverride.ok) {
+            return;
+          }
+          await profileCtx.ensureBrowserAvailable({ headless: headlessOverride.headless });
           res.json({ ok: true, profile: profileCtx.profile.name });
         },
       });

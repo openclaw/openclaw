@@ -56,6 +56,7 @@ Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-
 openclaw browser status
 openclaw browser doctor
 openclaw browser start
+openclaw browser start --headless
 openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
@@ -67,6 +68,14 @@ Notes:
   OpenClaw did not launch the browser process itself.
 - For local managed profiles, `openclaw browser stop` stops the spawned browser
   process.
+- `openclaw browser start --headless` applies only to that start request and
+  only when OpenClaw launches a local managed browser. It does not rewrite
+  `browser.headless` or profile config, and it is a no-op for an already-running
+  browser.
+- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
+  run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`,
+  `browser.headless=false`, or `browser.profiles.<name>.headless=false`
+  explicitly requests a visible browser.
 
 ## If the command is missing
 
@@ -184,6 +193,11 @@ openclaw browser waitfordownload
 openclaw browser download <ref> report.pdf
 openclaw browser dialog --accept
 ```
+
+Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw
+downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp
+root). Use `waitfordownload` or `download` when the agent needs to wait for a
+specific file and return its path; those explicit waiters own the next download.
 
 ## State and storage
 

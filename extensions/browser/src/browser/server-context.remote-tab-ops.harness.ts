@@ -29,6 +29,7 @@ export function makeState(
       extraArgs: [],
       color: "#FF4500",
       headless: true,
+      headlessSource: "config",
       noSandbox: false,
       attachOnly: false,
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -85,6 +86,8 @@ function resolveProfileForTest(
     color: rawProfile.color ?? state.resolved.color,
     driver: rawProfile.driver === "existing-session" ? "existing-session" : "openclaw",
     headless: rawProfile.headless ?? state.resolved.headless,
+    headlessSource:
+      typeof rawProfile.headless === "boolean" ? "profile" : state.resolved.headlessSource,
     attachOnly: rawProfile.attachOnly ?? state.resolved.attachOnly,
     userDataDir: rawProfile.userDataDir,
   };

@@ -101,7 +101,15 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
   }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
   const context = await prepareCliRunContext(params);
-  return runPreparedCliAgent(context);
+  try {
+    return await runPreparedCliAgent(context);
+  } finally {
+    if (params.cleanupCliLiveSessionOnRunEnd === true) {
+      const { closeClaudeLiveSessionForContext } =
+        await import("./cli-runner/claude-live-session.js");
+      closeClaudeLiveSessionForContext(context);
+    }
+  }
 }
 
 export async function runPreparedCliAgent(

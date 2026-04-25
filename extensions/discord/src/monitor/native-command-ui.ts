@@ -15,6 +15,7 @@ import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   listChatCommands,
   resolveStoredModelOverride,
   serializeCommandArgs,
@@ -54,6 +55,11 @@ import { resolveDiscordNativeInteractionChannelContext } from "./native-interact
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+type DiscordNativeChoiceInteraction =
+  | AutocompleteInteraction
+  | CommandInteraction
+  | ButtonInteraction
+  | StringSelectMenuInteraction;
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
 
@@ -280,7 +286,7 @@ async function resolveDiscordModelPickerRoute(params: {
 }
 
 export async function resolveDiscordNativeChoiceContext(params: {
-  interaction: AutocompleteInteraction;
+  interaction: DiscordNativeChoiceInteraction;
   cfg: ReturnType<typeof loadConfig>;
   accountId: string;
   threadBindings: ThreadBindingManager;
@@ -1066,8 +1072,7 @@ export function buildDiscordCommandArgMenu(params: {
     );
     return new Row(buttons);
   });
-  const content =
-    menu.title ?? `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
+  const content = formatCommandArgMenuTitle({ command, menu });
   return { content, components: rows };
 }
 
