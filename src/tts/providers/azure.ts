@@ -1,6 +1,7 @@
 import type { SpeechProviderPlugin } from "../../plugins/types.js";
 import type { SpeechVoiceOption } from "../provider-types.js";
 
+// Only define once - shared with tts.ts for consistency
 const DEFAULT_AZURE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -25,18 +26,25 @@ function normalizeAzureBaseUrl(baseUrl: string | undefined): string {
 
 function getFileExtension(outputFormat: string): string {
   if (outputFormat.includes("mp3")) return ".mp3";
-  if (outputFormat.includes("wav")) return ".wav";
+  if (outputFormat.includes("wav") || outputFormat.includes("riff") || outputFormat.includes("pcm")) return ".wav";
   if (outputFormat.includes("ogg")) return ".ogg";
   if (outputFormat.includes("webm")) return ".webm";
   return ".mp3"; // default to mp3
+}
+
+function isVoiceCompatibleFormat(outputFormat: string): boolean {
+  // Azure MP3 and opus formats are voice-note compatible
+  return outputFormat.includes("mp3") || outputFormat.includes("opus");
 }
 
 export async function listAzureVoices(params: {
   apiKey: string;
   region?: string;
   baseUrl?: string;
+  timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const region = params.region || "eastus";
+  const timeout = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   // Use baseUrl if provided, otherwise derive from region
   const url = params.baseUrl
     ? `${normalizeAzureBaseUrl(params.baseUrl)}/cognitiveservices/voices/list`
@@ -46,6 +54,7 @@ export async function listAzureVoices(params: {
     headers: {
       "Ocp-Apim-Subscription-Key": params.apiKey,
     },
+    signal: AbortSignal.timeout(timeout),
   });
 
   if (!response.ok) {
@@ -92,43 +101,57 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     label: "Azure Speech",
     aliases: ["azure-tts"],
     listVoices: async (req) => {
+      // baseUrl comes from the request, not from config
+      const baseUrl = req.baseUrl ?? (req.providerConfig as Record<string, unknown>)?.baseUrl as string | undefined;
+      const timeout = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const apiKey =
-        req.apiKey || (req.config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY;
+        req.apiKey ||
+        ((req.providerConfig as Record<string, unknown>)?.apiKey as string) ||
+        process.env.AZURE_SPEECH_API_KEY;
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
       return listAzureVoices({
         apiKey,
-        region: (req.config as any)?.azure?.region || process.env.AZURE_SPEECH_REGION,
-        baseUrl: (req.config as any)?.azure?.baseUrl,
+        region: ((req.providerConfig as Record<string, unknown>)?.region as string) || process.env.AZURE_SPEECH_REGION,
+        baseUrl,
+        timeoutMs: timeout,
       });
     },
-    isConfigured: ({ config }) =>
+    isConfigured: ({ providerConfig }) =>
       Boolean(
-        ((config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY) &&
-        ((config as any)?.azure?.voice || (config as any)?.azure?.lang),
+        (providerConfig?.apiKey || process.env.AZURE_SPEECH_API_KEY) &&
+        providerConfig?.voice, // Require voice to be set - API key alone is not enough
       ),
     synthesize: async (req) => {
-      const apiKey = (req.config as any)?.azure?.apiKey || process.env.AZURE_SPEECH_API_KEY;
+      const apiKey =
+        ((req.providerConfig as Record<string, unknown>)?.apiKey as string) ||
+        process.env.AZURE_SPEECH_API_KEY;
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
 
       const region =
-        (req.config as any)?.azure?.region || process.env.AZURE_SPEECH_REGION || "eastus";
-      const baseUrl = (req.config as any)?.azure?.baseUrl;
+        ((req.providerConfig as Record<string, unknown>)?.region as string) ||
+        process.env.AZURE_SPEECH_REGION ||
+        "eastus";
+      const baseUrl = (req.providerConfig as Record<string, unknown>)?.baseUrl as string | undefined;
       // Use baseUrl if provided, otherwise derive from region
       const endpoint = baseUrl
         ? `${normalizeAzureBaseUrl(baseUrl)}/cognitiveservices/v1`
         : `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
       // Apply directive overrides if provided
-      const azureOverride = (req.overrides as any)?.azure;
-      const voice = azureOverride?.voice || (req.config as any)?.azure?.voice;
-      const lang = azureOverride?.lang || (req.config as any)?.azure?.lang;
+      const azureOverride = (req.providerOverrides as Record<string, unknown>)?.azure as Record<string, unknown> | undefined;
+      const voice =
+        (azureOverride?.voice as string) ||
+        ((req.providerConfig as Record<string, unknown>)?.voice as string);
+      const lang =
+        (azureOverride?.lang as string) ||
+        ((req.providerConfig as Record<string, unknown>)?.lang as string);
       const outputFormat =
-        azureOverride?.outputFormat ??
-        (req.config as any)?.azure?.outputFormat ??
+        (azureOverride?.outputFormat as string) ||
+        ((req.providerConfig as Record<string, unknown>)?.outputFormat as string) ||
         DEFAULT_AZURE_OUTPUT_FORMAT;
 
       if (!voice) {
@@ -137,8 +160,8 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         );
       }
 
-      // Use timeout from config, directive, or default
-      const timeoutMs = (req.config as any)?.azure?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      // Use timeout from request (which comes from config), directive, or default
+      const timeoutMs = req.timeoutMs;
 
       const ssml = buildAzureSSML(req.text, voice, lang);
 
@@ -162,7 +185,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         audioBuffer: Buffer.from(audioBuffer),
         outputFormat,
         fileExtension: getFileExtension(outputFormat),
-        voiceCompatible: true,
+        voiceCompatible: isVoiceCompatibleFormat(outputFormat),
       };
     },
   };

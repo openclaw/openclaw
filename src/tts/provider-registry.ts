@@ -14,6 +14,23 @@ const BUILTIN_SPEECH_PROVIDER_BUILDERS = [
   buildAzureSpeechProvider,
 ] as const satisfies readonly (() => SpeechProviderPlugin)[];
 
+/**
+ * Get all registered speech providers including built-ins.
+ */
+function getAllSpeechProviders(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
+  const pluginProviders = resolvePluginCapabilityProviders({
+    key: "speechProviders",
+    cfg,
+  });
+  // Also include built-in providers that aren't provided by plugins
+  const builtinIds = new Set(BUILTIN_SPEECH_PROVIDER_BUILDERS.map((b) => b().id));
+  const pluginIds = new Set(pluginProviders.map((p) => p.id));
+  const missingBuiltins = BUILTIN_SPEECH_PROVIDER_BUILDERS
+    .filter((b) => !pluginIds.has(b().id))
+    .map((b) => b());
+  return [...pluginProviders, ...missingBuiltins];
+}
+
 function trimToUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
@@ -53,7 +70,7 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
     }
   };
 
-  for (const provider of resolveSpeechProviderPluginEntries(cfg)) {
+  for (const provider of getAllSpeechProviders(cfg)) {
     register(provider);
   }
 
