@@ -13,10 +13,8 @@ import {
   diffInventoryEntries,
   normalizeRepoPath,
   resolveRepoSpecifier,
-  visitModuleSpecifiers,
   writeLine,
 } from "./lib/guard-inventory-utils.mjs";
-import { toLine } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extensionsRoot = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
@@ -49,7 +47,7 @@ const baselinePathByMode = {
 };
 
 let allInventoryByModePromise;
-let parsedExtensionSourceFilesPromise;
+let extensionModuleReferencesPromise;
 
 const ruleTextByMode = {
   "src-outside-plugin-sdk":
@@ -97,36 +95,26 @@ async function collectExtensionSourceFiles(rootDir) {
   );
 }
 
-async function collectParsedExtensionSourceFiles() {
-  if (!parsedExtensionSourceFilesPromise) {
-    parsedExtensionSourceFilesPromise = (async () => {
+async function collectExtensionModuleReferences() {
+  if (!extensionModuleReferencesPromise) {
+    extensionModuleReferencesPromise = (async () => {
       const files = await collectExtensionSourceFiles(extensionsRoot);
-      const parsed = await Promise.all(
+      const referenced = await Promise.all(
         files.map(async (filePath) => {
           const source = await fs.readFile(filePath, "utf8");
           if (!mayContainModuleSpecifier(source)) {
             return null;
           }
-          const scriptKind =
-            filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
-              ? ts.ScriptKind.TSX
-              : ts.ScriptKind.TS;
           return {
             filePath,
-            sourceFile: ts.createSourceFile(
-              filePath,
-              source,
-              ts.ScriptTarget.Latest,
-              true,
-              scriptKind,
-            ),
+            references: collectModuleReferences(source),
           };
         }),
       );
-      return parsed.filter(Boolean);
+      return referenced.filter((entry) => entry && entry.references.length > 0);
     })();
   }
-  return await parsedExtensionSourceFilesPromise;
+  return await extensionModuleReferencesPromise;
 }
 
 function mayContainModuleSpecifier(source) {
@@ -135,6 +123,49 @@ function mayContainModuleSpecifier(source) {
     /\bimport\s*(?:\(|["']|type\b|[\w*{])/.test(source) ||
     /\bexport\s*(?:type\s+)?(?:\*|{)[^;\n]*\bfrom\s*["']/.test(source)
   );
+}
+
+function collectModuleReferences(source) {
+  const lineStarts = computeLineStarts(source);
+  return ts.preProcessFile(source, true, true).importedFiles.map((reference) => ({
+    kind: inferModuleReferenceKind(source, reference.pos),
+    line: lineFromPosition(lineStarts, reference.pos),
+    specifier: reference.fileName,
+  }));
+}
+
+function computeLineStarts(source) {
+  const lineStarts = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source.charCodeAt(index) === 10) {
+      lineStarts.push(index + 1);
+    }
+  }
+  return lineStarts;
+}
+
+function lineFromPosition(lineStarts, position) {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (lineStarts[middle] <= position) {
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return high + 1;
+}
+
+function inferModuleReferenceKind(source, specifierStart) {
+  const importIndex = source.lastIndexOf("import", specifierStart);
+  const exportIndex = source.lastIndexOf("export", specifierStart);
+  if (exportIndex > importIndex) {
+    return "export";
+  }
+  const importPrefix = source.slice(importIndex, specifierStart);
+  return /\bimport\s*\(\s*["']?$/.test(importPrefix) ? "dynamic-import" : "import";
 }
 
 function resolveExtensionRoot(filePath) {
@@ -198,7 +229,7 @@ function shouldReport(mode, resolvedPath) {
   return !resolvedPath.startsWith("src/plugin-sdk/");
 }
 
-function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
+function collectEntriesByModeFromModuleReferences(filePath, references) {
   const entriesByMode = {
     "src-outside-plugin-sdk": [],
     "plugin-sdk-internal": [],
@@ -207,11 +238,11 @@ function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
   const extensionRoot = resolveExtensionRoot(filePath);
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
 
-  function push(kind, specifierNode, specifier) {
+  function push(kind, line, specifier) {
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
     const baseEntry = {
       file: relativeFile,
-      line: toLine(sourceFile, specifierNode),
+      line,
       kind,
       specifier,
       resolvedPath,
@@ -237,9 +268,9 @@ function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
     }
   }
 
-  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
-    push(kind, specifierNode, specifier);
-  });
+  for (const { kind, line, specifier } of references) {
+    push(kind, line, specifier);
+  }
   return entriesByMode;
 }
 
@@ -249,14 +280,14 @@ export async function collectExtensionPluginSdkBoundaryInventory(mode) {
   }
   if (!allInventoryByModePromise) {
     allInventoryByModePromise = (async () => {
-      const files = await collectParsedExtensionSourceFiles();
+      const files = await collectExtensionModuleReferences();
       const inventoryByMode = {
         "src-outside-plugin-sdk": [],
         "plugin-sdk-internal": [],
         "relative-outside-package": [],
       };
-      for (const { filePath, sourceFile } of files) {
-        const entriesByMode = collectEntriesByModeFromSourceFile(sourceFile, filePath);
+      for (const { filePath, references } of files) {
+        const entriesByMode = collectEntriesByModeFromModuleReferences(filePath, references);
         for (const inventoryMode of MODES) {
           inventoryByMode[inventoryMode].push(...entriesByMode[inventoryMode]);
         }
