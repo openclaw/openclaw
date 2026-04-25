@@ -2,7 +2,7 @@ import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
-export const DEFAULT_INWORLD_VOICE_ID = "Dennis";
+export const DEFAULT_INWORLD_VOICE_ID = "Sarah";
 export const DEFAULT_INWORLD_MODEL_ID = "inworld-tts-1.5-max";
 
 export const INWORLD_TTS_MODELS = [

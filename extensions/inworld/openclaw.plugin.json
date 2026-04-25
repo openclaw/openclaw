@@ -23,7 +23,7 @@
       },
       "voiceId": {
         "type": "string",
-        "description": "Voice identifier (default Dennis)."
+        "description": "Voice identifier (default Sarah)."
       },
       "modelId": {
         "type": "string",

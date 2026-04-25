@@ -19,7 +19,7 @@ the standard reply-audio pipeline.
 | Website       | [inworld.ai](https://inworld.ai)                                               |
 | Docs          | [docs.inworld.ai/docs/tts-overview](https://docs.inworld.ai/docs/tts-overview) |
 | Auth          | `INWORLD_API_KEY` (HTTP Basic, Base64 dashboard credential)                    |
-| Default voice | `Dennis`                                                                       |
+| Default voice | `Sarah`                                                                        |
 | Default model | `inworld-tts-1.5-max`                                                          |
 
 ## Getting started
@@ -45,7 +45,7 @@ the standard reply-audio pipeline.
           provider: "inworld",
           providers: {
             inworld: {
-              voiceId: "Dennis",
+              voiceId: "Sarah",
               modelId: "inworld-tts-1.5-max",
             },
           },
@@ -67,7 +67,7 @@ the standard reply-audio pipeline.
 | ------------- | -------------------------------------------- | ----------------------------------------------------------------- |
 | `apiKey`      | `messages.tts.providers.inworld.apiKey`      | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.     |
 | `baseUrl`     | `messages.tts.providers.inworld.baseUrl`     | Override Inworld API base URL (default `https://api.inworld.ai`). |
-| `voiceId`     | `messages.tts.providers.inworld.voiceId`     | Voice identifier (default `Dennis`).                              |
+| `voiceId`     | `messages.tts.providers.inworld.voiceId`     | Voice identifier (default `Sarah`).                               |
 | `modelId`     | `messages.tts.providers.inworld.modelId`     | TTS model id (default `inworld-tts-1.5-max`).                     |
 | `temperature` | `messages.tts.providers.inworld.temperature` | Sampling temperature `0..2` (optional).                           |
 

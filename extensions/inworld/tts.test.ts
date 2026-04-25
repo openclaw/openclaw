@@ -232,7 +232,7 @@ describe("inworldTTS", () => {
     expect(headers.get("content-type")).toBe("application/json");
     expect(JSON.parse(readRequestBody(request))).toEqual({
       text: "Hello",
-      voiceId: "Dennis",
+      voiceId: "Sarah",
       modelId: "inworld-tts-1.5-max",
       audioConfig: { audioEncoding: "MP3" },
     });

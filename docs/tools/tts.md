@@ -232,7 +232,7 @@ by the bundled Google image-generation provider. Resolution order is
         inworld: {
           apiKey: "inworld_api_key",
           baseUrl: "https://api.inworld.ai",
-          voiceId: "Dennis",
+          voiceId: "Sarah",
           modelId: "inworld-tts-1.5-max",
           temperature: 0.8,
         },
@@ -486,7 +486,7 @@ Then run:
 - `providers.tts-local-cli.cwd`: optional command working directory.
 - `providers.tts-local-cli.env`: optional string environment overrides for the command.
 - `providers.inworld.baseUrl`: override Inworld API base URL (default `https://api.inworld.ai`).
-- `providers.inworld.voiceId`: Inworld voice identifier (default `Dennis`).
+- `providers.inworld.voiceId`: Inworld voice identifier (default `Sarah`).
 - `providers.inworld.modelId`: Inworld TTS model (default `inworld-tts-1.5-max`; also supports `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`).
 - `providers.inworld.temperature`: sampling temperature `0..2` (optional).
 - `providers.google.model`: Gemini TTS model (default `gemini-3.1-flash-tts-preview`).
