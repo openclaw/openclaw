@@ -20,6 +20,7 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = resolveSourceRoots(repoRoot, ["src/plugin-sdk", "src/plugins/runtime"]);
+let architectureSmellsPromise;
 
 function compareEntries(left, right) {
   return (
@@ -195,21 +196,32 @@ function scanRuntimeServiceLocatorSmells(sourceFile, filePath) {
 }
 
 export async function collectArchitectureSmells() {
-  const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
-    normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
-  );
-  return await collectTypeScriptInventory({
-    ts,
-    files,
-    compareEntries,
-    collectEntries(sourceFile, filePath) {
-      return [
-        ...scanPluginSdkExtensionFacadeSmells(sourceFile, filePath),
-        ...scanRuntimeTypeImplementationSmells(sourceFile, filePath),
-        ...scanRuntimeServiceLocatorSmells(sourceFile, filePath),
-      ];
-    },
-  });
+  if (!architectureSmellsPromise) {
+    architectureSmellsPromise = (async () => {
+      const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
+        normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+      );
+      return await collectTypeScriptInventory({
+        ts,
+        files,
+        compareEntries,
+        collectEntries(sourceFile, filePath) {
+          return [
+            ...scanPluginSdkExtensionFacadeSmells(sourceFile, filePath),
+            ...scanRuntimeTypeImplementationSmells(sourceFile, filePath),
+            ...scanRuntimeServiceLocatorSmells(sourceFile, filePath),
+          ];
+        },
+      });
+    })();
+    try {
+      return await architectureSmellsPromise;
+    } catch (error) {
+      architectureSmellsPromise = undefined;
+      throw error;
+    }
+  }
+  return await architectureSmellsPromise;
 }
 
 function formatInventoryHuman(inventory) {
