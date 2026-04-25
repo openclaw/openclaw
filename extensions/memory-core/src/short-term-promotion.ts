@@ -902,13 +902,13 @@ export async function filterLiveShortTermRecallEntries(params: {
   workspaceDir: string;
   entries: ShortTermRecallEntry[];
 }): Promise<ShortTermRecallEntry[]> {
-  const live: ShortTermRecallEntry[] = [];
-  for (const entry of params.entries) {
-    if (await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry })) {
-      live.push(entry);
-    }
-  }
-  return live;
+  const results = await Promise.all(
+    params.entries.map(async (entry) => ({
+      entry,
+      exists: await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry }),
+    })),
+  );
+  return results.filter((result) => result.exists).map((result) => result.entry);
 }
 
 export async function recordShortTermRecalls(params: {
