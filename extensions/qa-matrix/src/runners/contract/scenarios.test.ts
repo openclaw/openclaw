@@ -3047,8 +3047,16 @@ describe("matrix live qa scenarios", () => {
                 accounts?: Record<string, Record<string, unknown>>;
               };
             };
+            plugins?: {
+              allow?: string[];
+              entries?: Record<string, { enabled?: boolean }>;
+            };
           };
-          cliAccountConfigDuringRun = cliConfig.channels?.matrix?.accounts?.cli ?? null;
+          cliAccountConfigDuringRun = {
+            ...cliConfig.channels?.matrix?.accounts?.cli,
+            pluginAllow: cliConfig.plugins?.allow,
+            pluginEnabled: cliConfig.plugins?.entries?.matrix?.enabled,
+          };
         }
         const joined = args.join(" ");
         if (joined === "matrix verify status --account cli --json") {
@@ -3155,6 +3163,8 @@ describe("matrix live qa scenarios", () => {
         deviceId: "CLIDEVICE",
         encryption: true,
         homeserver: "http://127.0.0.1:28008/",
+        pluginAllow: expect.arrayContaining(["matrix"]),
+        pluginEnabled: true,
         startupVerification: "off",
         userId: "@driver:matrix-qa.test",
       });

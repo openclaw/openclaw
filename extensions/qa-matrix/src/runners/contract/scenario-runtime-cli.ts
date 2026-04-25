@@ -269,6 +269,12 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
     configPath,
     `${JSON.stringify(
       {
+        plugins: {
+          allow: ["matrix"],
+          entries: {
+            matrix: { enabled: true },
+          },
+        },
         channels: {
           matrix: {
             defaultAccount: params.accountId,

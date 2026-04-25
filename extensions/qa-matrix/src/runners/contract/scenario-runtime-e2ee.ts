@@ -413,6 +413,12 @@ async function createMatrixQaCliSelfVerificationRuntime(params: {
     configPath,
     `${JSON.stringify(
       {
+        plugins: {
+          allow: ["matrix"],
+          entries: {
+            matrix: { enabled: true },
+          },
+        },
         channels: {
           matrix: {
             defaultAccount: params.accountId,
