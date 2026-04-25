@@ -301,6 +301,28 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
     });
   });
+
+  it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/src/cli.test.ts"],
+    });
+  });
+
+  it("routes Google Meet OAuth edits to the lightweight OAuth tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/oauth.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/src/oauth.test.ts"],
+    });
+  });
+
+  it("routes Google Meet entry edits to the plugin entry tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/index.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/index.test.ts"],
+    });
+  });
+
   it("routes changed utils and shared files to their light scoped lanes", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/shared/string-normalization.ts",
