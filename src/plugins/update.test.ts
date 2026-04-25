@@ -997,4 +997,272 @@ describe("syncPluginsForUpdateChannel", () => {
       }
     }
   });
+
+  it("installs an externalized bundled plugin and rewrites its old bundled path ledger", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "legacy-chat",
+        targetDir: "/tmp/openclaw-plugins/legacy-chat",
+        version: "2.0.0",
+        npmResolution: {
+          name: "@openclaw/legacy-chat",
+          version: "2.0.0",
+          resolvedSpec: "@openclaw/legacy-chat@2.0.0",
+        },
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: [appBundledPluginRoot("legacy-chat")] },
+          installs: {
+            "legacy-chat": {
+              source: "path",
+              sourcePath: appBundledPluginRoot("legacy-chat"),
+              installPath: appBundledPluginRoot("legacy-chat"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/legacy-chat",
+        mode: "update",
+        expectedPluginId: "legacy-chat",
+      }),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
+    expect(result.summary.errors).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/legacy-chat",
+      installPath: "/tmp/openclaw-plugins/legacy-chat",
+      version: "2.0.0",
+      resolvedName: "@openclaw/legacy-chat",
+      resolvedVersion: "2.0.0",
+      resolvedSpec: "@openclaw/legacy-chat@2.0.0",
+    });
+  });
+
+  it("does not externalize disabled bundled plugins", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        plugins: {
+          entries: {
+            "legacy-chat": {
+              enabled: false,
+            },
+          },
+          load: { paths: [appBundledPluginRoot("legacy-chat")] },
+          installs: {
+            "legacy-chat": {
+              source: "path",
+              sourcePath: appBundledPluginRoot("legacy-chat"),
+              installPath: appBundledPluginRoot("legacy-chat"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "path",
+    });
+  });
+
+  it("leaves config unchanged when externalized plugin installation fails", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "package unavailable",
+    });
+    const config: OpenClawConfig = {
+      channels: {
+        "legacy-chat": {
+          enabled: true,
+        },
+      },
+      plugins: {
+        load: { paths: [appBundledPluginRoot("legacy-chat")] },
+        installs: {
+          "legacy-chat": {
+            source: "path",
+            sourcePath: appBundledPluginRoot("legacy-chat"),
+            installPath: appBundledPluginRoot("legacy-chat"),
+          },
+        },
+      },
+    };
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config,
+    });
+
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.summary.errors).toEqual(["Failed to update legacy-chat: package unavailable"]);
+  });
+
+  it("does not externalize custom local path installs that only share the old plugin id", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: ["/workspace/plugins/legacy-chat"] },
+          installs: {
+            "legacy-chat": {
+              source: "path",
+              sourcePath: "/workspace/plugins/legacy-chat",
+              installPath: "/workspace/plugins/legacy-chat",
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "path",
+      sourcePath: "/workspace/plugins/legacy-chat",
+    });
+  });
+
+  it("does not externalize while the bundled source is still present in the current build", async () => {
+    mockBundledSources(
+      createBundledSource({
+        pluginId: "legacy-chat",
+        localPath: appBundledPluginRoot("legacy-chat"),
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: [appBundledPluginRoot("legacy-chat")] },
+          installs: {
+            "legacy-chat": {
+              source: "path",
+              sourcePath: appBundledPluginRoot("legacy-chat"),
+              installPath: appBundledPluginRoot("legacy-chat"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "path",
+    });
+  });
+
+  it("removes stale bundled load paths for already-externalized npm installs", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: {
+            paths: [appBundledPluginRoot("legacy-chat"), "/workspace/plugins/other"],
+          },
+          installs: {
+            "legacy-chat": {
+              source: "npm",
+              spec: "@openclaw/legacy-chat",
+              installPath: "/tmp/openclaw-plugins/legacy-chat",
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.load?.paths).toEqual(["/workspace/plugins/other"]);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/legacy-chat",
+    });
+  });
 });
