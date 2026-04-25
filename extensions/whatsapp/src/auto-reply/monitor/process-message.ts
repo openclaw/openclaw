@@ -191,6 +191,13 @@ export async function processMessage(params: {
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
+  ackAlreadySent?: boolean;
+  /** Pre-computed audio transcript from a caller-level preflight, used to avoid
+   * re-transcribing the same voice note once per broadcast agent.
+   * - string  → transcript obtained; use it directly, skip internal STT
+   * - null    → preflight was attempted but failed / returned nothing; skip internal STT
+   * - undefined (omitted) → caller did not attempt preflight; run internal STT as normal */
+  preflightAudioTranscript?: string | null;
 }) {
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const self = getSelfIdentity(params.msg);
@@ -210,9 +217,50 @@ export async function processMessage(params: {
     agentId: params.route.agentId,
     sessionKey: params.route.sessionKey,
   });
+  // Preflight audio transcription: transcribe voice notes before building the
+  // inbound context so the agent receives the transcript instead of <media:audio>.
+  // Mirrors the preflight step added for Telegram in #61008.
+  // When the caller already performed transcription (e.g. on-message.ts before
+  // broadcast fan-out) the pre-computed result is reused to avoid N STT calls
+  // for N broadcast agents on the same voice note.
+  // preflightAudioTranscript semantics:
+  //   string    → transcript ready, use it
+  //   null      → caller attempted but got nothing; skip internal STT to avoid retry
+  //   undefined → caller did not attempt; run internal STT
+  let audioTranscript: string | undefined = params.preflightAudioTranscript ?? undefined;
+  const hasAudioBody =
+    params.msg.mediaType?.startsWith("audio/") === true && params.msg.body === "<media:audio>";
+  if (params.preflightAudioTranscript === undefined && hasAudioBody && params.msg.mediaPath) {
+    try {
+      const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
+      audioTranscript = await transcribeFirstAudio({
+        ctx: {
+          MediaPaths: [params.msg.mediaPath],
+          MediaTypes: params.msg.mediaType ? [params.msg.mediaType] : undefined,
+        },
+        cfg: params.cfg,
+      });
+    } catch {
+      // Transcription failure is non-fatal: fall back to <media:audio> placeholder.
+      if (shouldLogVerbose()) {
+        logVerbose("whatsapp: audio preflight transcription failed, using placeholder");
+      }
+    }
+  }
+
+  // If we have a transcript, replace the agent-facing body so the agent sees the spoken text.
+  // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
+  // (used by features such as messages.tts.auto: "inbound") still sees this as an
+  // audio message. The transcript is also stored in Transcript so downstream pipelines
+  // can detect it. Preventing a second STT pass in the media-understanding pipeline
+  // requires SDK-level support (alreadyTranscribed on a shared attachment instance);
+  // that is a shared concern across all channels and is tracked separately.
+  const msgForAgent =
+    audioTranscript !== undefined ? { ...params.msg, body: audioTranscript } : params.msg;
+
   let combinedBody = buildInboundLine({
     cfg: params.cfg,
-    msg: params.msg,
+    msg: msgForAgent,
     agentId: params.route.agentId,
     previousTimestamp,
     envelope: envelopeOptions,
@@ -267,18 +315,22 @@ export async function processMessage(params: {
     return false;
   }
 
-  // Send ack reaction immediately upon message receipt (post-gating)
-  await maybeSendAckReaction({
-    cfg: params.cfg,
-    msg: params.msg,
-    agentId: params.route.agentId,
-    sessionKey: params.route.sessionKey,
-    conversationId,
-    verbose: params.verbose,
-    accountId: account.accountId,
-    info: params.replyLogger.info.bind(params.replyLogger),
-    warn: params.replyLogger.warn.bind(params.replyLogger),
-  });
+  // Send ack reaction immediately upon message receipt (post-gating). Callers
+  // that do preflight work before processMessage can send it first and set
+  // ackAlreadySent so slow STT does not delay user-visible receipt feedback.
+  if (params.ackAlreadySent !== true) {
+    await maybeSendAckReaction({
+      cfg: params.cfg,
+      msg: params.msg,
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      conversationId,
+      verbose: params.verbose,
+      accountId: account.accountId,
+      info: params.replyLogger.info.bind(params.replyLogger),
+      warn: params.replyLogger.warn.bind(params.replyLogger),
+    });
+  }
 
   const correlationId = params.msg.id ?? newConnectionId();
   params.replyLogger.info(
@@ -353,19 +405,23 @@ export async function processMessage(params: {
         });
 
   const ctxPayload = buildWhatsAppInboundContext({
+    bodyForAgent: msgForAgent.body,
     combinedBody,
+    commandBody: params.msg.body,
     commandAuthorized,
     conversationId,
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
     msg: params.msg,
+    rawBody: params.msg.body,
     route: params.route,
     sender: {
       id: getPrimaryIdentityId(sender) ?? undefined,
       name: sender.name ?? undefined,
       e164: sender.e164 ?? undefined,
     },
+    ...(audioTranscript !== undefined ? { transcript: audioTranscript } : {}),
     replyThreading,
     visibleReplyTo: visibleReplyTo ?? undefined,
   });
