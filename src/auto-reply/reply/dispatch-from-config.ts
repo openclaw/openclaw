@@ -908,6 +908,9 @@ export async function dispatchReplyFromConfig(
         await sendPayloadAsync(payload, undefined, false);
         return;
       }
+      // TODO(#69303-followup): tool-result-only path; not flagged on
+      // outboundReplyDispatched. Catch path will release, not poison, if this
+      // is the only visible output before an error. See PR #71819.
       dispatcher.sendToolResult(payload);
     };
     const sendPlanUpdate = async (payload: {
@@ -924,6 +927,9 @@ export async function dispatchReplyFromConfig(
         await sendPayloadAsync(replyPayload, undefined, false);
         return;
       }
+      // TODO(#69303-followup): tool-result-only path; not flagged on
+      // outboundReplyDispatched. Catch path will release, not poison, if this
+      // is the only visible output before an error. See PR #71819.
       dispatcher.sendToolResult(replyPayload);
     };
     const summarizeApprovalLabel = (payload: {

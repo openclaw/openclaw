@@ -135,6 +135,9 @@ export function releaseInboundDedupe(key: string, opts?: { inFlight?: Set<string
 // Contrasts with releaseInboundDedupe (drop in-flight, leave cache unstamped),
 // which preserves the "nothing emitted yet, safe to retry" semantics added in
 // 7c91d0dbc9 for transient pre-dispatch failures.
+//
+// Functionally equivalent to commitInboundDedupe; named separately so call
+// sites are self-documenting about which terminal state they're entering.
 export function poisonInboundDedupe(
   key: string,
   opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
