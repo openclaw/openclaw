@@ -19,8 +19,9 @@ describe("markdown preview styles", () => {
 
     expect(css).toContain(".md-preview-dialog__panel.fullscreen .md-preview-dialog__header-main");
     expect(css).toContain("clip-path: inset(50%);");
-    expect(css).toContain(".md-preview-dialog__panel.fullscreen .md-preview-dialog__meta");
-    expect(css).toContain("display: none;");
+    expect(css).toMatch(
+      /\.md-preview-dialog__panel\.fullscreen\s+\.md-preview-dialog__meta\s*\{[^}]*display:\s*none;/,
+    );
     expect(css).toContain(".md-preview-dialog__panel.fullscreen .md-preview-dialog__body");
     expect(css).toContain("width: min(100%, 96ch);");
   });

@@ -38,6 +38,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
         <button
           @click=${props.onClose}
           class="btn"
+          type="button"
           title="Close sidebar"
           aria-label="Close sidebar"
         >
@@ -48,7 +49,12 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
         ${props.error
           ? html`
               <div class="callout danger">${props.error}</div>
-              <button @click=${props.onViewRawText} class="btn" style="margin-top: 12px;">
+              <button
+                @click=${props.onViewRawText}
+                class="btn"
+                type="button"
+                style="margin-top: 12px;"
+              >
                 View Raw Text
               </button>
             `
@@ -77,7 +83,9 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                     ${content.rawText?.trim()
                       ? html`
                           <div style="margin-top: 12px;">
-                            <button @click=${props.onViewRawText} class="btn">View Raw Text</button>
+                            <button @click=${props.onViewRawText} class="btn" type="button">
+                              View Raw Text
+                            </button>
                           </div>
                         `
                       : nothing}
@@ -95,7 +103,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                           Sanitized rich-text preview for quick reading.
                         </div>
                       </div>
-                      <button @click=${props.onViewRawText} class="btn btn--sm">
+                      <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
                         View Raw Text
                       </button>
                     </div>
