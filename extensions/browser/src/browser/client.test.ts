@@ -334,4 +334,30 @@ describe("browser client", () => {
       timeoutMs: 20_000,
     });
   });
+
+  it("gives browser act requests enough client timeout for long waits", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({ ok: true, targetId: "t1" }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" });
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "wait",
+      timeMs: 70_000,
+    });
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "wait",
+      timeoutMs: 45_000,
+    });
+
+    expect(calls.map((call) => call.init?.timeoutMs)).toEqual([60_000, 75_000, 50_000]);
+  });
 });

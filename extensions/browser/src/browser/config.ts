@@ -20,6 +20,7 @@ import { resolveUserPath } from "../utils.js";
 import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
@@ -66,6 +67,7 @@ export type ResolvedBrowserConfig = {
   cdpIsLoopback: boolean;
   remoteCdpTimeoutMs: number;
   remoteCdpHandshakeTimeoutMs: number;
+  actionTimeoutMs: number;
   color: string;
   executablePath?: string;
   headless: boolean;
@@ -263,6 +265,10 @@ export function resolveBrowserConfig(
     cfg?.remoteCdpHandshakeTimeoutMs,
     Math.max(2000, remoteCdpTimeoutMs * 2),
   );
+  const actionTimeoutMs = normalizeTimeoutMs(
+    cfg?.actionTimeoutMs,
+    DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  );
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
   const cdpRangeSpan = derivedCdpRange.end - derivedCdpRange.start;
@@ -343,6 +349,7 @@ export function resolveBrowserConfig(
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
     remoteCdpTimeoutMs,
     remoteCdpHandshakeTimeoutMs,
+    actionTimeoutMs,
     color: defaultColor,
     executablePath,
     headless,
