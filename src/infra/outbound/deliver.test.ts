@@ -850,6 +850,68 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("exposes audio-only spokenText to hooks without rendering it as media caption", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSending.mockResolvedValue({
+      content: "rewritten hidden transcript",
+    });
+    const sendMedia = vi.fn(async () => ({
+      channel: "matrix" as const,
+      messageId: "mx-voice",
+      roomId: "!room:example",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: {} } } as OpenClawConfig,
+      channel: "matrix",
+      to: "room:!room:example",
+      payloads: [
+        {
+          mediaUrl: "file:///tmp/clip.opus",
+          audioAsVoice: true,
+          spokenText: "original hidden transcript",
+        },
+      ],
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "original hidden transcript",
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "",
+        mediaUrl: "file:///tmp/clip.opus",
+        audioAsVoice: true,
+      }),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "rewritten hidden transcript",
+        success: true,
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+  });
+
   it("chunks plugin text and returns all results", async () => {
     const { sendMatrix, results } = await runChunkedMatrixDelivery();
 

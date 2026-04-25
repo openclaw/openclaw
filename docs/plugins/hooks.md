@@ -190,6 +190,11 @@ Use message hooks for channel-level routing and delivery policy:
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
 
+For audio-only TTS replies, `content` may contain the hidden spoken transcript
+even when the channel payload has no visible text/caption. Rewriting that
+`content` updates the hook-visible transcript only; it is not rendered as a
+media caption.
+
 Message hook contexts expose stable correlation fields when available:
 `ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
 `ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Prefer

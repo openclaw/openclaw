@@ -1149,10 +1149,12 @@ export async function dispatchReplyFromConfig(
           });
           // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {
-            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
+            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
+            // Keep the spoken text only for hooks/archive consumers.
             const ttsOnlyPayload: ReplyPayload = {
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
+              spokenText: accumulatedBlockText,
             };
             const result = await routeReplyToOriginating(ttsOnlyPayload);
             if (result) {

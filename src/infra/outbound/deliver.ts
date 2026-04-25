@@ -620,7 +620,7 @@ async function applyMessageSendingHook(params: {
     const sendingResult = await params.hookRunner!.runMessageSending(
       {
         to: params.to,
-        content: params.payloadSummary.text,
+        content: params.payloadSummary.hookContent ?? params.payloadSummary.text,
         replyToId: params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
         metadata: {
@@ -647,6 +647,20 @@ async function applyMessageSendingHook(params: {
         cancelled: false,
         payload: params.payload,
         payloadSummary: params.payloadSummary,
+      };
+    }
+    if (params.payloadSummary.hookContent && !params.payloadSummary.text) {
+      const spokenText = sendingResult.content;
+      return {
+        cancelled: false,
+        payload: {
+          ...params.payload,
+          spokenText,
+        },
+        payloadSummary: {
+          ...params.payloadSummary,
+          hookContent: spokenText,
+        },
       };
     }
     const payload = {
@@ -943,7 +957,7 @@ async function deliverOutboundPayloadsCore(
         });
         emitMessageSent({
           success: true,
-          content: payloadSummary.text,
+          content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId: delivery.messageId,
         });
         continue;
@@ -977,7 +991,7 @@ async function deliverOutboundPayloadsCore(
         });
         emitMessageSent({
           success: results.length > beforeCount,
-          content: payloadSummary.text,
+          content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
         continue;
@@ -1017,7 +1031,7 @@ async function deliverOutboundPayloadsCore(
         });
         emitMessageSent({
           success: results.length > beforeCount,
-          content: payloadSummary.text,
+          content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
         continue;
@@ -1058,13 +1072,13 @@ async function deliverOutboundPayloadsCore(
       });
       emitMessageSent({
         success: true,
-        content: payloadSummary.text,
+        content: payloadSummary.hookContent ?? payloadSummary.text,
         messageId: lastMessageId,
       });
     } catch (err) {
       emitMessageSent({
         success: false,
-        content: payloadSummary.text,
+        content: payloadSummary.hookContent ?? payloadSummary.text,
         error: formatErrorMessage(err),
       });
       if (!params.bestEffort) {
