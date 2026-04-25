@@ -8,9 +8,11 @@ import {
   createGoogleMeetSpace,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
+  fetchLatestGoogleMeetConferenceRecord,
   fetchGoogleMeetSpace,
   type GoogleMeetArtifactsResult,
   type GoogleMeetAttendanceResult,
+  type GoogleMeetLatestConferenceRecordResult,
 } from "./meet.js";
 import {
   buildGoogleMeetAuthUrl,
@@ -547,6 +549,18 @@ function writeAttendanceSummary(result: GoogleMeetAttendanceResult): void {
   }
 }
 
+function writeLatestConferenceRecordSummary(result: GoogleMeetLatestConferenceRecordResult): void {
+  writeStdoutLine("input: %s", result.input);
+  writeStdoutLine("space: %s", result.space.name);
+  if (!result.conferenceRecord) {
+    writeStdoutLine("conference record: none");
+    return;
+  }
+  writeStdoutLine("conference record: %s", result.conferenceRecord.name);
+  writeStdoutLine("started: %s", formatOptional(result.conferenceRecord.startTime));
+  writeStdoutLine("ended: %s", formatOptional(result.conferenceRecord.endTime));
+}
+
 function pushMarkdownLine(lines: string[], text = ""): void {
   lines.push(text);
 }
@@ -972,6 +986,37 @@ export function registerGoogleMeetCli(params: {
       for (const blocker of report.blockers) {
         writeStdoutLine("- %s", blocker);
       }
+    });
+
+  root
+    .command("latest")
+    .description("Find the latest Meet conference record for a meeting")
+    .option("--meeting <value>", "Meet URL, meeting code, or spaces/{id}")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--json", "Print JSON output", false)
+    .action(async (options: ResolveSpaceOptions) => {
+      const resolved = resolveTokenOptions(params.config, options);
+      const token = await resolveGoogleMeetAccessToken(resolved);
+      const result = await fetchLatestGoogleMeetConferenceRecord({
+        accessToken: token.accessToken,
+        meeting: resolved.meeting,
+      });
+      if (options.json) {
+        writeStdoutJson({
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
+      writeLatestConferenceRecordSummary(result);
+      writeStdoutLine(
+        "token source: %s",
+        token.refreshed ? "refresh-token" : "cached-access-token",
+      );
     });
 
   root

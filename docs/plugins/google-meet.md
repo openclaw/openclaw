@@ -638,6 +638,7 @@ openclaw googlemeet attendance --meeting https://meet.google.com/abc-defg-hij
 If you already know the conference record id, address it directly:
 
 ```bash
+openclaw googlemeet latest --meeting https://meet.google.com/abc-defg-hij
 openclaw googlemeet artifacts --conference-record conferenceRecords/abc123 --json
 openclaw googlemeet attendance --conference-record conferenceRecords/abc123 --json
 ```
