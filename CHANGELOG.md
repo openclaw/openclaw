@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/setup: include `setup.providers[].envVars` in generic provider auth/env lookups and warn non-bundled plugins that still rely on deprecated `providerAuthEnvVars` compatibility metadata. Thanks @vincentkoc.
 - Plugins/setup: derive generic provider setup choices from descriptor-safe `setup.providers[].authMethods` before falling back to setup runtime. Thanks @vincentkoc.
 - Plugins/setup: surface manifest provider auth choices directly in provider setup flow before falling back to setup runtime or install-catalog choices. Thanks @vincentkoc.
+- Models/catalog: add a manifest catalog planner that produces stable manifest-sourced model rows and reports duplicate provider/model conflicts without loading provider runtime. (#71368) Thanks @shakkernerd.
 - Models/catalog: centralize manifest model catalog normalization behind a shared `src/model-catalog` contract so future provider index, cache, onboarding, and listing consumers reuse the same validation and row refs. (#71360) Thanks @shakkernerd.
 - Plugins/manifest: add a `modelCatalog` contract for provider-owned model rows, aliases, suppression rules, and discovery mode metadata without loading plugin runtime. (#71342) Thanks @shakkernerd.
 - Plugins/setup: warn when descriptor-only setup plugins still ship ignored setup runtime entries, keeping `setup.requiresRuntime: false` semantics explicit without breaking existing metadata. Thanks @vincentkoc.
