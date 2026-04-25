@@ -44,6 +44,10 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
   return Math.max(1, opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
 }
 
+// `details` is runtime/UI metadata, not model-visible tool output. Keep the
+// session JSONL useful for debugging without letting metadata blobs dominate
+// disk, replay repair, transcript broadcasts, or future tooling that reads raw
+// sessions. Model-visible text belongs in tool result `content`.
 const MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES = 8_192;
 const MAX_PERSISTED_DETAIL_STRING_CHARS = 2_000;
 const MAX_PERSISTED_DETAIL_SESSION_COUNT = 10;
@@ -102,6 +106,9 @@ function buildPersistedDetailsFallback(
   originalSize: BoundedJsonUtf8Bytes,
   sanitizedBytes?: number,
 ): Record<string, unknown> {
+  // If even the structured summary is too large, keep only shape and stable
+  // status fields. This preserves "what happened?" without persisting the raw
+  // diagnostics payload that caused the cap to trip.
   const fallback: Record<string, unknown> = {
     persistedDetailsTruncated: true,
     finalDetailsTruncated: true,
@@ -150,6 +157,8 @@ function sanitizeToolResultDetailsForPersistence(details: unknown): unknown {
   if (details === undefined || details === null) {
     return details;
   }
+  // Measure with an early-exit walker so hostile or enormous details do not
+  // need to be fully stringified just to learn they exceed the persistence cap.
   const originalSize = boundedJsonUtf8Bytes(details, MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES);
   if (originalSize.complete && originalSize.bytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return details;

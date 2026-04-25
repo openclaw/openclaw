@@ -147,6 +147,21 @@ Rules:
 - `onResolution` receives the resolved approval decision — `allow-once`,
   `allow-always`, `deny`, `timeout`, or `cancelled`.
 
+### Tool result persistence
+
+Tool results can include structured `details` for UI rendering, diagnostics,
+media routing, or plugin-owned metadata. Treat `details` as runtime metadata,
+not prompt content:
+
+- OpenClaw strips `toolResult.details` before provider replay and compaction
+  input so metadata does not become model context.
+- Persisted session entries keep only bounded `details`. Oversized details are
+  replaced with a compact summary and `persistedDetailsTruncated: true`.
+- `tool_result_persist` and `before_message_write` run before the final
+  persistence cap. Hooks should still keep returned `details` small and avoid
+  placing prompt-relevant text only in `details`; put model-visible tool output
+  in `content`.
+
 ## Prompt and model hooks
 
 Use the phase-specific hooks for new plugins:
