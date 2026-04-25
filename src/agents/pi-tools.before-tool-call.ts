@@ -1,4 +1,16 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import {
+  diagnosticErrorCategory,
+  diagnosticHttpStatusCode,
+} from "../infra/diagnostic-error-metadata.js";
+import {
+  emitDiagnosticEvent,
+  type DiagnosticToolParamsSummary,
+} from "../infra/diagnostic-events.js";
+import {
+  freezeDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -17,6 +29,7 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  trace?: DiagnosticTraceContext;
   loopDetection?: ToolLoopDetectionConfig;
 };
 
@@ -70,10 +83,43 @@ function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean 
 }
 
 function unwrapErrorCause(err: unknown): unknown {
-  if (err instanceof Error && err.cause !== undefined) {
-    return err.cause;
+  try {
+    if (!(err instanceof Error)) {
+      return err;
+    }
+    const cause = Object.getOwnPropertyDescriptor(err, "cause");
+    if (cause && "value" in cause && cause.value !== undefined) {
+      return cause.value;
+    }
+  } catch {
+    return err;
   }
   return err;
+}
+
+function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
+  if (params === null) {
+    return { kind: "null" };
+  }
+  if (params === undefined) {
+    return { kind: "undefined" };
+  }
+  if (Array.isArray(params)) {
+    return { kind: "array", length: params.length };
+  }
+  if (typeof params === "object") {
+    return { kind: "object" };
+  }
+  if (typeof params === "string") {
+    return { kind: "string", length: params.length };
+  }
+  if (typeof params === "number") {
+    return { kind: "number" };
+  }
+  if (typeof params === "boolean") {
+    return { kind: "boolean" };
+  }
+  return { kind: "other" };
 }
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
@@ -197,6 +243,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
       ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
+      ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
     };
     const hookResult = await hookRunner.runBeforeToolCall(
@@ -409,8 +456,23 @@ export function wrapToolWithBeforeToolCallHook(
         }
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
+      const eventBase = {
+        ...(ctx?.runId && { runId: ctx.runId }),
+        ...(ctx?.sessionKey && { sessionKey: ctx.sessionKey }),
+        ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+        ...(ctx?.trace && { trace: freezeDiagnosticTraceContext(ctx.trace) }),
+        toolName: normalizedToolName,
+        ...(toolCallId && { toolCallId }),
+        paramsSummary: summarizeToolParams(outcome.params),
+      };
+      emitDiagnosticEvent({
+        type: "tool.execution.started",
+        ...eventBase,
+      });
+      const startedAt = Date.now();
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        const durationMs = Date.now() - startedAt;
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
@@ -418,8 +480,22 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result,
         });
+        emitDiagnosticEvent({
+          type: "tool.execution.completed",
+          ...eventBase,
+          durationMs,
+        });
         return result;
       } catch (err) {
+        const cause = unwrapErrorCause(err);
+        const errorCode = diagnosticHttpStatusCode(cause);
+        emitDiagnosticEvent({
+          type: "tool.execution.error",
+          ...eventBase,
+          durationMs: Date.now() - startedAt,
+          errorCategory: diagnosticErrorCategory(cause),
+          ...(errorCode ? { errorCode } : {}),
+        });
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,

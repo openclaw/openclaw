@@ -189,6 +189,7 @@ describe("qa cli runtime", () => {
       primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
+      thinking: "medium",
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
 
@@ -200,6 +201,7 @@ describe("qa cli runtime", () => {
       primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
+      thinkingDefault: "medium",
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
   });
@@ -642,6 +644,7 @@ describe("qa cli runtime", () => {
           "compaction-retry-mutating-tool",
           "subagent-handoff",
           "subagent-fanout-synthesis",
+          "subagent-stale-child-links",
           "memory-recall",
           "thread-memory-isolation",
           "config-restart-capability-flip",
@@ -1069,6 +1072,7 @@ describe("qa cli runtime", () => {
         "compaction-retry-mutating-tool",
         "subagent-handoff",
         "subagent-fanout-synthesis",
+        "subagent-stale-child-links",
         "memory-recall",
         "thread-memory-isolation",
         "config-restart-capability-flip",
@@ -1135,8 +1139,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -1166,7 +1170,7 @@ describe("qa cli runtime", () => {
   it("defaults manual frontier runs onto Codex OAuth when the runtime resolver prefers it", async () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"
-        ? "openai/gpt-5.5"
+        ? "openai/gpt-5.4"
         : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
@@ -1179,8 +1183,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,

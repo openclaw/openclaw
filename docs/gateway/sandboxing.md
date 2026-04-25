@@ -393,7 +393,7 @@ for containerized workloads. Current container defaults include:
 - `--no-zygote`
 - `--metrics-recording-only`
 - `--renderer-process-limit=2`
-- `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+- `--no-sandbox` when `noSandbox` is enabled.
 - The three graphics hardening flags (`--disable-3d-apis`,
   `--disable-software-rasterizer`, `--disable-gpu`) are optional and are useful
   when containers lack GPU support. Set `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0`
@@ -480,7 +480,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 ## Related docs
 
 - [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
-- [Sandbox Configuration](/gateway/configuration-reference#agentsdefaultssandbox)
+- [Sandbox Configuration](/gateway/config-agents#agentsdefaultssandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Security](/gateway/security)

@@ -320,7 +320,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
+      'For requests like "do this in claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
+    );
+    expect(prompt).toContain(
+      "For Codex conversation binding/control, prefer the native Codex app-server plugin path",
     );
     expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
@@ -395,12 +398,29 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       docsPath: "/tmp/openclaw/docs",
+      sourcePath: "/tmp/openclaw",
     });
 
     expect(prompt).toContain("## Documentation");
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
+    expect(prompt).toContain("Local source: /tmp/openclaw");
     expect(prompt).toContain(
       "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
+    );
+    expect(prompt).toContain(
+      "If docs are incomplete or stale, inspect the local OpenClaw source code before answering.",
+    );
+  });
+
+  it("falls back to public docs and GitHub source guidance when local docs are unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/work",
+    });
+
+    expect(prompt).toContain("OpenClaw docs: https://docs.openclaw.ai");
+    expect(prompt).toContain("Source: https://github.com/openclaw/openclaw");
+    expect(prompt).toContain(
+      "If docs are incomplete or stale, review the OpenClaw source on GitHub before answering.",
     );
   });
 
@@ -515,7 +535,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       modelAliasLines: [
         "- Opus: anthropic/claude-opus-4-5",
-        "- Sonnet: anthropic/claude-sonnet-4-5",
+        "- Sonnet: anthropic/claude-sonnet-4-6",
       ],
     });
 

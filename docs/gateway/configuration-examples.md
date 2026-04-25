@@ -234,7 +234,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       userTimezone: "America/Chicago",
       model: {
         primary: "anthropic/claude-sonnet-4-6",
-        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.5"],
+        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.4"],
       },
       imageModel: {
         primary: "openrouter/anthropic/claude-sonnet-4-6",
@@ -242,7 +242,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-        "openai/gpt-5.5": { alias: "gpt" },
+        "openai/gpt-5.4": { alias: "gpt" },
       },
       skills: ["github", "weather"], // inherited by agents that omit list[].skills
       thinkingDefault: "low",
@@ -501,6 +501,28 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 }
 ```
 
+### Trusted node network auto-approval
+
+Keep device pairing manual unless you control the network path. For a dedicated
+lab or tailnet subnet, you can opt in to first-time node device auto-approval
+with exact CIDRs or IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24", "fd00:1234:5678::/64"],
+      },
+    },
+  },
+}
+```
+
+This remains off when unset. It only applies to fresh `role: node` pairing with
+no requested scopes. Operator/browser clients and role, scope, metadata, or
+public-key upgrades still require manual approval.
+
 ### Secure DM mode (shared inbox / multi-user DMs)
 
 If more than one person can DM your bot (multiple entries in `allowFrom`, pairing approvals for multiple people, or `dmPolicy: "open"`), enable **secure DM mode** so DMs from different senders don’t share one context by default:
@@ -627,3 +649,8 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
 - Provider IDs differ (phone numbers, user IDs, channel IDs). Use the provider docs to confirm the format.
 - Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
 - See [Providers](/providers) and [Troubleshooting](/gateway/troubleshooting) for deeper setup notes.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Configuration](/gateway/configuration)

@@ -16,7 +16,7 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 | Auth             | `OPENCODE_API_KEY`              |
 | Parent setup     | [OpenCode](/providers/opencode) |
 
-## Supported models
+## Built-in catalog
 
 OpenClaw sources the Go catalog from the bundled pi model registry. Run
 `openclaw models list --provider opencode-go` for the current model list.
@@ -48,7 +48,7 @@ As of the bundled pi catalog, the provider includes:
       </Step>
       <Step title="Set a Go model as default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.5"
+        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.6"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -80,7 +80,7 @@ As of the bundled pi catalog, the provider includes:
 ```json5
 {
   env: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
-  agents: { defaults: { model: { primary: "opencode-go/kimi-k2.5" } } },
+  agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
 }
 ```
 

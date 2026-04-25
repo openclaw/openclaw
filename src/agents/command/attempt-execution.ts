@@ -14,9 +14,11 @@ import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
+import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
+import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
@@ -62,6 +64,7 @@ type TranscriptUsage = {
 
 type PersistTextTurnTranscriptParams = {
   body: string;
+  transcriptBody?: string;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -95,7 +98,7 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
 async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
 ): Promise<SessionEntry | undefined> {
-  const promptText = params.body;
+  const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
   if (!promptText && !replyText) {
     return params.sessionEntry;
@@ -167,6 +170,7 @@ function isClaudeCliProvider(provider: string): boolean {
 
 export async function persistAcpTurnTranscript(params: {
   body: string;
+  transcriptBody?: string;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -189,6 +193,7 @@ export async function persistAcpTurnTranscript(params: {
 
 export async function persistCliTurnTranscript(params: {
   body: string;
+  transcriptBody?: string;
   result: EmbeddedPiRunResult;
   sessionId: string;
   sessionKey: string;
@@ -205,6 +210,7 @@ export async function persistCliTurnTranscript(params: {
 
   return await persistTextTurnTranscript({
     body: params.body,
+    transcriptBody: params.transcriptBody,
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -262,14 +268,32 @@ export function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-  const sessionPinnedAgentHarnessId =
-    params.sessionEntry?.sessionId === params.sessionId
-      ? (params.sessionEntry.agentHarnessId ?? (params.sessionHasHistory ? "pi" : undefined))
-      : undefined;
-  const authProfileId =
-    params.providerOverride === params.authProfileProvider
-      ? params.sessionEntry?.authProfileOverride
-      : undefined;
+  const sessionPinnedAgentHarnessId = resolveSessionPinnedAgentHarnessId({
+    cfg: params.cfg,
+    sessionAgentId: params.sessionAgentId,
+    sessionEntry: params.sessionEntry,
+    sessionHasHistory: params.sessionHasHistory,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey ?? params.sessionId,
+  });
+  const agentHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.providerOverride,
+    modelId: params.modelOverride,
+    config: params.cfg,
+    agentId: params.sessionAgentId,
+    sessionKey: params.sessionKey ?? params.sessionId,
+  });
+  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+    provider: params.providerOverride,
+    authProfileProvider: params.authProfileProvider,
+    sessionAuthProfileId: params.sessionEntry?.authProfileOverride,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    harnessId: sessionPinnedAgentHarnessId,
+    harnessRuntime: agentHarnessPolicy.runtime,
+    allowHarnessAuthProfileForwarding: !isCliProvider(params.providerOverride, params.cfg),
+  });
+  const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, params.providerOverride);
     const resolveReusableCliSessionBinding = async () => {
@@ -440,6 +464,43 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });
+}
+
+function resolveSessionPinnedAgentHarnessId(params: {
+  cfg: OpenClawConfig;
+  sessionAgentId: string;
+  sessionEntry?: SessionEntry;
+  sessionHasHistory?: boolean;
+  sessionId: string;
+  sessionKey: string;
+}): string | undefined {
+  if (params.sessionEntry?.sessionId !== params.sessionId) {
+    return resolveConfiguredAgentHarnessId(params);
+  }
+  if (params.sessionEntry.agentHarnessId) {
+    return params.sessionEntry.agentHarnessId;
+  }
+  const configuredAgentHarnessId = resolveConfiguredAgentHarnessId(params);
+  if (configuredAgentHarnessId) {
+    return configuredAgentHarnessId;
+  }
+  if (!params.sessionHasHistory) {
+    return undefined;
+  }
+  return "pi";
+}
+
+function resolveConfiguredAgentHarnessId(params: {
+  cfg: OpenClawConfig;
+  sessionAgentId: string;
+  sessionKey: string;
+}): string | undefined {
+  const policy = resolveAgentHarnessPolicy({
+    config: params.cfg,
+    agentId: params.sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  return policy.runtime === "auto" ? undefined : policy.runtime;
 }
 
 export function buildAcpResult(params: {

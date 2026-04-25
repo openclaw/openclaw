@@ -392,22 +392,35 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
   return ["## Voice (TTS)", hint, ""];
 }
 
-function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
+function buildDocsSection(params: {
+  docsPath?: string;
+  sourcePath?: string;
+  isMinimal: boolean;
+  readToolName: string;
+}) {
   const docsPath = params.docsPath?.trim();
-  if (!docsPath || params.isMinimal) {
+  const sourcePath = params.sourcePath?.trim();
+  if (params.isMinimal) {
     return [];
   }
-  return [
+  const lines = [
     "## Documentation",
-    `OpenClaw docs: ${docsPath}`,
+    docsPath ? `OpenClaw docs: ${docsPath}` : "OpenClaw docs: https://docs.openclaw.ai",
     "Mirror: https://docs.openclaw.ai",
+    sourcePath ? `Local source: ${sourcePath}` : undefined,
     "Source: https://github.com/openclaw/openclaw",
     "Community: https://discord.com/invite/clawd",
     "Find new skills: https://clawhub.ai",
-    "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
+    docsPath
+      ? "For OpenClaw behavior, commands, config, or architecture: consult local docs first."
+      : "For OpenClaw behavior, commands, config, or architecture: consult the docs mirror first.",
+    sourcePath
+      ? "If docs are incomplete or stale, inspect the local OpenClaw source code before answering."
+      : "If docs are incomplete or stale, review the OpenClaw source on GitHub before answering.",
     "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
   ];
+  return lines.filter((line): line is string => line !== undefined);
 }
 
 function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason): string {
@@ -441,6 +454,7 @@ export function buildAgentSystemPrompt(params: {
   skillsPrompt?: string;
   heartbeatPrompt?: string;
   docsPath?: string;
+  sourcePath?: string;
   workspaceNotes?: string[];
   ttsHint?: string;
   /** Controls which hardcoded sections to include. Defaults to "full". */
@@ -663,6 +677,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
+    sourcePath: params.sourcePath,
     isMinimal,
     readToolName,
   });
@@ -705,7 +720,8 @@ export function buildAgentSystemPrompt(params: {
     'Sub-agents start isolated by default. Use `sessions_spawn` with `context:"fork"` only when the child needs the current transcript context; otherwise omit `context` or use `context:"isolated"`.',
     ...(acpHarnessSpawnAllowed
       ? [
-          'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          'For requests like "do this in claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          "For Codex conversation binding/control, prefer the native Codex app-server plugin path (`/codex bind`, `/codex threads`, `/codex resume`). Use ACP for Codex only when the user explicitly asks for ACP/`/acp`, or for background child sessions where native Codex runtime spawn is not exposed.",
           'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
           "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',

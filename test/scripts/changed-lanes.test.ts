@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { detectChangedLanes } from "../../scripts/changed-lanes.mjs";
 import {
   CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  createChangedCheckChildEnv,
   createChangedCheckPlan,
   createChangedCheckVitestEnv,
 } from "../../scripts/check-changed.mjs";
@@ -82,6 +83,7 @@ describe("scripts/changed-lanes", () => {
 
   it("routes core production changes to core prod and core test lanes", () => {
     const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
 
     expect(result.lanes).toMatchObject({
       core: true,
@@ -90,12 +92,34 @@ describe("scripts/changed-lanes", () => {
       extensionTests: false,
       all: false,
     });
-    expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
-      "tsgo:core",
-    );
-    expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
-      "tsgo:core:test",
-    );
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
+    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toMatchObject({
+      PATH: "/usr/bin",
+      OPENCLAW_TSGO_SPARSE_SKIP: "1",
+    });
+  });
+
+  it("reenables local-check policy for changed typecheck commands", () => {
+    const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
+    const plan = createChangedCheckPlan(result, {
+      env: { OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" },
+    });
+
+    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toMatchObject({
+      OPENCLAW_LOCAL_CHECK: "1",
+      OPENCLAW_TSGO_SPARSE_SKIP: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("marks changed-check children as covered by the parent heavy-check lock", () => {
+    expect(createChangedCheckChildEnv({ PATH: "/usr/bin" })).toMatchObject({
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+      PATH: "/usr/bin",
+    });
   });
 
   it("routes core test-only changes to core test lanes only", () => {
@@ -165,6 +189,7 @@ describe("scripts/changed-lanes", () => {
       all: false,
     });
     expect(plan.runExtensionTests).toBe(true);
+    expect(plan.testTargets).toEqual(["src/plugin-sdk/core.ts"]);
   });
 
   it("fails safe for root config changes", () => {
@@ -363,11 +388,14 @@ describe("scripts/changed-lanes", () => {
     expect(plan.runFullTests).toBe(false);
   });
 
-  it("sets a fail-fast Vitest watchdog for changed checks", () => {
+  it("sets a ten-minute Vitest watchdog for changed checks", () => {
+    expect(CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("600000");
     expect(createChangedCheckVitestEnv({ PATH: "/usr/bin" })).toMatchObject({
       PATH: "/usr/bin",
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
       OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
+      OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "1",
     });
 
     expect(
@@ -379,5 +407,17 @@ describe("scripts/changed-lanes", () => {
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "45000",
       OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1",
     });
+  });
+
+  it("does not force serial changed-check tests in CI or when workers are explicit", () => {
+    expect(createChangedCheckVitestEnv({ CI: "true" })).not.toHaveProperty(
+      "OPENCLAW_VITEST_MAX_WORKERS",
+    );
+    expect(createChangedCheckVitestEnv({ OPENCLAW_VITEST_MAX_WORKERS: "4" })).toMatchObject({
+      OPENCLAW_VITEST_MAX_WORKERS: "4",
+    });
+    expect(
+      createChangedCheckVitestEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "4" }),
+    ).not.toHaveProperty("OPENCLAW_TEST_PROJECTS_SERIAL");
   });
 });

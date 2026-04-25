@@ -74,10 +74,97 @@ async function pollCliCronJobVisible(params: {
   return { pollsUsed: polls };
 }
 
+async function removeCliCronJobBestEffort(params: {
+  id: string;
+  port: number;
+  token: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  try {
+    await runOpenClawCliJson(
+      [
+        "cron",
+        "rm",
+        params.id,
+        "--json",
+        "--url",
+        `ws://127.0.0.1:${params.port}`,
+        "--token",
+        params.token,
+      ],
+      params.env,
+    );
+  } catch (error) {
+    logCliCronProbe("cleanup:cron-rm-failed", {
+      jobId: params.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 type LoopbackJsonRpcResponse = {
   result?: unknown;
   error?: { message?: string };
 };
+
+type LoopbackToolListEntry = {
+  name?: string;
+  inputSchema?: unknown;
+};
+
+function asLoopbackSchemaRecord(schema: unknown): Record<string, unknown> | null {
+  return schema && typeof schema === "object" && !Array.isArray(schema)
+    ? (schema as Record<string, unknown>)
+    : null;
+}
+
+function assertLoopbackObjectSchemasHaveProperties(params: {
+  tools: LoopbackToolListEntry[];
+  expectedSchemaProbeToolName?: string;
+}): void {
+  const missingProperties = params.tools
+    .filter((tool) => {
+      const schema = asLoopbackSchemaRecord(tool.inputSchema);
+      if (!schema || schema.type !== "object") {
+        return false;
+      }
+      const properties = schema.properties;
+      return (
+        !Object.hasOwn(schema, "properties") ||
+        !properties ||
+        typeof properties !== "object" ||
+        Array.isArray(properties)
+      );
+    })
+    .map((tool) => tool.name)
+    .filter((name): name is string => typeof name === "string" && name.length > 0);
+
+  if (missingProperties.length > 0) {
+    throw new Error(
+      `mcp loopback tools/list exposed object schemas without properties: ${missingProperties.join(
+        ", ",
+      )}`,
+    );
+  }
+
+  const expectedToolName = params.expectedSchemaProbeToolName;
+  if (!expectedToolName) {
+    return;
+  }
+  const tool = params.tools.find((candidate) => candidate.name === expectedToolName);
+  if (!tool) {
+    throw new Error(`mcp loopback tools/list did not expose ${expectedToolName}`);
+  }
+  const schema = asLoopbackSchemaRecord(tool.inputSchema);
+  if (
+    !schema ||
+    schema.type !== "object" ||
+    !Object.hasOwn(schema, "properties") ||
+    !asLoopbackSchemaRecord(schema.properties)
+  ) {
+    throw new Error(`mcp loopback schema probe ${expectedToolName} was not normalized`);
+  }
+}
 
 async function callLoopbackJsonRpc(params: {
   sessionKey: string;
@@ -128,6 +215,7 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
   senderIsOwner: boolean;
   messageProvider?: string;
   accountId?: string;
+  expectedSchemaProbeToolName?: string;
 }): Promise<void> {
   const cronProbe = createLiveCronProbeSpec();
   logCliCronProbe("loopback-preflight:start", {
@@ -163,8 +251,12 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     body: { jsonrpc: "2.0", id: "tools-list", method: "tools/list" },
   });
   const tools = Array.isArray((toolsList.result as { tools?: unknown[] } | undefined)?.tools)
-    ? (((toolsList.result as { tools?: unknown[] }).tools ?? []) as Array<{ name?: string }>)
+    ? (((toolsList.result as { tools?: unknown[] }).tools ?? []) as LoopbackToolListEntry[])
     : [];
+  assertLoopbackObjectSchemasHaveProperties({
+    tools,
+    expectedSchemaProbeToolName: params.expectedSchemaProbeToolName,
+  });
   const toolNames = tools
     .map((tool) => (typeof tool.name === "string" ? tool.name : ""))
     .filter(Boolean);
@@ -227,19 +319,12 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     expectedSessionKey: params.sessionKey,
   });
   if (createdJob.id) {
-    await runOpenClawCliJson(
-      [
-        "cron",
-        "rm",
-        createdJob.id,
-        "--json",
-        "--url",
-        `ws://127.0.0.1:${params.port}`,
-        "--token",
-        params.token,
-      ],
-      params.env,
-    );
+    await removeCliCronJobBestEffort({
+      id: createdJob.id,
+      port: params.port,
+      token: params.token,
+      env: params.env,
+    });
   }
   logCliCronProbe("loopback-preflight:done", { jobName: cronProbe.name });
 }
@@ -367,18 +452,11 @@ export async function verifyCliCronMcpProbe(params: {
     expectedSessionKey: params.sessionKey,
   });
   if (createdJob?.id) {
-    await runOpenClawCliJson(
-      [
-        "cron",
-        "rm",
-        createdJob.id,
-        "--json",
-        "--url",
-        `ws://127.0.0.1:${params.port}`,
-        "--token",
-        params.token,
-      ],
-      params.env,
-    );
+    await removeCliCronJobBestEffort({
+      id: createdJob.id,
+      port: params.port,
+      token: params.token,
+      env: params.env,
+    });
   }
 }

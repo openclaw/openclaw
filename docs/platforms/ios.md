@@ -7,8 +7,6 @@ read_when:
 title: "iOS app"
 ---
 
-# iOS App (Node)
-
 Availability: internal preview. The iOS app is not publicly distributed yet.
 
 ## What it does
@@ -45,6 +43,25 @@ openclaw devices approve <requestId>
 If the app retries pairing with changed auth details (role/scopes/public key),
 the previous pending request is superseded and a new `requestId` is created.
 Run `openclaw devices list` again before approval.
+
+Optional: if the iOS node always connects from a tightly controlled subnet, you
+can opt in to first-time node auto-approval with explicit CIDRs or exact IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+This is disabled by default. It applies only to fresh `role: node` pairing with
+no requested scopes. Operator/browser pairing and any role, scope, metadata, or
+public-key change still require manual approval.
 
 4. Verify connection:
 
