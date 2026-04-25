@@ -126,6 +126,50 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     });
     expect(reused.snapshotIdx).toBe(retried.snapshotIdx);
   });
+
+  it("keeps thread history isolated from the main room queue", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, entry("main-1"));
+    tracker.recordPending(ROOM, entry("thread-1"), "$thread");
+    tracker.recordPending(ROOM, entry("main-2"));
+
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100)).toEqual([entry("main-1"), entry("main-2")]);
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100, "$thread")).toEqual([entry("thread-1")]);
+  });
+
+  it("tracks watermarks independently per thread scope", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, entry("thread-a"), "$thread-a");
+    const snapA = tracker.recordTrigger(ROOM, entry("trigger-a"), "$thread-a");
+    tracker.recordPending(ROOM, entry("thread-b"), "$thread-b");
+    const snapB = tracker.recordTrigger(ROOM, entry("trigger-b"), "$thread-b");
+
+    tracker.consumeHistory(AGENT, ROOM, snapA, undefined, "$thread-a");
+
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100, "$thread-a")).toHaveLength(0);
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100, "$thread-b")).toEqual([
+      entry("thread-b"),
+      entry("trigger-b"),
+    ]);
+
+    tracker.consumeHistory(AGENT, ROOM, snapB, undefined, "$thread-b");
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100, "$thread-b")).toHaveLength(0);
+  });
+
+  it("does not let main-room consumption clear a thread queue", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    tracker.recordPending(ROOM, entry("main-1"));
+    tracker.recordPending(ROOM, entry("thread-1"), "$thread");
+    const mainSnap = tracker.recordTrigger(ROOM, entry("main-trigger"));
+
+    tracker.consumeHistory(AGENT, ROOM, mainSnap);
+
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100)).toHaveLength(0);
+    expect(tracker.getPendingHistory(AGENT, ROOM, 100, "$thread")).toEqual([entry("thread-1")]);
+  });
 });
 
 describe("createRoomHistoryTracker — roomQueues eviction", () => {

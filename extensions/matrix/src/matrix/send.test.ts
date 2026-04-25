@@ -592,7 +592,35 @@ describe("sendMessageMatrix threads", () => {
     expect(content["m.relates_to"]).toMatchObject({
       rel_type: "m.thread",
       event_id: "$thread",
-      "m.in_reply_to": { event_id: "$thread" },
+    });
+    expect(content["m.relates_to"]).not.toHaveProperty("m.in_reply_to");
+    expect(content["m.relates_to"]).not.toHaveProperty("is_falling_back");
+  });
+
+  it("only adds thread fallback metadata when an explicit reply target is supplied", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello thread", {
+      client,
+      cfg: {} as never,
+      threadId: "$thread",
+      replyToId: "$reply",
+    });
+
+    const content = sendMessage.mock.calls[0]?.[1] as {
+      "m.relates_to"?: {
+        rel_type?: string;
+        event_id?: string;
+        is_falling_back?: boolean;
+        "m.in_reply_to"?: { event_id?: string };
+      };
+    };
+
+    expect(content["m.relates_to"]).toMatchObject({
+      rel_type: "m.thread",
+      event_id: "$thread",
+      is_falling_back: true,
+      "m.in_reply_to": { event_id: "$reply" },
     });
   });
 
@@ -861,6 +889,30 @@ describe("editMessageMatrix mentions", () => {
         [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
       },
     });
+  });
+
+  it("stores thread context on m.new_content when editing a threaded message", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await editMessageMatrix("room:!room:example", "$original", "done", {
+      client,
+      cfg: {} as never,
+      threadId: "$thread",
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      "m.relates_to": {
+        rel_type: "m.replace",
+        event_id: "$original",
+      },
+      "m.new_content": {
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$thread",
+        },
+      },
+    });
+    expect(sendMessage.mock.calls[0]?.[1]?.["m.relates_to"]).not.toHaveProperty("m.in_reply_to");
   });
 });
 
