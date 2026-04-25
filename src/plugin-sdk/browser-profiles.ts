@@ -12,6 +12,13 @@ export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "openclaw";
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
 export const DEFAULT_UPLOAD_DIR = path.join(resolvePreferredOpenClawTmpDir(), "uploads");
 
+export type ResolvedBrowserTabCleanupConfig = {
+  enabled: boolean;
+  idleMinutes: number;
+  maxTabsPerSession: number;
+  sweepMinutes: number;
+};
+
 export type ResolvedBrowserConfig = {
   enabled: boolean;
   evaluateEnabled: boolean;
@@ -30,6 +37,7 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
+  tabCleanup: ResolvedBrowserTabCleanupConfig;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
 };

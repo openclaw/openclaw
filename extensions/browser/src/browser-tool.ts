@@ -40,6 +40,7 @@ import {
   resolveNodeIdFromList,
   resolveProfile,
   selectDefaultNodeFromList,
+  touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
@@ -64,6 +65,7 @@ const browserToolDeps = {
   loadConfig,
   listNodes,
   callGatewayTool,
+  touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 };
@@ -89,6 +91,7 @@ export const __testing = {
       loadConfig: typeof loadConfig;
       listNodes: typeof listNodes;
       callGatewayTool: typeof callGatewayTool;
+      touchSessionBrowserTab: typeof touchSessionBrowserTab;
       trackSessionBrowserTab: typeof trackSessionBrowserTab;
       untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
     }> | null,
@@ -113,6 +116,8 @@ export const __testing = {
     browserToolDeps.loadConfig = overrides?.loadConfig ?? loadConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
     browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
+    browserToolDeps.touchSessionBrowserTab =
+      overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
     browserToolDeps.trackSessionBrowserTab =
       overrides?.trackSessionBrowserTab ?? trackSessionBrowserTab;
     browserToolDeps.untrackSessionBrowserTab =
@@ -512,6 +517,17 @@ export function createBrowserTool(opts?: {
         (usesExistingSessionManageFlow({ action, profileName: profile })
           ? DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS
           : undefined);
+      const touchTrackedTab = (targetId: string | undefined) => {
+        if (proxyRequest || !targetId) {
+          return;
+        }
+        browserToolDeps.touchSessionBrowserTab({
+          sessionKey: opts?.agentSessionKey,
+          targetId,
+          baseUrl,
+          profile,
+        });
+      };
 
       switch (action) {
         case "doctor":
@@ -644,6 +660,7 @@ export function createBrowserTool(opts?: {
             profile,
             timeoutMs: toolTimeoutMs,
           });
+          touchTrackedTab(targetId);
           return jsonResult({ ok: true });
         }
         case "close": {
@@ -694,6 +711,7 @@ export function createBrowserTool(opts?: {
             baseUrl,
             profile,
             proxyRequest,
+            onTabActivity: touchTrackedTab,
           });
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
@@ -733,6 +751,7 @@ export function createBrowserTool(opts?: {
                 timeoutMs: effectiveTimeoutMs,
                 profile,
               });
+          touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
             path: result.path,
@@ -754,13 +773,13 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult(
-            await browserToolDeps.browserNavigate(baseUrl, {
-              url: targetUrl,
-              targetId,
-              profile,
-            }),
-          );
+          const result = await browserToolDeps.browserNavigate(baseUrl, {
+            url: targetUrl,
+            targetId,
+            profile,
+          });
+          touchTrackedTab(readStringValue(result.targetId) ?? targetId);
+          return jsonResult(result);
         }
         case "console":
           return await executeConsoleAction({
@@ -779,6 +798,7 @@ export function createBrowserTool(opts?: {
                 body: { targetId },
               })) as Awaited<ReturnType<typeof browserPdfSave>>)
             : await browserToolDeps.browserPdfSave(baseUrl, { targetId, profile });
+          touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           return {
             content: [{ type: "text" as const, text: `FILE:${result.path}` }],
             details: result,
@@ -818,17 +838,17 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult(
-            await browserToolDeps.browserArmFileChooser(baseUrl, {
-              paths: normalizedPaths,
-              ref,
-              inputRef,
-              element,
-              targetId,
-              timeoutMs,
-              profile,
-            }),
-          );
+          const result = await browserToolDeps.browserArmFileChooser(baseUrl, {
+            paths: normalizedPaths,
+            ref,
+            inputRef,
+            element,
+            targetId,
+            timeoutMs,
+            profile,
+          });
+          touchTrackedTab(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+          return jsonResult(result);
         }
         case "dialog": {
           const accept = Boolean(params.accept);
@@ -848,15 +868,15 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          return jsonResult(
-            await browserToolDeps.browserArmDialog(baseUrl, {
-              accept,
-              promptText,
-              targetId,
-              timeoutMs,
-              profile,
-            }),
-          );
+          const result = await browserToolDeps.browserArmDialog(baseUrl, {
+            accept,
+            promptText,
+            targetId,
+            timeoutMs,
+            profile,
+          });
+          touchTrackedTab(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+          return jsonResult(result);
         }
         case "act": {
           const request = readActRequestParam(params);
@@ -868,6 +888,7 @@ export function createBrowserTool(opts?: {
             baseUrl,
             profile,
             proxyRequest,
+            onTabActivity: touchTrackedTab,
           });
         }
         default:
