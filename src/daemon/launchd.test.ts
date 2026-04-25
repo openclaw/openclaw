@@ -211,18 +211,6 @@ vi.mock("node:fs/promises", async () => {
       }
       throw new Error(`ENOENT: no such file or directory, access '${key}'`);
     }),
-    readFile: vi.fn(
-      async (p: string, encoding?: BufferEncoding | { encoding?: BufferEncoding }) => {
-        const key = p;
-        const data = state.files.get(key);
-        if (data === undefined) {
-          throw new Error(`ENOENT: no such file or directory, read '${key}'`);
-        }
-        const requestedEncoding =
-          typeof encoding === "string" ? encoding : (encoding?.encoding ?? undefined);
-        return requestedEncoding ? data : Buffer.from(data);
-      },
-    ),
     mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
       const key = p;
       state.dirs.add(key);
