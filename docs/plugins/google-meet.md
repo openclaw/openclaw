@@ -642,6 +642,15 @@ openclaw googlemeet artifacts --conference-record conferenceRecords/abc123 --jso
 openclaw googlemeet attendance --conference-record conferenceRecords/abc123 --json
 ```
 
+Write a readable report:
+
+```bash
+openclaw googlemeet artifacts --conference-record conferenceRecords/abc123 \
+  --format markdown --output meet-artifacts.md
+openclaw googlemeet attendance --conference-record conferenceRecords/abc123 \
+  --format markdown --output meet-attendance.md
+```
+
 `artifacts` returns conference record metadata plus participant, recording,
 transcript, structured transcript-entry, and smart-note resource metadata when
 Google exposes it for the meeting. Use `--no-transcript-entries` to skip
