@@ -8,7 +8,11 @@ import {
   type CrestodianCommandDeps,
 } from "./operations.js";
 import { formatCrestodianOverview, loadCrestodianOverview } from "./overview.js";
-import { runCrestodianTui } from "./tui-backend.js";
+
+type CrestodianInteractiveRunner = (
+  opts: RunCrestodianOptions,
+  runtime: RuntimeEnv,
+) => Promise<void>;
 
 export type RunCrestodianOptions = {
   message?: string;
@@ -19,7 +23,7 @@ export type RunCrestodianOptions = {
   planWithAssistant?: CrestodianAssistantPlanner;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
-  runInteractiveTui?: typeof runCrestodianTui;
+  runInteractiveTui?: CrestodianInteractiveRunner;
 };
 
 async function runOneShot(
@@ -62,6 +66,7 @@ export async function runCrestodian(
     return;
   }
 
-  const runInteractiveTui = opts.runInteractiveTui ?? runCrestodianTui;
+  const runInteractiveTui =
+    opts.runInteractiveTui ?? (await import("./tui-backend.js")).runCrestodianTui;
   await runInteractiveTui(opts, runtime);
 }

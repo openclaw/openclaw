@@ -16,7 +16,6 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
@@ -60,6 +59,8 @@ export type CrestodianOverview = {
     sourceUrl: string;
   };
 };
+
+type OpenClawReferencePaths = Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
 
 function issueMessages(snapshot: ConfigFileSnapshot): string[] {
   return snapshot.issues.map((issue) => {
@@ -107,6 +108,17 @@ function buildAgentSummaries(cfg: OpenClawConfig): CrestodianAgentSummary[] {
   return summaries;
 }
 
+function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePaths | undefined {
+  if (env.OPENCLAW_TEST_FAST !== "1") {
+    return undefined;
+  }
+  const sourcePath = process.cwd();
+  return {
+    sourcePath,
+    docsPath: `${sourcePath}/docs`,
+  };
+}
+
 export async function loadCrestodianOverview(
   opts: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<CrestodianOverview> {
@@ -122,6 +134,7 @@ export async function loadCrestodianOverview(
   let gatewaySource = "local loopback";
   let gatewayError: string | undefined;
   try {
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: cfg, configPath });
     gatewayUrl = details.url;
     gatewaySource = details.urlSource;
@@ -133,11 +146,12 @@ export async function loadCrestodianOverview(
     probeLocalCommand("codex"),
     probeLocalCommand("claude"),
     probeGatewayUrl(gatewayUrl),
-    resolveOpenClawReferencePaths({
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-      moduleUrl: import.meta.url,
-    }),
+    resolveFastTestReferences(env) ??
+      resolveOpenClawReferencePaths({
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+        moduleUrl: import.meta.url,
+      }),
   ]);
   return {
     config: {

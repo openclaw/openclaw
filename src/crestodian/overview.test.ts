@@ -1,8 +1,4 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetConfigRuntimeState } from "../config/config.js";
 
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
@@ -13,17 +9,40 @@ vi.mock("./probes.js", () => ({
   probeGatewayUrl: vi.fn(async (url: string) => ({ reachable: false, url, error: "offline" })),
 }));
 
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: vi.fn(async () => ({
+    path: "/tmp/openclaw.json",
+    exists: true,
+    valid: true,
+    issues: [],
+    hash: "test-hash",
+    runtimeConfig: {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.2" } },
+        list: [
+          { id: "main", default: true },
+          { id: "work", name: "Work" },
+        ],
+      },
+      gateway: { port: 19001 },
+    },
+    sourceConfig: undefined,
+  })),
+  resolveConfigPath: vi.fn(() => "/tmp/openclaw.json"),
+  resolveGatewayPort: vi.fn((cfg: { gateway?: { port?: number } }) => cfg.gateway?.port ?? 8765),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  buildGatewayConnectionDetails: vi.fn((input: { config: { gateway?: { port?: number } } }) => ({
+    url: `ws://127.0.0.1:${input.config.gateway?.port ?? 8765}`,
+    urlSource: "local loopback",
+  })),
+}));
+
 describe("loadCrestodianOverview", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   const previousTestFast = process.env.OPENCLAW_TEST_FAST;
 
   afterEach(() => {
-    resetConfigRuntimeState();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     if (previousTestFast === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
     } else {
@@ -32,26 +51,7 @@ describe("loadCrestodianOverview", () => {
   });
 
   it("summarizes config, agents, model, tools, and gateway", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-overview-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    await fs.writeFile(
-      path.join(tempDir, "openclaw.json"),
-      `${JSON.stringify(
-        {
-          agents: {
-            defaults: { model: { primary: "openai/gpt-5.2" } },
-            list: [
-              { id: "main", default: true },
-              { id: "work", name: "Work" },
-            ],
-          },
-          gateway: { port: 19001 },
-        },
-        null,
-        2,
-      )}\n`,
-    );
 
     const { formatCrestodianOverview, formatCrestodianStartupMessage, loadCrestodianOverview } =
       await import("./overview.js");

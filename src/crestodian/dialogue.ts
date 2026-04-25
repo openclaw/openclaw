@@ -1,15 +1,11 @@
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  planCrestodianCommand,
-  type CrestodianAssistantPlan,
-  type CrestodianAssistantPlanner,
-} from "./assistant.js";
+import type { CrestodianAssistantPlan, CrestodianAssistantPlanner } from "./assistant.js";
 import {
   describeCrestodianPersistentOperation,
   parseCrestodianOperation,
   type CrestodianOperation,
 } from "./operations.js";
-import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
+import type { CrestodianOverview } from "./overview.js";
 
 export type CrestodianDialogueOptions = {
   planWithAssistant?: CrestodianAssistantPlanner;
@@ -32,8 +28,9 @@ export async function resolveCrestodianOperation(
   if (!shouldAskAssistant(input, operation)) {
     return operation;
   }
+  const { loadCrestodianOverview } = await import("./overview.js");
   const overview = await loadCrestodianOverview();
-  const planner = opts.planWithAssistant ?? planCrestodianCommand;
+  const planner = opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
   const plan = await planner({ input, overview });
   if (!plan) {
     return operation;
