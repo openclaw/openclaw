@@ -75,7 +75,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "chat",
-    description: "Open a local terminal UI (alias for tui --local)",
+    description: "Open a browser-based chat UI for your Gemma assistant",
     hasSubcommands: false,
   },
   {

@@ -9,7 +9,6 @@ export function registerTuiCli(program: Command) {
   program
     .command("tui")
     .alias("terminal")
-    .alias("chat")
     .description("Open a terminal UI connected to the Gateway")
     .option("--local", "Run against the local embedded agent runtime", false)
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -30,8 +29,7 @@ export function registerTuiCli(program: Command) {
         // `cmd.name()` always returns the canonical subcommand name (`tui`).
         // Use the parsed parent args to see which alias the user actually typed.
         const invokedSubcommand = cmd.parent?.args[0];
-        const invokedAsLocalAlias =
-          invokedSubcommand === "terminal" || invokedSubcommand === "chat";
+        const invokedAsLocalAlias = invokedSubcommand === "terminal";
         const isLocal = Boolean(opts.local) || invokedAsLocalAlias;
         if (isLocal && (opts.url || opts.token || opts.password)) {
           throw new Error("--local cannot be combined with --url, --token, or --password");

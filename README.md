@@ -73,7 +73,7 @@ gemmaclaw setup
 gemmaclaw chat
 ```
 
-`gemmaclaw setup` detects your hardware, picks the best backend, downloads the model, and runs a smoke test. `gemmaclaw chat` opens a terminal UI where you can talk to your Gemma assistant directly.
+`gemmaclaw setup` detects your hardware, picks the best backend, downloads the model, and runs a smoke test. `gemmaclaw chat` starts the gateway and opens a web chat UI in your browser where you can talk to your Gemma assistant directly.
 
 ### Developer install
 
@@ -223,7 +223,10 @@ Results are written to `results/<model>__<timestamp>/` with three formats:
 | ---------------------------- | ---------------------------------------------------------- |
 | `gemmaclaw setup`            | Auto-detect hardware and provision the best Gemma backend  |
 | `gemmaclaw setup --advanced` | Interactive wizard for manual backend/model/port selection |
-| `gemmaclaw chat`             | Open terminal chat with your Gemma assistant               |
+| `gemmaclaw chat`             | Open a browser-based chat UI for your Gemma assistant      |
+| `gemmaclaw chat --no-open`   | Start gateway without auto-opening the browser             |
+| `gemmaclaw chat --port 3001` | Start gateway on a specific port                           |
+| `gemmaclaw tui`              | Open terminal chat (TUI) with your Gemma assistant         |
 | `gemmaclaw benchmark`        | Run the benchmark suite (full LLM judge mode)              |
 | `gemmaclaw benchmark --mock` | Run benchmark with deterministic scoring (fast CI mode)    |
 | `gemmaclaw provision`        | Low-level: manually provision a specific backend           |
