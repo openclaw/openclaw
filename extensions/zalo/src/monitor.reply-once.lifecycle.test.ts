@@ -65,7 +65,10 @@ describe("Zalo reply-once lifecycle", () => {
       },
     );
 
-    const monitor = await startWebhookLifecycleMonitor(createReplyOnceMonitorSetup());
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createReplyOnceMonitorSetup(),
+      cacheKey: "zalo-reply-once-lifecycle",
+    });
 
     try {
       await withServer(
@@ -131,7 +134,10 @@ describe("Zalo reply-once lifecycle", () => {
       },
     );
 
-    const monitor = await startWebhookLifecycleMonitor(createReplyOnceMonitorSetup());
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createReplyOnceMonitorSetup(),
+      cacheKey: "zalo-reply-once-lifecycle",
+    });
 
     try {
       await withServer(

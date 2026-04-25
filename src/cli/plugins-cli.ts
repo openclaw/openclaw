@@ -36,6 +36,7 @@ import {
 import { setPluginEnabledInConfig } from "./plugins-config.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { formatPluginLine } from "./plugins-list-format.js";
+import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 import { resolvePluginUninstallId } from "./plugins-uninstall-selection.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 import { promptYesNo } from "./prompt.js";
@@ -454,6 +455,9 @@ export function registerPluginsCli(program: Command) {
       if (typeof inspect.policy.allowPromptInjection === "boolean") {
         policyLines.push(`allowPromptInjection: ${inspect.policy.allowPromptInjection}`);
       }
+      if (typeof inspect.policy.allowConversationAccess === "boolean") {
+        policyLines.push(`allowConversationAccess: ${inspect.policy.allowConversationAccess}`);
+      }
       if (typeof inspect.policy.allowModelOverride === "boolean") {
         policyLines.push(`allowModelOverride: ${inspect.policy.allowModelOverride}`);
       }
@@ -495,6 +499,13 @@ export function registerPluginsCli(program: Command) {
         nextConfig: next,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       });
+      await refreshPluginRegistryAfterConfigMutation({
+        config: next,
+        reason: "policy-changed",
+        logger: {
+          warn: (message) => defaultRuntime.log(theme.warn(message)),
+        },
+      });
       logSlotWarnings(slotResult.warnings);
       if (enableResult.enabled) {
         defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
@@ -518,6 +529,13 @@ export function registerPluginsCli(program: Command) {
       await replaceConfigFile({
         nextConfig: next,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      });
+      await refreshPluginRegistryAfterConfigMutation({
+        config: next,
+        reason: "policy-changed",
+        logger: {
+          warn: (message) => defaultRuntime.log(theme.warn(message)),
+        },
       });
       defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
     });
@@ -641,6 +659,13 @@ export function registerPluginsCli(program: Command) {
       await replaceConfigFile({
         nextConfig: result.config,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      });
+      await refreshPluginRegistryAfterConfigMutation({
+        config: result.config,
+        reason: "source-changed",
+        logger: {
+          warn: (message) => defaultRuntime.log(theme.warn(message)),
+        },
       });
 
       const removed: string[] = [];

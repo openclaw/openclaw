@@ -3,6 +3,10 @@ import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import {
+  describePluginInstallSource,
+  type PluginInstallSourceInfo,
+} from "./install-source-info.js";
+import {
   loadPluginManifest,
   type PluginPackageInstall,
   type PluginManifestLoadResult,
@@ -17,6 +21,7 @@ export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
   label: string;
   origin: PluginOrigin;
   install: PluginPackageInstall;
+  installSource?: PluginInstallSourceInfo;
 };
 
 type ProviderInstallCatalogParams = {
@@ -29,6 +34,7 @@ type ProviderInstallCatalogParams = {
 type PreferredInstallSource = {
   origin: PluginOrigin;
   install: PluginPackageInstall;
+  packageName?: string;
 };
 
 const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
@@ -53,7 +59,7 @@ function resolvePluginManifest(
   return manifest.ok ? manifest : null;
 }
 
-function resolveTrustedPinnedNpmSpec(params: {
+function resolveTrustedNpmSpec(params: {
   origin: PluginOrigin;
   install?: PluginPackageInstall;
 }): string | undefined {
@@ -61,12 +67,11 @@ function resolveTrustedPinnedNpmSpec(params: {
     return undefined;
   }
   const npmSpec = params.install?.npmSpec?.trim();
-  const expectedIntegrity = params.install?.expectedIntegrity?.trim();
-  if (!npmSpec || !expectedIntegrity) {
+  if (!npmSpec) {
     return undefined;
   }
   const parsed = parseRegistryNpmSpec(npmSpec);
-  return parsed?.selectorKind === "exact-version" ? npmSpec : undefined;
+  return parsed ? npmSpec : undefined;
 }
 
 function resolveInstallInfo(params: {
@@ -75,7 +80,7 @@ function resolveInstallInfo(params: {
   packageDir?: string;
   workspaceDir?: string;
 }): PluginPackageInstall | null {
-  const npmSpec = resolveTrustedPinnedNpmSpec({
+  const npmSpec = resolveTrustedNpmSpec({
     origin: params.origin,
     install: params.install,
   });
@@ -158,6 +163,7 @@ function resolvePreferredInstallsByPluginId(
       preferredByPluginId.set(manifest.manifest.id, {
         origin: candidate.origin,
         install,
+        ...(candidate.packageName ? { packageName: candidate.packageName } : {}),
       });
     }
   }
@@ -180,6 +186,9 @@ export function resolveProviderInstallCatalogEntries(
           label: choice.groupLabel ?? choice.choiceLabel,
           origin: install.origin,
           install: install.install,
+          installSource: describePluginInstallSource(install.install, {
+            expectedPackageName: install.packageName,
+          }),
         } satisfies ProviderInstallCatalogEntry,
       ];
     })

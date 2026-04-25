@@ -116,6 +116,41 @@ function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawCon
   };
 }
 
+function formatPortableLocalPath(localPath: string, workspaceDir?: string): string | undefined {
+  const bases = [workspaceDir, process.cwd()].filter((entry): entry is string => Boolean(entry));
+  for (const base of bases) {
+    const realBase = resolveRealDirectory(base);
+    if (!realBase) {
+      continue;
+    }
+    const relative = path.relative(realBase, localPath);
+    if (
+      relative === "" ||
+      (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
+    ) {
+      const portable = relative.split(path.sep).join("/");
+      return portable ? `./${portable}` : ".";
+    }
+  }
+  return undefined;
+}
+
+function recordLocalPluginInstall(params: {
+  cfg: OpenClawConfig;
+  entry: OnboardingPluginInstallEntry;
+  localPath: string;
+  npmSpec?: string | null;
+  workspaceDir?: string;
+}): OpenClawConfig {
+  const sourcePath = formatPortableLocalPath(params.localPath, params.workspaceDir);
+  return recordPluginInstall(params.cfg, {
+    pluginId: params.entry.pluginId,
+    source: "path",
+    ...(sourcePath ? { sourcePath } : {}),
+    ...(params.npmSpec ? { spec: params.npmSpec } : {}),
+  });
+}
+
 function resolveLocalPath(params: {
   entry: OnboardingPluginInstallEntry;
   workspaceDir?: string;
@@ -191,14 +226,13 @@ function resolveBundledLocalPath(params: {
   );
 }
 
-function resolvePinnedNpmSpecForOnboarding(install: PluginPackageInstall): string | null {
+function resolveNpmSpecForOnboarding(install: PluginPackageInstall): string | null {
   const npmSpec = install.npmSpec?.trim();
-  const expectedIntegrity = install.expectedIntegrity?.trim();
-  if (!npmSpec || !expectedIntegrity) {
+  if (!npmSpec) {
     return null;
   }
   const parsed = parseRegistryNpmSpec(npmSpec);
-  return parsed?.selectorKind === "exact-version" ? npmSpec : null;
+  return parsed ? npmSpec : null;
 }
 
 function resolveInstallDefaultChoice(params: {
@@ -241,7 +275,7 @@ async function promptInstallChoice(params: {
   defaultChoice: InstallChoice;
   prompter: WizardPrompter;
 }): Promise<InstallChoice> {
-  const npmSpec = resolvePinnedNpmSpecForOnboarding(params.entry.install);
+  const npmSpec = resolveNpmSpecForOnboarding(params.entry.install);
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const safeNpmSpec = npmSpec ? sanitizeTerminalText(npmSpec) : null;
   const safeLocalPath = params.localPath ? sanitizeTerminalText(params.localPath) : null;
@@ -399,7 +433,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       workspaceDir,
       allowLocal,
     });
-  const npmSpec = resolvePinnedNpmSpecForOnboarding(entry.install);
+  const npmSpec = resolveNpmSpecForOnboarding(entry.install);
   const defaultChoice = resolveInstallDefaultChoice({
     cfg: next,
     entry,
@@ -440,6 +474,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       };
     }
     next = addPluginLoadPath(enableResult.config, localPath);
+    next = recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
     return {
       cfg: next,
       installed: true,
@@ -555,6 +590,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         };
       }
       next = addPluginLoadPath(enableResult.config, localPath);
+      next = recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
       return {
         cfg: next,
         installed: true,

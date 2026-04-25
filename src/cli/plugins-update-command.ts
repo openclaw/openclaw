@@ -3,6 +3,7 @@ import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 import {
   resolveHookPackUpdateSelection,
   resolvePluginUpdateSelection,
@@ -112,6 +113,13 @@ export async function runPluginUpdateCommand(params: {
       nextConfig: hookResult.config,
       baseHash: (await sourceSnapshotPromise)?.hash,
     });
+    if (pluginResult.changed) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: hookResult.config,
+        reason: "source-changed",
+        logger,
+      });
+    }
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
   }
 }

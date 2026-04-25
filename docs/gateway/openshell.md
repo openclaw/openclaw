@@ -1,13 +1,11 @@
 ---
-title: OpenShell
 summary: "Use OpenShell as a managed sandbox backend for OpenClaw agents"
+title: OpenShell
 read_when:
   - You want cloud-managed sandboxes instead of local Docker
   - You are setting up the OpenShell plugin
   - You need to choose between mirror and remote workspace modes
 ---
-
-# OpenShell
 
 OpenShell is a managed sandbox backend for OpenClaw. Instead of running Docker
 containers locally, OpenClaw delegates sandbox lifecycle to the `openshell` CLI,
@@ -280,6 +278,12 @@ Recreate after changing any of these:
 openclaw sandbox recreate --all
 ```
 
+## Security hardening
+
+OpenShell pins the workspace root fd and rechecks sandbox identity before each
+read, so symlink swaps or a remounted workspace cannot redirect reads out of
+the intended remote workspace.
+
 ## Current limitations
 
 - Sandbox browser is not supported on the OpenShell backend.
@@ -299,7 +303,7 @@ openclaw sandbox recreate --all
 5. In `remote` mode: seed once on create, then operate directly on the remote
    workspace.
 
-## See also
+## Related
 
 - [Sandboxing](/gateway/sandboxing) -- modes, scopes, and backend comparison
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging blocked tools

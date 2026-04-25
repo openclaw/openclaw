@@ -1,12 +1,10 @@
 ---
-title: "Auth Credential Semantics"
 summary: "Canonical credential eligibility and resolution semantics for auth profiles"
+title: "Auth credential semantics"
 read_when:
   - Working on auth profile resolution or credential routing
   - Debugging model auth failures or profile order
 ---
-
-# Auth Credential Semantics
 
 This document defines the canonical credential eligibility and resolution semantics used across:
 
@@ -78,3 +76,8 @@ For script compatibility, probe errors keep this first line unchanged:
 `Auth profile credentials are missing or expired.`
 
 Human-friendly detail and stable reason codes may be added on subsequent lines.
+
+## Related
+
+- [Secrets management](/gateway/secrets)
+- [Auth storage](/concepts/oauth)

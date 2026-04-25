@@ -61,14 +61,43 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.hasHelpOrVersion) {
+  if (invocation.hasHelpOrVersion || shouldStartCrestodianForBareRoot(argv)) {
     return false;
   }
   return shouldEnsureCliPathForCommandPath(invocation.commandPath);
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
-  return resolveCliArgvInvocation(argv).isRootHelpInvocation;
+  return (
+    process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
+    resolveCliArgvInvocation(argv).isRootHelpInvocation
+  );
+}
+
+export function shouldUseBrowserHelpFastPath(argv: string[]): boolean {
+  if (process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "browser" &&
+    invocation.hasHelpOrVersion
+  );
+}
+
+export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
+}
+
+export function shouldStartCrestodianForModernOnboard(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath[0] === "onboard" &&
+    argv.includes("--modern") &&
+    !invocation.hasHelpOrVersion
+  );
 }
 
 export function resolveMissingPluginCommandMessage(
@@ -200,6 +229,38 @@ export async function runCli(argv: string[] = process.argv) {
         const { outputRootHelp } = await import("./program/root-help.js");
         await outputRootHelp();
       }
+      return;
+    }
+
+    if (shouldUseBrowserHelpFastPath(normalizedArgv)) {
+      const { outputPrecomputedBrowserHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedBrowserHelpText()) {
+        return;
+      }
+    }
+
+    if (shouldStartCrestodianForBareRoot(normalizedArgv)) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.error(
+          'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const { runCrestodian } = await import("../crestodian/crestodian.js");
+      await runCrestodian();
+      return;
+    }
+
+    if (shouldStartCrestodianForModernOnboard(normalizedArgv)) {
+      const { runCrestodian } = await import("../crestodian/crestodian.js");
+      const nonInteractive = normalizedArgv.includes("--non-interactive");
+      await runCrestodian({
+        message: nonInteractive ? "overview" : undefined,
+        yes: false,
+        json: normalizedArgv.includes("--json"),
+        interactive: !nonInteractive,
+      });
       return;
     }
 
