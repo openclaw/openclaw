@@ -1,7 +1,10 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS = 30_000;
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV = "OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS";
@@ -42,6 +45,16 @@ function isAbortErrorMessage(message: string | undefined): boolean {
   return normalizeLowercaseStringOrEmpty(message).includes("aborted");
 }
 
+function isStartupTransientNetworkErrorMessage(message: string | undefined): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  return (
+    lower.includes("econnreset") ||
+    lower.includes("socket disconnected") ||
+    lower.includes("tls connection") ||
+    lower.includes("network socket disconnected")
+  );
+}
+
 export async function fetchBotIdentityForMonitor(
   account: ResolvedFeishuAccount,
   options: FetchBotOpenIdOptions = {},
@@ -55,11 +68,12 @@ export async function fetchBotIdentityForMonitor(
     timeoutMs,
     abortSignal: options.abortSignal,
   });
-  if (result.ok) {
-    return { botOpenId: result.botOpenId, botName: result.botName };
+  const typed = result as unknown as { ok?: boolean; error?: string; botOpenId?: string; botName?: string };
+  if (typed.ok) {
+    return { botOpenId: typed.botOpenId, botName: typed.botName };
   }
 
-  const probeError = result.error ?? undefined;
+  const probeError = typed.error ?? undefined;
   if (options.abortSignal?.aborted || isAbortErrorMessage(probeError)) {
     return {};
   }
@@ -69,6 +83,12 @@ export async function fetchBotIdentityForMonitor(
     error(
       `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,
     );
+    return {};
+  }
+
+  if (isStartupTransientNetworkErrorMessage(probeError)) {
+    const error = options.runtime?.error ?? console.error;
+    error(`feishu[${account.accountId}]: bot info probe failed (${probeError}); continuing startup`);
   }
   return {};
 }

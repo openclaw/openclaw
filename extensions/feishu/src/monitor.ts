@@ -1,6 +1,7 @@
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
+import { FEISHU_PROBE_REQUEST_TIMEOUT_MS } from "./probe.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -74,6 +75,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      timeoutMs: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
     });
 
     if (opts.abortSignal?.aborted) {
