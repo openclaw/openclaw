@@ -14,6 +14,17 @@ describe("session artifact helpers", () => {
     expect(isSessionArchiveArtifactName("abc.jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(true);
     expect(isSessionArchiveArtifactName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(true);
     expect(isSessionArchiveArtifactName("sessions.json.bak.1737420882")).toBe(true);
+    expect(
+      isSessionArchiveArtifactName("sessions.json.bak.session-maint-2026-04-03T00-11-27.859Z"),
+    ).toBe(true);
+    expect(
+      isSessionArchiveArtifactName("sessions.json.bak.safe-cleanup-2026-03-26T01-30-22.3NZ"),
+    ).toBe(true);
+    expect(
+      isSessionArchiveArtifactName(
+        "sessions.json.bak.pre-bot-session-detach-2026-03-31T07-50-22-248Z",
+      ),
+    ).toBe(true);
     expect(isSessionArchiveArtifactName("keep.deleted.keep.jsonl")).toBe(false);
     expect(isSessionArchiveArtifactName("abc.jsonl")).toBe(false);
   });

@@ -1,7 +1,7 @@
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
 const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
-const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
+const STORE_BACKUP_ARTIFACT_RE = /^sessions\.json\.bak\..+$/;
 
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   const marker = `.${reason}.`;
@@ -14,7 +14,7 @@ function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boole
 }
 
 export function isSessionArchiveArtifactName(fileName: string): boolean {
-  if (LEGACY_STORE_BACKUP_RE.test(fileName)) {
+  if (STORE_BACKUP_ARTIFACT_RE.test(fileName)) {
     return true;
   }
   return (
