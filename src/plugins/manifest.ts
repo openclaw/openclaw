@@ -251,6 +251,7 @@ export type PluginManifestContracts = {
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
+  documentExtractors?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
   musicGenerationProviders?: string[];
@@ -443,6 +444,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
   const musicGenerationProviders = normalizeTrimmedStringList(value.musicGenerationProviders);
@@ -459,6 +461,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
     ...(musicGenerationProviders.length > 0 ? { musicGenerationProviders } : {}),
