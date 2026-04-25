@@ -150,6 +150,76 @@ async function downloadGeneratedVideo(params: {
   }
 }
 
+function resolveGoogleGeneratedVideoDownloadUrl(params: {
+  uri: string | undefined;
+  apiKey: string;
+  configuredBaseUrl?: string;
+}): string | undefined {
+  const trimmed = normalizeOptionalString(params.uri);
+  if (!trimmed) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:") {
+    return undefined;
+  }
+  const allowedOrigins = new Set(["https://generativelanguage.googleapis.com"]);
+  if (params.configuredBaseUrl) {
+    try {
+      const configuredOrigin = new URL(params.configuredBaseUrl).origin;
+      if (configuredOrigin.startsWith("https://")) {
+        allowedOrigins.add(configuredOrigin);
+      }
+    } catch {
+      // Ignore invalid configured origins; resolveConfiguredGoogleVideoBaseUrl already normalizes.
+    }
+  }
+  if (!allowedOrigins.has(url.origin)) {
+    return undefined;
+  }
+  if (!url.searchParams.has("key")) {
+    url.searchParams.set("key", params.apiKey);
+  }
+  return url.toString();
+}
+
+async function downloadGeneratedVideoFromUri(params: {
+  uri: string | undefined;
+  apiKey: string;
+  configuredBaseUrl?: string;
+  mimeType?: string;
+  index: number;
+}): Promise<GeneratedVideoAsset | undefined> {
+  const downloadUrl = resolveGoogleGeneratedVideoDownloadUrl({
+    uri: params.uri,
+    apiKey: params.apiKey,
+    configuredBaseUrl: params.configuredBaseUrl,
+  });
+  if (!downloadUrl) {
+    return undefined;
+  }
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to download Google generated video: ${response.status} ${response.statusText}`,
+    );
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return {
+    buffer,
+    mimeType:
+      normalizeOptionalString(response.headers.get("content-type")) ||
+      normalizeOptionalString(params.mimeType) ||
+      "video/mp4",
+    fileName: `video-${params.index + 1}.mp4`,
+  };
+}
+
 export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
   return {
     ...createGoogleVideoGenerationProviderMetadata(),
@@ -232,6 +302,16 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
               mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
               fileName: `video-${index + 1}.mp4`,
             };
+          }
+          const directDownload = await downloadGeneratedVideoFromUri({
+            uri: inline?.uri,
+            apiKey: auth.apiKey,
+            configuredBaseUrl,
+            mimeType: inline?.mimeType,
+            index,
+          });
+          if (directDownload) {
+            return directDownload;
           }
           if (!inline) {
             throw new Error("Google generated video missing file handle");
