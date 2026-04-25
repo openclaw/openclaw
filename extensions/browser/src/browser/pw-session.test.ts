@@ -6,6 +6,7 @@ import {
   rememberRoleRefsForTarget,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 
 function fakePage(): {
   page: Page;
@@ -27,6 +28,7 @@ function fakePage(): {
   const getByRole = vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) }));
   const frameLocator = vi.fn(() => ({
     getByRole: vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) })),
+    locator: vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) })),
   }));
   const locator = vi.fn(() => ({ nth: vi.fn(() => ({ ok: true })) }));
 
@@ -72,10 +74,30 @@ describe("pw-session refLocator", () => {
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
 
-  it("rejects axN refs from format=aria snapshots instead of timing out", () => {
+  it("uses backend-marked DOM locators for ax refs", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.roleRefs = { ax12: { role: "button", name: "OK", domMarker: true } };
+
+    refLocator(page, "ax12");
+
+    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="ax12"]`);
+  });
+
+  it("falls back to role heuristics for ax refs without backend markers", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.roleRefs = { ax12: { role: "button", name: "OK" } };
+
+    refLocator(page, "ax12");
+
+    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name: "OK", exact: true });
+  });
+
+  it("rejects unknown ax refs instead of timing out on aria-ref locators", () => {
     const { page, mocks } = fakePage();
 
-    expect(() => refLocator(page, "ax12")).toThrow(/format=aria snapshot/);
+    expect(() => refLocator(page, "ax12")).toThrow(/Unknown ref/);
     expect(mocks.locator).not.toHaveBeenCalled();
   });
 });
