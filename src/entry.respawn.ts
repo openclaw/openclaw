@@ -28,14 +28,20 @@ export function buildCliRespawnPlan(
     execArgv?: string[];
     execPath?: string;
     autoNodeExtraCaCerts?: string | undefined;
+    platform?: NodeJS.Platform;
   } = {},
 ): { argv: string[]; env: NodeJS.ProcessEnv } | null {
   const argv = params.argv ?? process.argv;
   const env = params.env ?? process.env;
   const execArgv = params.execArgv ?? process.execArgv;
   const execPath = params.execPath ?? process.execPath;
+  const platform = params.platform ?? process.platform;
 
   if (shouldSkipRespawnForArgv(argv) || isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)) {
+    return null;
+  }
+
+  if (platform === "win32") {
     return null;
   }
 

@@ -72,4 +72,20 @@ describe("buildCliRespawnPlan", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not respawn on Windows", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: [
+          "node",
+          "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
+          "onboard",
+        ],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "win32",
+      }),
+    ).toBeNull();
+  });
 });

@@ -60,6 +60,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Windows/native: keep CLI startup and bundled provider plugin loading off
+  Windows ESM raw-path failure paths, fixing native onboarding/install smoke on
+  Node 24. Thanks @steipete.
 - Providers/Google: transcode Gemini TTS PCM to Opus for voice-note targets so
   WhatsApp and other native voice-note replies can play as voice messages.
 - Plugins/runtime deps: reuse existing external bundled-plugin stage roots when
