@@ -18,6 +18,8 @@ const hoisted = vi.hoisted(() => ({
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
+  prepareProviderDynamicModelMock: vi.fn(async () => {}),
+  resolveModelWithRegistryMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -29,6 +31,8 @@ const {
   discoverModelsMock,
   fetchMock,
   registerProviderStreamForModelMock,
+  prepareProviderDynamicModelMock,
+  resolveModelWithRegistryMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -63,6 +67,17 @@ vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
+vi.mock("../plugins/provider-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  )),
+  prepareProviderDynamicModel: prepareProviderDynamicModelMock,
+}));
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModelWithRegistry: resolveModelWithRegistryMock,
+}));
+
 const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
@@ -93,6 +108,12 @@ describe("describeImageWithModel", () => {
         baseUrl: "https://api.minimax.io/anthropic",
       })),
     });
+    resolveModelWithRegistryMock.mockImplementation(
+      // Delegate to modelRegistry.find so tests that override discoverModelsMock
+      // automatically get the right model through resolveModelWithRegistry.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ({ modelRegistry, provider, modelId }: any) => modelRegistry.find(provider, modelId),
+    );
   });
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
