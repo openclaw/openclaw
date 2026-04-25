@@ -707,7 +707,28 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     if (params.reason === "startup") {
       resolveStartupCron = params.startupCron ?? null;
     }
-    const cron = resolveStartupCron?.() ?? null;
+    let cron = resolveStartupCron?.() ?? null;
+    // Fallback: try to obtain cron service from plugin runtime when startup capture was null.
+    // This handles the case where the cron service wasn't available during gateway_start
+    // but becomes available later (e.g., after a delayed initialization or hot-reload).
+    if (!cron && params.reason === "runtime") {
+      try {
+        const runtimeAny = api.runtime as Record<string, unknown> | undefined;
+        if (runtimeAny && typeof runtimeAny === "object") {
+          const candidate = runtimeAny.cron ?? runtimeAny.getCron?.();
+          if (
+            candidate &&
+            typeof candidate === "object" &&
+            typeof (candidate as CronServiceLike).list === "function" &&
+            typeof (candidate as CronServiceLike).add === "function"
+          ) {
+            cron = candidate as CronServiceLike;
+          }
+        }
+      } catch {
+        // Ignore errors from runtime access — fall through with cron = null
+      }
+    }
     const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
