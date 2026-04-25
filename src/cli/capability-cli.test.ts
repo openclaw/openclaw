@@ -577,6 +577,61 @@ describe("capability cli", () => {
     );
   });
 
+  it("passes video generation parameters through to runtime", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "minimax",
+      model: "MiniMax-Hailuo-2.3",
+      attempts: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "video",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--model",
+        "minimax/MiniMax-Hailuo-2.3",
+        "--size",
+        "1280x768",
+        "--aspect-ratio",
+        "16:9",
+        "--resolution",
+        "768p",
+        "--duration",
+        "6",
+        "--audio",
+        "--watermark",
+        "--timeout-ms",
+        "300000",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateVideo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "friendly lobster",
+        modelOverride: "minimax/MiniMax-Hailuo-2.3",
+        size: "1280x768",
+        aspectRatio: "16:9",
+        resolution: "768P",
+        durationSeconds: 6,
+        audio: true,
+        watermark: true,
+        timeoutMs: 300000,
+      }),
+    );
+  });
+
   it("fails video generate when a provider returns an undeliverable asset", async () => {
     mocks.generateVideo.mockResolvedValue({
       provider: "vydra",

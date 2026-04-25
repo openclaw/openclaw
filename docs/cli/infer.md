@@ -114,7 +114,7 @@ This table maps common inference tasks to the corresponding infer command.
 | Describe an image file  | `openclaw infer image describe --file ./image.png --json`              | `--model` must be an image-capable `<provider/model>` |
 | Transcribe audio        | `openclaw infer audio transcribe --file ./memo.m4a --json`             | `--model` must be `<provider/model>`                  |
 | Synthesize speech       | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json` | `tts status` is gateway-oriented                      |
-| Generate a video        | `openclaw infer video generate --prompt "..." --json`                  |                                                       |
+| Generate a video        | `openclaw infer video generate --prompt "..." --json`                  | Supports provider hints such as `--resolution`        |
 | Describe a video file   | `openclaw infer video describe --file ./clip.mp4 --json`               | `--model` must be `<provider/model>`                  |
 | Search the web          | `openclaw infer web search --query "..." --json`                       |                                                       |
 | Fetch a web page        | `openclaw infer web fetch --url https://example.com --json`            |                                                       |
@@ -223,13 +223,14 @@ Use `video` for generation and description.
 
 ```bash
 openclaw infer video generate --prompt "cinematic sunset over the ocean" --json
-openclaw infer video generate --prompt "slow drone shot over a forest lake" --json
+openclaw infer video generate --prompt "slow drone shot over a forest lake" --resolution 768P --duration 6 --json
 openclaw infer video describe --file ./clip.mp4 --json
 openclaw infer video describe --file ./clip.mp4 --model openai/gpt-4.1-mini --json
 ```
 
 Notes:
 
+- `video generate` accepts `--size`, `--aspect-ratio`, `--resolution`, `--duration`, `--audio`, `--watermark`, and `--timeout-ms` and forwards them to the video-generation runtime.
 - `--model` must be `<provider/model>` for `video describe`.
 
 ## Web
