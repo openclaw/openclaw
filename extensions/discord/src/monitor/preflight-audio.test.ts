@@ -77,6 +77,36 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     );
   });
 
+  it("preflights Discord voice attachments by waveform metadata", async () => {
+    transcribeFirstAudioMock.mockResolvedValue("metadata transcript");
+
+    await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          {
+            url: " https://cdn.discordapp.com/attachments/voice ",
+            filename: "voice",
+            duration_secs: 1.5,
+            waveform: "AAAA",
+          },
+        ],
+      },
+      isDirectMessage: true,
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          MediaUrls: ["https://cdn.discordapp.com/attachments/voice"],
+          MediaTypes: ["audio/ogg"],
+        }),
+      }),
+    );
+  });
+
   it("does not preflight typed direct-message audio", async () => {
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: {

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getFileExtension } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 type DiscordPreflightAudioRuntime = typeof import("./preflight-audio.runtime.js");
 
@@ -13,8 +14,10 @@ function loadDiscordPreflightAudioRuntime(): Promise<DiscordPreflightAudioRuntim
 
 type DiscordAudioAttachment = {
   content_type?: string;
+  duration_secs?: number;
   filename?: string;
   url?: string;
+  waveform?: string;
 };
 
 const AUDIO_ATTACHMENT_MIME_BY_EXT = new Map([
@@ -30,9 +33,15 @@ const AUDIO_ATTACHMENT_MIME_BY_EXT = new Map([
 ]);
 
 function inferAudioAttachmentMime(attachment: DiscordAudioAttachment): string | undefined {
-  const contentType = attachment.content_type?.trim();
+  const contentType = normalizeOptionalString(attachment.content_type);
   if (contentType?.startsWith("audio/")) {
     return contentType;
+  }
+  if (
+    typeof attachment.duration_secs === "number" ||
+    typeof normalizeOptionalString(attachment.waveform) === "string"
+  ) {
+    return "audio/ogg";
   }
   const ext = getFileExtension(attachment.filename ?? attachment.url);
   return ext ? AUDIO_ATTACHMENT_MIME_BY_EXT.get(ext) : undefined;
@@ -45,7 +54,7 @@ function collectAudioAttachments(
     return [];
   }
   return attachments.filter(
-    (att) => typeof att.url === "string" && att.url.length > 0 && inferAudioAttachmentMime(att),
+    (att) => normalizeOptionalString(att.url) && inferAudioAttachmentMime(att),
   );
 }
 
@@ -91,7 +100,8 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
       }
       const audioUrls = audioAttachments
         .map((att) => att.url)
-        .filter((url): url is string => typeof url === "string" && url.length > 0);
+        .map((url) => normalizeOptionalString(url))
+        .filter((url): url is string => Boolean(url));
       if (audioUrls.length > 0) {
         transcript = await transcribeFirstAudio({
           ctx: {

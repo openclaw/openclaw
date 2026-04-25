@@ -44,6 +44,10 @@ function isDiscordAudioAttachmentFileName(fileName?: string | null): boolean {
   return Boolean(ext && AUDIO_ATTACHMENT_EXTENSIONS.has(ext));
 }
 
+function hasDiscordVoiceAttachmentFields(attachment: APIAttachment): boolean {
+  return typeof attachment.duration_secs === "number" || typeof attachment.waveform === "string";
+}
+
 function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | undefined {
   const merged = lists
     .flatMap((list) => list ?? [])
@@ -576,6 +580,9 @@ function inferPlaceholder(attachment: APIAttachment): string {
     return "<media:video>";
   }
   if (mime.startsWith("audio/")) {
+    return "<media:audio>";
+  }
+  if (hasDiscordVoiceAttachmentFields(attachment)) {
     return "<media:audio>";
   }
   if (isDiscordAudioAttachmentFileName(attachment.filename ?? attachment.url)) {

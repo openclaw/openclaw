@@ -560,6 +560,32 @@ describe("resolveMediaList", () => {
     ]);
   });
 
+  it("classifies Discord voice attachments by waveform metadata", async () => {
+    const attachment = {
+      id: "att-voice-metadata",
+      url: "https://cdn.discordapp.com/attachments/1/voice",
+      filename: "voice",
+      duration_secs: 1.5,
+      waveform: "AAAA",
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: undefined,
+        placeholder: "<media:audio>",
+      },
+    ]);
+  });
+
   it("falls back to URL when saveMediaBuffer fails", async () => {
     const attachment = {
       id: "att-save-fail",
