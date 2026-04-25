@@ -204,6 +204,44 @@ describe("native hook relay registry", () => {
     ).rejects.toThrow("JSON-compatible");
   });
 
+  it("rejects payloads beyond the relay string budget", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload: {
+          tool_response: "x".repeat(1_000_001),
+        },
+      }),
+    ).rejects.toThrow("JSON-compatible");
+  });
+
+  it("rejects payloads beyond the relay aggregate string budget", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload: Array.from({ length: 5 }, () => "x".repeat(900_000)),
+      }),
+    ).rejects.toThrow("JSON-compatible");
+  });
+
   it("rejects expired relay ids", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-24T12:00:00Z"));

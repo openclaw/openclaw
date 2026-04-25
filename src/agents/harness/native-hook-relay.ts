@@ -114,6 +114,8 @@ const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
 const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;
+const MAX_NATIVE_HOOK_RELAY_STRING_LENGTH = 1_000_000;
+const MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH = 4_000_000;
 const MAX_APPROVAL_TITLE_LENGTH = 80;
 const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
@@ -802,6 +804,7 @@ function readOptionalString(value: unknown): string | undefined {
 function isJsonValue(value: unknown): value is JsonValue {
   const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
   let nodes = 0;
+  let totalStringLength = 0;
   while (stack.length) {
     const current = stack.pop()!;
     nodes += 1;
@@ -811,7 +814,17 @@ function isJsonValue(value: unknown): value is JsonValue {
     if (current.depth > MAX_NATIVE_HOOK_RELAY_JSON_DEPTH) {
       return false;
     }
-    if (current.value === null || typeof current.value === "string") {
+    if (current.value === null) {
+      continue;
+    }
+    if (typeof current.value === "string") {
+      if (current.value.length > MAX_NATIVE_HOOK_RELAY_STRING_LENGTH) {
+        return false;
+      }
+      totalStringLength += current.value.length;
+      if (totalStringLength > MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH) {
+        return false;
+      }
       continue;
     }
     if (typeof current.value === "number") {
