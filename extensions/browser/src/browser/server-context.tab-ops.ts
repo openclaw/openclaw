@@ -1,3 +1,4 @@
+import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
@@ -132,6 +133,13 @@ export function createProfileTabOps({
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
   const getCdpControlPolicy = () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy);
+  const getNavigationPolicy = () =>
+    withBrowserNavigationPolicy(state().resolved.ssrfPolicy, {
+      browserProxyMode: resolveBrowserNavigationProxyMode({
+        resolved: state().resolved,
+        profile,
+      }),
+    });
 
   const readTabs = async (): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
@@ -218,7 +226,7 @@ export function createProfileTabOps({
   };
 
   const openTab = async (url: string, opts?: { label?: string }): Promise<BrowserTab> => {
-    const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
+    const ssrfPolicyOpts = getNavigationPolicy();
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
@@ -261,6 +269,7 @@ export function createProfileTabOps({
       );
     }
 
+    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
@@ -293,7 +302,6 @@ export function createProfileTabOps({
 
     const encoded = encodeURIComponent(url);
     const endpointUrl = new URL(appendCdpPath(cdpHttpBase, "/json/new"));
-    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
     const endpoint = endpointUrl.search
       ? (() => {
           endpointUrl.searchParams.set("url", url);
