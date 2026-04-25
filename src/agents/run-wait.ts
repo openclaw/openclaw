@@ -218,6 +218,56 @@ export async function waitForAgentRunsToDrain(params: {
   };
 }
 
+/**
+ * Default reply history limit used for post-timeout compensation reads.
+ * Must match SESSIONS_SEND_REPLY_HISTORY_LIMIT in sessions-send-tool.ts.
+ */
+const COMPENSATE_REPLY_HISTORY_LIMIT = 50;
+
+export async function compensateAfterWaitTimeout(params: {
+  sessionKey: string;
+  baseline?: AssistantReplySnapshot;
+  limit?: number;
+  callGateway?: GatewayCaller;
+}): Promise<{
+  newReply?: string;
+  accepted: boolean;
+  delivery: { status: "accepted" | "pending"; note?: string };
+  error?: string;
+}> {
+  try {
+    const latestReply = await readLatestAssistantReplySnapshot({
+      sessionKey: params.sessionKey,
+      limit: params.limit ?? COMPENSATE_REPLY_HISTORY_LIMIT,
+      callGateway: params.callGateway,
+    });
+
+    const hasNewReply =
+      latestReply.text &&
+      (!params.baseline?.fingerprint || latestReply.fingerprint !== params.baseline.fingerprint);
+
+    return {
+      newReply: hasNewReply ? latestReply.text : undefined,
+      accepted: true,
+      delivery: {
+        status: "accepted",
+        note: hasNewReply
+          ? "reply arrived after timeout window"
+          : "run accepted, no reply within timeout",
+      },
+    };
+  } catch (err) {
+    return {
+      accepted: false,
+      delivery: {
+        status: "pending",
+        note: "post-timeout compensation failed",
+      },
+      error: formatErrorMessage(err),
+    };
+  }
+}
+
 export const __testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     runWaitDeps = overrides

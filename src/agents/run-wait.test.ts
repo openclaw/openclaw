@@ -7,6 +7,7 @@ vi.mock("../gateway/call.js", () => ({
 
 import {
   __testing,
+  compensateAfterWaitTimeout,
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
@@ -242,6 +243,89 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
     expect(result).toEqual({
       status: "ok",
       replyText: "fresh reply",
+    });
+  });
+});
+
+describe("compensateAfterWaitTimeout", () => {
+  beforeEach(() => {
+    callGatewayMock.mockClear();
+    __testing.setDepsForTest({
+      callGateway: async (opts) => await callGatewayMock(opts),
+    });
+  });
+
+  it("returns the new reply when one materializes after timeout", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "late reply" }],
+          timestamp: 99,
+        },
+      ],
+    });
+
+    const result = await compensateAfterWaitTimeout({
+      sessionKey: "agent:main:child",
+      baseline: {
+        text: "older reply",
+        fingerprint: "old-fingerprint",
+      },
+    });
+
+    expect(result).toEqual({
+      newReply: "late reply",
+      accepted: true,
+      delivery: {
+        status: "accepted",
+        note: "reply arrived after timeout window",
+      },
+    });
+  });
+
+  it("returns accepted when no new reply appears but the run was likely accepted", async () => {
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "same reply" }],
+      timestamp: 42,
+    };
+    callGatewayMock.mockResolvedValueOnce({
+      messages: [assistantMessage],
+    });
+
+    const result = await compensateAfterWaitTimeout({
+      sessionKey: "agent:main:child",
+      baseline: {
+        text: "same reply",
+        fingerprint: JSON.stringify(assistantMessage),
+      },
+    });
+
+    expect(result).toEqual({
+      newReply: undefined,
+      accepted: true,
+      delivery: {
+        status: "accepted",
+        note: "run accepted, no reply within timeout",
+      },
+    });
+  });
+
+  it("falls back to a hard timeout when compensation itself fails", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("history read failed"));
+
+    const result = await compensateAfterWaitTimeout({
+      sessionKey: "agent:main:child",
+    });
+
+    expect(result).toEqual({
+      accepted: false,
+      delivery: {
+        status: "pending",
+        note: "post-timeout compensation failed",
+      },
+      error: "history read failed",
     });
   });
 });

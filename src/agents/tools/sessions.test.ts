@@ -658,6 +658,39 @@ describe("sessions_send gating", () => {
     expect(result.details).toMatchObject({ status: "forbidden" });
   });
 
+  it("keeps fire-and-forget sends on the accepted path without timeout compensation", async () => {
+    const tool = createMainSessionsSendTool();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-fire-and-forget", acceptedAt: 123 };
+      }
+      if (request.method === "chat.history" || request.method === "agent.wait") {
+        throw new Error(`unexpected method: ${request.method}`);
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-fire-and-forget", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      runId: "run-fire-and-forget",
+      status: "accepted",
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+    });
+  });
+
   it("does not reuse a stale assistant reply when no new reply appears", async () => {
     const tool = createMainSessionsSendTool();
     let historyCalls = 0;
