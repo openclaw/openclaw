@@ -777,6 +777,46 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
+  it("does not persist unsupported remaps for default-derived thinking levels", async () => {
+    const sessionEntry = createSessionEntry();
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast on"),
+        sessionEntry,
+        currentThinkLevel: "xhigh",
+        defaultModel: "claude-opus-4-7",
+        model: "claude-opus-4-7",
+      }),
+    );
+
+    expect(result?.text).toContain(
+      "Thinking level set to high (xhigh not supported for anthropic/claude-opus-4-7).",
+    );
+    expect(sessionEntry.fastMode).toBe(true);
+    expect(sessionEntry.thinkingLevel).toBeUndefined();
+  });
+
+  it("persists unsupported remaps for explicit stored thinking levels", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast on"),
+        sessionEntry,
+        currentThinkLevel: "xhigh",
+        defaultModel: "claude-opus-4-7",
+        model: "claude-opus-4-7",
+      }),
+    );
+
+    expect(result?.text).toContain(
+      "Thinking level set to high (xhigh not supported for anthropic/claude-opus-4-7).",
+    );
+    expect(sessionEntry.fastMode).toBe(true);
+    expect(sessionEntry.thinkingLevel).toBe("high");
+  });
+
   it("does not request a live restart when /model mutates an active session", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();

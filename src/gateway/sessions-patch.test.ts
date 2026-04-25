@@ -1,7 +1,13 @@
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
+
+const tryEnsureRuntimePluginsLoadedMock = vi.hoisted(() => vi.fn(() => true));
+
+vi.mock("../agents/runtime-plugins.js", () => ({
+  tryEnsureRuntimePluginsLoaded: tryEnsureRuntimePluginsLoadedMock,
+}));
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
@@ -105,6 +111,10 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 }
 
 describe("gateway sessions patch", () => {
+  beforeEach(() => {
+    tryEnsureRuntimePluginsLoadedMock.mockClear();
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -112,6 +122,10 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.thinkingLevel).toBe("off");
+    expect(tryEnsureRuntimePluginsLoadedMock).toHaveBeenCalledWith({
+      config: EMPTY_CFG,
+      workspaceDir: expect.any(String),
+    });
   });
 
   test("clears thinkingLevel when patch sets null", async () => {
@@ -355,6 +369,26 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
+  });
+
+  test("uses spawned workspace for thinking validation when patch sets it", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:subagent:child",
+        patch: {
+          key: "agent:main:subagent:child",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          thinkingLevel: "off",
+        },
+      }),
+    );
+
+    expect(entry.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
+    expect(entry.thinkingLevel).toBe("off");
+    expect(tryEnsureRuntimePluginsLoadedMock).toHaveBeenCalledWith({
+      config: EMPTY_CFG,
+      workspaceDir: "/tmp/subagent-workspace",
+    });
   });
 
   test("sets spawnDepth for ACP sessions", async () => {

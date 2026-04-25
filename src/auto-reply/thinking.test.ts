@@ -159,6 +159,34 @@ describe("listThinkingLevels", () => {
     ]);
   });
 
+  it("strips own-provider prefixes before provider thinking profile lookup", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider, context }) =>
+      provider === "anthropic" && context.modelId === "claude-opus-4-7"
+        ? { levels: [{ id: "off" }, { id: "xhigh" }, { id: "max" }] }
+        : undefined,
+    );
+
+    expect(listThinkingLevels("anthropic", "anthropic/anthropic/claude-opus-4-7")).toContain(
+      "xhigh",
+    );
+    expect(providerRuntimeMocks.resolveProviderThinkingProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        context: expect.objectContaining({ modelId: "claude-opus-4-7" }),
+      }),
+    );
+  });
+
+  it("keeps other-provider prefixes intact for provider thinking profile lookup", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider, context }) =>
+      provider === "anthropic" && context.modelId === "claude-opus-4-7"
+        ? { levels: [{ id: "off" }, { id: "xhigh" }] }
+        : undefined,
+    );
+
+    expect(listThinkingLevels("anthropic", "claude-cli/claude-opus-4-7")).not.toContain("xhigh");
+  });
+
   it("uses provider thinking profiles ahead of legacy hooks", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "low", label: "on" }],

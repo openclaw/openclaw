@@ -1,13 +1,19 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveRuntimePluginRegistry } from "../plugins/loader.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 
-export function ensureRuntimePluginsLoaded(params: {
+type RuntimePluginsLoadParams = {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
-}): void {
+};
+
+const log = createSubsystemLogger("agents/runtime-plugins");
+
+export function ensureRuntimePluginsLoaded(params: RuntimePluginsLoadParams): void {
   const workspaceDir =
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
@@ -25,4 +31,16 @@ export function ensureRuntimePluginsLoaded(params: {
       : undefined,
   };
   resolveRuntimePluginRegistry(loadOptions);
+}
+
+export function tryEnsureRuntimePluginsLoaded(params: RuntimePluginsLoadParams): boolean {
+  try {
+    ensureRuntimePluginsLoaded(params);
+    return true;
+  } catch (err) {
+    log.warn("runtime plugin activation failed; continuing with current registry", {
+      error: formatErrorMessage(err),
+    });
+    return false;
+  }
 }
