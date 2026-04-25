@@ -281,6 +281,9 @@ export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
+export OPENCLAW_BUNDLED_PLUGINS_DIR="${OPENCLAW_BUNDLED_PLUGINS_DIR:-}"
+export OPENCLAW_UID="${OPENCLAW_UID:-$(id -u)}"
+export OPENCLAW_GID="${OPENCLAW_GID:-$(id -g)}"
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 export OPENCLAW_TZ="$TIMEZONE"
@@ -464,6 +467,9 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES \
   OPENCLAW_EXTENSIONS \
+  OPENCLAW_BUNDLED_PLUGINS_DIR \
+  OPENCLAW_UID \
+  OPENCLAW_GID \
   OPENCLAW_SANDBOX \
   OPENCLAW_DOCKER_SOCKET \
   DOCKER_GID \
@@ -488,8 +494,9 @@ else
   fi
 fi
 
-# Ensure bind-mounted data directories are writable by the container's `node`
-# user (uid 1000). Host-created dirs inherit the host user's uid which may
+# Ensure bind-mounted data directories are writable by the runtime service
+# user (OPENCLAW_UID:OPENCLAW_GID). Host-created dirs inherit the host uid
+# which may
 # differ, causing EACCES when the container tries to mkdir/write.
 # Running a brief root container to chown is the portable Docker idiom --
 # it works regardless of the host uid and doesn't require host-side root.
@@ -501,8 +508,8 @@ echo "==> Fixing data-directory permissions"
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
-   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+  "find /home/node/.openclaw -xdev -exec chown ${OPENCLAW_UID}:${OPENCLAW_GID} {} +; \
+   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R ${OPENCLAW_UID}:${OPENCLAW_GID} /home/node/.openclaw/workspace/.openclaw || true"
 
 echo ""
 echo "==> Onboarding (interactive)"

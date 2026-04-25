@@ -1,11 +1,14 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    user: '${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}'
     environment:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_BUNDLED_PLUGINS_DIR: ${OPENCLAW_BUNDLED_PLUGINS_DIR:-/app/extensions}
+      PLAYWRIGHT_BROWSERS_PATH: ${PLAYWRIGHT_BROWSERS_PATH:-/home/node/.cache/ms-playwright}
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
@@ -22,26 +25,26 @@ services:
     # group_add:
     #   - "${DOCKER_GID:-999}"
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - '${OPENCLAW_GATEWAY_PORT:-18789}:18789'
+      - '${OPENCLAW_BRIDGE_PORT:-18790}:18790'
     init: true
     restart: unless-stopped
     command:
       [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
+        'node',
+        'dist/index.js',
+        'gateway',
+        '--bind',
+        '${OPENCLAW_GATEWAY_BIND:-lan}',
+        '--port',
+        '18789',
       ]
     healthcheck:
       test:
         [
-          "CMD",
-          "node",
-          "-e",
+          'CMD',
+          'node',
+          '-e',
           "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
@@ -51,7 +54,8 @@ services:
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
-    network_mode: "service:openclaw-gateway"
+    user: '${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}'
+    network_mode: 'service:openclaw-gateway'
     cap_drop:
       - NET_RAW
       - NET_ADMIN
@@ -62,6 +66,8 @@ services:
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_BUNDLED_PLUGINS_DIR: ${OPENCLAW_BUNDLED_PLUGINS_DIR:-/app/extensions}
+      PLAYWRIGHT_BROWSERS_PATH: ${PLAYWRIGHT_BROWSERS_PATH:-/home/node/.cache/ms-playwright}
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
@@ -73,6 +79,6 @@ services:
     stdin_open: true
     tty: true
     init: true
-    entrypoint: ["node", "dist/index.js"]
+    entrypoint: ['node', 'dist/index.js']
     depends_on:
       - openclaw-gateway
