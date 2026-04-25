@@ -488,6 +488,10 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
       profile("bundled-register:registerChannel", () =>
         api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
       );
+      if (api.registrationMode === "discovery") {
+        profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
+        return;
+      }
       if (api.registrationMode !== "full") {
         return;
       }
