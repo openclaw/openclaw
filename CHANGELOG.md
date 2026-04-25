@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 - Heartbeat: clamp oversized scheduler delays through the shared safe timer helper, preventing `every` values over Node's timeout cap from becoming a 1 ms crash loop. Fixes #71414. (#71478) Thanks @hclsys.
 - Telegram: remove the startup persisted-offset `getUpdates` preflight so polling restarts do not self-conflict before the runner starts. Fixes #69304. (#69779) Thanks @chinar-amrutkar.
+- Telegram: keep the polling stall watchdog active even when grammY reports the runner as not running while its task is still pending, so a rebuilt transport cannot leave `getUpdates` silent until a manual gateway restart. Fixes #69064. Thanks @LDLoeb.
 - Browser/Playwright: ignore benign already-handled route races during guarded navigation so browser-page tasks no longer fail when Playwright tears down a route mid-flight. (#68708) Thanks @Steady-ai.
 - Browser/aria snapshots: bind `format=aria` `axN` refs to live DOM nodes through backend DOM ids when Playwright is available, so follow-up browser actions can use those refs without timing out. (#62434) Thanks @MrKipler.
 - Telegram: prevent duplicate in-process long pollers for the same bot token and add clearer `getUpdates` conflict diagnostics for external duplicate pollers. Fixes #56230.
