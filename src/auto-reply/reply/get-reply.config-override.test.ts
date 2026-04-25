@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   buildGetReplyCtx,
@@ -17,10 +17,14 @@ registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let loadConfigMock: typeof import("../../config/config.js").loadConfig;
+let tryEnsureRuntimePluginsLoadedMock: typeof import("../../agents/runtime-plugins.js").tryEnsureRuntimePluginsLoaded;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ loadConfig: loadConfigMock } = await import("../../config/config.js"));
+  ({ tryEnsureRuntimePluginsLoaded: tryEnsureRuntimePluginsLoadedMock } = await import(
+    "../../agents/runtime-plugins.js"
+  ));
 }
 
 describe("getReplyFromConfig configOverride", () => {
@@ -30,6 +34,7 @@ describe("getReplyFromConfig configOverride", () => {
     mocks.resolveReplyDirectives.mockReset();
     mocks.initSessionState.mockReset();
     vi.mocked(loadConfigMock).mockReset();
+    vi.mocked(tryEnsureRuntimePluginsLoadedMock).mockClear();
 
     vi.mocked(loadConfigMock).mockReturnValue({});
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
@@ -63,5 +68,26 @@ describe("getReplyFromConfig configOverride", () => {
     } as OpenClawConfig);
 
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+  });
+
+  it("activates runtime plugins before directive handling", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          userTimezone: "America/New_York",
+        },
+      },
+    } as OpenClawConfig;
+    mocks.resolveReplyDirectives.mockImplementation(async () => {
+      expect(tryEnsureRuntimePluginsLoadedMock).toHaveBeenCalledWith({
+        config: expect.objectContaining({
+          agents: cfg.agents,
+        }),
+        workspaceDir: "/tmp/workspace",
+      });
+      return { kind: "reply", reply: { text: "ok" } };
+    });
+
+    await getReplyFromConfig(buildGetReplyCtx(), undefined, cfg);
   });
 });

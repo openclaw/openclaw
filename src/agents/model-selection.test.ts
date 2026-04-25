@@ -402,6 +402,32 @@ describe("model-selection", () => {
         model: "kimi-code",
       });
     });
+
+    it("strips redundant own-provider prefixes from explicit override models", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: "anthropic",
+          overrideProvider: "anthropic",
+          overrideModel: "anthropic/anthropic/claude-opus-4-7",
+        }),
+      ).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      });
+    });
+
+    it("preserves vendor-prefixed models for wrapper override providers", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: "anthropic",
+          overrideProvider: "openrouter",
+          overrideModel: "anthropic/claude-opus-4-7",
+        }),
+      ).toEqual({
+        provider: "openrouter",
+        model: "anthropic/claude-opus-4-7",
+      });
+    });
   });
 
   describe("resolvePersistedSelectedModelRef", () => {

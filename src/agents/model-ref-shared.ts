@@ -26,6 +26,31 @@ export function modelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
+export function stripOwnProviderPrefix(provider: string, model: string): string {
+  const normalizedProvider = normalizeProviderId(provider);
+  let trimmed = model.trim();
+  if (!normalizedProvider || !trimmed) {
+    return trimmed;
+  }
+  const prefix = `${normalizedProvider}/`;
+  while (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
+    const stripped = trimmed.slice(prefix.length).trim();
+    if (!stripped) {
+      break;
+    }
+    trimmed = stripped;
+  }
+  return trimmed;
+}
+
+export function canonicalizeProviderModelId(provider: string, model: string): string {
+  const normalizedProvider = normalizeProviderId(provider);
+  return normalizeStaticProviderModelId(
+    normalizedProvider,
+    stripOwnProviderPrefix(normalizedProvider, model),
+  );
+}
+
 export function normalizeAnthropicModelId(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {

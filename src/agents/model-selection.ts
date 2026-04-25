@@ -42,6 +42,7 @@ import {
   type ModelAliasIndex,
   type ModelRefStatus,
 } from "./model-selection-shared.js";
+import { stripOwnProviderPrefix } from "./model-ref-shared.js";
 
 export type { ModelAliasIndex, ModelRef, ModelRefStatus };
 
@@ -84,8 +85,12 @@ export function resolvePersistedOverrideModelRef(params: {
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const defaultProvider = params.defaultProvider.trim();
-  const overrideProvider = params.overrideProvider?.trim();
-  const overrideModel = params.overrideModel?.trim();
+  const normalizedOverride = normalizeStoredOverrideModel({
+    providerOverride: params.overrideProvider,
+    modelOverride: params.overrideModel,
+  });
+  const overrideProvider = normalizedOverride.providerOverride;
+  const overrideModel = normalizedOverride.modelOverride;
   if (!overrideModel) {
     return null;
   }
@@ -179,12 +184,9 @@ export function normalizeStoredOverrideModel(params: {
     };
   }
 
-  const providerPrefix = `${providerOverride.toLowerCase()}/`;
   return {
     providerOverride,
-    modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
-      ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
-      : modelOverride,
+    modelOverride: stripOwnProviderPrefix(providerOverride, modelOverride),
   };
 }
 

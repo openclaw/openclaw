@@ -142,6 +142,25 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.modelOverrideSource).toBe("auto");
   });
 
+  it("strips own-provider prefixes before persisting model overrides", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-5b",
+      updatedAt: Date.now() - 5_000,
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "anthropic",
+        model: "anthropic/claude-opus-4-7",
+      },
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-opus-4-7");
+  });
+
   it("sets liveModelSwitchPending only when explicitly requested", () => {
     const entry: SessionEntry = {
       sessionId: "sess-5",

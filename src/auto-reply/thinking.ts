@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { canonicalizeProviderModelId } from "../agents/model-ref-shared.js";
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
@@ -63,8 +64,11 @@ function resolveThinkingPolicyContext(params: {
 }) {
   const providerRaw = normalizeOptionalString(params.provider);
   const normalizedProvider = providerRaw ? normalizeProviderId(providerRaw) : "";
-  const modelId = normalizeOptionalString(params.model) ?? "";
-  const modelKey = normalizeOptionalLowercaseString(params.model) ?? "";
+  const rawModelId = normalizeOptionalString(params.model) ?? "";
+  const modelId = normalizedProvider
+    ? canonicalizeProviderModelId(normalizedProvider, rawModelId)
+    : rawModelId;
+  const modelKey = normalizeOptionalLowercaseString(modelId) ?? "";
   const candidate = params.catalog?.find(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );

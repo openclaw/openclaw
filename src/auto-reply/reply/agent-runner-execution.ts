@@ -13,6 +13,7 @@ import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { stripOwnProviderPrefix } from "../../agents/model-ref-shared.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -205,7 +206,7 @@ function buildFallbackSelectionState(params: {
 }): FallbackSelectionState {
   return {
     providerOverride: params.provider,
-    modelOverride: params.model,
+    modelOverride: stripOwnProviderPrefix(params.provider, params.model),
     modelOverrideSource: "auto",
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
