@@ -145,6 +145,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google Meet: tell agents to recover already-open Meet tabs after browser timeouts, and make the dev CLI release its build lock if compiler spawning fails. Thanks @steipete.
 - Plugins/Google Meet: return structured manual-action details when browser-based meeting creation needs login or permissions, so agents can guide the operator without opening duplicate Meet tabs. Thanks @steipete.
 - Plugins/CLI: provide Gateway-backed node inspection to plugin commands, so `googlemeet recover-tab` can inspect paired browser nodes from the terminal. Thanks @steipete.
+- Cron/isolated sessions: clear stale runtime, lifecycle, auth, model, exec, heartbeat, usage, privilege, routing, and delivery artifacts when creating a fresh isolated run, and persist per-run session rows as snapshots so old base-session state no longer leaks into new cron executions. Thanks @vincentkoc.
 - Gateway/sessions: recover main-agent turns interrupted by a gateway restart from stale transcript-lock evidence, avoiding stuck `status: "running"` sessions without broad post-boot transcript scans. Fixes #70555. Thanks @bitloi.
 - Codex approvals: sanitize MCP elicitation approval titles, descriptions, and display parameters before forwarding them to OpenClaw approval prompts. (#71343) Thanks @Lucenx9.
 - Codex approvals: keep command approval responses within Codex app-server `availableDecisions`, including deny/cancel fallbacks for prompts that do not offer `decline`. (#71338) Thanks @Lucenx9.

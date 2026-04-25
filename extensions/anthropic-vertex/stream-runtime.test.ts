@@ -1,36 +1,32 @@
-import type { Model } from "@mariozechner/pi-ai";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAssistantMessageEventStream, type Model } from "@mariozechner/pi-ai";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
 const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
 
-const hoisted = vi.hoisted(() => {
-  const streamAnthropicMock = vi.fn<(model: unknown, context: unknown, options: unknown) => symbol>(
-    () => Symbol("anthropic-vertex-stream"),
+function createStreamDeps(): {
+  deps: AnthropicVertexStreamDeps;
+  streamAnthropicMock: ReturnType<typeof vi.fn>;
+  anthropicVertexCtorMock: ReturnType<typeof vi.fn>;
+} {
+  const streamAnthropicMock = vi.fn(
+    (..._args: Parameters<AnthropicVertexStreamDeps["streamAnthropic"]>) =>
+      createAssistantMessageEventStream(),
   );
   const anthropicVertexCtorMock = vi.fn();
+  const MockAnthropicVertex = function MockAnthropicVertex(options: unknown) {
+    anthropicVertexCtorMock(options);
+  } as unknown as AnthropicVertexStreamDeps["AnthropicVertex"];
 
   return {
+    deps: {
+      AnthropicVertex: MockAnthropicVertex,
+      streamAnthropic: streamAnthropicMock,
+    },
     streamAnthropicMock,
     anthropicVertexCtorMock,
   };
-});
-
-vi.mock("@mariozechner/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...original,
-    streamAnthropic: (model: unknown, context: unknown, options: unknown) =>
-      hoisted.streamAnthropicMock(model, context, options),
-  };
-});
-
-vi.mock("@anthropic-ai/vertex-sdk", () => ({
-  AnthropicVertex: vi.fn(function MockAnthropicVertex(options: unknown) {
-    hoisted.anthropicVertexCtorMock(options);
-    return { options };
-  }),
-}));
+}
 
 let createAnthropicVertexStreamFn: typeof import("./stream-runtime.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./stream-runtime.js").createAnthropicVertexStreamFnForModel;
@@ -48,8 +44,12 @@ const CACHE_BOUNDARY_PROMPT = `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynam
 
 type PayloadHook = (payload: unknown, payloadModel: unknown) => Promise<unknown>;
 
-function captureCacheBoundaryPayloadHook(onPayload: PayloadHook) {
-  const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+function captureCacheBoundaryPayloadHook(
+  onPayload: PayloadHook,
+  deps: AnthropicVertexStreamDeps,
+  streamAnthropicMock: ReturnType<typeof vi.fn>,
+) {
+  const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
   const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
 
   void streamFn(
@@ -64,7 +64,7 @@ function captureCacheBoundaryPayloadHook(onPayload: PayloadHook) {
     } as never,
   );
 
-  const transportOptions = hoisted.streamAnthropicMock.mock.calls[0]?.[2] as {
+  const transportOptions = streamAnthropicMock.mock.calls[0]?.[2] as {
     onPayload?: PayloadHook;
   };
 
@@ -105,31 +105,29 @@ describe("createAnthropicVertexStreamFn", () => {
       await import("./stream-runtime.js"));
   });
 
-  beforeEach(() => {
-    hoisted.streamAnthropicMock.mockClear();
-    hoisted.anthropicVertexCtorMock.mockClear();
-  });
-
   it("omits projectId when ADC credentials are used without an explicit project", () => {
-    const streamFn = createAnthropicVertexStreamFn(undefined, "global");
+    const { deps, anthropicVertexCtorMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn(undefined, "global", undefined, deps);
 
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 }), { messages: [] }, {});
 
-    expect(hoisted.anthropicVertexCtorMock).toHaveBeenCalledWith({
+    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
       region: "global",
     });
   });
 
   it("passes an explicit baseURL through to the Vertex client", () => {
+    const { deps, anthropicVertexCtorMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn(
       "vertex-project",
       "us-east5",
       "https://proxy.example.test/vertex/v1",
+      deps,
     );
 
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 }), { messages: [] }, {});
 
-    expect(hoisted.anthropicVertexCtorMock).toHaveBeenCalledWith({
+    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
       projectId: "vertex-project",
       region: "us-east5",
       baseURL: "https://proxy.example.test/vertex/v1",
@@ -137,12 +135,13 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("defaults maxTokens to the model limit instead of the old 32000 cap", () => {
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-opus-4-6", maxTokens: 128000 });
 
     void streamFn(model, { messages: [] }, {});
 
-    expect(hoisted.streamAnthropicMock).toHaveBeenCalledWith(
+    expect(streamAnthropicMock).toHaveBeenCalledWith(
       model,
       { messages: [] },
       expect.objectContaining({
@@ -152,12 +151,13 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("clamps explicit maxTokens to the selected model limit", () => {
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
 
     void streamFn(model, { messages: [] }, { maxTokens: 999999 });
 
-    expect(hoisted.streamAnthropicMock).toHaveBeenCalledWith(
+    expect(streamAnthropicMock).toHaveBeenCalledWith(
       model,
       { messages: [] },
       expect.objectContaining({
@@ -167,12 +167,13 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("maps xhigh reasoning to max effort for adaptive Opus models", () => {
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-opus-4-6", maxTokens: 64000 });
 
     void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
 
-    expect(hoisted.streamAnthropicMock).toHaveBeenCalledWith(
+    expect(streamAnthropicMock).toHaveBeenCalledWith(
       model,
       { messages: [] },
       expect.objectContaining({
@@ -183,12 +184,13 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("maps xhigh reasoning to xhigh effort for Opus 4.7", () => {
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-opus-4-7", maxTokens: 64000 });
 
     void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
 
-    expect(hoisted.streamAnthropicMock).toHaveBeenCalledWith(
+    expect(streamAnthropicMock).toHaveBeenCalledWith(
       model,
       { messages: [] },
       expect.objectContaining({
@@ -199,8 +201,13 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
     const onPayload = vi.fn(async (payload: unknown) => payload);
-    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(onPayload);
+    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(
+      onPayload,
+      deps,
+      streamAnthropicMock,
+    );
     const payload = {
       system: [
         {
@@ -220,6 +227,7 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("reapplies Anthropic cache-boundary shaping when payload hooks return a fresh payload", async () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
     const onPayload = vi.fn(async () => ({
       system: [
         {
@@ -229,7 +237,11 @@ describe("createAnthropicVertexStreamFn", () => {
       ],
       messages: [{ role: "user", content: "Hello again" }],
     }));
-    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(onPayload);
+    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(
+      onPayload,
+      deps,
+      streamAnthropicMock,
+    );
 
     const nextPayload = await transportPayloadHook?.(
       {
@@ -248,12 +260,13 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("omits maxTokens when neither the model nor request provide a finite limit", () => {
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-sonnet-4-6" });
 
     void streamFn(model, { messages: [] }, { maxTokens: Number.NaN });
 
-    expect(hoisted.streamAnthropicMock).toHaveBeenCalledWith(
+    expect(streamAnthropicMock).toHaveBeenCalledWith(
       model,
       { messages: [] },
       expect.not.objectContaining({
@@ -264,19 +277,17 @@ describe("createAnthropicVertexStreamFn", () => {
 });
 
 describe("createAnthropicVertexStreamFnForModel", () => {
-  beforeEach(() => {
-    hoisted.anthropicVertexCtorMock.mockClear();
-  });
-
   it("derives project and region from the model and env", () => {
+    const { deps, anthropicVertexCtorMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(
       { baseUrl: "https://europe-west4-aiplatform.googleapis.com" },
       { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
+      deps,
     );
 
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
 
-    expect(hoisted.anthropicVertexCtorMock).toHaveBeenCalledWith({
+    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
       projectId: "vertex-project",
       region: "europe-west4",
       baseURL: "https://europe-west4-aiplatform.googleapis.com/v1",
@@ -284,14 +295,16 @@ describe("createAnthropicVertexStreamFnForModel", () => {
   });
 
   it("preserves explicit custom provider base URLs", () => {
+    const { deps, anthropicVertexCtorMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(
       { baseUrl: "https://proxy.example.test/custom-root/v1" },
       { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
+      deps,
     );
 
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
 
-    expect(hoisted.anthropicVertexCtorMock).toHaveBeenCalledWith({
+    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
       projectId: "vertex-project",
       region: "global",
       baseURL: "https://proxy.example.test/custom-root/v1",
@@ -299,14 +312,16 @@ describe("createAnthropicVertexStreamFnForModel", () => {
   });
 
   it("adds /v1 for path-prefixed custom provider base URLs", () => {
+    const { deps, anthropicVertexCtorMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(
       { baseUrl: "https://proxy.example.test/custom-root" },
       { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
+      deps,
     );
 
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
 
-    expect(hoisted.anthropicVertexCtorMock).toHaveBeenCalledWith({
+    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
       projectId: "vertex-project",
       region: "global",
       baseURL: "https://proxy.example.test/custom-root/v1",

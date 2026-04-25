@@ -9,6 +9,98 @@ import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+type FreshCronSessionSanitizeMode = "isolated-force-new" | "stale-rollover";
+
+const FRESH_CRON_SAFE_PREFERENCE_FIELDS = [
+  "heartbeatTaskState",
+  "chatType",
+  "thinkingLevel",
+  "fastMode",
+  "verboseLevel",
+  "traceLevel",
+  "reasoningLevel",
+  "ttsAuto",
+  "responseUsage",
+  "label",
+  "displayName",
+] as const satisfies readonly (keyof SessionEntry)[];
+
+const STALE_SESSION_CONTEXT_PRESERVED_FIELDS = [
+  "elevatedLevel",
+  "groupActivation",
+  "groupActivationNeedsSystemIntro",
+  "sendPolicy",
+  "queueMode",
+  "queueDebounceMs",
+  "queueCap",
+  "queueDrop",
+  "channel",
+  "groupId",
+  "subject",
+  "groupChannel",
+  "space",
+  "origin",
+  "acp",
+] as const satisfies readonly (keyof SessionEntry)[];
+
+function cloneSessionField<T>(value: T): T {
+  return globalThis.structuredClone(value);
+}
+
+function copySessionFields(
+  target: SessionEntry,
+  entry: SessionEntry,
+  fields: readonly (keyof SessionEntry)[],
+): void {
+  for (const field of fields) {
+    if (entry[field] !== undefined) {
+      target[field] = cloneSessionField(entry[field]) as never;
+    }
+  }
+}
+
+function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry): void {
+  if (entry.modelOverrideSource !== "auto") {
+    if (entry.modelOverride !== undefined) {
+      target.modelOverride = entry.modelOverride;
+    }
+    if (entry.providerOverride !== undefined) {
+      target.providerOverride = entry.providerOverride;
+    }
+    if (entry.modelOverrideSource !== undefined) {
+      target.modelOverrideSource = entry.modelOverrideSource;
+    }
+  }
+}
+
+function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): void {
+  if (entry.authProfileOverrideSource === "user") {
+    if (entry.authProfileOverride !== undefined) {
+      target.authProfileOverride = entry.authProfileOverride;
+    }
+    target.authProfileOverrideSource = entry.authProfileOverrideSource;
+    if (entry.authProfileOverrideCompactionCount !== undefined) {
+      target.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+    }
+  }
+}
+
+function sanitizeFreshCronSessionEntry(
+  entry: SessionEntry,
+  mode: FreshCronSessionSanitizeMode,
+): SessionEntry {
+  const next = {} as SessionEntry;
+
+  copySessionFields(next, entry, FRESH_CRON_SAFE_PREFERENCE_FIELDS);
+  if (mode === "stale-rollover") {
+    copySessionFields(next, entry, STALE_SESSION_CONTEXT_PRESERVED_FIELDS);
+  }
+  preserveNonAutoModelOverride(next, entry);
+  preserveUserAuthOverride(next, entry);
+
+  return next;
+}
+
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -65,27 +157,22 @@ export function resolveCronSession(params: {
     previousSessionId,
   });
 
+  const baseEntry = entry
+    ? isNewSession
+      ? sanitizeFreshCronSessionEntry(
+          entry,
+          params.forceNew ? "isolated-force-new" : "stale-rollover",
+        )
+      : entry
+    : undefined;
+
   const sessionEntry: SessionEntry = {
     // Preserve existing per-session overrides even when rolling to a new sessionId.
-    ...entry,
+    ...baseEntry,
     // Always update these core fields
     sessionId,
     updatedAt: params.nowMs,
     systemSent,
-    // When starting a fresh session (forceNew / isolated), clear delivery routing
-    // state inherited from prior sessions. Without this, lastThreadId leaks into
-    // the new session and causes announce-mode cron deliveries to post as thread
-    // replies instead of channel top-level messages.
-    // deliveryContext must also be cleared because normalizeSessionEntryDelivery
-    // repopulates lastThreadId from deliveryContext.threadId on store writes.
-    ...(isNewSession && {
-      lastChannel: undefined,
-      lastTo: undefined,
-      lastAccountId: undefined,
-      lastThreadId: undefined,
-      deliveryContext: undefined,
-      sessionFile: undefined,
-    }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };
 }
