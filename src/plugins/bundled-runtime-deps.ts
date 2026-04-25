@@ -566,18 +566,24 @@ function storeSourceCheckoutRuntimeDepsCache(params: {
 
 function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const nextEnv = { ...env };
+  delete nextEnv.NPM_CONFIG_CACHE;
+  delete nextEnv.npm_config_cache;
   delete nextEnv.npm_config_global;
   delete nextEnv.npm_config_location;
   delete nextEnv.npm_config_prefix;
   return nextEnv;
 }
 
-export function createBundledRuntimeDepsInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function createBundledRuntimeDepsInstallEnv(
+  env: NodeJS.ProcessEnv,
+  options: { cacheDir?: string } = {},
+): NodeJS.ProcessEnv {
   return {
     ...createNestedNpmInstallEnv(env),
     npm_config_legacy_peer_deps: "true",
     npm_config_package_lock: "false",
     npm_config_save: "false",
+    ...(options.cacheDir ? { npm_config_cache: options.cacheDir } : {}),
   };
 }
 
@@ -989,7 +995,9 @@ export function installBundledRuntimeDeps(params: {
         "utf8",
       );
     }
-    const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
+    const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
+      cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
+    });
     const npmRunner = resolveBundledRuntimeDepsNpmRunner({
       env: installEnv,
       npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
