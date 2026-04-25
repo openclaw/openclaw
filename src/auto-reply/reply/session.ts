@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
@@ -33,6 +33,7 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -899,6 +900,29 @@ export async function initSessionState(params: {
       });
       void hookRunner.runSessionStart(payload.event, payload.context).catch(() => {});
     }
+  }
+
+  // Auto-rollover (daily/idle stale detection) doesn't go through the command
+  // parser, so the bundled `session-memory` hook never sees a `command:reset`
+  // event and pre-reset transcripts go unwritten on low-activity sessions.
+  // Fire the same internal hook on stale rollover so listeners persist memory
+  // for automatic reset paths too.
+  if (
+    isNewSession &&
+    previousSessionEntry &&
+    !resetTriggered &&
+    (previousSessionEndReason === "daily" || previousSessionEndReason === "idle")
+  ) {
+    const autoResetEvent = createInternalHookEvent("command", "reset", sessionKey ?? "", {
+      sessionEntry,
+      previousSessionEntry,
+      commandSource: `auto:${previousSessionEndReason}`,
+      workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+      cfg,
+    });
+    void triggerInternalHook(autoResetEvent).catch((error: unknown) => {
+      log.warn(`auto-reset internal hook failed: ${String(error)}`);
+    });
   }
 
   return {

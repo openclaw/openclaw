@@ -9,6 +9,7 @@ import {
 } from "../../agents/pi-bundle-mcp-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as internalHooks from "../../hooks/internal-hooks.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   __testing as sessionBindingTesting,
@@ -1359,6 +1360,7 @@ describe("initSessionState RawBody", () => {
 
 describe("initSessionState reset policy", () => {
   let clearBootstrapSnapshotOnSessionRolloverSpy: ReturnType<typeof vi.spyOn>;
+  let triggerInternalHookSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -1366,10 +1368,14 @@ describe("initSessionState reset policy", () => {
       bootstrapCache,
       "clearBootstrapSnapshotOnSessionRollover",
     );
+    triggerInternalHookSpy = vi
+      .spyOn(internalHooks, "triggerInternalHook")
+      .mockImplementation(async () => {});
   });
 
   afterEach(() => {
     clearBootstrapSnapshotOnSessionRolloverSpy.mockRestore();
+    triggerInternalHookSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -1413,6 +1419,81 @@ describe("initSessionState reset policy", () => {
       }),
     ).resolves.toBeUndefined();
     expect(peekSystemEvents(existingSessionId)).toEqual([]);
+  });
+
+  it("fires the command:reset internal hook on automatic daily rollover so session-memory persists", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-daily-hook-");
+    const storePath = path.join(root, "sessions.json");
+    const agentWorkspaceDir = path.join(root, "agent-workspace");
+    const sessionKey = "agent:main:whatsapp:dm:auto-rollover";
+    const existingSessionId = "auto-rollover-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+      agents: { list: [{ id: "main", workspace: agentWorkspaceDir }] },
+    } as OpenClawConfig;
+    await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    await vi.runAllTimersAsync();
+
+    expect(triggerInternalHookSpy).toHaveBeenCalledTimes(1);
+    const event = triggerInternalHookSpy.mock.calls[0]?.[0] as {
+      type: string;
+      action: string;
+      sessionKey: string;
+      context: {
+        commandSource: string;
+        previousSessionEntry?: { sessionId?: string };
+        workspaceDir?: string;
+      };
+    };
+    expect(event.type).toBe("command");
+    expect(event.action).toBe("reset");
+    expect(event.sessionKey).toBe(sessionKey);
+    expect(event.context.commandSource).toBe("auto:daily");
+    expect(event.context.previousSessionEntry?.sessionId).toBe(existingSessionId);
+    // Pin the agent's configured workspace through to the hook context so
+    // bound-agent / multi-workspace setups land memory files in the right
+    // workspace instead of the bundled handler's resolved fallback.
+    expect(event.context.workspaceDir).toBe(agentWorkspaceDir);
+  });
+
+  it("does not fire the auto-reset hook for fresh sessions", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-fresh-no-hook-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:fresh";
+    const existingSessionId = "fresh-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 30, 0).getTime(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    await vi.runAllTimersAsync();
+
+    expect(triggerInternalHookSpy).not.toHaveBeenCalled();
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {

@@ -1059,6 +1059,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: keep default tool progress messages visible when answer preview streaming is disabled. (#71825) Thanks @VACInc.
 - Configure/models: clear deselected model fallbacks when updating the model picker allowlist, including provider-scoped setup flows. (#71596) Thanks @rubencu.
 - Agents/streaming: strip namespaced `<antml:thinking>` reasoning tags from streamed assistant replies before user-visible text is emitted. (#69288) Thanks @xialonglee.
+- Sessions/memory: fire the `command:reset` internal hook on automatic daily and idle session rollovers so the bundled `session-memory` hook persists pre-reset transcripts to `<workspace>/memory/YYYY-MM-DD-*.md` for low-activity agents that auto-roll over without an explicit `/reset` or `/new`. Thanks @jtatum.
 
 ## 2026.4.24
 
