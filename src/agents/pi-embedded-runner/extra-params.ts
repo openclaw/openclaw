@@ -389,7 +389,7 @@ function createCodexMinimalThinkingWrapper(baseStreamFn: StreamFn | undefined): 
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, payloadModel) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           const reasoning = payloadObj.reasoning;
@@ -402,7 +402,7 @@ function createCodexMinimalThinkingWrapper(baseStreamFn: StreamFn | undefined): 
             (reasoning as Record<string, unknown>).effort = "low";
           }
         }
-        originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, payloadModel);
       },
     });
   };
@@ -537,7 +537,12 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
     ctx.agent.streamFn = createSiliconFlowThinkingWrapper(ctx.agent.streamFn);
   }
 
-  if (shouldApplyCodexMinimalThinkingCompat({ provider: ctx.provider, thinkingLevel: ctx.thinkingLevel })) {
+  if (
+    shouldApplyCodexMinimalThinkingCompat({
+      provider: ctx.provider,
+      thinkingLevel: ctx.thinkingLevel,
+    })
+  ) {
     log.debug(
       `normalizing reasoning.effort=minimal to low for openai-codex compatibility (${ctx.provider}/${ctx.modelId})`,
     );
