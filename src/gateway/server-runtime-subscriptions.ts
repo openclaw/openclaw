@@ -3,7 +3,6 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import { startPlanSnapshotPersister } from "./plan-snapshot-persister.js";
 import {
   persistPlanModeSubagentGateState,
   startPlanSnapshotPersister,

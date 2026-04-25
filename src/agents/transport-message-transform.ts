@@ -1,6 +1,7 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
-import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PendingToolCall } from "./session-tool-result-state.js";
+import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "anthropic-messages",
@@ -108,7 +109,7 @@ function appendMissingToolResults(
       result.push({
         role: "toolResult",
         toolCallId: toolCall.id,
-        toolName: toolCall.name,
+        toolName: toolCall.name ?? "unknown",
         content: [{ type: "text", text: buildMissingToolResultText(toolCall) }],
         isError: true,
         timestamp: Date.now(),

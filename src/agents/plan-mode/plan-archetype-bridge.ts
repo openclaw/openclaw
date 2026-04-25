@@ -173,7 +173,9 @@ export async function dispatchPlanArchetypeAttachment(
     // removed in a future cleanup.
     const caption = buildPlanAttachmentCaption(input.details.title, input.details.summary);
     const { sendDocumentTelegram } = await import("../../plugin-sdk/telegram.js");
+    const { loadConfig } = await import("../../config/config.js");
     const sendResult = await sendDocumentTelegram(dctx.to, absPath, {
+      cfg: loadConfig(),
       caption,
       parseMode: "HTML",
     });

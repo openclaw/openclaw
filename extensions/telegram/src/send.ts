@@ -1559,7 +1559,7 @@ export async function sendStickerTelegram(
  * if needed (in practice, plan markdowns are tiny — ~10-50 KB).
  */
 export type TelegramDocumentOpts = {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -1608,7 +1608,7 @@ const TELEGRAM_CAPTION_MAX_CHARS = 1024;
 export async function sendDocumentTelegram(
   to: string,
   filePath: string,
-  opts: TelegramDocumentOpts = {},
+  opts: TelegramDocumentOpts,
 ): Promise<TelegramSendResult> {
   if (!filePath?.trim()) {
     throw new Error("Telegram document filePath is required");

@@ -62,7 +62,8 @@ const ExitPlanModeToolSchema = Type.Object({
     Type.Object(
       {
         step: Type.String({ description: "Short plan step." }),
-        status: stringEnum(PLAN_STEP_STATUSES, {
+        status: Type.String({
+          enum: [...PLAN_STEP_STATUSES],
           description: 'One of "pending", "in_progress", "completed", or "cancelled".',
         }),
         activeForm: Type.Optional(
