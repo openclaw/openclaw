@@ -31,6 +31,14 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./installed-plugin-index-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+  return {
+    ...actual,
+    readPersistedInstalledPluginIndexSync: vi.fn(() => null),
+  };
+});
+
 import {
   hasConfiguredChannelsForReadOnlyScope,
   listConfiguredAnnounceChannelIdsForConfig,

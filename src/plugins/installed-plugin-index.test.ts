@@ -154,7 +154,7 @@ describe("installed plugin index", () => {
 
     expect(index).toMatchObject({
       version: 1,
-      migrationVersion: 1,
+      migrationVersion: 2,
       generatedAtMs: 1777118400000,
       plugins: [
         {
@@ -679,7 +679,7 @@ describe("installed plugin index", () => {
         env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
       }),
       compatRegistryVersion: "different-compat-registry",
-      migrationVersion: 2 as 1,
+      migrationVersion: 3 as 2,
     };
 
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([

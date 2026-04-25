@@ -27,7 +27,7 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
+    migrationVersion: 2,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
     plugins: [
@@ -47,6 +47,12 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
           modelCatalogProviders: [],
           commandAliases: [],
           contracts: [],
+        },
+        startup: {
+          sidecar: false,
+          memory: false,
+          deferConfiguredChannelFullLoadUntilAfterListen: false,
+          agentHarnesses: [],
         },
         compat: [],
       },

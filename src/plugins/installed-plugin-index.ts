@@ -18,9 +18,10 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { hasKind } from "./slots.js";
 
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
-export const INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION = 1;
+export const INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION = 2;
 
 export type InstalledPluginIndexRefreshReason =
   | "missing"
@@ -42,6 +43,13 @@ export type InstalledPluginIndexContributions = {
   modelCatalogProviders: readonly string[];
   commandAliases: readonly string[];
   contracts: readonly string[];
+};
+
+export type InstalledPluginStartupInfo = {
+  sidecar: boolean;
+  memory: boolean;
+  deferConfiguredChannelFullLoadUntilAfterListen: boolean;
+  agentHarnesses: readonly string[];
 };
 
 export type InstalledPluginInstallRecordInfo = Pick<
@@ -95,6 +103,7 @@ export type InstalledPluginIndexRecord = {
   enabled: boolean;
   enabledByDefault?: boolean;
   contributions: InstalledPluginIndexContributions;
+  startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
 };
 
@@ -197,6 +206,34 @@ function collectContractKeys(record: PluginManifestRecord): readonly string[] {
       Array.isArray(value) && value.length > 0 ? [key] : [],
     ),
   );
+}
+
+function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
+  return Boolean(
+    record.providers.length > 0 ||
+    record.cliBackends.length > 0 ||
+    record.contracts?.speechProviders?.length ||
+    record.contracts?.mediaUnderstandingProviders?.length ||
+    record.contracts?.documentExtractors?.length ||
+    record.contracts?.imageGenerationProviders?.length ||
+    record.contracts?.videoGenerationProviders?.length ||
+    record.contracts?.musicGenerationProviders?.length ||
+    record.contracts?.webContentExtractors?.length ||
+    record.contracts?.webFetchProviders?.length ||
+    record.contracts?.webSearchProviders?.length ||
+    record.contracts?.memoryEmbeddingProviders?.length ||
+    hasKind(record.kind, "memory"),
+  );
+}
+
+function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
+  return {
+    sidecar: record.channels.length === 0 && !hasRuntimeContractSurface(record),
+    memory: hasKind(record.kind, "memory"),
+    deferConfiguredChannelFullLoadUntilAfterListen:
+      record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
+    agentHarnesses: sortUnique(record.activation?.onAgentHarnesses ?? []),
+  };
 }
 
 function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompatCode[] {
@@ -463,6 +500,7 @@ function buildInstalledPluginIndex(
       origin: record.origin,
       enabled,
       contributions: buildContributions(record),
+      startup: buildStartupInfo(record),
       compat: collectCompatCodes(record),
     };
     if (record.enabledByDefault === true) {

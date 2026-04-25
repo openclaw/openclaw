@@ -47,6 +47,15 @@ const InstalledPluginIndexContributionsSchema = z
   })
   .passthrough();
 
+const InstalledPluginIndexStartupSchema = z
+  .object({
+    sidecar: z.boolean(),
+    memory: z.boolean(),
+    deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
+    agentHarnesses: ContributionArraySchema,
+  })
+  .passthrough();
+
 const InstalledPluginIndexRecordSchema = z
   .object({
     pluginId: z.string(),
@@ -68,6 +77,7 @@ const InstalledPluginIndexRecordSchema = z
     enabled: z.boolean(),
     enabledByDefault: z.boolean().optional(),
     contributions: InstalledPluginIndexContributionsSchema,
+    startup: InstalledPluginIndexStartupSchema,
     compat: z.array(z.string()),
   })
   .passthrough();

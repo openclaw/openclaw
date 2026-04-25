@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   inspectPersistedInstalledPluginIndex,
+  readPersistedInstalledPluginIndexSync,
   resolveInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreInspection,
@@ -75,12 +76,15 @@ export function preflightPluginRegistryInstallMigration(
   }
   const pathExists = params.existsSync ?? fs.existsSync;
   if (!force && pathExists(filePath)) {
-    return {
-      action: "skip-existing",
-      filePath,
-      force,
-      deprecationWarnings,
-    };
+    const currentRegistry = readPersistedInstalledPluginIndexSync(params);
+    if (currentRegistry) {
+      return {
+        action: "skip-existing",
+        filePath,
+        force,
+        deprecationWarnings,
+      };
+    }
   }
   return {
     action: "migrate",
