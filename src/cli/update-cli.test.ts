@@ -31,6 +31,9 @@ const formatPortDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+const loadInstalledPluginIndexInstallRecords = vi.fn(
+  async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
+);
 const nodeVersionSatisfiesEngine = vi.fn();
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -153,9 +156,7 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
     await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>();
   return {
     ...actual,
-    loadInstalledPluginIndexInstallRecords: vi.fn(
-      async ({ config }) => config?.plugins?.installs ?? {},
-    ),
+    loadInstalledPluginIndexInstallRecords,
     writePersistedInstalledPluginIndexInstallRecords: vi.fn(async () => undefined),
   };
 });
@@ -1387,20 +1388,20 @@ describe("update-cli", () => {
     expect(lastWrite?.nextConfig?.update?.channel).toBe("beta");
   });
 
-  it("uses source config, not runtime-materialized config, for post-update plugin sync", async () => {
+  it("uses source config and plugin index records for post-update plugin sync", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
-    const sourceConfig = {
-      plugins: {
-        installs: {
-          "lossless-claw": {
-            source: "npm",
-            spec: "@martian-engineering/lossless-claw",
-            installPath: "/tmp/lossless-claw",
-          },
-        },
+    const pluginInstallRecords = {
+      "lossless-claw": {
+        source: "npm",
+        spec: "@martian-engineering/lossless-claw",
+        installPath: "/tmp/lossless-claw",
       },
+    } as const;
+    const sourceConfig = {
+      plugins: {},
     } as OpenClawConfig;
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(pluginInstallRecords);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
       sourceConfig,
@@ -1440,7 +1441,7 @@ describe("update-cli", () => {
     const syncConfig = vi.mocked(syncPluginsForUpdateChannel).mock.calls[0]?.[0]?.config as
       | OpenClawConfig
       | undefined;
-    expect(syncConfig?.plugins?.installs).toEqual(sourceConfig.plugins?.installs);
+    expect(syncConfig?.plugins?.installs).toEqual(pluginInstallRecords);
     expect(syncConfig?.update?.channel).toBe("beta");
     expect(syncConfig?.gateway?.auth).toBeUndefined();
     expect(syncConfig?.plugins?.entries).toBeUndefined();

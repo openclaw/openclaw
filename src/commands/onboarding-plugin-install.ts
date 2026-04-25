@@ -149,6 +149,7 @@ async function persistOnboardingPluginInstallRecord(params: {
   const records = await loadInstalledPluginIndexInstallRecords();
   await writePersistedInstalledPluginIndexInstallRecords(
     recordPluginInstallInRecords(records, params.install),
+    { config: params.cfg },
   );
 }
 

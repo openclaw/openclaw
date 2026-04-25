@@ -57,7 +57,7 @@ vi.mock("../../plugins/install.js", () => ({
 
 vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(
-    async ({ config }) => config?.plugins?.installs ?? {},
+    async (params = {}) => params.config?.plugins?.installs ?? {},
   ),
 }));
 
