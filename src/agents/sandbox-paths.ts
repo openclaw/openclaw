@@ -102,7 +102,7 @@ export function assertMediaNotDataUrl(media: string): void {
   }
 }
 
-export function isAllowedManagedMediaPath(candidate: string): boolean {
+function isManagedMediaPathUnderRoot(candidate: string): boolean {
   const expanded = expandPath(candidate);
   if (!hostPathLooksAbsolute(expanded)) {
     return false;
@@ -114,6 +114,22 @@ export function isAllowedManagedMediaPath(candidate: string): boolean {
   }
   const firstSegment = relative.split(path.sep)[0] ?? "";
   return MANAGED_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
+}
+
+export async function resolveAllowedManagedMediaPath(
+  candidate: string,
+): Promise<string | undefined> {
+  const expanded = expandPath(candidate);
+  if (!isManagedMediaPathUnderRoot(expanded)) {
+    return undefined;
+  }
+  const resolved = path.resolve(expanded);
+  const managedMediaRoot = path.resolve(resolveConfigDir(), "media");
+  await assertNoManagedMediaAliasEscape({
+    filePath: resolved,
+    managedMediaRoot,
+  });
+  return resolved;
 }
 
 export async function resolveSandboxedMediaSource(params: {
@@ -160,10 +176,7 @@ export async function resolveSandboxedMediaSource(params: {
   if (tmpMediaPath) {
     return tmpMediaPath;
   }
-  const managedMediaPath = await resolveAllowedManagedMediaPath({
-    candidate,
-    sandboxRoot: params.sandboxRoot,
-  });
+  const managedMediaPath = await resolveAllowedManagedMediaPath(candidate);
   if (managedMediaPath) {
     return managedMediaPath;
   }
@@ -173,23 +186,6 @@ export async function resolveSandboxedMediaSource(params: {
     root: params.sandboxRoot,
   });
   return sandboxResult.resolved;
-}
-
-async function resolveAllowedManagedMediaPath(params: {
-  candidate: string;
-  sandboxRoot: string;
-}): Promise<string | undefined> {
-  const expanded = expandPath(params.candidate);
-  if (!isAllowedManagedMediaPath(expanded)) {
-    return undefined;
-  }
-  const resolved = path.resolve(resolveSandboxInputPath(expanded, params.sandboxRoot));
-  const managedMediaRoot = path.resolve(resolveConfigDir(), "media");
-  await assertNoManagedMediaAliasEscape({
-    filePath: resolved,
-    managedMediaRoot,
-  });
-  return resolved;
 }
 
 async function assertNoManagedMediaAliasEscape(params: {
