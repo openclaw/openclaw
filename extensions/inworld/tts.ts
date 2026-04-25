@@ -1,4 +1,4 @@
-import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
@@ -62,6 +62,10 @@ export async function inworldTTS(params: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        // apiKey is the Base64-encoded credential string copied from the
+        // Inworld dashboard; it is sent verbatim as the HTTP Basic
+        // credential. Do not Base64-encode it here, and do not normalize
+        // bearer-style tokens.
         Authorization: `Basic ${params.apiKey}`,
       },
       body: requestBody,

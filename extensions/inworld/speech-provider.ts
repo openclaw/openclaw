@@ -3,8 +3,8 @@ import type {
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech";
-import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
+} from "openclaw/plugin-sdk/speech-core";
+import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
   DEFAULT_INWORLD_MODEL_ID,
   DEFAULT_INWORLD_VOICE_ID,

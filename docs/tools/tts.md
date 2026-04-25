@@ -242,9 +242,12 @@ by the bundled Google image-generation provider. Resolution order is
 }
 ```
 
-Inworld authenticates with HTTP Basic using a single Base64-encoded credential
-string taken from the Inworld dashboard. The provider reads the key from
-`messages.tts.providers.inworld.apiKey` or the `INWORLD_API_KEY` env var.
+The `apiKey` value must be the Base64-encoded credential string copied
+verbatim from the Inworld dashboard (Workspace > API Keys). The provider
+sends it as `Authorization: Basic <apiKey>` without any additional
+encoding, so do not pass a raw bearer token and do not Base64-encode it
+yourself. The key falls back to the `INWORLD_API_KEY` env var. See
+[Inworld provider](/providers/inworld) for full setup.
 
 ### xAI primary
 

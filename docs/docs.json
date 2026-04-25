@@ -1317,6 +1317,7 @@
                   "providers/groq",
                   "providers/huggingface",
                   "providers/inferrs",
+                  "providers/inworld",
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
