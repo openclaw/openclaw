@@ -127,6 +127,8 @@ vi.mock("../model-auth.js", () => ({
       "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
       moonshot: ["MOONSHOT_API_KEY"],
       openai: ["OPENAI_API_KEY"],
+      opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+      "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
       openrouter: ["OPENROUTER_API_KEY"],
       zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
     };
@@ -180,6 +182,8 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
     ["minimax", "MiniMax-VL-01"],
     ["minimax-portal", "MiniMax-VL-01"],
     ["openai", "gpt-5.4-mini"],
+    ["opencode", "gpt-5-nano"],
+    ["opencode-go", "kimi-k2.5"],
     ["zai", "glm-4.6v"],
   ]);
   __testing.setProviderDepsForTest({
@@ -479,6 +483,8 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
     ["minimax", "MiniMax-VL-01"],
     ["minimax-portal", "MiniMax-VL-01"],
     ["openai", "gpt-5.4-mini"],
+    ["opencode", "gpt-5-nano"],
+    ["opencode-go", "kimi-k2.5"],
     ["zai", "glm-4.6v"],
   ]);
   __testing.setProviderDepsForTest({
@@ -687,6 +693,32 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
       );
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
+  it("pairs opencode primary with the plugin-owned image model when auth exists", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("OPENCODE_API_KEY", "opencode-test");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "opencode/minimax-m2.7" } } },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "opencode/gpt-5-nano",
+      });
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
+  it("pairs opencode-go primary with the Go plugin-owned image model when auth exists", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("OPENCODE_API_KEY", "opencode-test");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "opencode-go/kimi-k2.5",
+      });
       expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
     });
   });
