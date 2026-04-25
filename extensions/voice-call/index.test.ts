@@ -5,20 +5,9 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
 import type { OpenClawPluginApi } from "./api.js";
+import type { VoiceCallRuntime } from "./runtime-entry.js";
 
-let runtimeStub: {
-  config: { toNumber?: string };
-  manager: {
-    initiateCall: ReturnType<typeof vi.fn>;
-    continueCall: ReturnType<typeof vi.fn>;
-    speak: ReturnType<typeof vi.fn>;
-    sendDtmf: ReturnType<typeof vi.fn>;
-    endCall: ReturnType<typeof vi.fn>;
-    getCall: ReturnType<typeof vi.fn>;
-    getCallByProviderCallId: ReturnType<typeof vi.fn>;
-  };
-  stop: ReturnType<typeof vi.fn>;
-};
+let runtimeStub: VoiceCallRuntime;
 
 vi.mock("./runtime-entry.js", () => ({
   createVoiceCallRuntime: vi.fn(async () => runtimeStub),
@@ -37,6 +26,7 @@ const noopLogger = {
 type Registered = {
   methods: Map<string, unknown>;
   tools: unknown[];
+  service?: Parameters<OpenClawPluginApi["registerService"]>[0];
 };
 type RegisterVoiceCall = (api: Record<string, unknown>) => void;
 type RegisterCliContext = {
@@ -57,9 +47,42 @@ function captureStdout() {
     restore: () => writeSpy.mockRestore(),
   };
 }
+
+function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
+  return {
+    config: { toNumber: "+15550001234" } as VoiceCallRuntime["config"],
+    provider: {} as VoiceCallRuntime["provider"],
+    manager: {
+      initiateCall: vi.fn(async () => ({ callId, success: true })),
+      continueCall: vi.fn(async () => ({
+        success: true,
+        transcript: "hello",
+      })),
+      speak: vi.fn(async () => ({ success: true })),
+      sendDtmf: vi.fn(async () => ({ success: true })),
+      endCall: vi.fn(async () => ({ success: true })),
+      getCall: vi.fn((id: string) => (id === callId ? { callId } : undefined)),
+      getCallByProviderCallId: vi.fn(() => undefined),
+    } as unknown as VoiceCallRuntime["manager"],
+    webhookServer: {} as VoiceCallRuntime["webhookServer"],
+    webhookUrl: "http://127.0.0.1:3334/voice/webhook",
+    publicUrl: null,
+    stop: vi.fn(async () => {}),
+  };
+}
+
+function createServiceContext(): Parameters<NonNullable<Registered["service"]>["start"]>[0] {
+  return {
+    config: {},
+    stateDir: os.tmpdir(),
+    logger: noopLogger,
+  } as Parameters<NonNullable<Registered["service"]>["start"]>[0];
+}
+
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
+  let service: Registered["service"];
   const api = createTestPluginApi({
     id: "voice-call",
     name: "Voice Call",
@@ -73,11 +96,13 @@ function setup(config: Record<string, unknown>): Registered {
     registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
     registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
-    registerService: () => {},
+    registerService: (registeredService) => {
+      service = registeredService;
+    },
     resolvePath: (p: string) => p,
   });
   plugin.register(api);
-  return { methods, tools };
+  return { methods, tools, service };
 }
 
 async function registerVoiceCallCli(program: Command) {
@@ -114,26 +139,60 @@ describe("voice-call plugin", () => {
     noopLogger.warn.mockClear();
     noopLogger.error.mockClear();
     noopLogger.debug.mockClear();
-    vi.mocked(createVoiceCallRuntime).mockClear();
-    runtimeStub = {
-      config: { toNumber: "+15550001234" },
-      manager: {
-        initiateCall: vi.fn(async () => ({ callId: "call-1", success: true })),
-        continueCall: vi.fn(async () => ({
-          success: true,
-          transcript: "hello",
-        })),
-        speak: vi.fn(async () => ({ success: true })),
-        sendDtmf: vi.fn(async () => ({ success: true })),
-        endCall: vi.fn(async () => ({ success: true })),
-        getCall: vi.fn((id: string) => (id === "call-1" ? { callId: "call-1" } : undefined)),
-        getCallByProviderCallId: vi.fn(() => undefined),
-      },
-      stop: vi.fn(async () => {}),
-    };
+    runtimeStub = createRuntimeStub();
+    vi.mocked(createVoiceCallRuntime).mockReset();
+    vi.mocked(createVoiceCallRuntime).mockImplementation(async () => runtimeStub);
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.voice-call.runtime")];
+    delete (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.voice-call.runtimePromise")
+    ];
+    delete (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.voice-call.runtimeStopPromise")
+    ];
+  });
+
+  it("reuses a started runtime across plugin registration contexts", async () => {
+    const first = setup({ provider: "mock" });
+    const second = setup({ provider: "mock" });
+
+    await first.service?.start(createServiceContext());
+    const handler = second.methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { message: "Hi" }, respond });
+
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
+  });
+
+  it("creates a fresh shared runtime after service stop", async () => {
+    const first = setup({ provider: "mock" });
+    await first.service?.start(createServiceContext());
+    await first.service?.stop?.(createServiceContext());
+
+    runtimeStub = createRuntimeStub("call-2");
+    const second = setup({ provider: "mock" });
+    const handler = second.methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { message: "Hi" }, respond });
+
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
+    expect(respond).toHaveBeenCalledWith(true, { callId: "call-2", initiated: true });
+  });
 
   it("initiates a call via voicecall.initiate", async () => {
     const { methods } = setup({ provider: "mock" });
