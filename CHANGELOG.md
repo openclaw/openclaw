@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Memory/search: stop installing `sqlite-vec` as a root dependency; local vector search now uses a configured extension path or reports vector recall as unavailable until `sqlite-vec` is installed. Thanks @vincentkoc.
 - Plugins/PDF: move local PDF extraction into a bundled `document-extract` plugin so core no longer owns `pdfjs-dist` or PDF image-rendering dependencies. Thanks @vincentkoc.
 - Matrix: require full cross-signing identity trust for self-device verification and add `openclaw matrix verify self` so operators can establish that trust from the CLI. (#70401) Thanks @gumadeiras.
 

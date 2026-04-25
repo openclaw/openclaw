@@ -173,11 +173,6 @@
       "class": "default-runtime-initially",
       "risk": ["native", "parser", "untrusted-files"]
     },
-    "sqlite-vec": {
-      "owner": "capability:memory-sqlite-vec",
-      "class": "default-runtime-initially",
-      "risk": ["native", "database-extension"]
-    },
     "tar": {
       "owner": "core:archive-handling",
       "class": "core-runtime",
