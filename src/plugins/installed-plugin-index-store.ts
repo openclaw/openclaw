@@ -4,18 +4,31 @@ import { resolveStateDir } from "../config/paths.js";
 import { readJsonFile, writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import {
+  diffInstalledPluginIndexInvalidationReasons,
   INSTALLED_PLUGIN_INDEX_VERSION,
+  loadInstalledPluginIndex,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
+  type InstalledPluginIndexRefreshReason,
+  type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 
-const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installed-index.json");
+export const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installed-index.json");
 
 export type InstalledPluginIndexStoreOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   filePath?: string;
+};
+
+export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
+
+export type InstalledPluginIndexStoreInspection = {
+  state: InstalledPluginIndexStoreState;
+  refreshReasons: readonly InstalledPluginIndexRefreshReason[];
+  persisted: InstalledPluginIndex | null;
+  current: InstalledPluginIndex;
 };
 
 const ContributionArraySchema = z.array(z.string());
@@ -107,6 +120,29 @@ export async function writePersistedInstalledPluginIndex(
     mode: 0o600,
   });
   return filePath;
+}
+
+export async function inspectPersistedInstalledPluginIndex(
+  params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
+): Promise<InstalledPluginIndexStoreInspection> {
+  const persisted = await readPersistedInstalledPluginIndex(params);
+  const current = loadInstalledPluginIndex(params);
+  if (!persisted) {
+    return {
+      state: "missing",
+      refreshReasons: ["missing"],
+      persisted: null,
+      current,
+    };
+  }
+
+  const refreshReasons = diffInstalledPluginIndexInvalidationReasons(persisted, current);
+  return {
+    state: refreshReasons.length > 0 ? "stale" : "fresh",
+    refreshReasons,
+    persisted,
+    current,
+  };
 }
 
 export async function refreshPersistedInstalledPluginIndex(
