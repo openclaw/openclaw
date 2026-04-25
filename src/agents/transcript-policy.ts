@@ -116,7 +116,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
       : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
-    ...(isAnthropic || isStrictOpenAiCompatible ? { validateAnthropicTurns: true } : {}),
+    ...(isAnthropic ? { validateAnthropicTurns: true } : {}),
     ...(isGoogle || isAnthropic ? { allowSyntheticToolResults: true } : {}),
   };
 }

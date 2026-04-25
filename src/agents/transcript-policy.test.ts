@@ -212,7 +212,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict");
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(false);
   }
 
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
@@ -489,7 +489,7 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(false);
   });
 
   it("keeps OpenRouter on its existing turn-validation path", () => {
