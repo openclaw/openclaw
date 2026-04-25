@@ -60,8 +60,10 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 The same `image_generate` tool handles text-to-image and reference-image
 editing. Use `image` for one reference or `images` for multiple references.
 Provider-supported output hints such as `quality`, `outputFormat`, and
-OpenAI-specific `background` are forwarded when available and reported as
-ignored when a provider does not support them.
+`background` are forwarded when available and reported as ignored when a
+provider does not support them. Current bundled transparent-background support
+is OpenAI-specific; other providers may still preserve PNG alpha if their
+backend emits it.
 
 ## Supported providers
 
@@ -124,6 +126,11 @@ Quality hint when the provider supports it.
 
 <ParamField path="outputFormat" type="'png' | 'jpeg' | 'webp'">
 Output format hint when the provider supports it.
+</ParamField>
+
+<ParamField path="background" type="'transparent' | 'opaque' | 'auto'">
+Background hint when the provider supports it. Use `transparent` with
+`outputFormat: "png"` or `"webp"` for transparency-capable providers.
 </ParamField>
 
 <ParamField path="count" type="number">
@@ -268,6 +275,11 @@ image model. OpenClaw routes default `gpt-image-2` transparent-background
 requests to `gpt-image-1.5`. `openai.outputCompression` applies to JPEG/WebP
 outputs.
 
+The top-level `background` hint is provider-neutral and currently maps to the
+same OpenAI `background` request field when the OpenAI provider is selected.
+Providers that do not declare background support return it in `ignoredOverrides`
+instead of receiving the unsupported parameter.
+
 When asking an agent for a transparent-background OpenAI image, the expected
 tool call is:
 
@@ -276,9 +288,7 @@ tool call is:
   "model": "openai/gpt-image-1.5",
   "prompt": "A simple red circle sticker on a transparent background",
   "outputFormat": "png",
-  "openai": {
-    "background": "transparent"
-  }
+  "background": "transparent"
 }
 ```
 
@@ -295,15 +305,16 @@ For headless CLI generation, use the equivalent `openclaw infer` flags:
 openclaw infer image generate \
   --model openai/gpt-image-1.5 \
   --output-format png \
-  --openai-background transparent \
+  --background transparent \
   --prompt "A simple red circle sticker on a transparent background" \
   --json
 ```
 
-The same `--output-format` and `--openai-background` flags are available on
-`openclaw infer image edit`. Other bundled providers can return PNGs and may
-preserve alpha when their backend emits it, but OpenClaw only exposes an
-explicit transparent-background control for OpenAI image generation.
+The same `--output-format` and `--background` flags are available on
+`openclaw infer image edit`; `--openai-background` remains available as an
+OpenAI-specific alias. Current bundled providers other than OpenAI do not
+declare explicit background control, so `background: "transparent"` is reported
+as ignored for them.
 
 Generate one 4K landscape image:
 
@@ -314,7 +325,7 @@ Generate one 4K landscape image:
 Generate a transparent PNG:
 
 ```
-/tool image_generate action=generate model=openai/gpt-image-1.5 prompt="A simple red circle sticker on a transparent background" outputFormat=png openai='{"background":"transparent"}'
+/tool image_generate action=generate model=openai/gpt-image-1.5 prompt="A simple red circle sticker on a transparent background" outputFormat=png background=transparent
 ```
 
 Generate two square images:

@@ -262,7 +262,8 @@ PNG/WebP output; the current `gpt-image-2` API rejects
 
 For a transparent-background request, agents should call `image_generate` with
 `model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and
-`openai.background: "transparent"`. OpenClaw also protects the public OpenAI and
+`background: "transparent"`; the older `openai.background` provider option is
+still accepted. OpenClaw also protects the public OpenAI and
 OpenAI Codex OAuth routes by rewriting default `openai/gpt-image-2` transparent
 requests to `gpt-image-1.5`; Azure and custom OpenAI-compatible endpoints keep
 their configured deployment/model names.
@@ -273,13 +274,14 @@ The same setting is exposed for headless CLI runs:
 openclaw infer image generate \
   --model openai/gpt-image-1.5 \
   --output-format png \
-  --openai-background transparent \
+  --background transparent \
   --prompt "A simple red circle sticker on a transparent background" \
   --json
 ```
 
-Use the same `--output-format` and `--openai-background` flags with
+Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
+`--openai-background` remains available as an OpenAI-specific alias.
 
 For Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
 `openai-codex` OAuth profile is configured, OpenClaw resolves that stored OAuth
@@ -302,7 +304,7 @@ Generate:
 Generate a transparent PNG:
 
 ```
-/tool image_generate model=openai/gpt-image-1.5 prompt="A simple red circle sticker on a transparent background" outputFormat=png openai='{"background":"transparent"}'
+/tool image_generate model=openai/gpt-image-1.5 prompt="A simple red circle sticker on a transparent background" outputFormat=png background=transparent
 ```
 
 Edit:

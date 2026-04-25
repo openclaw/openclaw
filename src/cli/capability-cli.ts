@@ -23,7 +23,7 @@ import { isLoopbackHost } from "../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
-  ImageGenerationOpenAIBackground,
+  ImageGenerationBackground,
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
@@ -83,7 +83,7 @@ import { collectOption } from "./program/helpers.js";
 
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
-const OPENAI_IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 
 type CapabilityMetadata = {
   id: string;
@@ -101,6 +101,7 @@ type CapabilityEnvelope = {
   model?: string;
   attempts: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
+  ignoredOverrides?: Array<Record<string, unknown>>;
   error?: string;
 };
 
@@ -390,6 +391,9 @@ function formatEnvelopeForText(value: unknown): string {
     `${envelope.capability} via ${envelope.transport}`,
     ...(envelope.provider ? [`provider: ${envelope.provider}`] : []),
     ...(envelope.model ? [`model: ${envelope.model}`] : []),
+    ...(envelope.ignoredOverrides && envelope.ignoredOverrides.length > 0
+      ? [`ignoredOverrides: ${JSON.stringify(envelope.ignoredOverrides)}`]
+      : []),
     `outputs: ${String(envelope.outputs.length)}`,
   ];
   for (const output of envelope.outputs) {
@@ -709,7 +713,8 @@ async function runImageGenerate(params: {
   aspectRatio?: string;
   resolution?: "1K" | "2K" | "4K";
   outputFormat?: ImageGenerationOutputFormat;
-  openaiBackground?: ImageGenerationOpenAIBackground;
+  background?: ImageGenerationBackground;
+  openaiBackground?: ImageGenerationBackground;
   file?: string[];
   output?: string;
   timeoutMs?: number;
@@ -737,6 +742,7 @@ async function runImageGenerate(params: {
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
     outputFormat: params.outputFormat,
+    background: params.background,
     providerOptions: params.openaiBackground
       ? { openai: { background: params.openaiBackground } }
       : undefined,
@@ -771,6 +777,7 @@ async function runImageGenerate(params: {
     model: result.model,
     attempts: result.attempts,
     outputs,
+    ignoredOverrides: result.ignoredOverrides,
   } satisfies CapabilityEnvelope;
 }
 
@@ -876,17 +883,18 @@ function normalizeImageOutputFormat(
   throw new Error("--output-format must be one of png, jpeg, or webp");
 }
 
-function normalizeOpenAIImageBackground(
+function normalizeImageBackground(
   raw: string | undefined,
-): ImageGenerationOpenAIBackground | undefined {
+  label = "--background",
+): ImageGenerationBackground | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(raw);
   if (!normalized) {
     return undefined;
   }
-  if ((OPENAI_IMAGE_BACKGROUNDS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationOpenAIBackground;
+  if ((IMAGE_BACKGROUNDS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationBackground;
   }
-  throw new Error("--openai-background must be one of transparent, opaque, or auto");
+  throw new Error(`${label} must be one of transparent, opaque, or auto`);
 }
 
 function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
@@ -1477,6 +1485,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
     .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
     .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+    .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
@@ -1492,8 +1501,10 @@ export function registerCapabilityCli(program: Command) {
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
           outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
-          openaiBackground: normalizeOpenAIImageBackground(
+          background: normalizeImageBackground(opts.background as string | undefined),
+          openaiBackground: normalizeImageBackground(
             opts.openaiBackground as string | undefined,
+            "--openai-background",
           ),
           timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
@@ -1509,6 +1520,7 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
     .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+    .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
@@ -1522,8 +1534,10 @@ export function registerCapabilityCli(program: Command) {
           model: opts.model as string | undefined,
           file: files,
           outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
-          openaiBackground: normalizeOpenAIImageBackground(
+          background: normalizeImageBackground(opts.background as string | undefined),
+          openaiBackground: normalizeImageBackground(
             opts.openaiBackground as string | undefined,
+            "--openai-background",
           ),
           timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,

@@ -225,7 +225,8 @@ describe("createImageGenerateTool", () => {
     const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
 
     expect(tool.description).toContain('outputFormat="png" or "webp"');
-    expect(tool.description).toContain('openai.background="transparent"');
+    expect(tool.description).toContain('background="transparent"');
+    expect(tool.description).toContain("openai.background");
     expect(tool.description).toContain("gpt-image-1.5");
     expect(JSON.stringify(tool.parameters)).toContain("openai/gpt-image-1.5");
   });

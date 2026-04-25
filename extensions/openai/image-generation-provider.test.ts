@@ -206,6 +206,7 @@ describe("openai image generation provider", () => {
     expect(provider.capabilities.output).toEqual({
       formats: ["png", "jpeg", "webp"],
       qualities: ["low", "medium", "high", "auto"],
+      backgrounds: ["transparent", "opaque", "auto"],
     });
   });
 
@@ -443,11 +444,7 @@ describe("openai image generation provider", () => {
       prompt: "Transparent sticker",
       cfg: {},
       outputFormat: "png",
-      providerOptions: {
-        openai: {
-          background: "transparent",
-        },
-      },
+      background: "transparent",
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledWith(

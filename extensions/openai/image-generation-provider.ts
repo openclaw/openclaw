@@ -52,6 +52,7 @@ const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
 const LOG_VALUE_MAX_CHARS = 256;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
+const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
 const OPENAI_IMAGE_MODELS = [
   DEFAULT_OPENAI_IMAGE_MODEL,
@@ -174,10 +175,11 @@ function appendOpenAIImageOptions(
   req: Parameters<ImageGenerationProvider["generateImage"]>[0],
 ): void {
   const openai = req.providerOptions?.openai;
+  const background = openai?.background ?? req.background;
   const entries: Record<string, unknown> = {
     ...(req.quality !== undefined ? { quality: req.quality } : {}),
     ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
-    ...(openai?.background !== undefined ? { background: openai.background } : {}),
+    ...(background !== undefined ? { background } : {}),
     ...(openai?.moderation !== undefined ? { moderation: openai.moderation } : {}),
     ...(openai?.outputCompression !== undefined
       ? { output_compression: openai.outputCompression }
@@ -201,7 +203,7 @@ function resolveOpenAIImageRequestModel(
   if (
     options?.allowTransparentDefaultReroute === true &&
     model === DEFAULT_OPENAI_IMAGE_MODEL &&
-    req.providerOptions?.openai?.background === "transparent"
+    (req.providerOptions?.openai?.background ?? req.background) === "transparent"
   ) {
     return OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL;
   }
@@ -513,6 +515,7 @@ function createOpenAIImageGenerationProviderBase(params: {
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],
         qualities: [...OPENAI_QUALITIES],
+        backgrounds: [...OPENAI_BACKGROUNDS],
       },
     },
     generateImage: params.generateImage,
@@ -580,6 +583,7 @@ async function generateOpenAICodexImage(params: {
   const size = req.size ?? DEFAULT_SIZE;
   const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
   const openai = req.providerOptions?.openai;
+  const background = openai?.background ?? req.background;
   headers.set("Content-Type", "application/json");
   const content: Array<Record<string, unknown>> = [
     { type: "input_text", text: req.prompt },
@@ -610,7 +614,7 @@ async function generateOpenAICodexImage(params: {
             size,
             ...(req.quality !== undefined ? { quality: req.quality } : {}),
             ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
-            ...(openai?.background !== undefined ? { background: openai.background } : {}),
+            ...(background !== undefined ? { background } : {}),
             ...(openai?.outputCompression !== undefined
               ? { output_compression: openai.outputCompression }
               : {}),

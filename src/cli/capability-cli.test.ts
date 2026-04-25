@@ -553,7 +553,7 @@ describe("capability cli", () => {
     );
   });
 
-  it("passes image output format and OpenAI background hints through to generation runtime", async () => {
+  it("passes image output format and generic background hints through to generation runtime", async () => {
     mocks.generateImage.mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1.5",
@@ -579,7 +579,7 @@ describe("capability cli", () => {
         "openai/gpt-image-1.5",
         "--output-format",
         "png",
-        "--openai-background",
+        "--background",
         "transparent",
         "--json",
       ],
@@ -590,11 +590,8 @@ describe("capability cli", () => {
         prompt: "transparent sticker",
         modelOverride: "openai/gpt-image-1.5",
         outputFormat: "png",
-        providerOptions: {
-          openai: {
-            background: "transparent",
-          },
-        },
+        background: "transparent",
+        providerOptions: undefined,
       }),
     );
   });
@@ -640,6 +637,7 @@ describe("capability cli", () => {
         prompt: "make background transparent",
         modelOverride: "openai/gpt-image-1.5",
         outputFormat: "png",
+        background: undefined,
         providerOptions: {
           openai: {
             background: "transparent",
@@ -654,7 +652,7 @@ describe("capability cli", () => {
     );
   });
 
-  it("rejects unsupported image output format and OpenAI background hints", async () => {
+  it("rejects unsupported image output format and background hints", async () => {
     await expect(
       runRegisteredCli({
         register: registerCapabilityCli as (program: Command) => void,
@@ -692,6 +690,26 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       "Error: --openai-background must be one of transparent, opaque, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--background",
+          "clear",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --background must be one of transparent, opaque, or auto",
     );
   });
 
