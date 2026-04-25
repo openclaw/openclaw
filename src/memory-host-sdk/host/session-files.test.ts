@@ -47,6 +47,12 @@ function expectNoUnpairedSurrogates(value: string): void {
   }
 }
 
+async function writeSessionJsonl(fileName: string, records: readonly unknown[]): Promise<string> {
+  const filePath = path.join(tmpDir, fileName);
+  await fs.writeFile(filePath, records.map((record) => JSON.stringify(record)).join("\n"));
+  return filePath;
+}
+
 describe("listSessionFilesForAgent", () => {
   it("includes reset and deleted transcripts in session file listing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
@@ -483,142 +489,118 @@ describe("buildSessionEntry", () => {
     expect(entry?.lineMap).toEqual([1, 2]);
   });
 
-  it("drops generated system wrapper user messages but keeps the assistant reply", async () => {
-    // Cross-message coupling (drop-next-assistant-when-prior-user-matched) was
-    // removed because user-typed text can match the same patterns; see
-    // PR #70737 review (aisle-research-bot). Real assistant content stays in
-    // the corpus regardless of what the prior user message looked like.
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content:
-            "System (untrusted): [2026-04-15 14:45:20 PDT] Exec completed (quiet-fo, code 0) :: Converted: 1",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "Handled internally.",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "What changed in the sync?",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "One new session was converted.",
-        },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "system-wrapper-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+  it("drops generated runtime chatter while preserving real follow-up content", async () => {
+    const cases = [
+      {
+        name: "system wrapper",
+        fileName: "system-wrapper-session.jsonl",
+        records: [
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content:
+                "System (untrusted): [2026-04-15 14:45:20 PDT] Exec completed (quiet-fo, code 0) :: Converted: 1",
+            },
+          },
+          { type: "message", message: { role: "assistant", content: "Handled internally." } },
+          { type: "message", message: { role: "user", content: "What changed in the sync?" } },
+          {
+            type: "message",
+            message: { role: "assistant", content: "One new session was converted." },
+          },
+        ],
+        content: [
+          "Assistant: Handled internally.",
+          "User: What changed in the sync?",
+          "Assistant: One new session was converted.",
+        ].join("\n"),
+        lineMap: [2, 3, 4],
+      },
+      {
+        name: "cron prompt",
+        fileName: "cron-prompt-session.jsonl",
+        records: [
+          {
+            type: "message",
+            message: { role: "user", content: "[cron:job-1 Example] Run the nightly sync" },
+          },
+          {
+            type: "message",
+            message: { role: "assistant", content: "Running the nightly sync now." },
+          },
+          {
+            type: "message",
+            message: { role: "user", content: "Did the nightly sync actually change anything?" },
+          },
+          {
+            type: "message",
+            message: { role: "assistant", content: "No, everything was already current." },
+          },
+        ],
+        content: [
+          "Assistant: Running the nightly sync now.",
+          "User: Did the nightly sync actually change anything?",
+          "Assistant: No, everything was already current.",
+        ].join("\n"),
+        lineMap: [2, 3, 4],
+      },
+      {
+        name: "heartbeat ack",
+        fileName: "heartbeat-session.jsonl",
+        records: [
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content:
+                "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+            },
+          },
+          { type: "message", message: { role: "assistant", content: "HEARTBEAT_OK" } },
+          {
+            type: "message",
+            message: { role: "user", content: "Summarize what changed in the inbox today." },
+          },
+        ],
+        content: "User: Summarize what changed in the inbox today.",
+        lineMap: [3],
+      },
+      {
+        name: "internal runtime context",
+        fileName: "internal-context-session.jsonl",
+        records: [
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: [
+                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                "OpenClaw runtime context (internal):",
+                "This context is runtime-generated, not user-authored. Keep internal details private.",
+                "",
+                "[Internal task completion event]",
+                "source: subagent",
+                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+              ].join("\n"),
+            },
+          },
+          { type: "message", message: { role: "assistant", content: "NO_REPLY" } },
+          { type: "message", message: { role: "user", content: "Actual user text" } },
+        ],
+        content: "User: Actual user text",
+        lineMap: [3],
+      },
+    ] as const;
 
-    const entry = await buildSessionEntry(filePath);
+    for (const testCase of cases) {
+      const filePath = await writeSessionJsonl(testCase.fileName, testCase.records);
+      const entry = await buildSessionEntry(filePath);
 
-    expect(entry).not.toBeNull();
-    expect(entry?.content).toBe(
-      [
-        "Assistant: Handled internally.",
-        "User: What changed in the sync?",
-        "Assistant: One new session was converted.",
-      ].join("\n"),
-    );
-    expect(entry?.lineMap).toEqual([2, 3, 4]);
-  });
-
-  it("drops direct cron-prompt user messages but keeps the assistant reply", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "[cron:job-1 Example] Run the nightly sync",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "Running the nightly sync now.",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "Did the nightly sync actually change anything?",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "No, everything was already current.",
-        },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "cron-prompt-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
-
-    const entry = await buildSessionEntry(filePath);
-
-    expect(entry).not.toBeNull();
-    expect(entry?.content).toBe(
-      [
-        "Assistant: Running the nightly sync now.",
-        "User: Did the nightly sync actually change anything?",
-        "Assistant: No, everything was already current.",
-      ].join("\n"),
-    );
-    expect(entry?.lineMap).toEqual([2, 3, 4]);
-  });
-
-  it("drops heartbeat prompt and the HEARTBEAT_OK ack via assistant-side detection", async () => {
-    // The ack is dropped because `HEARTBEAT_OK` is recognised as an
-    // assistant-side machinery token, not because the prior user message was
-    // a heartbeat prompt. A real reply to a similarly-shaped user message
-    // would still survive.
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content:
-            "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "HEARTBEAT_OK",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "Summarize what changed in the inbox today.",
-        },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "heartbeat-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
-
-    const entry = await buildSessionEntry(filePath);
-
-    expect(entry).not.toBeNull();
-    expect(entry?.content).toBe("User: Summarize what changed in the inbox today.");
-    expect(entry?.lineMap).toEqual([3]);
+      expect(entry, testCase.name).not.toBeNull();
+      expect(entry?.content, testCase.name).toBe(testCase.content);
+      expect(entry?.lineMap, testCase.name).toEqual(testCase.lineMap);
+    }
   });
 
   it("does not let a user-typed `[cron:...]` prompt suppress the next assistant reply (regression: PR #70737 review)", async () => {
@@ -671,48 +653,6 @@ describe("buildSessionEntry", () => {
     expect(checkpointEntry).not.toBeNull();
     expect(checkpointEntry?.content).toBe("");
     expect(checkpointEntry?.lineMap).toEqual([]);
-  });
-
-  it("strips internal runtime context blocks before flattening session text", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: [
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-            "OpenClaw runtime context (internal):",
-            "This context is runtime-generated, not user-authored. Keep internal details private.",
-            "",
-            "[Internal task completion event]",
-            "source: subagent",
-            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-          ].join("\n"),
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "NO_REPLY",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "Actual user text",
-        },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "internal-context-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
-
-    const entry = await buildSessionEntry(filePath);
-
-    expect(entry).not.toBeNull();
-    expect(entry?.content).toBe("User: Actual user text");
-    expect(entry?.lineMap).toEqual([3]);
   });
 
   it("does not flag transcripts when dreaming markers only appear mid-string", async () => {
