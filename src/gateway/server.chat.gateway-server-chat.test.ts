@@ -94,6 +94,31 @@ describe("gateway server chat", () => {
     });
   };
 
+  const loadWebchatHistoryWithMessages = async (
+    messages: Array<Record<string, unknown>>,
+  ): Promise<unknown[]> => {
+    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
+    trackConnectChallengeNonce(webchatWs);
+    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
+    await connectOk(webchatWs, {
+      client: {
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+      scopes: ["operator.admin"],
+    });
+
+    try {
+      return await loadChatHistoryWithMessages(messages, webchatWs);
+    } finally {
+      webchatWs.close();
+    }
+  };
+
   const withMainSessionStore = async <T>(run: (dir: string) => Promise<T>): Promise<T> => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -544,7 +569,7 @@ describe("gateway server chat", () => {
   });
 
   test("chat.history rewrites transcript image blocks into renderable control ui sources", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
+    const historyMessages = await loadWebchatHistoryWithMessages([
       {
         role: "user",
         content: [
@@ -699,10 +724,12 @@ describe("gateway server chat", () => {
   });
 
   test("chat.history normalizes inline image media types through an allowlist", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
+    const historyMessages = await loadWebchatHistoryWithMessages([
       {
         role: "user",
         content: [
+          { type: "image", data: "apng123==", mimeType: "image/apng" },
+          { type: "image", data: "bmp123==", mimeType: "image/bmp" },
           { type: "image", data: "abc123==", mimeType: " IMAGE/JPEG " },
           { type: "image", data: "def456==", mimeType: "image/svg+xml" },
         ],
@@ -719,10 +746,20 @@ describe("gateway server chat", () => {
       | undefined;
     expect(firstMessage?.content?.[0]?.source).toEqual({
       type: "base64",
+      media_type: "image/apng",
+      data: "apng123==",
+    });
+    expect(firstMessage?.content?.[1]?.source).toEqual({
+      type: "base64",
+      media_type: "image/bmp",
+      data: "bmp123==",
+    });
+    expect(firstMessage?.content?.[2]?.source).toEqual({
+      type: "base64",
       media_type: "image/jpeg",
       data: "abc123==",
     });
-    expect(firstMessage?.content?.[1]?.source).toEqual({
+    expect(firstMessage?.content?.[3]?.source).toEqual({
       type: "base64",
       media_type: "image/png",
       data: "def456==",
@@ -730,7 +767,7 @@ describe("gateway server chat", () => {
   });
 
   test("chat.history omits oversized inline image payloads without replacing the full turn", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
+    const historyMessages = await loadWebchatHistoryWithMessages([
       {
         role: "user",
         content: [
@@ -769,7 +806,7 @@ describe("gateway server chat", () => {
   });
 
   test("chat.history enforces the inline image budget across the full message", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
+    const historyMessages = await loadWebchatHistoryWithMessages([
       {
         role: "user",
         content: [

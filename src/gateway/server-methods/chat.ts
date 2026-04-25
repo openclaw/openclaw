@@ -146,11 +146,13 @@ export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_MAX_INLINE_IMAGE_DATA_BYTES = 48 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const CHAT_HISTORY_INLINE_IMAGE_MEDIA_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
+  "image/apng",
   "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
 ]);
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -752,7 +754,10 @@ function resolveChatHistoryInlineImageMediaType(value: unknown): string {
 }
 
 function canPreserveInlineChatHistoryImages(client: GatewayClient | undefined): boolean {
-  return (client?.connect?.scopes ?? []).includes(ADMIN_SCOPE);
+  return (
+    isWebchatClient(client?.connect?.client) &&
+    (client?.connect?.scopes ?? []).includes(ADMIN_SCOPE)
+  );
 }
 
 function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
