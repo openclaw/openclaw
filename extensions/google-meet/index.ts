@@ -8,7 +8,6 @@ import {
   findGoogleMeetCalendarEvent,
   type GoogleMeetCalendarLookupResult,
 } from "./src/calendar.js";
-import { registerGoogleMeetCli } from "./src/cli.js";
 import {
   resolveGoogleMeetConfig,
   type GoogleMeetConfig,
