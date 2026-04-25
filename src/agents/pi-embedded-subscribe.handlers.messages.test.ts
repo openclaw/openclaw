@@ -394,25 +394,25 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
 
-  it("keeps queued voice media when the reply also names media", () => {
+  it("does not append queued voice media when the reply already names media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
-      pendingToolTrustedLocalMedia: false,
+      pendingToolTrustedLocalMedia: true,
     };
 
     expect(
       consumePendingToolMediaIntoReply(state, {
         text: "done",
-        mediaUrls: ["./selected.png"],
+        mediaUrls: ["/tmp/assistant-provided.opus"],
       }),
     ).toEqual({
       text: "done",
-      mediaUrls: ["./selected.png", "/tmp/reply.opus"],
-      audioAsVoice: true,
+      mediaUrls: ["/tmp/assistant-provided.opus"],
     });
     expect(state.pendingToolMediaUrls).toEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
 
   it("preserves reasoning replies without consuming queued media", () => {

@@ -198,7 +198,7 @@ export function consumePendingToolMediaIntoReply(
   ) {
     return payload;
   }
-  if (hasReplyMedia(payload) && !state.pendingToolAudioAsVoice) {
+  if (hasReplyMedia(payload)) {
     clearPendingToolMedia(state);
     return payload;
   }
