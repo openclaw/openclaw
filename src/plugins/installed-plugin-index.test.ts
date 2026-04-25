@@ -162,6 +162,7 @@ describe("installed plugin index", () => {
           packageVersion: "1.2.3",
           origin: "global",
           rootDir: fixture.rootDir,
+          enabled: true,
           packageInstall: {
             defaultChoice: "npm",
             npm: {
@@ -220,6 +221,7 @@ describe("installed plugin index", () => {
     const record = getInstalledPluginRecord(index, "demo");
     expect(record).toMatchObject({
       pluginId: "demo",
+      enabled: true,
     });
     expect(record?.installRecord).toBeUndefined();
     expect(isInstalledPluginEnabled(index, "demo")).toBe(true);
@@ -259,6 +261,7 @@ describe("installed plugin index", () => {
     expect(listEnabledInstalledPluginRecords(index, config)).toEqual([]);
     expect(getInstalledPluginRecord(index, "demo")).toMatchObject({
       pluginId: "demo",
+      enabled: false,
     });
     expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
     expect(listInstalledPluginContributionIds(index, "providers", { config })).toEqual([]);
@@ -536,6 +539,7 @@ describe("installed plugin index", () => {
         },
       }),
     ).toBe(false);
+    expect(index.plugins[0]?.enabled).toBe(false);
     expect(index.plugins[0]?.contributions.providers).toEqual(["demo"]);
   });
 

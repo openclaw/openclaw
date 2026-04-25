@@ -97,6 +97,7 @@ describe("plugin registry facade", () => {
     expect(listPluginRecords({ index }).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
     expect(getPluginRecord({ index, pluginId: "demo" })).toMatchObject({
       pluginId: "demo",
+      enabled: true,
     });
     expect(isPluginEnabled({ index, pluginId: "demo" })).toBe(true);
     expect(listPluginContributionIds({ index, contribution: "providers" })).toEqual(["demo"]);
@@ -132,6 +133,7 @@ describe("plugin registry facade", () => {
 
     expect(getPluginRecord({ index, pluginId: "demo" })).toMatchObject({
       pluginId: "demo",
+      enabled: false,
     });
     const config = {
       plugins: {
