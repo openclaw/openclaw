@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -126,7 +127,7 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedFacadeRuntimeIds()).toEqual(["demo"]);
   });
 
-  it("uses native Jiti import for Windows dist facade loads", () => {
+  it("uses the runtime-supported Jiti boundary for Windows dist facade loads", () => {
     const dir = createTempDirSync("openclaw-facade-loader-windows-dist-");
     const bundledPluginsDir = path.join(dir, "dist");
     fs.mkdirSync(path.join(bundledPluginsDir, "demo"), { recursive: true });
@@ -158,7 +159,7 @@ describe("plugin-sdk facade loader", () => {
       expect(createJitiCalls[0]?.[0]).toEqual(expect.any(String));
       expect(createJitiCalls[0]?.[1]).toEqual(
         expect.objectContaining({
-          tryNative: true,
+          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
         }),
       );
     } finally {
