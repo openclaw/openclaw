@@ -388,7 +388,7 @@ export const dispatchTelegramMessage = async ({
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
   const previewToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg, false);
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
   const pushPreviewToolProgress = (line?: string) => {
@@ -966,7 +966,7 @@ export const dispatchTelegramMessage = async ({
                   previewToolProgressLines = [];
                 })
             : undefined,
-          suppressDefaultToolProgressMessages: previewToolProgressEnabled ? true : undefined,
+          suppressDefaultToolProgressMessages: true,
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
             if (statusReactionController && toolName) {

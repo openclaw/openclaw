@@ -176,7 +176,8 @@ Preview streaming can also include **tool-progress** updates — short status li
 
 Supported surfaces:
 
-- **Discord**, **Slack**, and **Telegram** stream tool-progress into the live preview edit.
+- **Discord** and **Slack** stream tool-progress into the live preview edit by default.
+- **Telegram** only streams tool-progress into the live preview edit when `streaming.preview.toolProgress` is explicitly enabled.
 - **Mattermost** already folds tool activity into its single draft preview post (see above).
 - Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message.
 
