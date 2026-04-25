@@ -1,4 +1,7 @@
-import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";
+import {
+  resolveWhatsAppAckEmoji,
+  shouldAckReactionForWhatsApp,
+} from "openclaw/plugin-sdk/channel-feedback";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSenderIdentity } from "../../identity.js";
@@ -34,7 +37,9 @@ export async function maybeSendAckReaction(params: {
   }
 
   const ackConfig = params.cfg.channels?.whatsapp?.ackReaction;
-  const emoji = (ackConfig?.emoji ?? "").trim();
+  const emoji = resolveWhatsAppAckEmoji(params.cfg, params.agentId, {
+    accountId: params.accountId,
+  });
   const directEnabled = ackConfig?.direct ?? true;
   const groupMode = ackConfig?.group ?? "mentions";
   const conversationIdForCheck = params.msg.conversationId ?? params.msg.from;

@@ -20,7 +20,7 @@ export function resolveAckReaction(
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountReaction = accounts?.[opts.accountId]?.ackReaction as string | undefined;
+    const accountReaction = extractAckEmoji(accounts?.[opts.accountId]?.ackReaction);
     if (accountReaction !== undefined) {
       return accountReaction.trim();
     }
@@ -29,7 +29,7 @@ export function resolveAckReaction(
   // L2: Channel level
   if (opts?.channel) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
-    const channelReaction = channelCfg?.ackReaction as string | undefined;
+    const channelReaction = extractAckEmoji(channelCfg?.ackReaction);
     if (channelReaction !== undefined) {
       return channelReaction.trim();
     }
@@ -73,6 +73,75 @@ export function resolveMessagePrefix(
   }
 
   return resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[openclaw]";
+}
+
+/** Extracts the ack emoji from either a plain string or an object with an `emoji` field. */
+function extractAckEmoji(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "object" && value !== null && "emoji" in value) {
+    const emoji = (value as { emoji?: unknown }).emoji;
+    return typeof emoji === "string" ? emoji : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Resolves the ack reaction emoji for a WhatsApp message, scoped to the responding agent.
+ *
+ * Resolution order (most to least specific):
+ *   L1: channels.whatsapp.accounts[accountId].ackReaction.emoji
+ *   L2: channels.whatsapp.ackReaction.emoji
+ *   L4: agent identity emoji
+ *
+ * Intentionally skips the global messages.ackReaction (L3) — that field is a plain
+ * string used by channels with a flat ack config; mixing it into WhatsApp's object-format
+ * ackReaction would silently change behaviour for users who set messages.ackReaction for
+ * other channels but leave WhatsApp ackReaction.emoji unset.
+ *
+ * Returns "" (no reaction) when channels.whatsapp.ackReaction is absent at both the
+ * channel and account level, preserving the existing default of no reaction for
+ * unconfigured WhatsApp setups.
+ */
+export function resolveWhatsAppAckEmoji(
+  cfg: OpenClawConfig,
+  agentId: string,
+  opts?: { accountId?: string },
+): string {
+  const waConfig = (cfg.channels as Record<string, unknown> | undefined)?.whatsapp as
+    | Record<string, unknown>
+    | undefined;
+
+  const accounts = waConfig?.accounts as Record<string, Record<string, unknown>> | undefined;
+  const accountAck = opts?.accountId ? accounts?.[opts.accountId]?.ackReaction : undefined;
+
+  // Preserve existing default: no ackReaction config at either level → no reaction.
+  if (!waConfig?.ackReaction && accountAck === undefined) {
+    return "";
+  }
+
+  // L1: account-level ackReaction takes full precedence when present.
+  // If account ackReaction is configured but has no emoji, skip channel-level and
+  // fall directly to agent identity — account config wins at its level.
+  if (accountAck !== undefined) {
+    const accountEmoji = extractAckEmoji(accountAck);
+    if (accountEmoji !== undefined) {
+      return accountEmoji.trim();
+    }
+    return resolveAgentIdentity(cfg, agentId)?.emoji?.trim() ?? "";
+  }
+
+  // L2: channel-level ackReaction.emoji
+  const channelEmoji = extractAckEmoji(waConfig?.ackReaction);
+  if (channelEmoji !== undefined) {
+    return channelEmoji.trim();
+  }
+
+  // L4: agent identity emoji — enables per-agent ack reactions when ackReaction is
+  // configured but emoji is intentionally left unset.
+  // L3 (messages.ackReaction) is skipped: see function doc.
+  return resolveAgentIdentity(cfg, agentId)?.emoji?.trim() ?? "";
 }
 
 /** Helper to extract a channel config value by dynamic key. */
