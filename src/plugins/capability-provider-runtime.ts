@@ -4,6 +4,7 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
+import { hasExplicitPluginConfig } from "./config-policy.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -158,7 +159,11 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders" && !params.cfg) {
+  if (
+    activeProviders.length > 0 &&
+    params.key !== "memoryEmbeddingProviders" &&
+    !hasExplicitPluginConfig(params.cfg?.plugins)
+  ) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
