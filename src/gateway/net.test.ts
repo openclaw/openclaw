@@ -350,6 +350,23 @@ describe("pickPrimaryLanIPv4", () => {
       expected: "172.16.0.99",
     },
     {
+      name: "prefers physical LAN interfaces before Docker bridges",
+      interfaces: makeNetworkInterfacesSnapshot({
+        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        "br-c87a82b2afb7": [{ address: "172.18.0.1", family: "IPv4" }],
+        wlp13s0: [{ address: "192.168.1.193", family: "IPv4" }],
+      }),
+      expected: "192.168.1.193",
+    },
+    {
+      name: "still falls back to Docker bridges when they are the only candidate",
+      interfaces: makeNetworkInterfacesSnapshot({
+        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        docker0: [{ address: "172.17.0.1", family: "IPv4" }],
+      }),
+      expected: "172.17.0.1",
+    },
+    {
       name: "no non-internal interface",
       interfaces: makeNetworkInterfacesSnapshot({
         lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
@@ -357,7 +374,7 @@ describe("pickPrimaryLanIPv4", () => {
       expected: undefined,
     },
   ] as const)(
-    "prefers en0, then eth0, then any non-internal IPv4: $name",
+    "prefers physical LAN candidates before virtual bridge fallback: $name",
     ({ interfaces, expected }) => {
       vi.spyOn(os, "networkInterfaces").mockReturnValue(interfaces);
       expect(pickPrimaryLanIPv4()).toBe(expected);

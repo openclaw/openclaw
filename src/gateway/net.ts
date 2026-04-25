@@ -3,8 +3,9 @@ import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import {
-  pickMatchingExternalInterfaceAddress,
+  listExternalInterfaceAddresses,
   readNetworkInterfaces,
+  type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
@@ -16,15 +17,48 @@ import {
 } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
+const preferredLanInterfaceNames = ["en0", "eth0"];
+const preferredLanInterfaceNamePattern = /^(?:en|eth|wl|wlan|wi-?fi|ethernet)/i;
+const deprioritizedLanInterfaceNamePattern = /^(?:docker\d*|br-|veth|cni|podman|virbr|lxc|lxdbr)/i;
+
+function isDeprioritizedLanInterfaceName(name: string): boolean {
+  return deprioritizedLanInterfaceNamePattern.test(name);
+}
+
+function isPreferredLanInterfaceName(name: string): boolean {
+  return preferredLanInterfaceNamePattern.test(name);
+}
+
+export function pickPrimaryLanIPv4FromSnapshot(
+  snapshot: NetworkInterfacesSnapshot | undefined,
+  params: { matches?: (address: string) => boolean } = {},
+): string | undefined {
+  const matches = params.matches ?? (() => true);
+  const addresses = listExternalInterfaceAddresses(snapshot, "IPv4").filter((entry) =>
+    matches(entry.address),
+  );
+
+  for (const name of preferredLanInterfaceNames) {
+    const preferred = addresses.find((entry) => entry.name === name);
+    if (preferred) {
+      return preferred.address;
+    }
+  }
+
+  const nonDeprioritized = addresses.filter(
+    (entry) => !isDeprioritizedLanInterfaceName(entry.name),
+  );
+  const preferredByName = nonDeprioritized.find((entry) => isPreferredLanInterfaceName(entry.name));
+  return preferredByName?.address ?? nonDeprioritized[0]?.address ?? addresses[0]?.address;
+}
+
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
- * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
+ * Prefers physical/default-looking LAN interfaces and only falls back to
+ * Docker/bridge-style interfaces when they are the only available candidate.
  */
 export function pickPrimaryLanIPv4(): string | undefined {
-  return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
-    family: "IPv4",
-    preferredNames: ["en0", "eth0"],
-  });
+  return pickPrimaryLanIPv4FromSnapshot(readNetworkInterfaces());
 }
 
 export function normalizeHostHeader(hostHeader?: string): string {

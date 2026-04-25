@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
-import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
+import {
+  isLoopbackHost,
+  isSecureWebSocketUrl,
+  pickPrimaryLanIPv4FromSnapshot,
+} from "../gateway/net.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
@@ -195,7 +199,11 @@ function pickIPv4Matching(
 function pickLanIPv4(
   networkInterfaces: () => ReturnType<typeof os.networkInterfaces>,
 ): string | null {
-  return pickIPv4Matching(networkInterfaces, isPrivateIPv4);
+  return (
+    pickPrimaryLanIPv4FromSnapshot(safeNetworkInterfaces(networkInterfaces), {
+      matches: isPrivateIPv4,
+    }) ?? null
+  );
 }
 
 function pickTailnetIPv4(

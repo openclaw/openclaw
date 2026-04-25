@@ -208,9 +208,12 @@ function isTailnetIPv4(address: string): boolean {
   return a === 100 && b >= 64 && b <= 127;
 }
 
-function pickMatchingIPv4(predicate: (address: string) => boolean): string | null {
+type IPv4Candidate = { name: string; address: string };
+
+function listMatchingIPv4(predicate: (address: string) => boolean): IPv4Candidate[] {
   const nets = os.networkInterfaces();
-  for (const entries of Object.values(nets)) {
+  const candidates: IPv4Candidate[] = [];
+  for (const [name, entries] of Object.entries(nets)) {
     if (!entries) {
       continue;
     }
@@ -226,15 +229,39 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
         continue;
       }
       if (predicate(address)) {
-        return address;
+        candidates.push({ name, address });
       }
     }
   }
-  return null;
+  return candidates;
+}
+
+function pickMatchingIPv4(predicate: (address: string) => boolean): string | null {
+  return listMatchingIPv4(predicate)[0]?.address ?? null;
+}
+
+const preferredLanInterfaceNames = ["en0", "eth0"];
+const preferredLanInterfaceNamePattern = /^(?:en|eth|wl|wlan|wi-?fi|ethernet)/i;
+const deprioritizedLanInterfaceNamePattern = /^(?:docker\d*|br-|veth|cni|podman|virbr|lxc|lxdbr)/i;
+
+function pickPreferredLanIPv4(candidates: IPv4Candidate[]): string | null {
+  for (const name of preferredLanInterfaceNames) {
+    const preferred = candidates.find((entry) => entry.name === name);
+    if (preferred) {
+      return preferred.address;
+    }
+  }
+  const nonDeprioritized = candidates.filter(
+    (entry) => !deprioritizedLanInterfaceNamePattern.test(entry.name),
+  );
+  const preferredByName = nonDeprioritized.find((entry) =>
+    preferredLanInterfaceNamePattern.test(entry.name),
+  );
+  return preferredByName?.address ?? nonDeprioritized[0]?.address ?? candidates[0]?.address ?? null;
 }
 
 function pickLanIPv4(): string | null {
-  return pickMatchingIPv4(isPrivateIPv4);
+  return pickPreferredLanIPv4(listMatchingIPv4(isPrivateIPv4));
 }
 
 function pickTailnetIPv4(): string | null {
