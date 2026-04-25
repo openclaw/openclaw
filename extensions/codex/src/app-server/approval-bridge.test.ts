@@ -616,6 +616,41 @@ describe("Codex app-server approval bridge", () => {
     expect(description).toContain("High-risk targets:");
   });
 
+  it("redacts slash-style Windows home paths in permission descriptions", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-windows-slash-home", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-windows-slash-home",
+        decision: "allow-once",
+      });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "perm-windows-slash-home",
+        permissions: {
+          fileSystem: {
+            roots: ["C:/Users/alice"],
+            readPaths: ["C:/Users/alice/.ssh/id_rsa"],
+          },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("File system roots: ~; readPaths: ~/.ssh/id_rsa");
+    expect(description).toContain("High-risk targets: home directory");
+    expect(description).not.toContain("alice");
+    expect(description).not.toContain("C:/Users");
+  });
+
   it("strips terminal and invisible controls from permission descriptions", async () => {
     const params = createParams();
     mockCallGatewayTool

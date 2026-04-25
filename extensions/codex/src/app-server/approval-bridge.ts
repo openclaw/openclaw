@@ -433,7 +433,7 @@ function sanitizePermissionPathValue(value: string): string {
   const homeCompacted = normalized
     .replace(/^\/home\/[^/]+(?=\/|$)/, "~")
     .replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
-    .replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/, "~");
+    .replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+(?=[\\/]|$)/, "~");
   return truncate(homeCompacted, PERMISSION_VALUE_MAX_LENGTH);
 }
 
