@@ -238,10 +238,15 @@ function isBridgeBundledPathRecord(params: {
   }
   if (
     params.bundledLocalPath &&
-    (pathsEqual(params.record.sourcePath, params.bundledLocalPath, params.env) ||
-      pathsEqual(params.record.installPath, params.bundledLocalPath, params.env))
-  ) {
-    return true;
+function isBridgeBundledPathRecord(params: {
+  bridge: ExternalizedBundledPluginBridge;
+  record: PluginInstallRecord;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (params.record.source !== "path") {
+    return false;
+  }
+  const bundledExtensionSegment = bridgeBundledExtensionSegment(params.bridge);
   }
   const bundledExtensionSegment = bridgeBundledExtensionSegment(params.bridge);
   return (
