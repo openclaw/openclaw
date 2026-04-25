@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { detectActivePreset } from "./config-presets.ts";
+import { OpenClawSchema } from "../../../../src/config/zod-schema.js";
+import { CONFIG_PRESETS, detectActivePreset } from "./config-presets.ts";
 
 describe("detectActivePreset", () => {
+  it("keeps every preset patch valid for the runtime config schema", () => {
+    for (const preset of CONFIG_PRESETS) {
+      const defaults = preset.patch.agents.defaults;
+
+      expect(() => OpenClawSchema.parse(preset.patch), preset.id).not.toThrow();
+      expect(defaults.bootstrapMaxChars, preset.id).toBeGreaterThan(0);
+      expect(defaults.bootstrapTotalMaxChars, preset.id).toBeGreaterThan(0);
+      expect(defaults.bootstrapTotalMaxChars, preset.id).toBeGreaterThanOrEqual(
+        defaults.bootstrapMaxChars,
+      );
+    }
+  });
+
   it("returns null when bootstrap defaults are unset", () => {
     expect(detectActivePreset({})).toBeNull();
   });

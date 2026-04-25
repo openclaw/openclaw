@@ -5,6 +5,16 @@
 
 export type ConfigPresetId = "personal" | "codeAgent" | "teamBot" | "minimal";
 
+export type ConfigPresetPatch = {
+  agents: {
+    defaults: {
+      bootstrapMaxChars: number;
+      bootstrapTotalMaxChars: number;
+      contextInjection: "always" | "continuation-skip";
+    };
+  };
+};
+
 export type ConfigPreset = {
   id: ConfigPresetId;
   label: string;
@@ -12,7 +22,7 @@ export type ConfigPreset = {
   detail: string;
   impact: string;
   icon: string;
-  patch: Record<string, unknown>;
+  patch: ConfigPresetPatch;
 };
 
 export const CONFIG_PRESETS: ConfigPreset[] = [
