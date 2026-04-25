@@ -8,6 +8,13 @@ export {
   normalizeModelCatalogProviderRows,
   normalizeModelCatalogRows,
 } from "./normalize.js";
+export { planManifestModelCatalogRows } from "./manifest-planner.js";
+export type {
+  ManifestModelCatalogPlan,
+  ManifestModelCatalogPlanEntry,
+  ManifestModelCatalogPlugin,
+  ManifestModelCatalogRegistry,
+} from "./manifest-planner.js";
 export type {
   ModelCatalog,
   ModelCatalogAlias,
