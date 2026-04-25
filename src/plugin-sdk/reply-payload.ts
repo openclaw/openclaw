@@ -292,6 +292,7 @@ export async function sendTextMediaPayload(params: {
   }
   const nextReplyToId = createReplyToFanout(params.ctx);
   if (urls.length > 0) {
+    const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;
     const lastResult = await sendPayloadMediaSequence({
       text,
       mediaUrls: urls,
@@ -300,6 +301,7 @@ export async function sendTextMediaPayload(params: {
           ...params.ctx,
           text,
           mediaUrl,
+          ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
           replyToId: nextReplyToId(),
         }),
     });

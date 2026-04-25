@@ -139,6 +139,27 @@ describe("sendTextMediaPayload", () => {
     expect(sendMedia.mock.calls.map((call) => call[0].replyToId)).toEqual(["reply-1", undefined]);
   });
 
+  it("preserves audioAsVoice on media fallback sends", async () => {
+    const sendMedia = vi.fn(async ({ mediaUrl }) => ({ channel: "test", messageId: mediaUrl }));
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "",
+        payload: {
+          text: "caption",
+          mediaUrls: ["https://example.com/voice.ogg", "https://example.com/next.ogg"],
+          audioAsVoice: true,
+        },
+      },
+      adapter: { sendMedia },
+    });
+
+    expect(sendMedia.mock.calls.map((call) => call[0].audioAsVoice)).toEqual([true, true]);
+  });
+
   it("keeps explicit reply tags independent from single-use implicit reply modes", async () => {
     const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
 
