@@ -64,6 +64,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -119,15 +120,6 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
-
-// Node `setTimeout(fn, delay)` clamps `delay > 2147483647` (signed-32-bit ms,
-// ~24.85 days) to `1`, which fires the callback in a tight loop and crashes
-// the gateway. When a config sets `heartbeat.every` to e.g. `365d`, clamp the
-// scheduler delay to this cap instead so the worst case is one heartbeat
-// every ~24.85 days instead of crash-loop. Warn once so misconfig is visible
-// without flooding logs. (#71414)
-const HEARTBEAT_MAX_TIMEOUT_MS = 2_147_483_647;
-let heartbeatTimeoutOverflowWarned = false;
 let heartbeatRunnerRuntimePromise: Promise<typeof import("./heartbeat-runner.runtime.js")> | null =
   null;
 
@@ -1339,6 +1331,7 @@ export function startHeartbeatRunner(opts: {
     stopped: false,
   };
   let initialized = false;
+  let heartbeatTimeoutOverflowWarned = false;
 
   const resolveNextDue = (
     now: number,
@@ -1394,14 +1387,14 @@ export function startHeartbeatRunner(opts: {
       return;
     }
     const rawDelay = Math.max(0, nextDue - now);
-    if (rawDelay > HEARTBEAT_MAX_TIMEOUT_MS && !heartbeatTimeoutOverflowWarned) {
+    if (rawDelay > MAX_SAFE_TIMEOUT_DELAY_MS && !heartbeatTimeoutOverflowWarned) {
       heartbeatTimeoutOverflowWarned = true;
       log.warn("heartbeat: scheduled delay exceeds Node setTimeout cap; clamping to ~24.85d", {
         rawDelayMs: rawDelay,
-        clampedMs: HEARTBEAT_MAX_TIMEOUT_MS,
+        clampedMs: MAX_SAFE_TIMEOUT_DELAY_MS,
       });
     }
-    const delay = Math.min(rawDelay, HEARTBEAT_MAX_TIMEOUT_MS);
+    const delay = resolveSafeTimeoutDelayMs(rawDelay, { minMs: 0 });
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
