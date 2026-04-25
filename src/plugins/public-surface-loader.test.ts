@@ -149,8 +149,8 @@ describe("bundled plugin public surface loader", () => {
         artifactBasename: "secret-contract-api.js",
       }).marker,
     ).toBe("source-jiti-ok");
-    expect(requireLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
-    expect(jitiLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
+    expect(requireLoader).toHaveBeenCalledWith(fs.realpathSync(modulePath));
+    expect(jitiLoader).toHaveBeenCalledWith(fs.realpathSync(modulePath));
   });
 
   it("reuses one bundled dist jiti loader across public artifacts with the same native mode", async () => {

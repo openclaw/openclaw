@@ -201,9 +201,10 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
-  it("uses a forced live session as the isolated heartbeat base instead of reverting to the configured base session", async () => {
+  it("uses the configured isolated heartbeat base when a forced live session has no pending work", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg = makeNamedIsolatedHeartbeatConfig(tmpDir, storePath, "main");
+      const baseSessionKey = resolveMainSessionKey(cfg);
       const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
 
@@ -224,7 +225,10 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe("agent:main:cloud-codex:heartbeat");
+      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+      expect(store["agent:main:cloud-codex:heartbeat"]).toBeUndefined();
     });
   });
 
