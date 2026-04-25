@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import type {
+  ImageGenerationProvider,
+  ImageGenerationResult,
+  ImageGenerationSourceImage,
+} from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -39,6 +43,18 @@ function resolveLitellmProviderConfig(
   cfg: OpenClawConfig | undefined,
 ): LitellmProviderConfig | undefined {
   return cfg?.models?.providers?.litellm;
+}
+
+// Models routed through LiteLLM's chat-completions multimodal path rather than
+// the OpenAI-style /images/edits endpoint. These models (Gemini multimodal,
+// Anthropic Claude image generation, etc.) live behind chat APIs upstream;
+// LiteLLM only exposes them via /v1/chat/completions. Forcing them through
+// /v1/images/edits routes to a Vertex/ADC backend that most proxy deployments
+// do not configure, surfacing as "default credentials were not found" 500s.
+const CHAT_NATIVE_IMAGE_MODEL_PATTERNS: RegExp[] = [/^gemini-/i, /^claude-/i];
+
+function isChatNativeImageModel(model: string): boolean {
+  return CHAT_NATIVE_IMAGE_MODEL_PATTERNS.some((p) => p.test(model));
 }
 
 function resolveConfiguredLitellmBaseUrl(cfg: OpenClawConfig | undefined): string {
@@ -98,12 +114,153 @@ function inferLitellmImageFileName(params: {
   return `image-${params.index + 1}.${ext}`;
 }
 
+function toDataUrl(buffer: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
 type LitellmImageApiResponse = {
   data?: Array<{
     b64_json?: string;
     revised_prompt?: string;
   }>;
 };
+
+type LitellmChatImagePart = {
+  type?: string;
+  image_url?: { url?: string } | string;
+};
+
+type LitellmChatStandaloneImage = {
+  // Some LiteLLM routes (notably Gemini multimodal via Vertex/AI Studio) wrap
+  // each image as a chat-content-style part: `{type: "image_url", image_url:
+  // {url: "data:image/png;base64,..."}}`. Other routes ship a flat shape with
+  // `b64_json` or a top-level `url`. Support both.
+  type?: string;
+  image_url?: { url?: string } | string;
+  url?: string;
+  b64_json?: string;
+  data?: string;
+  mime_type?: string;
+  mimeType?: string;
+};
+
+type LitellmChatCompletionResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | Array<LitellmChatImagePart>;
+      images?: Array<LitellmChatStandaloneImage | string>;
+    };
+  }>;
+};
+
+type ParsedImage = ImageGenerationResult["images"][number];
+
+const DATA_URL_RE = /data:([^;,]+)(?:;base64)?,([A-Za-z0-9+/=_-]+)/g;
+
+function pushDataUrl(into: ParsedImage[], url: string): void {
+  // Single-shot match (anchored at start) for known-good URLs from typed
+  // image_url fields. Falls back to a scan if the typed shape ships a longer
+  // string with prefix/suffix noise.
+  const single = /^data:([^;,]+)(?:;base64)?,([A-Za-z0-9+/=_-]+)$/.exec(url);
+  if (single) {
+    const [, mime, b64] = single;
+    into.push({
+      buffer: Buffer.from(b64, "base64"),
+      mimeType: mime || DEFAULT_OUTPUT_MIME,
+      fileName: `image-${into.length + 1}.${mime === "image/jpeg" ? "jpg" : "png"}`,
+    });
+    return;
+  }
+  DATA_URL_RE.lastIndex = 0;
+  for (const m of url.matchAll(DATA_URL_RE)) {
+    const [, mime, b64] = m;
+    into.push({
+      buffer: Buffer.from(b64, "base64"),
+      mimeType: mime || DEFAULT_OUTPUT_MIME,
+      fileName: `image-${into.length + 1}.${mime === "image/jpeg" ? "jpg" : "png"}`,
+    });
+  }
+}
+
+function parseChatCompletionImages(data: LitellmChatCompletionResponse): ParsedImage[] {
+  const images: ParsedImage[] = [];
+  for (const choice of data.choices ?? []) {
+    const message = choice.message;
+    if (!message) {
+      continue;
+    }
+
+    // Prefer the typed `images` array if the proxy ships one (some LiteLLM
+    // routes return generated images out-of-band rather than embedding them
+    // in `content`).
+    for (const standalone of message.images ?? []) {
+      if (typeof standalone === "string") {
+        if (standalone.startsWith("data:")) {
+          pushDataUrl(images, standalone);
+        } else {
+          // Assume bare base64 with default mime.
+          images.push({
+            buffer: Buffer.from(standalone, "base64"),
+            mimeType: DEFAULT_OUTPUT_MIME,
+            fileName: `image-${images.length + 1}.png`,
+          });
+        }
+        continue;
+      }
+      // Nested chat-content-style shape (Gemini via LiteLLM):
+      //   {type: "image_url", image_url: {url: "data:image/png;base64,..."}}
+      const nestedImageUrl = standalone.image_url;
+      const nestedUrl = typeof nestedImageUrl === "string" ? nestedImageUrl : nestedImageUrl?.url;
+      const flatUrl = standalone.url;
+      const url = nestedUrl ?? flatUrl;
+      const b64 = standalone.b64_json ?? standalone.data;
+      const mime = standalone.mime_type ?? standalone.mimeType ?? DEFAULT_OUTPUT_MIME;
+      if (b64) {
+        images.push({
+          buffer: Buffer.from(b64, "base64"),
+          mimeType: mime,
+          fileName: `image-${images.length + 1}.${mime === "image/jpeg" ? "jpg" : "png"}`,
+        });
+      } else if (url) {
+        if (url.startsWith("data:")) {
+          pushDataUrl(images, url);
+        }
+        // External http(s) URLs intentionally skipped: caller has no SSRF
+        // policy here, and chat-completion responses for image gen normally
+        // ship inline data URLs anyway.
+      }
+    }
+
+    const content = message.content;
+    if (Array.isArray(content)) {
+      for (const part of content) {
+        const imageUrl = part.image_url;
+        const url = typeof imageUrl === "string" ? imageUrl : imageUrl?.url;
+        if (url && url.startsWith("data:")) {
+          pushDataUrl(images, url);
+        }
+      }
+    } else if (typeof content === "string" && content.includes("data:")) {
+      pushDataUrl(images, content);
+    }
+  }
+  return images;
+}
+
+function buildChatCompletionMessages(params: {
+  prompt: string;
+  inputImages: ImageGenerationSourceImage[];
+}): Array<Record<string, unknown>> {
+  const userContent: Array<Record<string, unknown>> = [{ type: "text", text: params.prompt }];
+  for (const image of params.inputImages) {
+    const mime = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
+    userContent.push({
+      type: "image_url",
+      image_url: { url: toDataUrl(image.buffer, mime) },
+    });
+  }
+  return [{ role: "user", content: userContent }];
+}
 
 export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
   return {
@@ -168,7 +325,47 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
       const model = req.model || DEFAULT_LITELLM_IMAGE_MODEL;
       const count = req.count ?? 1;
       const size = req.size ?? DEFAULT_SIZE;
+      const timeoutMs = req.timeoutMs ?? DEFAULT_LITELLM_IMAGE_TIMEOUT_MS;
 
+      // Chat-native multimodal models (Gemini, Claude, etc.) live on the chat
+      // completions endpoint upstream. Routing them through /images/edits
+      // makes the proxy dispatch to a Vertex backend that needs ADC and fails
+      // with HTTP 500 on most deployments.
+      if (isChatNativeImageModel(model)) {
+        const jsonHeaders = new Headers(headers);
+        jsonHeaders.set("Content-Type", "application/json");
+        const { response, release } = await postJsonRequest({
+          url: `${baseUrl}/chat/completions`,
+          headers: jsonHeaders,
+          body: {
+            model,
+            messages: buildChatCompletionMessages({ prompt: req.prompt, inputImages }),
+            n: count,
+          },
+          timeoutMs,
+          fetchFn: fetch,
+          allowPrivateNetwork,
+          dispatcherPolicy,
+        });
+        try {
+          await assertOkOrThrowHttpError(
+            response,
+            isEdit
+              ? "LiteLLM chat-completions image edit failed"
+              : "LiteLLM chat-completions image generation failed",
+          );
+          const data = (await response.json()) as LitellmChatCompletionResponse;
+          const images = parseChatCompletionImages(data);
+          if (images.length === 0) {
+            throw new Error("LiteLLM chat-completions response did not contain image data");
+          }
+          return { images, model };
+        } finally {
+          await release();
+        }
+      }
+
+      // OpenAI-compatible image API path (gpt-image-*, dall-e-*, etc.).
       const endpoint = isEdit ? "images/edits" : "images/generations";
       const url = `${baseUrl}/${endpoint}`;
       const { response, release } = isEdit
@@ -196,7 +393,7 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
               url,
               headers: multipartHeaders,
               body: form,
-              timeoutMs: req.timeoutMs ?? DEFAULT_LITELLM_IMAGE_TIMEOUT_MS,
+              timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,
               dispatcherPolicy,
@@ -214,7 +411,7 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
                 n: count,
                 size,
               },
-              timeoutMs: req.timeoutMs ?? DEFAULT_LITELLM_IMAGE_TIMEOUT_MS,
+              timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,
               dispatcherPolicy,

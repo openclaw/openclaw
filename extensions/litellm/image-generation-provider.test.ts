@@ -189,6 +189,147 @@ describe("litellm image generation provider", () => {
     expect((images[0] as Blob).type).toBe("image/png");
   });
 
+  it("routes gemini-* models to /chat/completions with multimodal messages", async () => {
+    const pngB64 = Buffer.from("png-bytes").toString("base64");
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: [
+                  {
+                    type: "image_url",
+                    image_url: { url: `data:image/png;base64,${pngB64}` },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildLitellmImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "litellm",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "make the hero blue",
+      cfg: {},
+      inputImages: [{ buffer: Buffer.from("ref"), mimeType: "image/png", fileName: "ref.png" }],
+    });
+
+    expect(postMultipartRequestMock).not.toHaveBeenCalled();
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "http://localhost:4000/chat/completions" }),
+    );
+    const call = postJsonRequestMock.mock.calls[0][0] as {
+      body: {
+        model: string;
+        messages: Array<{
+          role: string;
+          content: Array<Record<string, unknown>>;
+        }>;
+      };
+    };
+    expect(call.body.model).toBe("gemini-3.1-flash-image-preview");
+    expect(call.body.messages[0].role).toBe("user");
+    const parts = call.body.messages[0].content;
+    expect(parts[0]).toEqual({ type: "text", text: "make the hero blue" });
+    expect(parts[1]).toEqual(
+      expect.objectContaining({
+        type: "image_url",
+        image_url: expect.objectContaining({
+          url: expect.stringMatching(/^data:image\/png;base64,/),
+        }),
+      }),
+    );
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0].buffer.toString()).toBe("png-bytes");
+    expect(result.model).toBe("gemini-3.1-flash-image-preview");
+  });
+
+  it("extracts gemini chat-completions images shipped as nested image_url parts (real LiteLLM Gemini shape)", async () => {
+    // Real shape observed from LiteLLM proxy with gemini-3.1-flash-image-preview:
+    //   choices[0].message.images[i] = { type: "image_url", index, image_url: { url: "data:..." } }
+    const pngB64 = Buffer.from("nested-png").toString("base64");
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: null,
+                images: [
+                  {
+                    type: "image_url",
+                    index: 0,
+                    image_url: { url: `data:image/png;base64,${pngB64}`, detail: "auto" },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildLitellmImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "litellm",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "x",
+      cfg: {},
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0].buffer.toString()).toBe("nested-png");
+  });
+
+  it("extracts gemini chat-completions images shipped via the typed images array", async () => {
+    const pngB64 = Buffer.from("standalone").toString("base64");
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [{ message: { images: [{ b64_json: pngB64, mime_type: "image/png" }] } }],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildLitellmImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "litellm",
+      model: "gemini-3-pro-image-preview",
+      prompt: "hi",
+      cfg: {},
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0].buffer.toString()).toBe("standalone");
+  });
+
+  it("throws when chat-completions response yields no image data", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ choices: [{ message: { content: "no image here" } }] }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildLitellmImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "litellm",
+        model: "gemini-3.1-flash-image-preview",
+        prompt: "x",
+        cfg: {},
+      }),
+    ).rejects.toThrow("did not contain image data");
+  });
+
   it("throws a clear error when the API key is missing", async () => {
     resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
 
