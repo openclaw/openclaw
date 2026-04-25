@@ -4,6 +4,10 @@ import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderCompactionIndicator, renderFallbackIndicator } from "./status-indicators.ts";
 
+vi.mock("../icons.ts", () => ({
+  icons: {},
+}));
+
 describe("chat status indicators", () => {
   it("renders compaction and fallback indicators while they are fresh", () => {
     const container = document.createElement("div");

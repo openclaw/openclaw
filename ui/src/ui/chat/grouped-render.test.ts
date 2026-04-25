@@ -26,12 +26,7 @@ vi.mock("../markdown.ts", () => ({
 }));
 
 vi.mock("../icons.ts", () => ({
-  icons: new Proxy(
-    {},
-    {
-      get: () => "",
-    },
-  ),
+  icons: {},
 }));
 
 vi.mock("../views/agents-utils.ts", () => {

@@ -4,6 +4,10 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderChatRunControls, type ChatRunControlsProps } from "./run-controls.ts";
 
+vi.mock("../icons.ts", () => ({
+  icons: {},
+}));
+
 function createProps(overrides: Partial<ChatRunControlsProps> = {}): ChatRunControlsProps {
   return {
     canAbort: false,

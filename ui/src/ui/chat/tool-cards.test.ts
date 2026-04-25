@@ -5,12 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildToolCardSidebarContent, extractToolCards, renderToolCard } from "./tool-cards.ts";
 
 vi.mock("../icons.ts", () => ({
-  icons: new Proxy(
-    {},
-    {
-      get: () => "",
-    },
-  ),
+  icons: {},
 }));
 
 vi.mock("../tool-display.ts", () => ({

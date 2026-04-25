@@ -8,12 +8,7 @@ import { renderWelcomeState } from "../chat/chat-welcome.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
 
 vi.mock("../icons.ts", () => ({
-  icons: new Proxy(
-    {},
-    {
-      get: () => "",
-    },
-  ),
+  icons: {},
 }));
 
 vi.mock("./agents-utils.ts", () => ({
