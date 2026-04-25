@@ -287,6 +287,9 @@ What happened:
 - OpenClaw preserved the rejected payload as `.clobbered.*`.
 - The active config was restored from the last validated last-known-good copy.
 - The next main-agent turn is warned not to blindly rewrite the rejected config.
+- If all validation issues were under `plugins.entries.<id>...`, OpenClaw would
+  not restore the whole file. Plugin-local failures stay loud while unrelated
+  user settings remain in the active config.
 
 Inspect and repair:
 
