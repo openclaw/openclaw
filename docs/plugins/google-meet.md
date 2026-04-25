@@ -900,7 +900,7 @@ Check the realtime path:
 
 ```bash
 openclaw googlemeet setup
-openclaw googlemeet status
+openclaw googlemeet doctor
 ```
 
 Use `mode: "realtime"` for listen/talk-back. `mode: "transcribe"` intentionally
@@ -914,6 +914,24 @@ Also verify:
 - `rec` and `play` exist on the Chrome host.
 - Meet microphone and speaker are routed through the virtual audio path used by
   OpenClaw.
+
+`googlemeet doctor [session-id]` prints the session, node, in-call state,
+manual action reason, realtime provider connection, `realtimeReady`, audio
+input/output activity, last audio timestamps, byte counters, and browser URL.
+Use `googlemeet status [session-id]` when you need the raw JSON.
+
+If an agent timed out and you can see a Meet tab already open, inspect that tab
+without opening another one:
+
+```bash
+openclaw googlemeet recover-tab
+openclaw googlemeet recover-tab https://meet.google.com/abc-defg-hij
+```
+
+The equivalent tool action is `recover_current_tab`. It focuses and inspects an
+existing Meet tab on the configured Chrome node. It does not open a new tab or
+create a new session; it reports the current blocker, such as login, admission,
+permissions, or audio-choice state.
 
 ### Twilio setup checks fail
 
@@ -934,6 +952,21 @@ Then restart or reload the Gateway and run:
 
 ```bash
 openclaw googlemeet setup
+openclaw voicecall setup
+openclaw voicecall smoke
+```
+
+`voicecall smoke` is readiness-only by default. To dry-run a specific number:
+
+```bash
+openclaw voicecall smoke --to "+15555550123"
+```
+
+Only add `--yes` when you intentionally want to place a live outbound notify
+call:
+
+```bash
+openclaw voicecall smoke --to "+15555550123" --yes
 ```
 
 ### Twilio call starts but never enters the meeting

@@ -144,6 +144,7 @@ const GoogleMeetToolSchema = Type.Object({
       "setup_status",
       "resolve_space",
       "preflight",
+      "recover_current_tab",
       "leave",
       "speak",
       "test_speech",
@@ -309,6 +310,18 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.recoverCurrentTab",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const rt = await ensureRuntime();
+          respond(true, await rt.recoverCurrentTab({ url: normalizeOptionalString(params?.url) }));
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.setup",
       async ({ respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -427,6 +440,10 @@ export default definePluginEntry({
             case "status": {
               const rt = await ensureRuntime();
               return json(rt.status(normalizeOptionalString(raw.sessionId)));
+            }
+            case "recover_current_tab": {
+              const rt = await ensureRuntime();
+              return json(await rt.recoverCurrentTab({ url: normalizeOptionalString(raw.url) }));
             }
             case "setup_status": {
               const rt = await ensureRuntime();
