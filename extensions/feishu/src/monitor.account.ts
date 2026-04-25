@@ -199,9 +199,9 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   const unionId = readString(operator.union_id);
   const tag = readString(action.tag);
   const actionValue = action.value;
-  const contextOpenId = readString(context.open_id);
-  const contextUserId = readString(context.user_id);
-  const chatId = readString(context.chat_id);
+  const contextOpenId = readString(context.open_id) ?? openId;
+  const contextUserId = readString(context.user_id) ?? userId;
+  const chatId = readString(context.chat_id) ?? readString(context.open_chat_id);
   if (
     !token ||
     !openId ||

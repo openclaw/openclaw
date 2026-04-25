@@ -198,6 +198,35 @@ describe("Feishu card-action lifecycle", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("accepts schema 2.0 card callbacks that use open_chat_id context", async () => {
+    const onCardAction = await setupLifecycleMonitor();
+    const event = createCardActionEvent({
+      token: "tok-card-schema2",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+      chatId: "oc_group1",
+      chatType: "group",
+    });
+
+    await onCardAction({
+      ...event,
+      context: {
+        open_chat_id: "oc_group1",
+        open_message_id: "om_msg1",
+      },
+    });
+
+    expect(lastRuntime?.error).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "acct-card",
+        chatId: "oc_group1",
+        replyToMessageId: "card-action-tok-card-schema2",
+      }),
+    );
+  });
+
   it("does not duplicate delivery when retrying after a post-send failure", async () => {
     const onCardAction = await setupLifecycleMonitor();
     const event = createCardActionEvent({
