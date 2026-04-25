@@ -43,6 +43,9 @@ let dispatchAcpSessionRuntimePromise: Promise<
 > | null = null;
 let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
   null;
+let dispatchAcpTranscriptRuntimePromise: Promise<
+  typeof import("./dispatch-acp-transcript.runtime.js")
+> | null = null;
 
 function loadDispatchAcpManagerRuntime() {
   dispatchAcpManagerRuntimePromise ??= import("./dispatch-acp-manager.runtime.js");
@@ -57,6 +60,11 @@ function loadDispatchAcpSessionRuntime() {
 function loadDispatchAcpTtsRuntime() {
   dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
   return dispatchAcpTtsRuntimePromise;
+}
+
+function loadDispatchAcpTranscriptRuntime() {
+  dispatchAcpTranscriptRuntimePromise ??= import("./dispatch-acp-transcript.runtime.js");
+  return dispatchAcpTranscriptRuntimePromise;
 }
 
 type DispatchProcessedRecorder = (
@@ -440,6 +448,30 @@ export async function tryDispatchAcpReply(params: {
     });
 
     await projector.flush(true);
+    if (params.abortSignal?.aborted) {
+      const counts = params.dispatcher.getQueuedCounts();
+      delivery.applyRoutedCounts(counts);
+      params.recordProcessed("completed", { reason: "acp_aborted" });
+      params.markIdle("message_aborted");
+      return { queuedFinal, counts };
+    }
+    try {
+      const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
+      await persistAcpDispatchTranscript({
+        cfg: params.cfg,
+        sessionKey: canonicalSessionKey,
+        promptText,
+        finalText: delivery.getAccumulatedBlockText(),
+        meta: acpResolution.meta,
+        threadId: params.ctx.MessageThreadId,
+      });
+    } catch (error) {
+      logVerbose(
+        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
+          error,
+        )}`,
+      );
+    }
     queuedFinal =
       (await finalizeAcpTurnOutput({
         cfg: params.cfg,

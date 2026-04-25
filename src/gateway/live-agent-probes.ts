@@ -5,7 +5,7 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const execFileAsync = promisify(execFile);
 
-export type LiveAgentFamily = "claude" | "codex" | "gemini";
+export type LiveAgentFamily = "claude" | "codex" | "gemini" | "opencode";
 
 export type CronListCliResult = {
   jobs?: Array<{
@@ -38,6 +38,9 @@ export function normalizeLiveAgentFamily(raw: string): LiveAgentFamily {
   }
   if (normalized === "gemini" || normalized === "google-gemini-cli") {
     return "gemini";
+  }
+  if (normalized === "opencode" || normalized === "opencode-ai") {
+    return "opencode";
   }
   throw new Error(`unsupported live agent family: ${raw}`);
 }

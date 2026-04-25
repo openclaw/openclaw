@@ -215,8 +215,8 @@ importers:
   extensions/acpx:
     dependencies:
       acpx:
-        specifier: 0.5.3
-        version: 0.5.3
+        specifier: 0.6.0
+        version: 0.6.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1519,13 +1519,13 @@ importers:
 
 packages:
 
-  '@agentclientprotocol/sdk@0.17.1':
-    resolution: {integrity: sha512-yjyIn8POL18IOXioLySYiL0G44kZ/IZctAls7vS3AC3X+qLhFXbWmzABSZehwRnWFShMXT+ODa/HJG1+mGXZ1A==}
+  '@agentclientprotocol/sdk@0.19.1':
+    resolution: {integrity: sha512-oSb3RzjlMoU3Xu6MRJAL/Gd1DyK2+XSmZyUENrt/j1yqt33+ROhxncU6em8nyXEs97D4lVIGaFZ1pN0Q1C9SpA==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  '@agentclientprotocol/sdk@0.19.1':
-    resolution: {integrity: sha512-oSb3RzjlMoU3Xu6MRJAL/Gd1DyK2+XSmZyUENrt/j1yqt33+ROhxncU6em8nyXEs97D4lVIGaFZ1pN0Q1C9SpA==}
+  '@agentclientprotocol/sdk@0.20.0':
+    resolution: {integrity: sha512-BxEHyE4MvwyOsdyVPub1vEtyrq8E0JSdjC+ckXWimY1VabFCTXdPyXv2y2Omz1j+iod7Z8oBJDXFCJptM0GBqQ==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -4323,8 +4323,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.5.3:
-    resolution: {integrity: sha512-LNKc9gWlRztWKtQ3jr4g/kzlL9HU/5Wor79mromg/zRV5vE2FOdU+8VtW8ZypIMLzxLx2ATN6A4S1Dr97DM2QQ==}
+  acpx@0.6.0:
+    resolution: {integrity: sha512-ThJ2NLLc3kos3MzC8yrPrJeIfpRuwp2+/aMRkfKfJ0cATSbkV25NEi93d0Vx9f2NIpSEhr+mGQpbvphBrrSRPA==}
     engines: {node: '>=22.12.0'}
     hasBin: true
 
@@ -7557,11 +7557,11 @@ packages:
 
 snapshots:
 
-  '@agentclientprotocol/sdk@0.17.1(zod@4.3.6)':
+  '@agentclientprotocol/sdk@0.19.1(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
 
-  '@agentclientprotocol/sdk@0.19.1(zod@4.3.6)':
+  '@agentclientprotocol/sdk@0.20.0(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
 
@@ -11054,9 +11054,9 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.5.3:
+  acpx@0.6.0:
     dependencies:
-      '@agentclientprotocol/sdk': 0.17.1(zod@4.3.6)
+      '@agentclientprotocol/sdk': 0.20.0(zod@4.3.6)
       commander: 14.0.3
       skillflag: 0.1.4
       tsx: 4.21.0

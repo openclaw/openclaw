@@ -497,6 +497,12 @@ describe("scripts/test-projects changed-target routing", () => {
 });
 
 describe("scripts/test-projects local heavy-check lock", () => {
+  const localCheckEnv = () => ({
+    ...process.env,
+    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: undefined,
+    OPENCLAW_TEST_PROJECTS_FORCE_LOCK: undefined,
+  });
+
   it("skips the lock for a single scoped tooling run", () => {
     expect(
       shouldAcquireLocalHeavyCheckLock(
@@ -507,7 +513,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
             watchMode: false,
           },
         ],
-        process.env,
+        localCheckEnv(),
       ),
     ).toBe(false);
   });
@@ -522,7 +528,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
             watchMode: false,
           },
         ],
-        process.env,
+        localCheckEnv(),
       ),
     ).toBe(true);
   });
@@ -538,7 +544,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
           },
         ],
         {
-          ...process.env,
+          ...localCheckEnv(),
           OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
         },
       ),
@@ -556,7 +562,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
           },
         ],
         {
-          ...process.env,
+          ...localCheckEnv(),
           OPENCLAW_TEST_PROJECTS_FORCE_LOCK: "1",
         },
       ),
