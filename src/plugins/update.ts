@@ -222,6 +222,11 @@ function pathEndsWithSegment(params: {
   return Boolean(value && segment && (value === segment || value.endsWith(`/${segment}`)));
 }
 
+function bridgeBundledExtensionSegment(bridge: ExternalizedBundledPluginBridge): string {
+  const bundledDirName = bridge.bundledDirName ?? bridge.bundledPluginId;
+  return ["extensions", bundledDirName].join("/");
+}
+
 function isBridgeBundledPathRecord(params: {
   bridge: ExternalizedBundledPluginBridge;
   bundledLocalPath?: string;
@@ -238,16 +243,16 @@ function isBridgeBundledPathRecord(params: {
   ) {
     return true;
   }
-  const bundledDirName = params.bridge.bundledDirName ?? params.bridge.bundledPluginId;
+  const bundledExtensionSegment = bridgeBundledExtensionSegment(params.bridge);
   return (
     pathEndsWithSegment({
       value: params.record.sourcePath,
-      segment: `extensions/${bundledDirName}`,
+      segment: bundledExtensionSegment,
       env: params.env,
     }) ||
     pathEndsWithSegment({
       value: params.record.installPath,
-      segment: `extensions/${bundledDirName}`,
+      segment: bundledExtensionSegment,
       env: params.env,
     })
   );
@@ -258,11 +263,11 @@ function removeBridgeBundledLoadPaths(params: {
   loadPaths: ReturnType<typeof buildLoadPathHelpers>;
   env: NodeJS.ProcessEnv;
 }) {
-  const bundledDirName = params.bridge.bundledDirName ?? params.bridge.bundledPluginId;
+  const bundledExtensionSegment = bridgeBundledExtensionSegment(params.bridge);
   params.loadPaths.removeMatching((entry) =>
     pathEndsWithSegment({
       value: entry,
-      segment: `extensions/${bundledDirName}`,
+      segment: bundledExtensionSegment,
       env: params.env,
     }),
   );
@@ -866,8 +871,7 @@ export async function syncPluginsForUpdateChannel(params: {
     const bridges = params.externalizedBundledPluginBridges ?? [];
     for (const bridge of bridges) {
       const targetPluginId = getExternalizedBundledPluginTargetId(bridge);
-      const bundledInfo = bundled.get(bridge.bundledPluginId);
-      if (bundledInfo) {
+      if (bundled.has(bridge.bundledPluginId)) {
         continue;
       }
       const existing = resolveBridgeInstallRecord({ installs, bridge });
@@ -896,9 +900,6 @@ export async function syncPluginsForUpdateChannel(params: {
           installs = next.plugins?.installs ?? {};
           changed = true;
         }
-        if (bundledInfo?.localPath) {
-          loadHelpers.removePath(bundledInfo.localPath);
-        }
         removeBridgeBundledLoadPaths({ bridge, loadPaths: loadHelpers, env });
         continue;
       }
@@ -907,7 +908,6 @@ export async function syncPluginsForUpdateChannel(params: {
         existing &&
         !isBridgeBundledPathRecord({
           bridge,
-          bundledLocalPath: bundledInfo?.localPath,
           record: existing.record,
           env,
         })
@@ -947,9 +947,6 @@ export async function syncPluginsForUpdateChannel(params: {
         ...buildNpmResolutionInstallFields(result.npmResolution),
       });
       installs = next.plugins?.installs ?? {};
-      if (bundledInfo?.localPath) {
-        loadHelpers.removePath(bundledInfo.localPath);
-      }
       if (existing?.record.sourcePath) {
         loadHelpers.removePath(existing.record.sourcePath);
       }
