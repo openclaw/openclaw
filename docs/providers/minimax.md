@@ -235,6 +235,13 @@ Both `minimax` and `minimax-portal` register `image_generate` with the same
 `image-01` model. API-key setups use `MINIMAX_API_KEY`; OAuth setups can use
 the bundled `minimax-portal` auth path instead.
 
+Image generation always uses MiniMax's dedicated image endpoint
+(`/v1/image_generation`) and ignores `models.providers.minimax.baseUrl`,
+since that field configures the chat/Anthropic-compatible base URL. Set
+`MINIMAX_API_HOST=https://api.minimaxi.com` to route image generation
+through the CN endpoint; the default global endpoint is
+`https://api.minimax.io`.
+
 When onboarding or API-key setup writes explicit `models.providers.minimax`
 entries, OpenClaw materializes `MiniMax-M2.7` and
 `MiniMax-M2.7-highspeed` as text-only chat models. Image understanding is
