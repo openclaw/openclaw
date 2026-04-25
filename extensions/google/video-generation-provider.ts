@@ -437,17 +437,22 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       }
 
       if (!usedRestFallback) {
-        for (let attempt = 0; !(operation.done ?? false); attempt += 1) {
+        let sdkOperation = operation as Awaited<
+          ReturnType<GoogleGenAIClient["models"]["generateVideos"]>
+        >;
+        for (let attempt = 0; !(sdkOperation.done ?? false); attempt += 1) {
           if (attempt >= MAX_POLL_ATTEMPTS) {
             throw new Error("Google video generation did not finish in time");
           }
           await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
           resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS });
-          operation = await client.operations.getVideosOperation({ operation });
+          sdkOperation = await client.operations.getVideosOperation({ operation: sdkOperation });
         }
+        operation = sdkOperation;
       }
-      if (operation.error) {
-        throw new Error(JSON.stringify(operation.error));
+      const finalOperation = operation as { error?: unknown; name?: string };
+      if (finalOperation.error) {
+        throw new Error(JSON.stringify(finalOperation.error));
       }
       let generatedVideos = extractGeneratedVideos(operation);
       if (generatedVideos.length === 0 && !hasReferenceInputs && !usedRestFallback) {
@@ -470,7 +475,9 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       }
       const videos = await Promise.all(
         generatedVideos.map(async (entry, index) => {
-          const inline = entry.video;
+          const inline = entry.video as
+            | { videoBytes?: string; uri?: string; mimeType?: string }
+            | undefined;
           if (inline?.videoBytes) {
             return {
               buffer: Buffer.from(inline.videoBytes, "base64"),
@@ -501,9 +508,9 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       return {
         videos,
         model,
-        metadata: operation.name
+        metadata: finalOperation.name
           ? {
-              operationName: operation.name,
+              operationName: finalOperation.name,
             }
           : undefined,
       };
