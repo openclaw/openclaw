@@ -566,6 +566,7 @@ describe("active-memory plugin", () => {
           },
         },
       },
+      cleanupBundleMcpOnRunEnd: true,
     });
   });
 
