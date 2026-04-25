@@ -221,18 +221,18 @@ export function loadSessionTranscriptClassificationForAgent(
   );
 }
 
-function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean {
+function classifySessionTranscriptFromSessionStore(absPath: string): {
+  generatedByDreamingNarrative: boolean;
+  generatedByCronRun: boolean;
+} {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
   const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  return classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath);
-}
-
-function isCronRunTranscriptFromSessionStore(absPath: string): boolean {
-  const sessionsDir = path.dirname(absPath);
-  const normalizedAbsPath = normalizeComparablePath(absPath);
-  const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
-  return classification.cronRunTranscriptPaths.has(normalizedAbsPath);
+  return {
+    generatedByDreamingNarrative:
+      classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath),
+    generatedByCronRun: classification.cronRunTranscriptPaths.has(normalizedAbsPath),
+  };
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -473,10 +473,16 @@ export async function buildSessionEntry(
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
+    const sessionStoreClassification =
+      opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined
+        ? classifySessionTranscriptFromSessionStore(absPath)
+        : null;
     let generatedByDreamingNarrative =
-      opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
+      opts.generatedByDreamingNarrative ??
+      sessionStoreClassification?.generatedByDreamingNarrative ??
+      false;
     const generatedByCronRun =
-      opts.generatedByCronRun ?? isCronRunTranscriptFromSessionStore(absPath);
+      opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
