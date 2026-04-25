@@ -65,6 +65,9 @@ Docs: https://docs.openclaw.ai
 - Feishu: accept Schema 2.0 card action callbacks that report
   `context.open_chat_id` instead of legacy `context.chat_id`, so button
   callbacks no longer drop as malformed. Fixes #71670. Thanks @eddy1068.
+- Feishu: keep synthetic card-action and bot-menu ids out of platform reply
+  targets, using the real card callback message id when Feishu provides one and
+  plain-sending otherwise. Fixes #71673. Thanks @eddy1068.
 - QQ Bot: make `qqbot_remind` schedule, list, and remove Gateway cron jobs
   directly for owner-authorized senders instead of returning `cronParams` and
   relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937)

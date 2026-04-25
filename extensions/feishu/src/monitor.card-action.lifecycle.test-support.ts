@@ -181,7 +181,7 @@ describe("Feishu card-action lifecycle", () => {
       expect.objectContaining({
         accountId: "acct-card",
         chatId: "p2p:ou_user1",
-        replyToMessageId: "card-action-tok-card-once",
+        replyToMessageId: undefined,
       }),
     );
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
@@ -233,7 +233,12 @@ describe("Feishu card-action lifecycle", () => {
       expect.objectContaining({
         accountId: "acct-card",
         chatId,
-        replyToMessageId: "card-action-tok-card-v2-context",
+        replyToMessageId: "om_card_v2",
+      }),
+    );
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageSid: "card-action-tok-card-v2-context",
       }),
     );
   });
@@ -261,7 +266,42 @@ describe("Feishu card-action lifecycle", () => {
       expect.objectContaining({
         accountId: "acct-card",
         chatId: "ou_user1",
-        replyToMessageId: "card-action-tok-card-sdk-flat",
+        replyToMessageId: "om_sdk_card",
+      }),
+    );
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageSid: "card-action-tok-card-sdk-flat",
+      }),
+    );
+  });
+
+  it("plain-sends card action replies when Feishu provides no real message id", async () => {
+    const onCardAction = await setupLifecycleMonitor();
+
+    await onCardAction({
+      open_id: "ou_user1",
+      token: "tok-card-no-reply-target",
+      action: {
+        tag: "button",
+        value: {
+          command: "/help",
+        },
+      },
+    });
+
+    expect(lastRuntime?.error).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "acct-card",
+        chatId: "ou_user1",
+        replyToMessageId: undefined,
+      }),
+    );
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        MessageSid: "card-action-tok-card-no-reply-target",
       }),
     );
   });
