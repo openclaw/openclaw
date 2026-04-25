@@ -55,7 +55,7 @@ function requestUrl(input: RequestInfo | URL): URL {
   return new URL(input.url);
 }
 
-function stubMeetArtifactsApi() {
+function stubMeetArtifactsApi(options: { failSmartNoteDocumentBody?: boolean } = {}) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -173,6 +173,9 @@ function stubMeetArtifactsApi() {
         });
       }
       if (url.pathname === "/drive/v3/files/notes-1/export") {
+        if (options.failSmartNoteDocumentBody) {
+          return new Response("insufficientPermissions", { status: 403 });
+        }
         return new Response("Smart note document body.", {
           status: 200,
           headers: { "Content-Type": "text/plain" },
@@ -516,6 +519,26 @@ describe("google-meet CLI", () => {
       expect(readFileSync(path.join(tempDir, "transcript.md"), "utf8")).toContain(
         "Transcript document body.",
       );
+      const manifest = JSON.parse(readFileSync(path.join(tempDir, "manifest.json"), "utf8"));
+      expect(manifest).toMatchObject({
+        request: {
+          conferenceRecord: "rec-1",
+          includeDocumentBodies: true,
+        },
+        tokenSource: "cached-access-token",
+        counts: {
+          attendanceRows: 1,
+          warnings: 0,
+        },
+        files: expect.arrayContaining([
+          "summary.md",
+          "attendance.csv",
+          "transcript.md",
+          "artifacts.json",
+          "attendance.json",
+          "manifest.json",
+        ]),
+      });
       expect(JSON.parse(readFileSync(path.join(tempDir, "artifacts.json"), "utf8"))).toMatchObject({
         conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
         artifacts: [{ transcripts: [{ documentText: "Transcript document body." }] }],
@@ -525,6 +548,49 @@ describe("google-meet CLI", () => {
       stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(`${tempDir}.zip`, { force: true });
+    }
+  });
+
+  it("includes artifact warnings in export summaries and manifests", async () => {
+    stubMeetArtifactsApi({ failSmartNoteDocumentBody: true });
+    const stdout = captureStdout();
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-warning-"));
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "export",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--include-doc-bodies",
+          "--output",
+          tempDir,
+          "--json",
+        ],
+        { from: "user" },
+      );
+      const summary = readFileSync(path.join(tempDir, "summary.md"), "utf8");
+      expect(summary).toContain("### Warnings");
+      expect(summary).toContain("Document body warning");
+      const manifest = JSON.parse(readFileSync(path.join(tempDir, "manifest.json"), "utf8"));
+      expect(manifest).toMatchObject({
+        counts: { warnings: 1 },
+        warnings: [
+          {
+            type: "smart_note_document_body",
+            conferenceRecord: "conferenceRecords/rec-1",
+            resource: "conferenceRecords/rec-1/smartNotes/sn1",
+          },
+        ],
+      });
+    } finally {
+      stdout.restore();
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

@@ -75,6 +75,57 @@ type MeetArtifactOptions = ResolveSpaceOptions & {
   output?: string;
 };
 
+export type GoogleMeetExportRequest = {
+  meeting?: string;
+  conferenceRecord?: string;
+  calendarEventId?: string;
+  calendarEventSummary?: string;
+  calendarId?: string;
+  pageSize?: number;
+  includeTranscriptEntries?: boolean;
+  includeDocumentBodies?: boolean;
+  allConferenceRecords?: boolean;
+  mergeDuplicateParticipants?: boolean;
+  lateAfterMinutes?: number;
+  earlyBeforeMinutes?: number;
+};
+
+export type GoogleMeetExportWarning = {
+  type:
+    | "smart_notes"
+    | "transcript_entries"
+    | "transcript_document_body"
+    | "smart_note_document_body";
+  conferenceRecord: string;
+  resource?: string;
+  message: string;
+};
+
+export type GoogleMeetExportManifest = {
+  generatedAt: string;
+  request?: GoogleMeetExportRequest;
+  tokenSource?: "cached-access-token" | "refresh-token";
+  calendarEvent?: GoogleMeetCalendarLookupResult;
+  inputs: {
+    artifacts?: string;
+    attendance?: string;
+  };
+  counts: {
+    conferenceRecords: number;
+    artifacts: number;
+    attendanceRows: number;
+    recordings: number;
+    transcripts: number;
+    transcriptEntries: number;
+    smartNotes: number;
+    warnings: number;
+  };
+  conferenceRecords: string[];
+  files: string[];
+  zipFile?: string;
+  warnings: GoogleMeetExportWarning[];
+};
+
 type SetupOptions = {
   json?: boolean;
 };
@@ -601,6 +652,9 @@ function writeArtifactsSummary(result: GoogleMeetArtifactsResult): void {
     }
     for (const transcript of entry.transcripts) {
       writeStdoutLine("- transcript: %s", transcript.name);
+      if (transcript.documentTextError) {
+        writeStdoutLine("- transcript document body warning: %s", transcript.documentTextError);
+      }
     }
     for (const transcriptEntries of entry.transcriptEntries) {
       if (transcriptEntries.entriesError) {
@@ -613,6 +667,9 @@ function writeArtifactsSummary(result: GoogleMeetArtifactsResult): void {
     }
     for (const smartNote of entry.smartNotes) {
       writeStdoutLine("- smart note: %s", smartNote.name);
+      if (smartNote.documentTextError) {
+        writeStdoutLine("- smart note document body warning: %s", smartNote.documentTextError);
+      }
     }
   }
 }
@@ -735,6 +792,18 @@ function renderArtifactsMarkdown(result: GoogleMeetArtifactsResult): string {
       )}`,
     );
     pushMarkdownLine(lines, `Smart notes: ${entry.smartNotes.length}`);
+    const warnings = collectGoogleMeetArtifactWarnings({
+      conferenceRecords: [entry.conferenceRecord],
+      artifacts: [entry],
+    });
+    if (warnings.length > 0) {
+      pushMarkdownLine(lines);
+      pushMarkdownLine(lines, "### Warnings");
+      for (const warning of warnings) {
+        const resource = warning.resource ? `${warning.resource}: ` : "";
+        pushMarkdownLine(lines, `- ${resource}${warning.message}`);
+      }
+    }
     if (entry.recordings.length > 0) {
       pushMarkdownLine(lines);
       pushMarkdownLine(lines, "### Recordings");
@@ -935,6 +1004,107 @@ function renderTranscriptMarkdown(result: GoogleMeetArtifactsResult): string {
   return `${lines.join("\n")}\n`;
 }
 
+export function collectGoogleMeetArtifactWarnings(
+  result: GoogleMeetArtifactsResult,
+): GoogleMeetExportWarning[] {
+  const warnings: GoogleMeetExportWarning[] = [];
+  for (const entry of result.artifacts) {
+    const conferenceRecord = entry.conferenceRecord.name;
+    if (entry.smartNotesError) {
+      warnings.push({
+        type: "smart_notes",
+        conferenceRecord,
+        message: entry.smartNotesError,
+      });
+    }
+    for (const transcriptEntries of entry.transcriptEntries) {
+      if (transcriptEntries.entriesError) {
+        warnings.push({
+          type: "transcript_entries",
+          conferenceRecord,
+          resource: transcriptEntries.transcript,
+          message: transcriptEntries.entriesError,
+        });
+      }
+    }
+    for (const transcript of entry.transcripts) {
+      if (transcript.documentTextError) {
+        warnings.push({
+          type: "transcript_document_body",
+          conferenceRecord,
+          resource: transcript.name,
+          message: transcript.documentTextError,
+        });
+      }
+    }
+    for (const smartNote of entry.smartNotes) {
+      if (smartNote.documentTextError) {
+        warnings.push({
+          type: "smart_note_document_body",
+          conferenceRecord,
+          resource: smartNote.name,
+          message: smartNote.documentTextError,
+        });
+      }
+    }
+  }
+  return warnings;
+}
+
+function buildGoogleMeetExportManifest(params: {
+  artifacts: GoogleMeetArtifactsResult;
+  attendance: GoogleMeetAttendanceResult;
+  files: string[];
+  request?: GoogleMeetExportRequest;
+  tokenSource?: "cached-access-token" | "refresh-token";
+  calendarEvent?: GoogleMeetCalendarLookupResult;
+  zipFile?: string;
+}): GoogleMeetExportManifest {
+  const transcriptEntryCount = params.artifacts.artifacts.reduce(
+    (count, entry) =>
+      count +
+      entry.transcriptEntries.reduce(
+        (entryCount, transcript) => entryCount + transcript.entries.length,
+        0,
+      ),
+    0,
+  );
+  const warnings = collectGoogleMeetArtifactWarnings(params.artifacts);
+  return {
+    generatedAt: new Date().toISOString(),
+    ...(params.request ? { request: params.request } : {}),
+    ...(params.tokenSource ? { tokenSource: params.tokenSource } : {}),
+    ...(params.calendarEvent ? { calendarEvent: params.calendarEvent } : {}),
+    inputs: {
+      ...(params.artifacts.input ? { artifacts: params.artifacts.input } : {}),
+      ...(params.attendance.input ? { attendance: params.attendance.input } : {}),
+    },
+    counts: {
+      conferenceRecords: params.artifacts.conferenceRecords.length,
+      artifacts: params.artifacts.artifacts.length,
+      attendanceRows: params.attendance.attendance.length,
+      recordings: params.artifacts.artifacts.reduce(
+        (count, entry) => count + entry.recordings.length,
+        0,
+      ),
+      transcripts: params.artifacts.artifacts.reduce(
+        (count, entry) => count + entry.transcripts.length,
+        0,
+      ),
+      transcriptEntries: transcriptEntryCount,
+      smartNotes: params.artifacts.artifacts.reduce(
+        (count, entry) => count + entry.smartNotes.length,
+        0,
+      ),
+      warnings: warnings.length,
+    },
+    conferenceRecords: params.artifacts.conferenceRecords.map((record) => record.name),
+    files: params.files,
+    ...(params.zipFile ? { zipFile: params.zipFile } : {}),
+    warnings,
+  };
+}
+
 function defaultExportDirectory(): string {
   return `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
 }
@@ -1021,14 +1191,26 @@ function buildZipArchive(files: Array<{ name: string; content: string }>): Buffe
   return Buffer.concat([...localParts, centralDirectory, end]);
 }
 
-async function writeMeetExportBundle(params: {
+export async function writeMeetExportBundle(params: {
   outputDir?: string;
   artifacts: GoogleMeetArtifactsResult;
   attendance: GoogleMeetAttendanceResult;
   zip?: boolean;
+  request?: GoogleMeetExportRequest;
+  tokenSource?: "cached-access-token" | "refresh-token";
+  calendarEvent?: GoogleMeetCalendarLookupResult;
 }): Promise<{ outputDir: string; files: string[]; zipFile?: string }> {
   const outputDir = params.outputDir?.trim() || defaultExportDirectory();
   await mkdir(outputDir, { recursive: true });
+  const zipFile = params.zip ? `${outputDir.replace(/\/$/, "")}.zip` : undefined;
+  const fileNames = [
+    "summary.md",
+    "attendance.csv",
+    "transcript.md",
+    "artifacts.json",
+    "attendance.json",
+    "manifest.json",
+  ];
   const files = [
     {
       name: "summary.md",
@@ -1038,6 +1220,22 @@ async function writeMeetExportBundle(params: {
     { name: "transcript.md", content: renderTranscriptMarkdown(params.artifacts) },
     { name: "artifacts.json", content: `${JSON.stringify(params.artifacts, null, 2)}\n` },
     { name: "attendance.json", content: `${JSON.stringify(params.attendance, null, 2)}\n` },
+    {
+      name: "manifest.json",
+      content: `${JSON.stringify(
+        buildGoogleMeetExportManifest({
+          artifacts: params.artifacts,
+          attendance: params.attendance,
+          files: fileNames,
+          ...(params.request ? { request: params.request } : {}),
+          ...(params.tokenSource ? { tokenSource: params.tokenSource } : {}),
+          ...(params.calendarEvent ? { calendarEvent: params.calendarEvent } : {}),
+          ...(zipFile ? { zipFile } : {}),
+        }),
+        null,
+        2,
+      )}\n`,
+    },
   ];
   for (const file of files) {
     await writeFile(path.join(outputDir, file.name), file.content, "utf8");
@@ -1046,8 +1244,7 @@ async function writeMeetExportBundle(params: {
     outputDir,
     files: files.map((file) => path.join(outputDir, file.name)),
   };
-  if (params.zip) {
-    const zipFile = `${outputDir.replace(/\/$/, "")}.zip`;
+  if (zipFile) {
     await writeFile(zipFile, buildZipArchive(files));
     result.zipFile = zipFile;
   }
@@ -1648,11 +1845,37 @@ export function registerGoogleMeetCli(params: {
         lateAfterMinutes: resolved.lateAfterMinutes,
         earlyBeforeMinutes: resolved.earlyBeforeMinutes,
       });
+      const resolvedMeeting = meetingResult.meeting ?? resolved.meeting;
+      const request: GoogleMeetExportRequest = {
+        ...(resolvedMeeting ? { meeting: resolvedMeeting } : {}),
+        ...(resolved.conferenceRecord ? { conferenceRecord: resolved.conferenceRecord } : {}),
+        ...(meetingResult.calendarEvent?.event.id
+          ? { calendarEventId: meetingResult.calendarEvent.event.id }
+          : {}),
+        ...(meetingResult.calendarEvent?.event.summary
+          ? { calendarEventSummary: meetingResult.calendarEvent.event.summary }
+          : {}),
+        ...(options.calendar ? { calendarId: options.calendar } : {}),
+        ...(resolved.pageSize !== undefined ? { pageSize: resolved.pageSize } : {}),
+        includeTranscriptEntries: resolved.includeTranscriptEntries,
+        includeDocumentBodies: resolved.includeDocumentBodies,
+        allConferenceRecords: resolved.allConferenceRecords,
+        mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
+        ...(resolved.lateAfterMinutes !== undefined
+          ? { lateAfterMinutes: resolved.lateAfterMinutes }
+          : {}),
+        ...(resolved.earlyBeforeMinutes !== undefined
+          ? { earlyBeforeMinutes: resolved.earlyBeforeMinutes }
+          : {}),
+      };
       const bundle = await writeMeetExportBundle({
         outputDir: options.output,
         artifacts,
         attendance,
         zip: Boolean(options.zip),
+        request,
+        tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        ...(meetingResult.calendarEvent ? { calendarEvent: meetingResult.calendarEvent } : {}),
       });
       const payload = {
         ...bundle,
