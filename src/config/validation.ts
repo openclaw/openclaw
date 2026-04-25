@@ -19,6 +19,7 @@ import {
 } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
+import { collectLegacySecretRefEnvMarkerCandidates } from "../secrets/legacy-secretref-env-marker.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
@@ -454,7 +455,35 @@ function mergeUnsupportedMutableSecretRefIssues(
 }
 
 export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
-  return collectUnsupportedMutableSecretRefIssues(raw);
+  return [
+    ...collectUnsupportedMutableSecretRefIssues(raw),
+    ...collectLegacySecretRefEnvMarkerIssues(raw),
+  ];
+}
+
+function formatLegacySecretRefEnvMarkerMessage(candidate: {
+  value: string;
+  ref: { id: string; provider: string } | null;
+}): string {
+  const replacement = candidate.ref
+    ? JSON.stringify({ source: "env", provider: candidate.ref.provider, id: candidate.ref.id })
+    : '{"source":"env","provider":"default","id":"ENV_VAR"}';
+  return [
+    `${JSON.stringify(candidate.value)} is a legacy SecretRef marker and is not valid openclaw.json config.`,
+    `Use a structured SecretRef object instead, for example ${replacement}.`,
+    'Run "openclaw doctor --fix" to migrate valid secretref-env:<ENV_VAR> markers.',
+    `See ${SECRETREF_POLICY_DOC_URL}.`,
+  ].join(" ");
+}
+
+function collectLegacySecretRefEnvMarkerIssues(raw: unknown): ConfigValidationIssue[] {
+  if (!isRecord(raw)) {
+    return [];
+  }
+  return collectLegacySecretRefEnvMarkerCandidates(raw as OpenClawConfig).map((candidate) => ({
+    path: candidate.path,
+    message: formatLegacySecretRefEnvMarkerMessage(candidate),
+  }));
 }
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
