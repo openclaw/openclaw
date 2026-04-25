@@ -5,10 +5,6 @@ import {
   resolveManagedCodexAppServerPaths,
   resolveManagedCodexAppServerStartOptions,
 } from "./managed-binary.js";
-import {
-  MANAGED_CODEX_APP_SERVER_PACKAGE,
-  MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
-} from "./version.js";
 
 function startOptions(
   commandSource: CodexAppServerStartOptions["commandSource"],
@@ -22,91 +18,78 @@ function startOptions(
   };
 }
 
+function managedCommandPath(root: string, platform: NodeJS.Platform): string {
+  return path.join(root, "node_modules", ".bin", platform === "win32" ? "codex.cmd" : "codex");
+}
+
 describe("managed Codex app-server binary", () => {
   it("leaves explicit command overrides unchanged", async () => {
     const explicitOptions = startOptions("config");
-    const installPackage = vi.fn(async () => undefined);
+    const pathExists = vi.fn(async () => false);
 
     await expect(
       resolveManagedCodexAppServerStartOptions(explicitOptions, {
         platform: "darwin",
-        env: { OPENCLAW_CODEX_APP_SERVER_CACHE_DIR: "/tmp/openclaw-codex-cache" },
-        pathExists: vi.fn(async () => false),
-        installPackage,
+        pathExists,
       }),
     ).resolves.toBe(explicitOptions);
-    expect(installPackage).not.toHaveBeenCalled();
+    expect(pathExists).not.toHaveBeenCalled();
   });
 
-  it("resolves an already-installed managed Codex binary from the cache", async () => {
-    const cacheDir = path.join("/tmp", "openclaw-codex-managed-installed");
-    const paths = resolveManagedCodexAppServerPaths({
-      platform: "darwin",
-      env: { OPENCLAW_CODEX_APP_SERVER_CACHE_DIR: cacheDir },
-    });
-    const pathExists = vi.fn(async () => true);
-    const installPackage = vi.fn(async () => undefined);
+  it("resolves the plugin-local bundled Codex binary", async () => {
+    const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
+    const paths = resolveManagedCodexAppServerPaths({ platform: "darwin", pluginRoot });
+    const pathExists = vi.fn(async (filePath: string) => filePath === paths.commandPath);
 
     await expect(
       resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
         platform: "darwin",
-        env: { OPENCLAW_CODEX_APP_SERVER_CACHE_DIR: cacheDir },
+        pluginRoot,
         pathExists,
-        installPackage,
       }),
     ).resolves.toEqual({
       ...startOptions("managed"),
       command: paths.commandPath,
       commandSource: "resolved-managed",
     });
-    expect(pathExists).toHaveBeenCalledWith(paths.commandPath, "darwin");
-    expect(installPackage).not.toHaveBeenCalled();
+    expect(paths.commandPath).toBe(managedCommandPath(pluginRoot, "darwin"));
   });
 
-  it("installs the pinned package when the managed binary is missing", async () => {
-    const cacheDir = path.join("/tmp", "openclaw-codex-managed-missing");
-    const paths = resolveManagedCodexAppServerPaths({
-      platform: "darwin",
-      env: { OPENCLAW_CODEX_APP_SERVER_CACHE_DIR: cacheDir },
-    });
-    let existsCalls = 0;
-    const pathExists = vi.fn(async () => {
-      existsCalls += 1;
-      return existsCalls > 1;
-    });
-    const installPackage = vi.fn(async () => undefined);
+  it("resolves Windows Codex command shims", () => {
+    const pluginRoot = path.win32.join("C:\\", "OpenClaw", "dist", "extensions", "codex");
+    const paths = resolveManagedCodexAppServerPaths({ platform: "win32", pluginRoot });
 
-    const resolved = await resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-      platform: "darwin",
-      env: { OPENCLAW_CODEX_APP_SERVER_CACHE_DIR: cacheDir },
-      pathExists,
-      installPackage,
-    });
-
-    expect(resolved).toEqual({
-      ...startOptions("managed"),
-      command: paths.commandPath,
-      commandSource: "resolved-managed",
-    });
-    expect(pathExists).toHaveBeenCalledTimes(2);
-    expect(installPackage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        installRoot: paths.installRoot,
-        packageName: MANAGED_CODEX_APP_SERVER_PACKAGE,
-        packageVersion: MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
-        platform: "darwin",
-      }),
+    expect(paths.commandPath.endsWith(path.win32.join("node_modules", ".bin", "codex.cmd"))).toBe(
+      true,
     );
   });
 
-  it("fails clearly when installation does not create the Codex shim", async () => {
+  it("finds Codex in the external runtime-deps install root used by packaged plugins", async () => {
+    const installRoot = path.join("/tmp", "openclaw-runtime-deps", "codex");
+    const pluginRoot = path.join(installRoot, "dist", "extensions", "codex");
+    const installedCommand = managedCommandPath(installRoot, "linux");
+    const pathExists = vi.fn(async (filePath: string) => filePath === installedCommand);
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: installedCommand,
+      commandSource: "resolved-managed",
+    });
+  });
+
+  it("fails clearly when bundled runtime deps did not stage Codex", async () => {
     await expect(
       resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
         platform: "darwin",
-        env: { OPENCLAW_CODEX_APP_SERVER_CACHE_DIR: "/tmp/openclaw-codex-managed-broken" },
+        pluginRoot: path.join("/tmp", "openclaw", "extensions", "codex"),
         pathExists: vi.fn(async () => false),
-        installPackage: vi.fn(async () => undefined),
       }),
-    ).rejects.toThrow("Managed Codex app-server binary was not created");
+    ).rejects.toThrow("Managed Codex app-server binary was not found");
   });
 });

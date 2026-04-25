@@ -103,9 +103,9 @@ Codex after changing config.
 ## Requirements
 
 - OpenClaw with the bundled `codex` plugin available.
-- Codex app-server `0.125.0` or newer. OpenClaw installs and runs a managed
-  `@openai/codex@0.125.0` binary by default, so local `codex` commands on
-  `PATH` do not affect normal harness startup.
+- Codex app-server `0.125.0` or newer. The bundled plugin manages a compatible
+  Codex app-server binary by default, so local `codex` commands on `PATH` do
+  not affect normal harness startup.
 - Codex auth available to the app-server process.
 
 The plugin blocks older or unversioned app-server handshakes. That keeps
@@ -347,9 +347,11 @@ By default, the plugin starts OpenClaw's managed Codex binary locally with:
 codex app-server --listen stdio://
 ```
 
-The managed binary is installed into OpenClaw's user cache the first time the
-plugin needs it. Set `appServer.command` only when you intentionally want to run
-a different executable.
+The managed binary is declared as a bundled plugin runtime dependency and staged
+with the rest of the `codex` plugin dependencies. This keeps the app-server
+version tied to the bundled plugin instead of whichever separate Codex CLI
+happens to be installed locally. Set `appServer.command` only when you
+intentionally want to run a different executable.
 
 By default, OpenClaw starts local Codex harness sessions in YOLO mode:
 `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
@@ -419,7 +421,7 @@ Supported `appServer` fields:
 | Field               | Default                                  | Meaning                                                                                                      |
 | ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                     |
-| `command`           | managed `@openai/codex@0.125.0`          | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override. |
+| `command`           | managed Codex binary                     | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override. |
 | `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                               |
 | `url`               | unset                                    | WebSocket app-server URL.                                                                                    |
 | `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                        |
@@ -438,11 +440,9 @@ Environment overrides remain available for local testing:
 - `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`
-- `OPENCLAW_CODEX_APP_SERVER_CACHE_DIR`
 
 `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
-`appServer.command` is unset. `OPENCLAW_CODEX_APP_SERVER_CACHE_DIR` changes
-where OpenClaw installs the managed binary.
+`appServer.command` is unset.
 
 `OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed. Use
 `plugins.entries.codex.config.appServer.mode: "guardian"` instead, or
