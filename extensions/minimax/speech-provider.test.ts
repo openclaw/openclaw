@@ -309,7 +309,13 @@ describe("buildMinimaxSpeechProvider", () => {
         text: "Test",
         cfg: {} as never,
         providerConfig: { apiKey: "sk-test" },
-        providerOverrides: { model: "speech-01-240228", voiceId: "custom_voice", speed: 1.5 },
+        providerOverrides: {
+          model: "speech-01-240228",
+          voiceId: "custom_voice",
+          speed: 1.5,
+          vol: 1.5,
+          pitch: 0.5,
+        },
         target: "audio-file",
         timeoutMs: 30000,
       });
@@ -318,6 +324,8 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.model).toBe("speech-01-240228");
       expect(body.voice_setting.voice_id).toBe("custom_voice");
       expect(body.voice_setting.speed).toBe(1.5);
+      expect(body.voice_setting.vol).toBe(1.5);
+      expect(body.voice_setting.pitch).toBe(0);
     });
 
     it("throws when API key is missing", async () => {

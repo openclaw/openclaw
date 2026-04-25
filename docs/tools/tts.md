@@ -374,7 +374,7 @@ Then run:
 - `providers.minimax.voiceId`: voice identifier (default `English_expressive_narrator`, env: `MINIMAX_TTS_VOICE_ID`).
 - `providers.minimax.speed`: playback speed `0.5..2.0` (default 1.0).
 - `providers.minimax.vol`: volume `(0, 10]` (default 1.0; must be greater than 0).
-- `providers.minimax.pitch`: pitch shift `-12..12` (default 0).
+- `providers.minimax.pitch`: integer pitch shift `-12..12` (default 0). Fractional values are truncated before calling MiniMax T2A because the API rejects non-integer pitch values.
 - `providers.google.model`: Gemini TTS model (default `gemini-3.1-flash-tts-preview`).
 - `providers.google.voiceName`: Gemini prebuilt voice name (default `Kore`; `voice` is also accepted).
 - `providers.google.baseUrl`: override the Gemini API base URL. Only `https://generativelanguage.googleapis.com` is accepted.
@@ -432,7 +432,7 @@ Available directive keys (when enabled):
 - `model` (OpenAI TTS model, ElevenLabs model id, or MiniMax model) or `google_model` (Google TTS model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0-10)
-- `pitch` (MiniMax pitch, -12 to 12)
+- `pitch` (MiniMax integer pitch, -12 to 12; fractional values are truncated before the MiniMax request)
 - `applyTextNormalization` (`auto|on|off`)
 - `languageCode` (ISO 639-1)
 - `seed`
