@@ -7,7 +7,11 @@ import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./co
 import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
 import { isSameMeetUrlForReuse, resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
-import { launchChromeMeet, launchChromeMeetOnNode } from "./transports/chrome.js";
+import {
+  launchChromeMeet,
+  launchChromeMeetOnNode,
+  recoverCurrentMeetTabOnNode,
+} from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
 import type {
   GoogleMeetChromeHealth,
@@ -116,6 +120,14 @@ export class GoogleMeetRuntime {
     return createMeetWithBrowserProxyOnNode({
       runtime: this.params.runtime,
       config: this.params.config,
+    });
+  }
+
+  async recoverCurrentTab(request: { url?: string } = {}) {
+    return recoverCurrentMeetTabOnNode({
+      runtime: this.params.runtime,
+      config: this.params.config,
+      url: request.url ? normalizeMeetUrl(request.url) : undefined,
     });
   }
 

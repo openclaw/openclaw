@@ -14,6 +14,7 @@ import {
   asBrowserTabs,
   callBrowserProxyOnNode,
   isSameMeetUrlForReuse,
+  normalizeMeetUrlForReuse,
   readBrowserTab,
   resolveChromeNode,
   type BrowserTab,
@@ -395,6 +396,96 @@ async function openMeetWithBrowserProxy(params: {
     }
   } while (Date.now() <= deadline);
   return { launched: true, browser };
+}
+
+function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
+  if (url) {
+    return isSameMeetUrlForReuse(tab.url, url);
+  }
+  if (normalizeMeetUrlForReuse(tab.url)) {
+    return true;
+  }
+  const tabUrl = tab.url ?? "";
+  return (
+    tabUrl.startsWith("https://accounts.google.com/") &&
+    /sign in|google accounts|meet/i.test(tab.title ?? "")
+  );
+}
+
+export async function recoverCurrentMeetTabOnNode(params: {
+  runtime: PluginRuntime;
+  config: GoogleMeetConfig;
+  url?: string;
+}): Promise<{
+  nodeId: string;
+  found: boolean;
+  targetId?: string;
+  tab?: BrowserTab;
+  browser?: GoogleMeetChromeHealth;
+  message: string;
+}> {
+  const nodeId = await resolveChromeNode({
+    runtime: params.runtime,
+    requestedNode: params.config.chromeNode.node,
+  });
+  const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
+  const tabs = asBrowserTabs(
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId,
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: Math.min(timeoutMs, 5_000),
+    }),
+  );
+  const tab = tabs.find((entry) => isRecoverableMeetTab(entry, params.url));
+  const targetId = tab?.targetId;
+  if (!tab || !targetId) {
+    return {
+      nodeId,
+      found: false,
+      tab,
+      message: params.url
+        ? `No existing Meet tab matched ${params.url}.`
+        : "No existing Meet tab found on the selected Chrome node.",
+    };
+  }
+  await callBrowserProxyOnNode({
+    runtime: params.runtime,
+    nodeId,
+    method: "POST",
+    path: "/tabs/focus",
+    body: { targetId },
+    timeoutMs: Math.min(timeoutMs, 5_000),
+  });
+  const evaluated = await callBrowserProxyOnNode({
+    runtime: params.runtime,
+    nodeId,
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "evaluate",
+      targetId,
+      fn: meetStatusScript({
+        guestName: params.config.chrome.guestName,
+        autoJoin: false,
+      }),
+    },
+    timeoutMs: Math.min(timeoutMs, 10_000),
+  });
+  const browser = parseMeetBrowserStatus(evaluated);
+  const manual = browser?.manualActionRequired
+    ? browser.manualActionMessage || browser.manualActionReason
+    : undefined;
+  return {
+    nodeId,
+    found: true,
+    targetId,
+    tab,
+    browser,
+    message:
+      manual ?? (browser?.inCall ? "Existing Meet tab is in-call." : "Existing Meet tab focused."),
+  };
 }
 
 export async function launchChromeMeetOnNode(params: {
