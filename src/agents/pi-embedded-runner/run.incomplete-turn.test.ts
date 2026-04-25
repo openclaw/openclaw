@@ -11,6 +11,7 @@ import {
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import {
+  ACK_EXECUTION_FAST_PATH_INSTRUCTION,
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
@@ -673,6 +674,16 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(instruction).toContain("Do not recap or restate the plan");
   });
 
+  it("applies the ack-turn fast path to Gemini action turns", () => {
+    const instruction = resolveAckExecutionFastPathInstruction({
+      provider: "google",
+      modelId: "gemini-3.1-pro",
+      prompt: "go ahead",
+    });
+
+    expect(instruction).toBe(ACK_EXECUTION_FAST_PATH_INSTRUCTION);
+  });
+
   it("extracts structured steps from planning-only narration", () => {
     expect(
       extractPlanningOnlyPlanDetails(
@@ -1047,6 +1058,21 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("does not enable incomplete-turn recovery for non-Gemini Google models", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "google",
+      modelId: "gemma-4-26b-a4b-it",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
   });
 
   it("does not misclassify a direct answer that says 'i'm not going to' as planning-only", () => {
