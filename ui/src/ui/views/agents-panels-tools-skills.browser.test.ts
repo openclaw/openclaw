@@ -105,12 +105,13 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     const text = container.textContent ?? "";
-    expect(text).toContain("core");
-    expect(text).toContain("plugin:voice-call");
-    expect(text).toContain("optional");
+    expect(text).toContain("Built-In");
+    expect(text).toContain("Plugin: voice-call");
+    expect(text).toContain("Optional");
     expect(text).toContain("Available Right Now");
     expect(text).toContain("Message Actions");
     expect(text).toContain("Channel: guildchat");
+    expect(container.querySelector(".agent-tool-card[open]")).toBeNull();
   });
 
   it("shows fallback warning when runtime catalog fails", async () => {
@@ -127,5 +128,55 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
+  });
+
+  it("closes expanded tool rows when the parent group collapses", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "full", label: "Full" }],
+            groups: [
+              {
+                id: "files",
+                label: "Files",
+                source: "core",
+                tools: [
+                  {
+                    id: "read",
+                    label: "read",
+                    description: "Read file contents",
+                    source: "core",
+                    defaultProfiles: ["full"],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const group = container.querySelector<HTMLDetailsElement>(".agent-tools-group");
+    const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
+
+    expect(group).not.toBeNull();
+    expect(tool).not.toBeNull();
+
+    if (!group || !tool) {
+      return;
+    }
+
+    group.open = true;
+    tool.open = true;
+
+    group.open = false;
+    group.dispatchEvent(new Event("toggle"));
+
+    expect(tool.open).toBe(false);
   });
 });
