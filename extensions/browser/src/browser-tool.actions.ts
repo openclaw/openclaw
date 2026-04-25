@@ -223,6 +223,7 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
 
 function formatConsoleToolResult(result: {
   targetId?: string;
+  url?: string;
   messages?: unknown[];
 }): AgentToolResult<unknown> {
   const wrapped = wrapBrowserExternalJson({
@@ -235,6 +236,7 @@ function formatConsoleToolResult(result: {
     details: {
       ...wrapped.safeDetails,
       targetId: readStringValue(result.targetId),
+      url: readStringValue(result.url),
       messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
     },
   };
