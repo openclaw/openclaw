@@ -1909,6 +1909,26 @@ export async function processReaction(
     return;
   }
 
+  // Group reaction with no chat identifiers cannot be routed safely. The
+  // peerId fallback below would degrade to the literal string "group", and
+  // resolveBlueBubblesConversationRoute would then synthesize a session key
+  // unrelated to any real binding — worse, an isGroup=false misclassification
+  // upstream would have routed this to the sender's DM session, surfacing
+  // a group tapback inside an unrelated 1:1 transcript. Drop+log instead.
+  if (
+    reaction.isGroup &&
+    !reaction.chatGuid &&
+    reaction.chatId == null &&
+    !reaction.chatIdentifier
+  ) {
+    logVerbose(
+      core,
+      runtime,
+      `dropping group reaction with no chat identifiers (senderId=${reaction.senderId} messageId=${reaction.messageId} action=${reaction.action})`,
+    );
+    return;
+  }
+
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
