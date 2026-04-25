@@ -7,6 +7,7 @@ import {
   parseImportedCustomTheme,
   syncCustomThemeStyleTag,
 } from "./custom-theme.ts";
+import type { ImportedCustomTheme } from "./custom-theme.ts";
 
 function createTweakcnPayload() {
   return {
@@ -181,6 +182,14 @@ describe("custom theme import helpers", () => {
     expect(css).toContain(':root[data-theme="custom-light"]');
     expect(css).toContain("--bg: oklch(0.12 0.04 265);");
     expect(css).toContain("--bg: oklch(0.98 0.01 120);");
+  });
+
+  it("throws when stored custom theme tokens are missing", () => {
+    const theme = { ...createImportedTheme(), light: undefined } as unknown as ImportedCustomTheme;
+
+    expect(() => buildCustomThemeStyles(theme)).toThrow(
+      "Stored custom theme is missing required tokens.",
+    );
   });
 
   it("parses stored imported themes and rejects malformed records", () => {

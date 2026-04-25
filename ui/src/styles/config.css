@@ -559,24 +559,10 @@
   transform: translateY(-1px);
 }
 
-.settings-theme-card:disabled {
-  cursor: not-allowed;
-}
-
 .settings-theme-card--active {
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.settings-theme-card--disabled {
-  opacity: 0.6;
-}
-
-.settings-theme-card--disabled:hover {
-  border-color: var(--border);
-  background: var(--bg);
-  transform: none;
 }
 
 .settings-theme-card__icon,

@@ -504,7 +504,7 @@ export function buildCustomThemeStyles(theme: ImportedCustomTheme) {
   const light = normalizeStoredTokenMap(theme.light);
   const dark = normalizeStoredTokenMap(theme.dark);
   if (!light || !dark) {
-    return "";
+    throw new Error("Stored custom theme is missing required tokens.");
   }
   const renderDeclarations = (modeTokens: ThemeTokenMap) =>
     MODE_TOKEN_ORDER.map((key) => `  --${key}: ${modeTokens[key]};`).join("\n");
