@@ -23,6 +23,7 @@ Scope includes:
 - Tool result pairing repair
 - Turn validation / ordering
 - Thought signature cleanup
+- Thinking signature cleanup
 - Image payload sanitization
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error-turn repair for Bedrock Converse replay
@@ -133,6 +134,9 @@ external end-user instructions.
 
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
+- Thinking blocks with missing, empty, or blank replay signatures are stripped
+  before provider conversion. If that empties an assistant turn, OpenClaw keeps
+  turn shape with non-empty omitted-reasoning text.
 - Older thinking-only assistant turns that must be stripped are replaced with
   non-empty omitted-reasoning text so provider adapters do not drop the replay
   turn.
@@ -143,6 +147,9 @@ external end-user instructions.
   before replay. Bedrock Converse rejects assistant messages with `content: []`, so
   persisted assistant turns with `stopReason: "error"` and empty content are also
   repaired on disk before load.
+- Claude thinking blocks with missing, empty, or blank replay signatures are
+  stripped before Converse replay. If that empties an assistant turn, OpenClaw
+  keeps turn shape with non-empty omitted-reasoning text.
 - Older thinking-only assistant turns that must be stripped are replaced with
   non-empty omitted-reasoning text so the Converse replay keeps strict turn shape.
 - Replay filters OpenClaw delivery-mirror and gateway-injected assistant turns.

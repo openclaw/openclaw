@@ -96,6 +96,10 @@ Docs: https://docs.openclaw.ai
 - Agents/Bedrock: prevent empty assistant stream-error turns from poisoning
   Converse replay by persisting, repairing, and replaying a non-empty fallback
   block. Fixes #71572. (#71627) Thanks @openperf.
+- Agents/Anthropic/Bedrock: strip thinking blocks with missing, empty, or blank
+  replay signatures before provider conversion, falling back to non-empty
+  omitted-reasoning text when needed so corrupted signed-thinking history no
+  longer poisons subsequent turns. Fixes #45010. (#70054) Thanks @castaples.
 - Agents/Anthropic/Bedrock: preserve stripped thinking-only assistant replay
   turns with non-empty omitted-reasoning text so provider adapters keep strict
   user/assistant turn shape. Thanks @wujiaming88.

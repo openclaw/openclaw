@@ -1263,6 +1263,77 @@ describe("sanitizeSessionHistory", () => {
     },
   );
 
+  it.each([
+    {
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      label: "anthropic",
+    },
+    {
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
+      label: "bedrock",
+    },
+  ])("strips invalid thinking signatures before $label replay", async ({ provider, modelApi }) => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        { type: "thinking", thinking: "missing signature" },
+        { type: "thinking", thinking: "blank signature", thinkingSignature: "   " },
+        { type: "thinking", thinking: "signed", thinkingSignature: "sig_latest" },
+        { type: "text", text: "latest visible answer" },
+      ]),
+    ]);
+
+    const result = await sanitizeAnthropicHistory({
+      provider,
+      modelApi,
+      messages,
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "thinking", thinking: "signed", thinkingSignature: "sig_latest" },
+      { type: "text", text: "latest visible answer" },
+    ]);
+  });
+
+  it.each([
+    {
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      label: "anthropic",
+    },
+    {
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
+      label: "bedrock",
+    },
+  ])(
+    "uses non-empty omitted-reasoning fallback when all $label thinking signatures are invalid",
+    async ({ provider, modelApi }) => {
+      setNonGoogleModelApi();
+
+      const messages = castAgentMessages([
+        makeUserMessage("first"),
+        makeAssistantMessage([{ type: "thinking", thinking: "blank", thinkingSignature: "" }]),
+      ]);
+
+      const result = await sanitizeAnthropicHistory({
+        provider,
+        modelApi,
+        messages,
+        modelId: "claude-sonnet-4-6",
+      });
+
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+      ]);
+    },
+  );
+
   it("uses immutable thinking replay for anthropic-compatible providers when policy preserves signatures", async () => {
     setNonGoogleModelApi();
 

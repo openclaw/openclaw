@@ -61,6 +61,67 @@ function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
   return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
 }
 
+function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
+  if (!isThinkingBlock(block)) {
+    return false;
+  }
+  const record = block as {
+    data?: unknown;
+    signature?: unknown;
+    thinkingSignature?: unknown;
+    thought_signature?: unknown;
+  };
+  const candidates =
+    (block as { type?: unknown }).type === "redacted_thinking"
+      ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
+      : [record.signature, record.thinkingSignature, record.thought_signature];
+  return candidates.some((signature) => {
+    return typeof signature === "string" && signature.trim().length > 0;
+  });
+}
+
+/**
+ * Strip thinking blocks with clearly invalid replay signatures.
+ *
+ * Anthropic and Bedrock reject persisted thinking blocks when the signature is
+ * absent, empty, or blank. They are also the authority for opaque signature
+ * validity, so this intentionally avoids local length or shape heuristics.
+ */
+export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+
+  for (const message of messages) {
+    if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+
+    const nextContent: AssistantContentBlock[] = [];
+    let changed = false;
+    for (const block of message.content) {
+      if (!isThinkingBlock(block) || hasReplayableThinkingSignature(block)) {
+        nextContent.push(block);
+        continue;
+      }
+      changed = true;
+      touched = true;
+    }
+
+    if (!changed) {
+      out.push(message);
+      continue;
+    }
+
+    out.push({
+      ...message,
+      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
+    });
+  }
+
+  return touched ? out : messages;
+}
+
 /**
  * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
  * all assistant messages except the latest one.
