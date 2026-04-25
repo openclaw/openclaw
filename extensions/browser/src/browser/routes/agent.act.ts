@@ -10,6 +10,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
 import {
@@ -48,11 +49,13 @@ const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] 
 
 async function readExistingSessionLocationHref(params: {
   profileName: string;
+  profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
 }): Promise<string> {
   const currentUrl = await evaluateChromeMcpScript({
     profileName: params.profileName,
+    profile: params.profile,
     userDataDir: params.userDataDir,
     targetId: params.targetId,
     fn: "() => window.location.href",
@@ -69,6 +72,7 @@ async function readExistingSessionLocationHref(params: {
 
 async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   profileName: string;
+  profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
   ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
@@ -208,6 +212,7 @@ function buildExistingSessionWaitPredicate(params: {
 
 async function waitForExistingSessionCondition(params: {
   profileName: string;
+  profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
   timeMs?: number;
@@ -234,6 +239,7 @@ async function waitForExistingSessionCondition(params: {
       ready = Boolean(
         await evaluateChromeMcpScript({
           profileName: params.profileName,
+          profile: params.profile,
           userDataDir: params.userDataDir,
           targetId: params.targetId,
           fn: `async () => ${predicate}`,
@@ -243,6 +249,7 @@ async function waitForExistingSessionCondition(params: {
     if (ready && params.url) {
       const currentUrl = await evaluateChromeMcpScript({
         profileName: params.profileName,
+        profile: params.profile,
         userDataDir: params.userDataDir,
         targetId: params.targetId,
         fn: "() => window.location.href",
@@ -406,7 +413,7 @@ export function registerBrowserAgentActRoutes(
               : new Set<string>();
             const existingSessionNavigationGuard = {
               profileName,
-              userDataDir: profileCtx.profile.userDataDir,
+              profile: profileCtx.profile,
               targetId: tab.targetId,
               ssrfPolicy,
               listTabs: () => profileCtx.listTabs(),
@@ -427,7 +434,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     clickChromeMcpElement({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       uid: action.ref!,
                       doubleClick: action.doubleClick ?? false,
@@ -442,7 +449,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     clickChromeMcpCoords({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       x: action.x,
                       y: action.y,
@@ -458,7 +465,7 @@ export function registerBrowserAgentActRoutes(
                   execute: async () => {
                     await fillChromeMcpElement({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       uid: action.ref!,
                       value: action.text,
@@ -466,7 +473,7 @@ export function registerBrowserAgentActRoutes(
                     if (action.submit) {
                       await pressChromeMcpKey({
                         profileName,
-                        userDataDir: profileCtx.profile.userDataDir,
+                        profile: profileCtx.profile,
                         targetId: tab.targetId,
                         key: "Enter",
                       });
@@ -480,7 +487,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     pressChromeMcpKey({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       key: action.key,
                     }),
@@ -492,7 +499,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     hoverChromeMcpElement({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       uid: action.ref!,
                     }),
@@ -504,7 +511,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     evaluateChromeMcpScript({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                       args: [action.ref!],
@@ -517,7 +524,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     dragChromeMcpElement({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       fromUid: action.startRef!,
                       toUid: action.endRef!,
@@ -530,7 +537,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     fillChromeMcpElement({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       uid: action.ref!,
                       value: action.values[0] ?? "",
@@ -543,7 +550,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     fillChromeMcpForm({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       elements: action.fields.map((field) => ({
                         uid: field.ref,
@@ -556,7 +563,7 @@ export function registerBrowserAgentActRoutes(
               case "resize":
                 await resizeChromeMcpPage({
                   profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
+                  profile: profileCtx.profile,
                   targetId: tab.targetId,
                   width: action.width,
                   height: action.height,
@@ -565,7 +572,7 @@ export function registerBrowserAgentActRoutes(
               case "wait":
                 await waitForExistingSessionCondition({
                   profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
+                  profile: profileCtx.profile,
                   targetId: tab.targetId,
                   timeMs: action.timeMs,
                   text: action.text,
@@ -582,7 +589,7 @@ export function registerBrowserAgentActRoutes(
                   execute: () =>
                     evaluateChromeMcpScript({
                       profileName,
-                      userDataDir: profileCtx.profile.userDataDir,
+                      profile: profileCtx.profile,
                       targetId: tab.targetId,
                       fn: action.fn,
                       args: action.ref ? [action.ref] : undefined,
@@ -592,7 +599,7 @@ export function registerBrowserAgentActRoutes(
                 return await jsonOk({ result });
               }
               case "close":
-                await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile.userDataDir);
+                await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile);
                 return await jsonOk();
               case "batch":
                 return jsonActError(
@@ -713,7 +720,7 @@ export function registerBrowserAgentActRoutes(
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             await evaluateChromeMcpScript({
               profileName: profileCtx.profile.name,
-              userDataDir: profileCtx.profile.userDataDir,
+              profile: profileCtx.profile,
               targetId: tab.targetId,
               args: [ref],
               fn: `(el) => {

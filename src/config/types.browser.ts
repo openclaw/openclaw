@@ -5,6 +5,10 @@ export type BrowserProfileConfig = {
   cdpUrl?: string;
   /** Explicit user data directory for existing-session Chrome MCP attachment. */
   userDataDir?: string;
+  /** Override the Chrome MCP command for existing-session profiles. */
+  mcpCommand?: string;
+  /** Extra Chrome MCP arguments for existing-session profiles. */
+  mcpArgs?: string[];
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "clawd" | "existing-session";
   /** If true, launch this profile in headless mode. Falls back to browser.headless. */
