@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Google Chat: preserve reply text when a typing indicator message is deleted or can no longer be updated, so media captions and first text chunks are resent instead of silently disappearing. (#71498) Thanks @colin-lgtm.
 - Heartbeat: clamp oversized scheduler delays through the shared safe timer helper, preventing `every` values over Node's timeout cap from becoming a 1 ms crash loop. Fixes #71414. (#71478) Thanks @hclsys.
 - Telegram: remove the startup persisted-offset `getUpdates` preflight so polling restarts do not self-conflict before the runner starts. Fixes #69304. (#69779) Thanks @chinar-amrutkar.
 - Telegram: keep the polling stall watchdog active even when grammY reports the runner as not running while its task is still pending, so a rebuilt transport cannot leave `getUpdates` silent until a manual gateway restart. Fixes #69064. Thanks @LDLoeb.
