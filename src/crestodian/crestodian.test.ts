@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCrestodian } from "./crestodian.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 
+const withProgressMock = vi.hoisted(() =>
+  vi.fn(async (_opts: unknown, work: (progress: { setLabel: (label: string) => void }) => Promise<unknown>) => {
+    return await work({ setLabel: vi.fn() });
+  }),
+);
+
 vi.mock("./probes.js", () => ({
   probeLocalCommand: vi.fn(async (command: string) => ({
     command,
@@ -39,6 +45,10 @@ vi.mock("./overview.js", () => ({
   })),
 }));
 
+vi.mock("../cli/progress.js", () => ({
+  withProgress: withProgressMock,
+}));
+
 describe("runCrestodian", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -69,6 +79,10 @@ describe("runCrestodian", () => {
     );
 
     expect(runGatewayRestart).not.toHaveBeenCalled();
+    expect(withProgressMock).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "Loading Crestodian overview…" }),
+      expect.any(Function),
+    );
     expect(lines.join("\n")).toContain("[crestodian] planner: openai/gpt-5.5");
     expect(lines.join("\n")).toContain("[crestodian] interpreted: restart gateway");
     expect(lines.join("\n")).toContain("Plan: restart the Gateway. Say yes to apply.");
@@ -90,6 +104,10 @@ describe("runCrestodian", () => {
     );
 
     expect(planner).not.toHaveBeenCalled();
+    expect(withProgressMock).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "Loading Crestodian overview…" }),
+      expect.any(Function),
+    );
     expect(lines.join("\n")).toContain("Default model:");
   });
 
@@ -112,6 +130,10 @@ describe("runCrestodian", () => {
     expect(runInteractiveTui).toHaveBeenCalledWith(
       expect.objectContaining({ runInteractiveTui }),
       runtime,
+    );
+    expect(withProgressMock).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "Starting Crestodian…" }),
+      expect.any(Function),
     );
     expect(lines.join("\n")).not.toContain("Say: status");
   });
