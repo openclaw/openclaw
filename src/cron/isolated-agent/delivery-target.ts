@@ -8,11 +8,14 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolut
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
+import { getChildLogger } from "../../logging.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel-normalize.js";
+
+const deliveryTargetLogger = getChildLogger({ subsystem: "cron-delivery-target" });
 
 export type DeliveryTargetResolution =
   | {
@@ -103,8 +106,12 @@ export async function resolveDeliveryTarget(
         requestedChannel = selection.channel;
         explicitTo = rawRequestedChannel;
       }
-    } catch {
-      // Keep the original request when channel inference is ambiguous.
+    } catch (err) {
+      deliveryTargetLogger.warn(
+        { error: formatErrorMessage(err), requestedChannel: rawRequestedChannel },
+        "cron: failed to infer delivery target channel",
+      );
+      // Keep the original request when channel inference is ambiguous or unavailable.
     }
   }
   const allowMismatchedLastTo = requestedChannel === "last";
