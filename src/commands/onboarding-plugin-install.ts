@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
@@ -147,6 +148,23 @@ async function persistOnboardingPluginInstallRecord(params: {
 }) {
   const records = await loadPluginInstallRecords({ config: params.cfg });
   await writePersistedPluginInstallLedger(recordPluginInstallInRecords(records, params.install));
+}
+
+async function refreshRegistryAfterOnboardingPluginInstall(params: {
+  cfg: OpenClawConfig;
+  refreshRegistry?: boolean;
+  runtime: RuntimeEnv;
+  workspaceDir?: string;
+}) {
+  if (params.refreshRegistry === false) {
+    return;
+  }
+  await refreshPluginRegistryAfterConfigMutation({
+    config: params.cfg,
+    reason: "source-changed",
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    logger: { warn: (message) => params.runtime.log(message) },
+  });
 }
 
 async function recordLocalPluginInstall(params: {
@@ -438,6 +456,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   prompter: WizardPrompter;
+  refreshRegistry?: boolean;
   runtime: RuntimeEnv;
   workspaceDir?: string;
 }): Promise<OnboardingPluginInstallResult> {
@@ -494,6 +513,12 @@ export async function ensureOnboardingPluginInstalled(params: {
     }
     next = addPluginLoadPath(enableResult.config, localPath);
     next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
+    await refreshRegistryAfterOnboardingPluginInstall({
+      cfg: next,
+      refreshRegistry: params.refreshRegistry,
+      runtime,
+      workspaceDir,
+    });
     return {
       cfg: next,
       installed: true,
@@ -576,6 +601,12 @@ export async function ensureOnboardingPluginInstalled(params: {
       install,
     });
     next = withoutPluginInstallRecords(recordPluginInstall(next, install));
+    await refreshRegistryAfterOnboardingPluginInstall({
+      cfg: next,
+      refreshRegistry: params.refreshRegistry,
+      runtime,
+      workspaceDir,
+    });
     return {
       cfg: next,
       installed: true,
@@ -615,6 +646,12 @@ export async function ensureOnboardingPluginInstalled(params: {
       }
       next = addPluginLoadPath(enableResult.config, localPath);
       next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
+      await refreshRegistryAfterOnboardingPluginInstall({
+        cfg: next,
+        refreshRegistry: params.refreshRegistry,
+        runtime,
+        workspaceDir,
+      });
       return {
         cfg: next,
         installed: true,

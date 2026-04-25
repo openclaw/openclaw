@@ -46,6 +46,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
     cfg: params.cfg,
     entry: toOnboardingPluginInstallEntry(params.entry),
     prompter: params.prompter,
+    refreshRegistry: false,
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
   });
