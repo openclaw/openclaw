@@ -57,10 +57,21 @@
       },
       "lookbackHours": 24,
       "draftReplies": true
+    },
+    "calendar": {
+      "google": {
+        "user": "${GMAIL_USER}",
+        "clientId": "${GMAIL_OAUTH_CLIENT_ID}",
+        "clientSecret": "${GMAIL_OAUTH_CLIENT_SECRET}",
+        "refreshToken": "${GMAIL_OAUTH_REFRESH_TOKEN}"
+      },
+      "defaultCalendarId": "primary",
+      "timezone": "Europe/London",
+      "writeEnabled": true
     }
   },
   "skills": {
-    "include": ["inbox-triage", "memory-second-brain"]
+    "include": ["inbox-triage", "memory-second-brain", "calendar"]
   },
   "meta": {
     "ownerEmail": "arhan.harchandani@gmail.com",

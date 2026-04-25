@@ -23,7 +23,19 @@ const CLIENT_ID = process.env.GMAIL_OAUTH_CLIENT_ID;
 const CLIENT_SECRET = process.env.GMAIL_OAUTH_CLIENT_SECRET;
 const PORT = Number(process.env.GMAIL_OAUTH_PORT ?? 53682);
 const REDIRECT = `http://127.0.0.1:${PORT}/oauth2callback`;
-const SCOPES = ["https://www.googleapis.com/auth/gmail.modify"];
+// Default scopes: Gmail (for inbox-triage) + Calendar (for the calendar
+// extension). The same Desktop OAuth client + refresh token can serve
+// both, so the user only does the consent flow once.
+//
+// Override via GMAIL_OAUTH_SCOPES (space-separated) if you want a smaller
+// or different set.
+const DEFAULT_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/calendar",
+];
+const SCOPES = process.env.GMAIL_OAUTH_SCOPES
+  ? process.env.GMAIL_OAUTH_SCOPES.split(/\s+/).filter(Boolean)
+  : DEFAULT_SCOPES;
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
   console.error("Set GMAIL_OAUTH_CLIENT_ID and GMAIL_OAUTH_CLIENT_SECRET first.");
