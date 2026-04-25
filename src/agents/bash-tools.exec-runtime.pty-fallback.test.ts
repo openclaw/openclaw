@@ -1,4 +1,9 @@
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import type { ManagedRun, SpawnInput } from "../process/supervisor/index.js";
 
 let listRunningSessions: typeof import("./bash-process-registry.js").listRunningSessions;
@@ -56,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetProcessRegistryForTests();
+  resetDiagnosticEventsForTest();
   vi.clearAllMocks();
 });
 
@@ -100,4 +106,54 @@ test("exec cleans session state when PTY fallback spawn also fails", async () =>
   await expect(runPtyFallback()).rejects.toThrow("child fallback failed");
 
   expect(listRunningSessions()).toHaveLength(0);
+});
+
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+test("exec emits bounded process diagnostics without command text", async () => {
+  supervisorSpawnMock.mockImplementationOnce(async (input: SpawnInput) =>
+    createSuccessfulRun(input),
+  );
+  const events: DiagnosticEventPayload[] = [];
+  const unsubscribe = onInternalDiagnosticEvent((event) => {
+    events.push(event);
+  });
+  try {
+    const command = "printf super-secret-value";
+    const handle = await runExecProcess({
+      command,
+      workdir: process.cwd(),
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 20_000,
+      pendingMaxOutput: 20_000,
+      notifyOnExit: false,
+      sessionKey: "session-1",
+      timeoutSec: 5,
+    });
+
+    await handle.promise;
+    await flushDiagnosticEvents();
+
+    const event = events.find((item) => item.type === "exec.process.completed");
+    expect(event).toMatchObject({
+      type: "exec.process.completed",
+      target: "host",
+      mode: "child",
+      outcome: "completed",
+      durationMs: expect.any(Number),
+      commandLength: command.length,
+      exitCode: 0,
+      sessionKey: "session-1",
+    });
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain("printf");
+    expect(serialized).not.toContain("super-secret-value");
+    expect(serialized).not.toContain(process.cwd());
+  } finally {
+    unsubscribe();
+  }
 });

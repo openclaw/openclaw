@@ -17,10 +17,12 @@ export type DiagnosticStabilityEventRecord = {
   channel?: string;
   pluginId?: string;
   source?: string;
+  target?: string;
   surface?: string;
   action?: string;
   reason?: string;
   outcome?: string;
+  mode?: string;
   level?: string;
   detector?: string;
   toolName?: string;
@@ -28,6 +30,9 @@ export type DiagnosticStabilityEventRecord = {
   provider?: string;
   model?: string;
   durationMs?: number;
+  commandLength?: number;
+  exitCode?: number;
+  timedOut?: boolean;
   costUsd?: number;
   count?: number;
   bytes?: number;
@@ -246,6 +251,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.toolName = event.toolName;
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
+      break;
+    case "exec.process.completed":
+      record.target = event.target;
+      record.mode = event.mode;
+      record.outcome = event.outcome;
+      record.durationMs = event.durationMs;
+      record.commandLength = event.commandLength;
+      record.exitCode = event.exitCode;
+      record.timedOut = event.timedOut;
+      assignReasonCode(record, event.failureKind);
       break;
     case "run.started":
       record.provider = event.provider;
