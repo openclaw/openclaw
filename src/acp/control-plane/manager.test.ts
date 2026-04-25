@@ -2674,6 +2674,59 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.getStatus).not.toHaveBeenCalled();
   });
 
+  it("skips startup identity reconciliation for stale one-shot sessions", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    const sessionKey = "agent:codex:acp:old-oneshot";
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg: baseCfg,
+        storePath: "/tmp/sessions-acp.json",
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          acp: {
+            ...readySessionMeta({
+              agent: "codex",
+            }),
+            mode: "oneshot",
+            identity: {
+              state: "pending",
+              acpxSessionId: "acpx-stale-oneshot",
+              source: "ensure",
+              lastUpdatedAt: Date.now(),
+            },
+          },
+        },
+        acp: {
+          ...readySessionMeta({
+            agent: "codex",
+          }),
+          mode: "oneshot",
+          identity: {
+            state: "pending",
+            acpxSessionId: "acpx-stale-oneshot",
+            source: "ensure",
+            lastUpdatedAt: Date.now(),
+          },
+        },
+      },
+    ]);
+
+    const manager = new AcpSessionManager();
+    const result = await manager.reconcilePendingSessionIdentities({ cfg: baseCfg });
+
+    expect(result).toEqual({ checked: 0, resolved: 0, failed: 0 });
+    expect(runtimeState.ensureSession).not.toHaveBeenCalled();
+    expect(runtimeState.getStatus).not.toHaveBeenCalled();
+  });
+
   it("reconciles prompt-learned agent session IDs even when runtime status omits them", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockResolvedValue({

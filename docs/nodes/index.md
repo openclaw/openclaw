@@ -355,7 +355,7 @@ Examples:
 
 ```bash
 openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
-openclaw nodes invoke --node <idOrNameOrIp> --command system.which --params '{"name":"git"}'
+openclaw nodes invoke --node <idOrNameOrIp> --command system.which --params '{"bins":["git"]}'
 ```
 
 Notes:
