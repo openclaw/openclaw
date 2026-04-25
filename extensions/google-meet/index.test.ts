@@ -966,6 +966,121 @@ describe("google-meet plugin", () => {
     }
   });
 
+  it("CLI doctor verifies Google Meet OAuth refresh without printing secrets", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      return new Response(
+        JSON.stringify({
+          access_token: "new-access-token",
+          expires_in: 3600,
+          token_type: "Bearer",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ensureRuntime = vi.fn(async () => {
+      throw new Error("runtime should not be loaded for OAuth doctor");
+    });
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({
+        oauth: {
+          clientId: "client-id",
+          clientSecret: "client-secret",
+          refreshToken: "rt-secret",
+        },
+      }),
+      ensureRuntime: ensureRuntime as unknown as () => Promise<GoogleMeetRuntime>,
+    });
+
+    try {
+      await program.parseAsync(["googlemeet", "doctor", "--oauth", "--json"], { from: "user" });
+      const output = stdout.output();
+      expect(output).not.toContain("new-access-token");
+      expect(output).not.toContain("rt-secret");
+      expect(output).not.toContain("client-secret");
+      expect(JSON.parse(output)).toMatchObject({
+        ok: true,
+        configured: true,
+        tokenSource: "refresh-token",
+        checks: [
+          { id: "oauth-config", ok: true },
+          { id: "oauth-token", ok: true },
+        ],
+      });
+      expect(ensureRuntime).not.toHaveBeenCalled();
+      const body = fetchMock.mock.calls[0]?.[1]?.body as URLSearchParams;
+      expect(body.get("grant_type")).toBe("refresh_token");
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI doctor can prove Google Meet API create access", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url === "https://oauth2.googleapis.com/token") {
+          return new Response(
+            JSON.stringify({
+              access_token: "new-access-token",
+              expires_in: 3600,
+              token_type: "Bearer",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url === "https://meet.googleapis.com/v2/spaces") {
+          return new Response(
+            JSON.stringify({
+              name: "spaces/new-space",
+              meetingUri: "https://meet.google.com/new-abcd-xyz",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({
+        oauth: {
+          clientId: "client-id",
+          refreshToken: "refresh-token",
+        },
+      }),
+      ensureRuntime: async () => ({}) as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(["googlemeet", "doctor", "--oauth", "--create-space", "--json"], {
+        from: "user",
+      });
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        ok: true,
+        tokenSource: "refresh-token",
+        createdSpace: "spaces/new-space",
+        meetingUri: "https://meet.google.com/new-abcd-xyz",
+        checks: [
+          { id: "oauth-config", ok: true },
+          { id: "oauth-token", ok: true },
+          { id: "meet-spaces-create", ok: true },
+        ],
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("CLI recover-tab focuses and summarizes an existing Meet tab", async () => {
     const program = new Command();
     const stdout = captureStdout();
