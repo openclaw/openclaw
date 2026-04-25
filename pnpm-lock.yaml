@@ -84,9 +84,6 @@ importers:
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
-      express:
-        specifier: ^5.2.1
-        version: 5.2.1
       file-type:
         specifier: 22.0.1
         version: 22.0.1

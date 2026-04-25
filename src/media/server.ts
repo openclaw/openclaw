@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
-import type { Server } from "node:http";
-import express, { type Express, type RequestHandler } from "express";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { danger } from "../globals.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { detectMime } from "./mime.js";
@@ -17,12 +16,6 @@ const MAX_MEDIA_ID_CHARS = 200;
 const MEDIA_ID_PATTERN = /^[\p{L}\p{N}._-]+$/u;
 const MAX_MEDIA_BYTES = MEDIA_MAX_BYTES;
 
-function asyncMediaRoute(handler: RequestHandler): RequestHandler {
-  return (req, res, next) => {
-    Promise.resolve(handler(req, res, next)).catch(next);
-  };
-}
-
 const isValidMediaId = (id: string) => {
   if (!id) {
     return false;
@@ -36,20 +29,46 @@ const isValidMediaId = (id: string) => {
   return MEDIA_ID_PATTERN.test(id);
 };
 
-export function attachMediaRoutes(
-  app: Express,
-  ttlMs = DEFAULT_TTL_MS,
-  _runtime: RuntimeEnv = defaultRuntime,
-) {
+function sendText(res: ServerResponse, statusCode: number, body: string): void {
+  res.statusCode = statusCode;
+  res.end(body);
+}
+
+function resolveMediaId(req: IncomingMessage): { routeMatched: boolean; id?: string } {
+  if (req.method !== "GET") {
+    return { routeMatched: false };
+  }
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  const prefix = "/media/";
+  if (!url.pathname.startsWith(prefix)) {
+    return { routeMatched: false };
+  }
+  const encodedId = url.pathname.slice(prefix.length);
+  if (!encodedId || encodedId.includes("/")) {
+    return { routeMatched: false };
+  }
+  try {
+    return { routeMatched: true, id: decodeURIComponent(encodedId) };
+  } catch {
+    return { routeMatched: true, id: "" };
+  }
+}
+
+export function createMediaRequestHandler(ttlMs = DEFAULT_TTL_MS) {
   const mediaDir = getMediaDir();
 
-  app.get(
-    "/media/:id",
-    asyncMediaRoute(async (req, res) => {
+  return (req: IncomingMessage, res: ServerResponse) => {
+    const route = resolveMediaId(req);
+    if (!route.routeMatched) {
+      sendText(res, 404, "not found");
+      return;
+    }
+
+    void (async () => {
       res.setHeader("X-Content-Type-Options", "nosniff");
-      const id = typeof req.params.id === "string" ? req.params.id : "";
+      const id = route.id ?? "";
       if (!isValidMediaId(id)) {
-        res.status(400).send("invalid path");
+        sendText(res, 400, "invalid path");
         return;
       }
       try {
@@ -64,14 +83,15 @@ export function attachMediaRoutes(
         });
         if (Date.now() - stat.mtimeMs > ttlMs) {
           await fs.rm(realPath).catch(() => {});
-          res.status(410).send("expired");
+          sendText(res, 410, "expired");
           return;
         }
         const mime = await detectMime({ buffer: data, filePath: realPath });
         if (mime) {
-          res.type(mime);
+          res.setHeader("Content-Type", mime);
         }
-        res.send(data);
+        res.statusCode = 200;
+        res.end(data);
         // best-effort single-use cleanup after response ends
         res.on("finish", () => {
           const cleanup = () => {
@@ -87,27 +107,35 @@ export function attachMediaRoutes(
       } catch (err) {
         if (isSafeOpenError(err)) {
           if (err.code === "outside-workspace") {
-            res.status(400).send("file is outside workspace root");
+            sendText(res, 400, "file is outside workspace root");
             return;
           }
           if (err.code === "invalid-path") {
-            res.status(400).send("invalid path");
+            sendText(res, 400, "invalid path");
             return;
           }
           if (err.code === "not-found") {
-            res.status(404).send("not found");
+            sendText(res, 404, "not found");
             return;
           }
           if (err.code === "too-large") {
-            res.status(413).send("too large");
+            sendText(res, 413, "too large");
             return;
           }
         }
-        res.status(404).send("not found");
+        sendText(res, 404, "not found");
       }
-    }),
-  );
+    })().catch(() => {
+      if (!res.headersSent) {
+        sendText(res, 404, "not found");
+      } else {
+        res.destroy();
+      }
+    });
+  };
+}
 
+function startMediaCleanupInterval(ttlMs: number): void {
   // periodic cleanup
   setInterval(() => {
     void cleanOldMedia(ttlMs, { recursive: false });
@@ -119,10 +147,10 @@ export async function startMediaServer(
   ttlMs = DEFAULT_TTL_MS,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<Server> {
-  const app = express();
-  attachMediaRoutes(app, ttlMs, runtime);
+  const server = createServer(createMediaRequestHandler(ttlMs));
+  startMediaCleanupInterval(ttlMs);
   return await new Promise((resolve, reject) => {
-    const server = app.listen(port, "127.0.0.1");
+    server.listen(port, "127.0.0.1");
     server.once("listening", () => resolve(server));
     server.once("error", (err) => {
       runtime.error(danger(`Media server failed: ${String(err)}`));
