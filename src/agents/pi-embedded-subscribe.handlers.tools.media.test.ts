@@ -388,7 +388,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
-  it("still queues structured media for markdown verbose output", async () => {
+  it("queues structured media once for markdown verbose output", async () => {
     const ctx = await handleVerboseGeneratedImage("markdown");
 
     expect(ctx.emitToolOutput).toHaveBeenCalled();

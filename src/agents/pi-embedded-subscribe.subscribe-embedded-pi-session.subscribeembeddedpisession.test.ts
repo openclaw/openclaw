@@ -309,6 +309,66 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payload?.mediaUrls).toBeUndefined();
   });
 
+  it("delivers generated image media once in markdown verbose output", async () => {
+    const onToolResult = vi.fn();
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onBlockReply,
+      verboseLevel: "full",
+      blockReplyBreak: "message_end",
+      builtinToolNames: new Set(["image_generate"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "image_generate",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+    const toolPayload = onToolResult.mock.calls.at(-1)?.[0] as
+      | { text?: string; mediaUrls?: string[] }
+      | undefined;
+    expect(toolPayload?.text ?? "").toContain("Generated 1 image");
+    expect(toolPayload?.mediaUrls).toBeUndefined();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Here is the image.");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the image." }],
+      },
+    });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here is the image.",
+        mediaUrls: ["/tmp/generated.png"],
+      }),
+    );
+  });
+
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createSubscribedHarness({
