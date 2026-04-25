@@ -1913,6 +1913,10 @@ describe("memory-core dreaming phases", () => {
         // stay in the corpus; they are ordinary user prose, not scheduler
         // scaffolding.
         makeMessage("user", "[cron:daily] explain this tag please", 35),
+        // Standalone sentinel-looking assistant text must stay unless it is the
+        // immediate answer to runtime cron/heartbeat scaffolding.
+        makeMessage("assistant", "NO_REPLY", 40),
+        makeMessage("assistant", "HEARTBEAT_OK", 45),
       ].join("\n") + "\n",
       "utf-8",
     );
@@ -1963,8 +1967,6 @@ describe("memory-core dreaming phases", () => {
     // Automation scaffolding must not leak into the corpus.
     expect(corpus).not.toContain("[cron:abc-123");
     expect(corpus).not.toContain("[cron:heartbeat-daily");
-    expect(corpus).not.toMatch(/Assistant:\s*NO_REPLY/);
-    expect(corpus).not.toMatch(/Assistant:\s*HEARTBEAT_OK/);
 
     // Legitimate prose that merely mentions cron must still be ingested.
     expect(corpus).toContain("wire up a cron job to back up the vault");
@@ -1973,5 +1975,9 @@ describe("memory-core dreaming phases", () => {
     // bracketed cron tag must NOT be treated as runtime cron scaffolding.
     expect(corpus).toContain("[cron:0 3 * * *] explain this schedule");
     expect(corpus).toContain("[cron:daily] explain this tag");
+    // User-influenced assistant messages that happen to equal automation
+    // sentinels remain traceable instead of silently bypassing ingestion.
+    expect(corpus).toMatch(/Assistant:\s*NO_REPLY/);
+    expect(corpus).toMatch(/Assistant:\s*HEARTBEAT_OK/);
   });
 });

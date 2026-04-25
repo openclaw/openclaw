@@ -562,17 +562,17 @@ function normalizeSessionCorpusSnippet(value: string): string {
  *   include a job-name segment before the closing bracket — tight enough to
  *   leave user text like “User: [cron:daily] explain this tag” untouched while
  *   still catching runtime-injected prompts.
- * - Assistant `NO_REPLY` sentinels, which are the documented "silent reply"
- *   marker from the system prompt rather than actual content.
- * - System-injected `HEARTBEAT_OK` acknowledgements from heartbeat polls.
+ * - Assistant `NO_REPLY` / `HEARTBEAT_OK` lines only when they directly answer
+ *   one of those runtime-shaped cron/heartbeat prompts. Standalone assistant
+ *   messages with those strings are preserved so user-influenced sentinel text
+ *   cannot silently bypass the dreaming corpus.
  *
- * Everything else (including real user mentions of the word "cron" in
- * prose) is passed through untouched, because the matches are anchored
- * on the `User:`/`Assistant:` role prefix produced by `buildSessionEntry`.
+ * Everything else (including real user mentions of the word "cron" in prose or
+ * assistant messages that literally say `NO_REPLY`) is passed through untouched.
  *
  * See openclaw/openclaw#68449 issue 2.
  */
-function isCronNoiseSessionSnippet(snippet: string): boolean {
+function isCronRuntimePromptSessionSnippet(snippet: string): boolean {
   // `snippet` has already been trimmed + max-length-clamped by
   // `normalizeSessionCorpusSnippet`, and the call site rejects anything
   // shorter than `SESSION_INGESTION_MIN_SNIPPET_CHARS`, so no empty-string
@@ -585,15 +585,11 @@ function isCronNoiseSessionSnippet(snippet: string): boolean {
   if (/^User:\s*\[cron:[A-Za-z0-9_-]{4,}\s+[^\]]+\]\s+/i.test(snippet)) {
     return true;
   }
-  // Silent-reply sentinel and heartbeat acks are fixed strings the assistant
-  // is instructed to emit instead of real content.
-  if (/^Assistant:\s*NO_REPLY\s*$/i.test(snippet)) {
-    return true;
-  }
-  if (/^Assistant:\s*HEARTBEAT_OK\s*$/i.test(snippet)) {
-    return true;
-  }
   return false;
+}
+
+function isRuntimeAutomationAssistantAckSessionSnippet(snippet: string): boolean {
+  return /^Assistant:\s*(?:NO_REPLY|HEARTBEAT_OK)\s*$/i.test(snippet);
 }
 
 function hashSessionMessageId(value: string): string {
@@ -870,6 +866,7 @@ async function collectSessionIngestionBatches(params: {
     const fileCap = Math.max(1, Math.min(perFileCap, remaining));
     let fileCount = 0;
     let lastScannedContentLine = cursor;
+    let pendingRuntimePromptAckDrop = false;
     for (let index = cursor; index < lines.length; index += 1) {
       if (fileCount >= fileCap || remaining <= 0) {
         break;
@@ -880,12 +877,22 @@ async function collectSessionIngestionBatches(params: {
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
         continue;
       }
-      // Drop cron-triggered prompts and NO_REPLY/HEARTBEAT_OK sentinels so
-      // they don't flood the dreaming corpus with automation scaffolding.
+      // Drop cron-triggered prompts and the immediately following fixed
+      // assistant ack only as a pair. That keeps user-influenced standalone
+      // `Assistant: NO_REPLY` / `Assistant: HEARTBEAT_OK` text traceable.
       // See openclaw/openclaw#68449 issue 2.
-      if (isCronNoiseSessionSnippet(snippet)) {
+      if (isCronRuntimePromptSessionSnippet(snippet)) {
+        pendingRuntimePromptAckDrop = true;
         continue;
       }
+      if (
+        pendingRuntimePromptAckDrop &&
+        isRuntimeAutomationAssistantAckSessionSnippet(snippet)
+      ) {
+        pendingRuntimePromptAckDrop = false;
+        continue;
+      }
+      pendingRuntimePromptAckDrop = false;
       const lineNumber = entry.lineMap[index] ?? index + 1;
       const messageTimestampMs = entry.messageTimestampsMs[index] ?? 0;
       const day = formatMemoryDreamingDay(
