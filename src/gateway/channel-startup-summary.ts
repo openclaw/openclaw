@@ -86,6 +86,7 @@ export function summarizeChannelStartup(params: {
     perChannel.push({ channelId, total: channelTotal, counts });
   }
 
+  failingChannels.sort((a, b) => a.localeCompare(b));
   perChannel.sort((a, b) => a.channelId.localeCompare(b.channelId));
   failingChannels.sort((a, b) => a.localeCompare(b));
   const failingLabel = failingChannels.length > 0 ? failingChannels.join(",") : "none";
