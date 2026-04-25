@@ -20,6 +20,7 @@ export type RunCrestodianOptions = {
   yes?: boolean;
   json?: boolean;
   interactive?: boolean;
+  onReady?: () => void;
   deps?: CrestodianCommandDeps;
   planWithAssistant?: CrestodianAssistantPlanner;
   input?: NodeJS.ReadableStream;
@@ -77,13 +78,6 @@ export async function runCrestodian(
 
   const runInteractiveTui =
     opts.runInteractiveTui ?? (await import("./tui-backend.js")).runCrestodianTui;
-  await withProgress(
-    {
-      label: "Starting Crestodian…",
-      indeterminate: true,
-      delayMs: 120,
-      fallback: "none",
-    },
-    async () => await runInteractiveTui(opts, runtime),
-  );
+  opts.onReady?.();
+  await runInteractiveTui(opts, runtime);
 }
