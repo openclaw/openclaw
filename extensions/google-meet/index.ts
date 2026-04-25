@@ -11,14 +11,14 @@ import {
   type GoogleMeetTransport,
 } from "./src/config.js";
 import {
-  buildGoogleMeetPreflightReport,
-  createGoogleMeetSpace,
-  fetchGoogleMeetSpace,
-} from "./src/meet.js";
+  createAndJoinMeetFromParams,
+  createMeetFromParams,
+  shouldJoinCreatedMeet,
+} from "./src/create.js";
+import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
-import { createMeetWithBrowserProxyOnNode } from "./src/transports/chrome.js";
 
 const googleMeetConfigSchema = {
   parse(value: unknown) {
@@ -223,94 +223,6 @@ async function resolveSpaceFromParams(config: GoogleMeetConfig, raw: Record<stri
     meeting,
   });
   return { meeting, token, space };
-}
-
-async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<string, unknown>) {
-  const token = await resolveGoogleMeetAccessToken({
-    clientId: normalizeOptionalString(raw.clientId) ?? config.oauth.clientId,
-    clientSecret: normalizeOptionalString(raw.clientSecret) ?? config.oauth.clientSecret,
-    refreshToken: normalizeOptionalString(raw.refreshToken) ?? config.oauth.refreshToken,
-    accessToken: normalizeOptionalString(raw.accessToken) ?? config.oauth.accessToken,
-    expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : config.oauth.expiresAt,
-  });
-  const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
-  return { source: "api" as const, token, ...result };
-}
-
-function hasGoogleMeetOAuth(config: GoogleMeetConfig, raw: Record<string, unknown>): boolean {
-  return Boolean(
-    normalizeOptionalString(raw.accessToken) ??
-    normalizeOptionalString(raw.refreshToken) ??
-    config.oauth.accessToken ??
-    config.oauth.refreshToken,
-  );
-}
-
-function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
-  return raw.join !== false && raw.join !== "false";
-}
-
-async function createMeetFromParams(params: {
-  config: GoogleMeetConfig;
-  runtime: OpenClawPluginApi["runtime"];
-  raw: Record<string, unknown>;
-}) {
-  if (hasGoogleMeetOAuth(params.config, params.raw)) {
-    const { token: _token, ...result } = await createSpaceFromParams(params.config, params.raw);
-    return {
-      ...result,
-      joined: false,
-      nextAction:
-        "URL-only creation was requested. Call google_meet with action=join and url=meetingUri to enter the meeting.",
-    };
-  }
-  const browser = await createMeetWithBrowserProxyOnNode({
-    runtime: params.runtime,
-    config: params.config,
-  });
-  return {
-    source: browser.source,
-    meetingUri: browser.meetingUri,
-    joined: false,
-    nextAction:
-      "URL-only creation was requested. Call google_meet with action=join and url=meetingUri to enter the meeting.",
-    space: {
-      name: `browser/${browser.meetingUri.split("/").pop()}`,
-      meetingUri: browser.meetingUri,
-    },
-    browser: {
-      nodeId: browser.nodeId,
-      targetId: browser.targetId,
-      browserUrl: browser.browserUrl,
-      browserTitle: browser.browserTitle,
-      notes: browser.notes,
-    },
-  };
-}
-
-async function createAndJoinMeetFromParams(params: {
-  config: GoogleMeetConfig;
-  runtime: OpenClawPluginApi["runtime"];
-  raw: Record<string, unknown>;
-  ensureRuntime: () => Promise<GoogleMeetRuntime>;
-}) {
-  const created = await createMeetFromParams(params);
-  const rt = await params.ensureRuntime();
-  const join = await rt.join({
-    url: created.meetingUri,
-    transport: normalizeTransport(params.raw.transport),
-    mode: normalizeMode(params.raw.mode),
-    dialInNumber: normalizeOptionalString(params.raw.dialInNumber),
-    pin: normalizeOptionalString(params.raw.pin),
-    dtmfSequence: normalizeOptionalString(params.raw.dtmfSequence),
-    message: normalizeOptionalString(params.raw.message),
-  });
-  return {
-    ...created,
-    joined: true,
-    nextAction: "Share meetingUri with participants; the OpenClaw agent has started the join flow.",
-    join,
-  };
 }
 
 export default definePluginEntry({
