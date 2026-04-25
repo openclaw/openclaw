@@ -97,6 +97,16 @@ describe("package dist inventory", () => {
         ".bin",
         "fxparser",
       );
+      const omittedInstallStageSymlink = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "amazon-bedrock-mantle",
+        ".openclaw-install-stage",
+        "node_modules",
+        ".bin",
+        "anthropic-ai-sdk",
+      );
       const omittedExtensionNodeModuleSymlink = path.join(
         packageRoot,
         "dist",
@@ -122,6 +132,7 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(omittedRuntimeDepsStamp), { recursive: true });
       await fs.mkdir(path.dirname(omittedRuntimeDepsTempFile), { recursive: true });
       await fs.mkdir(path.dirname(omittedRuntimeDepsTempSymlink), { recursive: true });
+      await fs.mkdir(path.dirname(omittedInstallStageSymlink), { recursive: true });
       await fs.mkdir(path.dirname(omittedExtensionNodeModuleSymlink), { recursive: true });
       await fs.mkdir(path.dirname(omittedExtensionRootAliasSymlink), { recursive: true });
       await fs.mkdir(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
@@ -137,6 +148,7 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedRuntimeDepsStamp, "{}\n", "utf8");
       await fs.writeFile(omittedRuntimeDepsTempFile, "module.exports = 1;\n", "utf8");
       await fs.symlink(path.join(packageRoot, "color-support.js"), omittedRuntimeDepsTempSymlink);
+      await fs.symlink(path.join(packageRoot, "color-support.js"), omittedInstallStageSymlink);
       await fs.symlink(
         path.join(packageRoot, "color-support.js"),
         omittedExtensionNodeModuleSymlink,

@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/update: omit temporary bundled-extension `.openclaw-install-stage` trees from the packaged dist inventory, avoiding false unsafe-path failures on package-manager `.bin` symlinks during `openclaw update`.
 - Windows/native: keep CLI startup and bundled provider plugin loading off
   Windows ESM raw-path failure paths, fixing native onboarding/install smoke on
   Node 24. Thanks @steipete.
