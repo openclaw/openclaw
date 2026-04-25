@@ -19,6 +19,7 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { safeRealpathSync } from "./path-safety.js";
 import { hasKind } from "./slots.js";
 
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -284,8 +285,15 @@ function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string 
   if (!candidate?.packageDir) {
     return undefined;
   }
-  const packageJsonPath = path.join(candidate.packageDir, "package.json");
+  const packageDir = safeRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
+  const packageJsonPath = path.join(packageDir, "package.json");
   return fs.existsSync(packageJsonPath) ? packageJsonPath : undefined;
+}
+
+function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string): string {
+  const resolvedRootDir = safeRealpathSync(rootDir) ?? path.resolve(rootDir);
+  const relativePath = path.relative(resolvedRootDir, packageJsonPath) || "package.json";
+  return relativePath.split(path.sep).join("/");
 }
 
 function resolvePackageJsonRecord(params: {
@@ -307,7 +315,7 @@ function resolvePackageJsonRecord(params: {
     return undefined;
   }
   return {
-    path: path.relative(params.candidate.rootDir, params.packageJsonPath) || "package.json",
+    path: resolvePackageJsonRelativePath(params.candidate.rootDir, params.packageJsonPath),
     hash,
   };
 }
