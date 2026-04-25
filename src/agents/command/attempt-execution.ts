@@ -64,6 +64,7 @@ type TranscriptUsage = {
 
 type PersistTextTurnTranscriptParams = {
   body: string;
+  transcriptBody?: string;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -97,7 +98,7 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
 async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
 ): Promise<SessionEntry | undefined> {
-  const promptText = params.body;
+  const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
   if (!promptText && !replyText) {
     return params.sessionEntry;
@@ -169,6 +170,7 @@ function isClaudeCliProvider(provider: string): boolean {
 
 export async function persistAcpTurnTranscript(params: {
   body: string;
+  transcriptBody?: string;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -191,6 +193,7 @@ export async function persistAcpTurnTranscript(params: {
 
 export async function persistCliTurnTranscript(params: {
   body: string;
+  transcriptBody?: string;
   result: EmbeddedPiRunResult;
   sessionId: string;
   sessionKey: string;
@@ -207,6 +210,7 @@ export async function persistCliTurnTranscript(params: {
 
   return await persistTextTurnTranscript({
     body: params.body,
+    transcriptBody: params.transcriptBody,
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

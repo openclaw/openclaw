@@ -162,6 +162,24 @@ describe("active-memory plugin", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
   });
 
+  it("runs recall without recording shared auth-profile failures", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileFailurePolicy: "local",
+      }),
+    );
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
@@ -566,6 +584,7 @@ describe("active-memory plugin", () => {
           },
         },
       },
+      cleanupBundleMcpOnRunEnd: true,
     });
   });
 
@@ -653,6 +672,9 @@ describe("active-memory plugin", () => {
       "You receive conversation context, including the user's latest message.",
     );
     expect(runParams?.prompt).toContain("Use only memory_search and memory_get.");
+    expect(runParams?.prompt).toContain(
+      "When searching for preference or habit recall, use a permissive memory_search threshold before deciding that no useful memory exists.",
+    );
     expect(runParams?.prompt).toContain(
       "If the user is directly asking about favorites, preferences, habits, routines, or personal facts, treat that as a strong recall signal.",
     );
@@ -897,6 +919,53 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
       provider: "qwen",
       model: "glm-5",
+    });
+  });
+
+  it("infers the configured provider for bare active-memory default models", async () => {
+    api.config = {
+      agents: {
+        defaults: {
+          model: { primary: "gpt-5.5" },
+        },
+      },
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT 5.5",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    };
+    api.pluginConfig = {
+      agents: ["main"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? bare model default", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.5",
     });
   });
 

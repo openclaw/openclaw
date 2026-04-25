@@ -22,6 +22,10 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { isLoopbackHost } from "../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
+import type {
+  ImageGenerationOpenAIBackground,
+  ImageGenerationOutputFormat,
+} from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import {
   describeImageFile,
@@ -61,6 +65,7 @@ import {
   textToSpeech,
 } from "../tts/tts.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "../video-generation/runtime.js";
+import type { VideoGenerationResolution } from "../video-generation/types.js";
 import {
   isWebFetchProviderConfigured,
   resolveWebFetchDefinition,
@@ -77,6 +82,8 @@ import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
 type CapabilityTransport = "local" | "gateway";
+const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
+const OPENAI_IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 
 type CapabilityMetadata = {
   id: string;
@@ -267,7 +274,19 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "video.generate",
     description: "Generate video files with configured video providers.",
     transports: ["local"],
-    flags: ["--prompt", "--model", "--output", "--json"],
+    flags: [
+      "--prompt",
+      "--model",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
+      "--duration",
+      "--audio",
+      "--watermark",
+      "--timeout-ms",
+      "--output",
+      "--json",
+    ],
     resultShape: "saved video files plus attempts",
   },
   {
@@ -530,6 +549,7 @@ async function runModelRun(params: {
         agentId,
         model: params.model,
         json: false,
+        cleanupBundleMcpOnRunEnd: true,
       },
       {
         ...defaultRuntime,
@@ -565,6 +585,7 @@ async function runModelRun(params: {
       message: params.prompt,
       provider,
       model,
+      cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
     },
     expectFinal: true,
@@ -687,8 +708,11 @@ async function runImageGenerate(params: {
   size?: string;
   aspectRatio?: string;
   resolution?: "1K" | "2K" | "4K";
+  outputFormat?: ImageGenerationOutputFormat;
+  openaiBackground?: ImageGenerationOpenAIBackground;
   file?: string[];
   output?: string;
+  timeoutMs?: number;
 }) {
   const cfg = loadConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
@@ -712,6 +736,11 @@ async function runImageGenerate(params: {
     size: params.size,
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
+    outputFormat: params.outputFormat,
+    providerOptions: params.openaiBackground
+      ? { openai: { background: params.openaiBackground } }
+      : undefined,
+    timeoutMs: params.timeoutMs,
     inputImages,
   });
   const outputs = await Promise.all(
@@ -820,7 +849,74 @@ async function runAudioTranscribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
-async function runVideoGenerate(params: { prompt: string; model?: string; output?: string }) {
+function parseOptionalFiniteNumber(
+  raw: string | number | undefined,
+  label: string,
+): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`);
+  }
+  return value;
+}
+
+function normalizeImageOutputFormat(
+  raw: string | undefined,
+): ImageGenerationOutputFormat | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if ((IMAGE_OUTPUT_FORMATS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOutputFormat;
+  }
+  throw new Error("--output-format must be one of png, jpeg, or webp");
+}
+
+function normalizeOpenAIImageBackground(
+  raw: string | undefined,
+): ImageGenerationOpenAIBackground | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if ((OPENAI_IMAGE_BACKGROUNDS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOpenAIBackground;
+  }
+  throw new Error("--openai-background must be one of transparent, opaque, or auto");
+}
+
+function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
+  const normalized = raw?.trim().toUpperCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "480P" ||
+    normalized === "720P" ||
+    normalized === "768P" ||
+    normalized === "1080P"
+  ) {
+    return normalized;
+  }
+  throw new Error("video resolution must be one of 480P, 720P, 768P, or 1080P");
+}
+
+async function runVideoGenerate(params: {
+  prompt: string;
+  model?: string;
+  output?: string;
+  size?: string;
+  aspectRatio?: string;
+  resolution?: VideoGenerationResolution;
+  durationSeconds?: number;
+  audio?: boolean;
+  watermark?: boolean;
+  timeoutMs?: number;
+}) {
   const cfg = loadConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const result = await generateVideo({
@@ -828,6 +924,13 @@ async function runVideoGenerate(params: { prompt: string; model?: string; output
     agentDir,
     prompt: params.prompt,
     modelOverride: params.model,
+    size: params.size,
+    aspectRatio: params.aspectRatio,
+    resolution: params.resolution,
+    durationSeconds: params.durationSeconds,
+    audio: params.audio,
+    watermark: params.watermark,
+    timeoutMs: params.timeoutMs,
   });
   const outputs = await Promise.all(
     result.videos.map(async (video, index) => {
@@ -1373,6 +1476,9 @@ export function registerCapabilityCli(program: Command) {
     .option("--size <size>", "Size hint like 1024x1024")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
     .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
+    .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+    .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -1385,6 +1491,11 @@ export function registerCapabilityCli(program: Command) {
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
+          outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
+          openaiBackground: normalizeOpenAIImageBackground(
+            opts.openaiBackground as string | undefined,
+          ),
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1397,6 +1508,9 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
+    .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -1407,6 +1521,11 @@ export function registerCapabilityCli(program: Command) {
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
           file: files,
+          outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
+          openaiBackground: normalizeOpenAIImageBackground(
+            opts.openaiBackground as string | undefined,
+          ),
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1678,6 +1797,13 @@ export function registerCapabilityCli(program: Command) {
     .description("Generate video")
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--size <size>", "Size hint like 1280x720")
+    .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
+    .option("--resolution <value>", "Resolution hint: 480P, 720P, 768P, or 1080P")
+    .option("--duration <seconds>", "Target duration in seconds")
+    .option("--audio", "Enable generated audio when supported")
+    .option("--watermark", "Request provider watermark when supported")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
@@ -1686,6 +1812,13 @@ export function registerCapabilityCli(program: Command) {
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
           output: opts.output as string | undefined,
+          size: opts.size as string | undefined,
+          aspectRatio: opts.aspectRatio as string | undefined,
+          resolution: normalizeVideoResolution(opts.resolution as string | undefined),
+          durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
+          audio: opts.audio === true ? true : undefined,
+          watermark: opts.watermark === true ? true : undefined,
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });

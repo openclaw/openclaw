@@ -353,6 +353,41 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
 
+  it("keeps browser out of coding-profile subagents unless profile-stage alsoAllow adds it", () => {
+    const baseConfig = {
+      browser: { enabled: true },
+      plugins: { entries: { browser: { enabled: true } } },
+      tools: { profile: "coding" },
+    } as OpenClawConfig;
+    const codingSubagent = createOpenClawCodingTools({
+      sessionKey: "agent:main:subagent:test",
+      config: baseConfig,
+    });
+    const codingNames = new Set(codingSubagent.map((tool) => tool.name));
+    expect(codingNames.has("browser")).toBe(false);
+
+    const subagentAllowOnly = createOpenClawCodingTools({
+      sessionKey: "agent:main:subagent:test",
+      config: {
+        ...baseConfig,
+        tools: {
+          profile: "coding",
+          subagents: { tools: { allow: ["browser"] } },
+        },
+      } as OpenClawConfig,
+    });
+    expect(subagentAllowOnly.some((tool) => tool.name === "browser")).toBe(false);
+
+    const profileStageAlsoAllow = createOpenClawCodingTools({
+      sessionKey: "agent:main:subagent:test",
+      config: {
+        ...baseConfig,
+        tools: { profile: "coding", alsoAllow: ["browser"] },
+      } as OpenClawConfig,
+    });
+    expect(profileStageAlsoAllow.some((tool) => tool.name === "browser")).toBe(true);
+  });
+
   it("can keep message available when a cron route needs it under the coding profile", () => {
     const codingTools = createOpenClawCodingTools({
       config: { tools: { profile: "coding" } },

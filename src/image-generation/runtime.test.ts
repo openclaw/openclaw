@@ -80,6 +80,48 @@ describe("image-generation runtime", () => {
     expect(result.ignoredOverrides).toEqual([]);
   });
 
+  it("uses configured image-generation timeout when the call omits timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("image-plugin/img-v1");
+    const provider: ImageGenerationProvider = {
+      id: "image-plugin",
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
+      },
+      async generateImage(req: { timeoutMs?: number }) {
+        seenTimeoutMs = req.timeoutMs;
+        return {
+          images: [
+            {
+              buffer: Buffer.from("png-bytes"),
+              mimeType: "image/png",
+              fileName: "sample.png",
+            },
+          ],
+          model: "img-v1",
+        };
+      },
+    };
+    mocks.getImageGenerationProvider.mockReturnValue(provider);
+
+    await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "image-plugin/img-v1",
+              timeoutMs: 180_000,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(180_000);
+  });
+
   it("auto-detects and falls through to another configured image-generation provider by default", async () => {
     mocks.getImageGenerationProvider.mockImplementation((providerId: string) => {
       if (providerId === "openai") {

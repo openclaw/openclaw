@@ -68,6 +68,7 @@ observation-only.
 
 **Conversation observation**
 
+- `model_call_started` / `model_call_ended` — observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` — observe provider input (system prompt, prompt, history)
 - `llm_output` — observe provider output
 
@@ -146,6 +147,21 @@ Rules:
 - `onResolution` receives the resolved approval decision — `allow-once`,
   `allow-always`, `deny`, `timeout`, or `cancelled`.
 
+### Tool result persistence
+
+Tool results can include structured `details` for UI rendering, diagnostics,
+media routing, or plugin-owned metadata. Treat `details` as runtime metadata,
+not prompt content:
+
+- OpenClaw strips `toolResult.details` before provider replay and compaction
+  input so metadata does not become model context.
+- Persisted session entries keep only bounded `details`. Oversized details are
+  replaced with a compact summary and `persistedDetailsTruncated: true`.
+- `tool_result_persist` and `before_message_write` run before the final
+  persistence cap. Hooks should still keep returned `details` small and avoid
+  placing prompt-relevant text only in `details`; put model-visible tool output
+  in `content`.
+
 ## Prompt and model hooks
 
 Use the phase-specific hooks for new plugins:
@@ -158,6 +174,16 @@ Use the phase-specific hooks for new plugins:
 
 `before_agent_start` remains for compatibility. Prefer the explicit hooks above
 so your plugin does not depend on a legacy combined phase.
+
+`before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
+identify the active run. The same value is also available on `ctx.runId`.
+
+Use `model_call_started` and `model_call_ended` for provider-call telemetry
+that should not receive raw prompts, history, responses, headers, request
+bodies, or provider request IDs. These hooks include stable metadata such as
+`runId`, `callId`, `provider`, `model`, optional `api`/`transport`, terminal
+`durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
+bounded provider request-id hash.
 
 Non-bundled plugins that need `llm_input`, `llm_output`, or `agent_end` must set:
 
@@ -182,9 +208,20 @@ Prompt-mutating hooks can be disabled per plugin with
 
 Use message hooks for channel-level routing and delivery policy:
 
-- `message_received`: observe inbound content, sender, `threadId`, and metadata.
+- `message_received`: observe inbound content, sender, `threadId`, `messageId`,
+  `senderId`, optional run/session correlation, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
+
+For audio-only TTS replies, `content` may contain the hidden spoken transcript
+even when the channel payload has no visible text/caption. Rewriting that
+`content` updates the hook-visible transcript only; it is not rendered as a
+media caption.
+
+Message hook contexts expose stable correlation fields when available:
+`ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
+`ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Prefer
+these first-class fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
@@ -214,8 +251,30 @@ resources.
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
 
+## Upcoming deprecations
+
+A few hook-adjacent surfaces are deprecated but still supported. Migrate
+before the next major release:
+
+- **Plaintext channel envelopes** in `inbound_claim` and `message_received`
+  handlers. Read `BodyForAgent` and the structured user-context blocks
+  instead of parsing flat envelope text. See
+  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
+- **`before_agent_start`** remains for compatibility. New plugins should use
+  `before_model_resolve` and `before_prompt_build` instead of the combined
+  phase.
+- **`onResolution` in `before_tool_call`** now uses the typed
+  `PluginApprovalResolution` union (`allow-once` / `allow-always` / `deny` /
+  `timeout` / `cancelled`) instead of a free-form `string`.
+
+For the full list — memory capability registration, provider thinking
+profile, external auth providers, provider discovery types, task runtime
+accessors, and the `command-auth` → `command-status` rename — see
+[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#active-deprecations).
+
 ## Related
 
+- [Plugin SDK migration](/plugins/sdk-migration) — active deprecations and removal timeline
 - [Building plugins](/plugins/building-plugins)
 - [Plugin SDK overview](/plugins/sdk-overview)
 - [Plugin entry points](/plugins/sdk-entrypoints)

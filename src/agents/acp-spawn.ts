@@ -98,6 +98,7 @@ export type SpawnAcpParams = {
   agentId?: string;
   resumeSessionId?: string;
   model?: string;
+  thinking?: string;
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
@@ -826,6 +827,7 @@ async function initializeAcpSpawnRuntime(params: {
   runtimeMode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
   model?: string;
+  thinking?: string;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
@@ -850,7 +852,13 @@ async function initializeAcpSpawnRuntime(params: {
     agent: params.targetAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
-    runtimeOptions: params.model ? { model: params.model } : undefined,
+    runtimeOptions:
+      params.model || params.thinking
+        ? {
+            ...(params.model ? { model: params.model } : {}),
+            ...(params.thinking ? { thinking: params.thinking } : {}),
+          }
+        : undefined,
     cwd: params.cwd,
     backendId: params.cfg.acp?.backend,
   });
@@ -1070,7 +1078,9 @@ export async function spawnAcpDirect(
     return createAcpSpawnFailure({
       status: "error",
       errorCode: "thread_required",
-      error: 'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
+      error:
+        'sessions_spawn(runtime="acp", mode="session") requires thread=true so the ACP session can stay bound to a channel thread. ' +
+        'Retry with { mode: "session", thread: true } on a channel that exposes threads (e.g. Discord, Slack, Telegram topics), or use mode="run" for one-shot work.',
     });
   }
 
@@ -1189,6 +1199,7 @@ export async function spawnAcpDirect(
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
       model: params.model,
+      thinking: params.thinking,
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;

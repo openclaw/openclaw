@@ -508,9 +508,9 @@ describe("qa-lab server", () => {
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf8");`,
         "process.stdout.write(JSON.stringify({",
         "  models: [{",
-        '    key: "openai/gpt-5.4",',
-        '    name: "GPT-5.4",',
-        '    input: "openai/gpt-5.4",',
+        '    key: "openai/gpt-5.5",',
+        '    name: "GPT-5.5",',
+        '    input: "openai/gpt-5.5",',
         "    available: true,",
         "    missing: false,",
         "  }],",
@@ -726,7 +726,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -747,7 +747,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -796,7 +796,7 @@ describe("qa-lab server", () => {
         expect.objectContaining({
           flowId: "flow-1",
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           captureOrigin: "shared-fetch",
         }),
         expect.objectContaining({
@@ -828,7 +828,7 @@ describe("qa-lab server", () => {
     );
     expect(coverage.coverage.models).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ value: "gpt-5.4", count: 2 }),
+        expect.objectContaining({ value: "gpt-5.5", count: 2 }),
         expect.objectContaining({ value: "kimi-k2.5:cloud", count: 1 }),
       ]),
     );

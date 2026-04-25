@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
+import { migrateLegacySecretRefEnvMarkers } from "../../../secrets/legacy-secretref-env-marker.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
 import {
@@ -26,6 +27,11 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);
+  }
+  const secretRefMarkers = migrateLegacySecretRefEnvMarkers(next);
+  if (secretRefMarkers.changes.length > 0) {
+    next = secretRefMarkers.config;
+    changes.push(...secretRefMarkers.changes);
   }
   next = normalizeLegacyCommandsConfig(next, changes);
   next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);

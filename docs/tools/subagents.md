@@ -170,7 +170,7 @@ Auto-archive:
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
-## Nested Sub-Agents
+## Nested sub-agents
 
 By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). You can enable one level of nesting by setting `maxSpawnDepth: 2`, which allows the **orchestrator pattern**: main → orchestrator sub-agent → worker sub-sub-agents.
 
@@ -214,6 +214,11 @@ Operational guidance:
 - Start child work once and wait for completion events instead of building poll
   loops around `sessions_list`, `sessions_history`, `/subagents list`, or
   `exec` sleep commands.
+- `sessions_list` and `/subagents list` keep child-session relationships focused
+  on live work: live children remain attached, ended children stay visible for a
+  short recent window, and stale store-only child links are ignored after their
+  freshness window. This prevents old `spawnedBy` / `parentSessionKey` metadata
+  from resurrecting ghost children after restart.
 - If a child completion event arrives after you already sent the final answer,
   the correct follow-up is the exact silent token `NO_REPLY` / `no_reply`.
 
@@ -300,7 +305,11 @@ Announce payloads include a stats line at the end (even when wrapped):
 
 ## Tool Policy (sub-agent tools)
 
-By default, sub-agents get **all tools except session tools** and system tools:
+Sub-agents use the same profile and tool-policy pipeline as the parent or target
+agent first. After that, OpenClaw applies the sub-agent restriction layer.
+
+With no restrictive `tools.profile`, sub-agents get **all tools except session
+tools** and system tools:
 
 - `sessions_list`
 - `sessions_history`
@@ -336,12 +345,42 @@ Override via config:
 }
 ```
 
+`tools.subagents.tools.allow` is a final allow-only filter. It can narrow the
+already-resolved tool set, but it cannot add back a tool removed by
+`tools.profile`. For example, `tools.profile: "coding"` includes
+`web_search`/`web_fetch`, but not the `browser` tool. To let coding-profile
+sub-agents use browser automation, add browser at the profile stage:
+
+```json5
+{
+  tools: {
+    profile: "coding",
+    alsoAllow: ["browser"],
+  },
+}
+```
+
+Use per-agent `agents.list[].tools.alsoAllow: ["browser"]` when only one agent
+should get browser automation.
+
 ## Concurrency
 
 Sub-agents use a dedicated in-process queue lane:
 
 - Lane name: `subagent`
 - Concurrency: `agents.defaults.subagents.maxConcurrent` (default `8`)
+
+## Liveness and recovery
+
+OpenClaw does not treat `endedAt` absence as permanent proof that a sub-agent
+is still alive. Unended runs older than the stale-run window stop counting as
+active/pending in `/subagents list`, status summaries, descendant completion
+gating, and per-session concurrency checks.
+
+After a gateway restart, stale unended restored runs are pruned unless their
+child session is marked `abortedLastRun: true`. Those restart-aborted child
+sessions remain recoverable through the sub-agent orphan recovery flow, which
+sends a synthetic resume message before clearing the aborted marker.
 
 ## Stopping
 

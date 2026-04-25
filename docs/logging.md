@@ -206,6 +206,9 @@ Message flow:
 - `webhook.error`: webhook handler errors.
 - `message.queued`: message enqueued for processing.
 - `message.processed`: outcome + duration + optional error.
+- `message.delivery.started`: outbound delivery attempt started.
+- `message.delivery.completed`: outbound delivery attempt finished + duration/result count.
+- `message.delivery.error`: outbound delivery attempt failed + duration/bounded error category.
 
 Queue + session:
 
@@ -215,6 +218,12 @@ Queue + session:
 - `session.stuck`: session stuck warning + age.
 - `run.attempt`: run retry/attempt metadata.
 - `diagnostic.heartbeat`: aggregate counters (webhooks/queue/session).
+
+Exec:
+
+- `exec.process.completed`: terminal exec process outcome, duration, target, mode,
+  exit code, and failure kind. Command text and working directories are not
+  included.
 
 ### Enable diagnostics (no exporter)
 
@@ -279,7 +288,15 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
       "metrics": true,
       "logs": true,
       "sampleRate": 0.2,
-      "flushIntervalMs": 60000
+      "flushIntervalMs": 60000,
+      "captureContent": {
+        "enabled": false,
+        "inputMessages": false,
+        "outputMessages": false,
+        "toolInputs": false,
+        "toolOutputs": false,
+        "systemPrompt": false
+      }
     }
   }
 }
@@ -293,9 +310,16 @@ Notes:
   counters/histograms (webhooks, queueing, session state, queue depth/wait).
 - Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
   include model usage spans plus webhook/message processing spans when enabled.
+- Raw model/tool content is not exported by default. Use
+  `diagnostics.otel.captureContent` only when your collector and retention policy
+  are approved for prompt, response, tool, or system prompt text.
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
+- Set `OPENCLAW_OTEL_PRELOADED=1` when another preload or host process already
+  registered the global OpenTelemetry SDK. In that mode the plugin does not start
+  or shut down its own SDK, but it still wires OpenClaw diagnostic listeners and
+  honors `diagnostics.otel.traces`, `metrics`, and `logs`.
 
 ### Exported metrics (names + types)
 
@@ -309,6 +333,9 @@ Model usage:
   `openclaw.provider`, `openclaw.model`)
 - `openclaw.context.tokens` (histogram, attrs: `openclaw.context`,
   `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
+- `gen_ai.client.token.usage` (histogram, GenAI semantic-conventions metric,
+  attrs: `gen_ai.token.type` = `input`/`output`, `gen_ai.system`,
+  `gen_ai.operation.name`, `gen_ai.request.model`)
 
 Message flow:
 
@@ -324,6 +351,11 @@ Message flow:
   `openclaw.outcome`)
 - `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`,
   `openclaw.outcome`)
+- `openclaw.message.delivery.started` (counter, attrs: `openclaw.channel`,
+  `openclaw.delivery.kind`)
+- `openclaw.message.delivery.duration_ms` (histogram, attrs:
+  `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`,
+  `openclaw.errorCategory`)
 
 Queues + sessions:
 
@@ -337,12 +369,42 @@ Queues + sessions:
 - `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
 
+Exec:
+
+- `openclaw.exec.duration_ms` (histogram, attrs: `openclaw.exec.target`,
+  `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`)
+
+Diagnostics internals (memory + tool loop):
+
+- `openclaw.memory.heap_used_bytes` (histogram, attrs: `openclaw.memory.kind`)
+- `openclaw.memory.rss_bytes` (histogram)
+- `openclaw.memory.pressure` (counter, attrs: `openclaw.memory.level`)
+- `openclaw.tool.loop.iterations` (counter, attrs: `openclaw.toolName`,
+  `openclaw.outcome`)
+- `openclaw.tool.loop.duration_ms` (histogram, attrs: `openclaw.toolName`,
+  `openclaw.outcome`)
+
 ### Exported spans (names + key attributes)
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
-  - `openclaw.sessionKey`, `openclaw.sessionId`
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
+- `openclaw.run`
+  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`,
+    `openclaw.model`, `openclaw.errorCategory`
+- `openclaw.model.call`
+  - `gen_ai.system`, `gen_ai.request.model`, `gen_ai.operation.name`,
+    `openclaw.provider`, `openclaw.model`, `openclaw.api`,
+    `openclaw.transport`, `openclaw.provider.request_id_hash` (bounded
+    SHA-based hash of the upstream provider request id; raw ids are not
+    exported)
+- `openclaw.tool.execution`
+  - `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.errorCategory`,
+    `openclaw.tool.params.*`
+- `openclaw.exec`
+  - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`,
+    `openclaw.failureKind`, `openclaw.exec.command_length`,
+    `openclaw.exec.exit_code`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`
 - `openclaw.webhook.error`
@@ -350,11 +412,26 @@ Queues + sessions:
     `openclaw.error`
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`,
-    `openclaw.messageId`, `openclaw.sessionKey`, `openclaw.sessionId`,
-    `openclaw.reason`
+    `openclaw.messageId`, `openclaw.reason`
+- `openclaw.message.delivery`
+  - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`,
+    `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
-  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`,
-    `openclaw.sessionKey`, `openclaw.sessionId`
+  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
+- `openclaw.context.assembled`
+  - `openclaw.prompt.size`, `openclaw.history.size`,
+    `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt,
+    history, response, or session-key content)
+- `openclaw.tool.loop`
+  - `openclaw.toolName`, `openclaw.outcome`, `openclaw.iterations`,
+    `openclaw.errorCategory` (no loop messages, params, or tool output)
+- `openclaw.memory.pressure`
+  - `openclaw.memory.level`, `openclaw.memory.heap_used_bytes`,
+    `openclaw.memory.rss_bytes`
+
+When content capture is explicitly enabled, model/tool spans can also include
+bounded, redacted `openclaw.content.*` attributes for the specific content
+classes you opted into.
 
 ### Sampling + flushing
 
@@ -367,6 +444,8 @@ Queues + sessions:
   `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - If the endpoint already contains `/v1/traces` or `/v1/metrics`, it is used as-is.
 - If the endpoint already contains `/v1/logs`, it is used as-is for logs.
+- `OPENCLAW_OTEL_PRELOADED=1` reuses an externally registered OpenTelemetry SDK
+  for traces/metrics instead of starting a plugin-owned NodeSDK.
 - `diagnostics.otel.logs` enables OTLP log export for the main logger output.
 
 ### Log export behavior

@@ -332,6 +332,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         requesterSenderE164: params.ctx.SenderE164,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
+        mirror: false,
       });
       if (!result.ok) {
         if (tracksVisibleText) {

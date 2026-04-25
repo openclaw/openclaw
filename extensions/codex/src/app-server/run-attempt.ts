@@ -9,6 +9,7 @@ import {
   buildEmbeddedAttemptToolRunContext,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
+  emitAgentEvent as emitGlobalAgentEvent,
   finalizeHarnessContextEngineTurn,
   formatErrorMessage,
   isActiveHarnessContextEngine,
@@ -90,11 +91,29 @@ function emitCodexAppServerEvent(
   event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
 ): void {
   try {
-    params.onAgentEvent?.(event);
-  } catch {
+    emitGlobalAgentEvent({
+      runId: params.runId,
+      stream: event.stream,
+      data: event.data,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+  }
+  try {
+    const maybePromise = params.onAgentEvent?.(event);
+    void Promise.resolve(maybePromise).catch((error: unknown) => {
+      embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+    });
+  } catch (error) {
     // Event consumers are observational; they must not abort or strand the
     // canonical app-server turn lifecycle.
+    embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
   }
+}
+
+function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
+  return result.assistantTexts.join("\n\n").trim();
 }
 
 export async function runCodexAppServerAttempt(
@@ -335,11 +354,36 @@ export async function runCodexAppServerAttempt(
   let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
   let completed = false;
   let timedOut = false;
+  let lifecycleStarted = false;
+  let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
   const completion = new Promise<void>((resolve) => {
     resolveCompletion = resolve;
   });
   let notificationQueue: Promise<void> = Promise.resolve();
+
+  const emitLifecycleStart = () => {
+    emitCodexAppServerEvent(params, {
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: attemptStartedAt },
+    });
+    lifecycleStarted = true;
+  };
+
+  const emitLifecycleTerminal = (data: Record<string, unknown> & { phase: "end" | "error" }) => {
+    if (!lifecycleStarted || lifecycleTerminalEmitted) {
+      return;
+    }
+    emitCodexAppServerEvent(params, {
+      stream: "lifecycle",
+      data: {
+        startedAt: attemptStartedAt,
+        endedAt: Date.now(),
+        ...data,
+      },
+    });
+    lifecycleTerminalEmitted = true;
+  };
 
   const handleNotification = async (notification: CodexServerNotification) => {
     userInputBridge?.handleNotification(notification);
@@ -536,6 +580,7 @@ export async function runCodexAppServerAttempt(
     imagesCount: params.images?.length ?? 0,
   });
   projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId);
+  emitLifecycleStart();
   const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
@@ -622,6 +667,24 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
+    const terminalAssistantText = collectTerminalAssistantText(result);
+    if (terminalAssistantText && !finalAborted && !finalPromptError) {
+      emitCodexAppServerEvent(params, {
+        stream: "assistant",
+        data: { text: terminalAssistantText },
+      });
+    }
+    if (finalPromptError) {
+      emitLifecycleTerminal({
+        phase: "error",
+        error: formatErrorMessage(finalPromptError),
+      });
+    } else {
+      emitLifecycleTerminal({
+        phase: "end",
+        ...(finalAborted ? { aborted: true } : {}),
+      });
+    }
     if (activeContextEngine) {
       const finalMessages =
         readMirroredSessionHistoryMessages(params.sessionFile) ??
@@ -684,6 +747,10 @@ export async function runCodexAppServerAttempt(
       promptErrorSource: finalPromptErrorSource,
     };
   } finally {
+    emitLifecycleTerminal({
+      phase: "error",
+      error: "codex app-server run completed without lifecycle terminal event",
+    });
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
         status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
