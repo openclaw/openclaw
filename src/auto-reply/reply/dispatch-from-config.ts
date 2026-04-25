@@ -72,7 +72,12 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
-import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import {
+  claimInboundDedupe,
+  commitInboundDedupe,
+  poisonInboundDedupe,
+  releaseInboundDedupe,
+} from "./inbound-dedupe.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -671,6 +676,12 @@ export async function dispatchReplyFromConfig(
 
   markProcessing();
 
+  // Tracks whether an outbound reply has been dispatched in this turn. Used by
+  // the catch path below to choose between releaseInboundDedupe (safe-retry on
+  // transient pre-dispatch failure) and poisonInboundDedupe (block replay once
+  // any externally-visible reply has gone out). See #69303.
+  let outboundReplyDispatched = false;
+
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -738,13 +749,20 @@ export async function dispatchReplyFromConfig(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
+        if (result.ok) {
+          outboundReplyDispatched = true;
+        }
         return {
           queuedFinal: result.ok,
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
+      const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
+      if (queuedFinal) {
+        outboundReplyDispatched = true;
+      }
       return {
-        queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
+        queuedFinal,
         routedFinalCount: 0,
       };
     };
@@ -1200,6 +1218,7 @@ export async function dispatchReplyFromConfig(
               queuedFinal = result.ok || queuedFinal;
               if (result.ok) {
                 routedFinalCount += 1;
+                outboundReplyDispatched = true;
               }
               if (!result.ok) {
                 logVerbose(
@@ -1209,6 +1228,9 @@ export async function dispatchReplyFromConfig(
             } else {
               const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
+              if (didQueue) {
+                outboundReplyDispatched = true;
+              }
             }
           }
         } catch (err) {
@@ -1232,7 +1254,16 @@ export async function dispatchReplyFromConfig(
     return { queuedFinal, counts };
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
-      releaseInboundDedupe(inboundDedupeClaim.key);
+      if (outboundReplyDispatched) {
+        // A reply has gone out — replaying the same message_id would surface a
+        // duplicate visible message and re-run any associated turn-state side
+        // effects. Stamp the cache so the inbound entrypoint short-circuits.
+        poisonInboundDedupe(inboundDedupeClaim.key);
+      } else {
+        // Nothing emitted yet; the original release-after-error contract from
+        // 7c91d0dbc9 still applies — let the same message_id retry cleanly.
+        releaseInboundDedupe(inboundDedupeClaim.key);
+      }
     }
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");

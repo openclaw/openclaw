@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import type { MsgContext } from "../templating.js";
-import { resetInboundDedupe } from "./inbound-dedupe.js";
+import {
+  claimInboundDedupe,
+  poisonInboundDedupe,
+  releaseInboundDedupe,
+  resetInboundDedupe,
+} from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -71,5 +76,31 @@ describe("inbound dedupe", () => {
       inboundA.resetInboundDedupe();
       inboundB.resetInboundDedupe();
     }
+  });
+
+  it("poisonInboundDedupe stamps the cache so subsequent identical inbound is skipped", () => {
+    const claim = claimInboundDedupe(sharedInboundContext);
+    expect(claim).toMatchObject({ status: "claimed" });
+    if (claim.status !== "claimed") {
+      throw new Error("expected claimed inbound dedupe result");
+    }
+
+    poisonInboundDedupe(claim.key);
+
+    // cache.peek (used by claim) hits the stamped cache → duplicate.
+    expect(claimInboundDedupe(sharedInboundContext)).toMatchObject({ status: "duplicate" });
+  });
+
+  it("releaseInboundDedupe leaves the cache unstamped so transient retries can re-claim", () => {
+    const claim = claimInboundDedupe(sharedInboundContext);
+    expect(claim).toMatchObject({ status: "claimed" });
+    if (claim.status !== "claimed") {
+      throw new Error("expected claimed inbound dedupe result");
+    }
+
+    releaseInboundDedupe(claim.key);
+
+    // Cache is unstamped; the same message_id can re-enter and re-claim.
+    expect(claimInboundDedupe(sharedInboundContext)).toMatchObject({ status: "claimed" });
   });
 });

@@ -126,6 +126,25 @@ export function releaseInboundDedupe(key: string, opts?: { inFlight?: Set<string
   inFlight.delete(key);
 }
 
+// Mark an in-flight dedupe claim as poisoned: stamp the cache so subsequent
+// identical inbound message_ids short-circuit at the inbound entrypoint, and
+// drop in-flight tracking. Use when an error fires after externally-visible
+// progress (an outbound reply was dispatched), so the same message_id cannot
+// replay a partially-completed turn.
+//
+// Contrasts with releaseInboundDedupe (drop in-flight, leave cache unstamped),
+// which preserves the "nothing emitted yet, safe to retry" semantics added in
+// 7c91d0dbc9 for transient pre-dispatch failures.
+export function poisonInboundDedupe(
+  key: string,
+  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
+): void {
+  const cache = opts?.cache ?? inboundDedupeCache;
+  cache.check(key, opts?.now);
+  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
+  inFlight.delete(key);
+}
+
 export function resetInboundDedupe(): void {
   inboundDedupeCache.clear();
   inboundDedupeInFlight.clear();
