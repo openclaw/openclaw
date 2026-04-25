@@ -245,7 +245,6 @@ export function buildOpenClawChromeLaunchArgs(params: {
   }
   if (resolved.noSandbox) {
     args.push("--no-sandbox");
-    args.push("--disable-setuid-sandbox");
   }
   if (process.platform === "linux") {
     args.push("--disable-dev-shm-usage");

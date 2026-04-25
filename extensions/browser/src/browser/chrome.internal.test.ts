@@ -210,7 +210,7 @@ describe("chrome.ts internal", () => {
         userDataDir: "/tmp/foo",
       });
       expect(args).toContain("--no-sandbox");
-      expect(args).toContain("--disable-setuid-sandbox");
+      expect(args).not.toContain("--disable-setuid-sandbox");
     });
 
     it("adds --disable-dev-shm-usage on linux", () => {
