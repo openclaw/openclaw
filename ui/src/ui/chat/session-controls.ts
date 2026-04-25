@@ -6,7 +6,6 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
-import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { parseAgentSessionKey } from "../session-key.ts";
@@ -78,6 +77,12 @@ async function refreshSessionOptions(state: AppViewState) {
     includeGlobal: true,
     includeUnknown: true,
   });
+}
+
+async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
+  const { refreshVisibleToolsEffectiveForCurrentSession } =
+    await import("../controllers/agents.ts");
+  return refreshVisibleToolsEffectiveForCurrentSession(state);
 }
 
 function renderChatModelSelect(state: AppViewState) {
@@ -278,7 +283,7 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
       key: targetSessionKey,
       model: nextModel || null,
     });
-    void refreshVisibleToolsEffectiveForCurrentSession(state);
+    void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
     await refreshSessionOptions(state);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.

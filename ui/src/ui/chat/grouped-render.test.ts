@@ -17,6 +17,15 @@ vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
 }));
 
+vi.mock("../icons.ts", () => ({
+  icons: new Proxy(
+    {},
+    {
+      get: () => "",
+    },
+  ),
+}));
+
 vi.mock("../views/agents-utils.ts", () => ({
   agentLogoUrl: () => "/openclaw-logo.svg",
   isRenderableControlUiAvatarUrl: (value: string) =>
@@ -38,6 +47,15 @@ vi.mock("../views/agents-utils.ts", () => ({
     }
     return null;
   },
+}));
+
+vi.mock("../tool-display.ts", () => ({
+  formatToolDetail: () => undefined,
+  resolveToolDisplay: ({ name }: { name: string }) => ({
+    name,
+    label: name,
+    icon: "zap",
+  }),
 }));
 
 vi.mock("./speech.ts", () => ({
@@ -729,11 +747,14 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    await vi.waitFor(() => {
-      const image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image?.getAttribute("src")).toBe(objectUrl);
-      expect(image?.getAttribute("alt")).toBe("Generated image 1");
-    });
+    await vi.waitFor(
+      () => {
+        const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+        expect(image?.getAttribute("src")).toBe(objectUrl);
+        expect(image?.getAttribute("alt")).toBe("Generated image 1");
+      },
+      { interval: 1, timeout: 100 },
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
       expect.objectContaining({
