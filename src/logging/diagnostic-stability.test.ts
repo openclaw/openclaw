@@ -171,6 +171,50 @@ describe("diagnostic stability recorder", () => {
     });
   });
 
+  it("records sanitized context assembly diagnostics", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "context.assembled",
+      runId: "run-secret",
+      sessionId: "session-secret",
+      sessionKey: "session-key-secret",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "telegram",
+      trigger: "reply",
+      messageCount: 4,
+      historyTextChars: 1000,
+      historyImageBlocks: 2,
+      maxMessageTextChars: 500,
+      systemPromptChars: 200,
+      promptChars: 1200,
+      promptImages: 1,
+      contextTokenBudget: 8192,
+      reserveTokens: 512,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.events[0]).toMatchObject({
+      type: "context.assembled",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "telegram",
+      source: "reply",
+      count: 4,
+      context: {
+        limit: 8192,
+        used: 1200,
+      },
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("runId");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionId");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionKey");
+    expect(snapshot.events[0]).not.toHaveProperty("historyTextChars");
+  });
+
   it("summarizes memory and large payload events", () => {
     startDiagnosticStabilityRecorder();
 
