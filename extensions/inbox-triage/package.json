@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/inbox-triage",
+  "version": "0.1.0",
+  "description": "Daily Gmail + WhatsApp triage skill: classify, draft replies, deliver to your phone.",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "google-auth-library": "^9.14.0",
+    "googleapis": "^144.0.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "scripts": {
+    "gmail:auth": "node scripts/gmail-auth.mjs"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "defaultChoice": "local",
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.25"
+    }
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "id": "inbox-triage",
+  "uiHints": {
+    "gmail.user": {
+      "label": "Gmail Address",
+      "placeholder": "you@gmail.com",
+      "help": "The Gmail account whose unread inbox is summarised each morning."
+    },
+    "gmail.clientId": {
+      "label": "Gmail OAuth Client ID",
+      "sensitive": true,
+      "placeholder": "${GMAIL_OAUTH_CLIENT_ID}"
+    },
+    "gmail.clientSecret": {
+      "label": "Gmail OAuth Client Secret",
+      "sensitive": true,
+      "placeholder": "${GMAIL_OAUTH_CLIENT_SECRET}"
+    },
+    "gmail.refreshToken": {
+      "label": "Gmail OAuth Refresh Token",
+      "sensitive": true,
+      "placeholder": "${GMAIL_OAUTH_REFRESH_TOKEN}",
+      "help": "Long-lived token produced by the one-shot pnpm gmail:auth helper."
+    },
+    "deliver.channel": {
+      "label": "Delivery Channel",
+      "placeholder": "whatsapp",
+      "help": "Channel the morning brief is posted to (must already be configured)."
+    },
+    "deliver.target": {
+      "label": "Delivery Target",
+      "placeholder": "self",
+      "help": "Channel-specific destination (e.g. 'self' for a self-DM, or a JID/email)."
+    },
+    "lookbackHours": {
+      "label": "Look-back Window",
+      "advanced": true,
+      "placeholder": "24",
+      "help": "How many hours of unread items to include."
+    },
+    "draftReplies": {
+      "label": "Draft Replies",
+      "help": "Generate one-tap-approve reply drafts for items tagged NEEDS_REPLY."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "gmail": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": { "type": "string" },
+          "clientId": { "type": "string" },
+          "clientSecret": { "type": "string" },
+          "refreshToken": { "type": "string" }
+        },
+        "required": ["user", "clientId", "clientSecret", "refreshToken"]
+      },
+      "deliver": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "channel": { "type": "string" },
+          "target": { "type": "string" }
+        },
+        "required": ["channel", "target"]
+      },
+      "lookbackHours": { "type": "number", "minimum": 1, "maximum": 168 },
+      "draftReplies": { "type": "boolean" }
+    },
+    "required": ["gmail", "deliver"]
+  }
+}
