@@ -427,6 +427,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          beforeDeliver: expect.any(Function),
+        }),
         replyOptions: expect.objectContaining({
           disableBlockStreaming: true,
         }),

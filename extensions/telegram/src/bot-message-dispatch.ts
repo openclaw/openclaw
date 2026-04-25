@@ -761,6 +761,7 @@ export const dispatchTelegramMessage = async ({
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
+          beforeDeliver: async (payload) => payload,
           deliver: async (payload, info) => {
             if (isDispatchSuperseded()) {
               return;
