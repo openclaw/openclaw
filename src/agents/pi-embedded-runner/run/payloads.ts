@@ -293,20 +293,22 @@ export function buildEmbeddedRunPayloads(params: {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
-  const normalizedAssistantTexts = normalizeTextForComparison(params.assistantTexts.join("\n\n"));
+  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
     rawAnswerHasMedia &&
-    (!params.assistantTexts.length ||
+    (!nonEmptyAssistantTexts.length ||
       (!assistantTextsHaveMedia &&
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
+  const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts = suppressAssistantArtifacts
     ? []
     : (shouldPreferRawAnswerText && fallbackRawAnswerText
         ? [fallbackRawAnswerText]
-        : params.assistantTexts.length
-          ? params.assistantTexts
+        : hasAssistantTextPayload
+          ? nonEmptyAssistantTexts
           : fallbackAnswerText
             ? [fallbackAnswerText]
             : []
