@@ -54,6 +54,8 @@ void openclaw_log_init(void) {
                 current_categories |= OPENCLAW_LOG_CAT_HEALTH;
             } else if (g_ascii_strcasecmp(cat, "gateway") == 0) {
                 current_categories |= OPENCLAW_LOG_CAT_GATEWAY;
+            } else if (g_ascii_strcasecmp(cat, "remote") == 0) {
+                current_categories |= OPENCLAW_LOG_CAT_REMOTE;
             }
         }
         g_strfreev(cats);

@@ -13,12 +13,16 @@
 
 #include <adwaita.h>
 
+#include "connection_mode_resolver.h"
 #include "display_model.h"
 #include "gateway_client.h"
 #include "gateway_config.h"
+#include "gateway_remote_config.h"
 #include "product_coordinator.h"
 #include "product_state.h"
 #include "readiness.h"
+#include "remote_endpoint.h"
+#include "remote_probe.h"
 #include "runtime_paths.h"
 #include "runtime_reveal.h"
 #include "section_adw_helpers.h"
@@ -50,6 +54,29 @@ static GtkWidget *gen_btn_start = NULL;
 static GtkWidget *gen_btn_stop = NULL;
 static GtkWidget *gen_btn_restart = NULL;
 static GtkWidget *gen_btn_open_dashboard = NULL;
+
+/* ── Remote-mode settings group ── */
+static GtkWidget *gen_remote_group = NULL;
+static GtkWidget *gen_remote_transport_dropdown = NULL;
+static GtkStringList *gen_remote_transport_model = NULL;
+static gboolean gen_remote_transport_programmatic_change = FALSE;
+static GtkWidget *gen_remote_url_row = NULL;
+static GtkWidget *gen_remote_ssh_target_row = NULL;
+static GtkWidget *gen_remote_ssh_identity_row = NULL;
+/*
+ * Remote auth rows. These map to gateway.remote.token /
+ * gateway.remote.password. They are visible regardless of transport
+ * because both transports may need the same gateway-side bearer.
+ * Empty strings are persisted via the writer's "remove key" semantics.
+ */
+static GtkWidget *gen_remote_token_row = NULL;
+static GtkWidget *gen_remote_password_row = NULL;
+static GtkWidget *gen_remote_status_row = NULL;
+static GtkWidget *gen_remote_test_btn = NULL;
+static GtkWidget *gen_remote_apply_btn = NULL;
+static GtkWidget *gen_remote_test_status_label = NULL;
+static guint      gen_remote_endpoint_sub = 0;
+static GCancellable *gen_remote_probe_cancel = NULL;
 
 static void on_gen_start(GtkButton *button, gpointer user_data) {
     (void)button;
@@ -111,7 +138,7 @@ static ProductConnectionMode gen_connection_mode_for_selection(guint selected) {
 static const gchar* gen_connection_mode_detail_text(ProductConnectionMode stored_mode,
                                                     ProductConnectionMode effective_mode) {
     if (effective_mode == PRODUCT_CONNECTION_MODE_REMOTE) {
-        return "Remote mode is saved, but Linux remote connection flow is not implemented yet. Open General for guidance or switch back to Local to use onboarding on this machine.";
+        return "Remote mode is active. Configure the gateway target below and apply.";
     }
 
     if (stored_mode == PRODUCT_CONNECTION_MODE_UNSPECIFIED) {
@@ -213,6 +240,409 @@ static GtkWidget* general_note_row(const char *title) {
     return row;
 }
 
+/* ── Remote-mode form helpers ── */
+
+static GtkWidget* gen_remote_entry_row(const char *title) {
+    GtkWidget *row = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
+    return row;
+}
+
+static const gchar* gen_remote_entry_text(GtkWidget *row) {
+    if (!row || !ADW_IS_ENTRY_ROW(row)) return "";
+    const gchar *t = gtk_editable_get_text(GTK_EDITABLE(row));
+    return t ? t : "";
+}
+
+static void gen_remote_entry_set(GtkWidget *row, const gchar *text) {
+    if (!row || !ADW_IS_ENTRY_ROW(row)) return;
+    gtk_editable_set_text(GTK_EDITABLE(row), text ? text : "");
+}
+
+static const gchar* gen_remote_selected_transport(void) {
+    if (!gen_remote_transport_dropdown ||
+        !ADW_IS_COMBO_ROW(gen_remote_transport_dropdown)) {
+        return "direct";
+    }
+    guint sel = adw_combo_row_get_selected(ADW_COMBO_ROW(gen_remote_transport_dropdown));
+    return sel == 1u ? "ssh" : "direct";
+}
+
+static void gen_remote_set_transport_selection(const gchar *transport) {
+    if (!gen_remote_transport_dropdown ||
+        !ADW_IS_COMBO_ROW(gen_remote_transport_dropdown)) return;
+    guint sel = (g_strcmp0(transport, "ssh") == 0) ? 1u : 0u;
+    gen_remote_transport_programmatic_change = TRUE;
+    adw_combo_row_set_selected(ADW_COMBO_ROW(gen_remote_transport_dropdown), sel);
+    gen_remote_transport_programmatic_change = FALSE;
+}
+
+static void gen_remote_refresh_field_visibility(void) {
+    const gchar *t = gen_remote_selected_transport();
+    gboolean ssh = (g_strcmp0(t, "ssh") == 0);
+    if (gen_remote_url_row) gtk_widget_set_visible(gen_remote_url_row, !ssh);
+    if (gen_remote_ssh_target_row) gtk_widget_set_visible(gen_remote_ssh_target_row, ssh);
+    if (gen_remote_ssh_identity_row) gtk_widget_set_visible(gen_remote_ssh_identity_row, ssh);
+}
+
+static void gen_remote_refresh_group_visibility(void) {
+    if (!gen_remote_group) return;
+    /*
+     * Compute visibility from the full resolver context rather than
+     * persisted product state alone. A config-declared remote mode
+     * (gateway.mode = "remote") or a present gateway.remote subtree
+     * must surface the Remote Settings group even when product state
+     * still says local — otherwise config-driven deployments would
+     * have no UI surface to edit the remote fields.
+     */
+    GatewayConfig *config = gateway_client_get_config();
+    const gchar *cfg_mode = config ? config->mode : NULL;
+    gboolean has_remote_url = config && config->remote_url != NULL;
+    ProductConnectionMode persisted = product_state_get_connection_mode();
+    gboolean onboarded = product_state_get_onboarding_seen_version() > 0;
+
+    EffectiveConnectionMode em = connection_mode_resolve(
+        cfg_mode, has_remote_url, persisted, onboarded);
+    gtk_widget_set_visible(gen_remote_group,
+                           em.mode == PRODUCT_CONNECTION_MODE_REMOTE);
+}
+
+static void gen_remote_refresh_status_row(void) {
+    if (!gen_remote_status_row || !ADW_IS_ACTION_ROW(gen_remote_status_row)) return;
+    const RemoteEndpointSnapshot *ep = remote_endpoint_get();
+    if (!ep || ep->kind == REMOTE_ENDPOINT_IDLE) {
+        adw_action_row_set_subtitle(ADW_ACTION_ROW(gen_remote_status_row),
+                                    "idle (remote mode is not active)");
+        return;
+    }
+    if (ep->kind == REMOTE_ENDPOINT_READY) {
+        g_autofree gchar *line = g_strdup_printf("ready — %s://%s:%d",
+                                                 ep->tls ? "wss" : "ws",
+                                                 ep->host ? ep->host : "?",
+                                                 ep->port);
+        adw_action_row_set_subtitle(ADW_ACTION_ROW(gen_remote_status_row), line);
+        return;
+    }
+    g_autofree gchar *line = g_strdup_printf("%s%s%s",
+                                             remote_endpoint_state_to_string(ep->kind),
+                                             ep->detail ? " — " : "",
+                                             ep->detail ? ep->detail : "");
+    adw_action_row_set_subtitle(ADW_ACTION_ROW(gen_remote_status_row), line);
+}
+
+static void on_gen_remote_endpoint_changed(gpointer user_data) {
+    (void)user_data;
+    gen_remote_refresh_status_row();
+}
+
+static void on_gen_remote_transport_notify(GObject *object,
+                                           GParamSpec *pspec,
+                                           gpointer user_data) {
+    (void)pspec;
+    (void)user_data;
+    if (gen_remote_transport_programmatic_change) return;
+    if (!ADW_IS_COMBO_ROW(object)) return;
+    gen_remote_refresh_field_visibility();
+}
+
+static void gen_remote_seed_from_config(void) {
+    GatewayConfig *cfg = gateway_client_get_config();
+    if (!cfg) {
+        gen_remote_set_transport_selection("direct");
+        gen_remote_entry_set(gen_remote_url_row, "");
+        gen_remote_entry_set(gen_remote_ssh_target_row, "");
+        gen_remote_entry_set(gen_remote_ssh_identity_row, "");
+        gen_remote_entry_set(gen_remote_token_row, "");
+        gen_remote_entry_set(gen_remote_password_row, "");
+        gen_remote_refresh_field_visibility();
+        return;
+    }
+    const gchar *transport = "direct";
+    if (cfg->remote_transport == REMOTE_TRANSPORT_SSH) transport = "ssh";
+    gen_remote_set_transport_selection(transport);
+
+    /*
+     * Seed from cfg->remote_url, which is the normalized ws:// or
+     * wss:// URL produced by gateway_remote_config_parse at config-load
+     * time. Do NOT reconstruct an http/https string from host/port/tls
+     * — those legacy fields are derived for the generic gateway client
+     * and do not represent the declared gateway.remote.url.
+     */
+    gen_remote_entry_set(gen_remote_url_row,
+                         (cfg->remote_url && cfg->remote_url[0] != '\0')
+                             ? cfg->remote_url : "");
+    gen_remote_entry_set(gen_remote_ssh_target_row,
+                         cfg->remote_ssh_target ? cfg->remote_ssh_target : "");
+    /*
+     * Token / password rows mirror gateway.remote.token /
+     * gateway.remote.password, NOT the in-place overlay on cfg->token.
+     * Surfacing the raw remote subtree lets the operator see what is
+     * actually persisted in the config file rather than the merged
+     * effective value.
+     */
+    gen_remote_entry_set(gen_remote_token_row,
+                         cfg->remote_token ? cfg->remote_token : "");
+    gen_remote_entry_set(gen_remote_password_row,
+                         cfg->remote_password ? cfg->remote_password : "");
+    gen_remote_entry_set(gen_remote_ssh_identity_row,
+                         cfg->remote_ssh_identity ? cfg->remote_ssh_identity : "");
+    gen_remote_refresh_field_visibility();
+}
+
+static void gen_remote_set_test_status(const gchar *text) {
+    if (!gen_remote_test_status_label || !GTK_IS_LABEL(gen_remote_test_status_label)) return;
+    gtk_label_set_text(GTK_LABEL(gen_remote_test_status_label), text ? text : "");
+}
+
+/*
+ * Validate + normalize a user-entered URL using the Remote Connection
+ * Mode contract (gateway_remote_config_normalize_url). Returns a newly
+ * allocated normalized ws:// or wss:// URL on success. On failure,
+ * returns NULL and sets *out_error to a short diagnostic string. http
+ * and https are intentionally rejected here — the gateway.remote.url
+ * contract is ws-only to mirror the macOS companion and the gateway
+ * websocket transport.
+ */
+static gchar* gen_remote_validate_and_normalize_url(const gchar *url,
+                                                    gchar **out_host,
+                                                    gint *out_port,
+                                                    gboolean *out_tls,
+                                                    gchar **out_error) {
+    if (out_host) *out_host = NULL;
+    if (out_port) *out_port = 0;
+    if (out_tls) *out_tls = FALSE;
+    if (out_error) *out_error = NULL;
+
+    if (!url || url[0] == '\0') {
+        if (out_error) *out_error = g_strdup("Gateway URL is empty");
+        return NULL;
+    }
+    g_autofree gchar *trimmed = g_strstrip(g_strdup(url));
+    if (trimmed[0] == '\0') {
+        if (out_error) *out_error = g_strdup("Gateway URL is empty");
+        return NULL;
+    }
+
+    gchar *normalized = gateway_remote_config_normalize_url(url,
+                                                            out_host,
+                                                            out_port,
+                                                            out_tls);
+    if (!normalized) {
+        /* normalize_url rejects http/https and any other non-ws scheme,
+         * empty hosts, and non-loopback ws hosts. Report a single
+         * user-actionable message rather than leaking parser details. */
+        if (out_error) {
+            *out_error = g_strdup(
+                "URL must be wss://host[:port] or ws://loopback[:port]");
+        }
+        return NULL;
+    }
+    return normalized;
+}
+
+static void gen_remote_probe_done(const RemoteProbeResult *result, gpointer user_data) {
+    (void)user_data;
+    g_clear_object(&gen_remote_probe_cancel);
+    /*
+     * NULL-guard: the General section can be torn down (general_destroy)
+     * while a probe is still in flight. The cancellable above will fire,
+     * but the callback may still be invoked once during the GMainContext
+     * drain — and by then gen_remote_test_btn has been reset to NULL.
+     * Mirror the onboarding callback's defensive check.
+     */
+    if (gen_remote_test_btn) {
+        gtk_widget_set_sensitive(gen_remote_test_btn, TRUE);
+    }
+    if (!result) {
+        gen_remote_set_test_status("probe completed without a result");
+        return;
+    }
+    g_autofree gchar *line = NULL;
+    if (result->kind == REMOTE_PROBE_OK) {
+        line = g_strdup_printf("✅ %s%s%s",
+                               result->title ? result->title : "ok",
+                               result->detail ? " — " : "",
+                               result->detail ? result->detail : "");
+    } else {
+        line = g_strdup_printf("⚠️ %s%s%s",
+                               result->title ? result->title : "failed",
+                               result->detail ? " — " : "",
+                               result->detail ? result->detail : "");
+    }
+    gen_remote_set_test_status(line);
+}
+
+static void on_gen_remote_test_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+
+    /* Cancel any in-flight probe. */
+    if (gen_remote_probe_cancel) {
+        g_cancellable_cancel(gen_remote_probe_cancel);
+        g_clear_object(&gen_remote_probe_cancel);
+    }
+    gen_remote_probe_cancel = g_cancellable_new();
+
+    const gchar *transport = gen_remote_selected_transport();
+    gtk_widget_set_sensitive(gen_remote_test_btn, FALSE);
+    gen_remote_set_test_status("Testing…");
+
+    if (g_strcmp0(transport, "ssh") == 0) {
+        const gchar *target = gen_remote_entry_text(gen_remote_ssh_target_row);
+        const gchar *identity = gen_remote_entry_text(gen_remote_ssh_identity_row);
+        gchar *user = NULL;
+        gchar *host = NULL;
+        gint port = 22;
+        if (!gateway_remote_config_parse_ssh_target(target, &user, &host, &port)) {
+            gtk_widget_set_sensitive(gen_remote_test_btn, TRUE);
+            gen_remote_set_test_status("⚠️ invalid SSH target — expected user@host[:port]");
+            g_clear_object(&gen_remote_probe_cancel);
+            return;
+        }
+        /*
+         * Test the same gateway port the coordinator will forward to
+         * once SSH mode is applied. Falling back to GATEWAY_DEFAULT_PORT
+         * only when no config has loaded keeps the UI testable in
+         * pre-onboarding states.
+         */
+        GatewayConfig *cfg = gateway_client_get_config();
+        gint gateway_port = (cfg && cfg->port > 0) ? cfg->port
+                                                   : GATEWAY_DEFAULT_PORT;
+        remote_probe_ssh_async(user, host, port,
+                               (identity && identity[0] != '\0') ? identity : NULL,
+                               gateway_port,
+                               gen_remote_probe_cancel,
+                               gen_remote_probe_done, NULL);
+        g_free(user);
+        g_free(host);
+        return;
+    }
+
+    /* direct */
+    const gchar *url = gen_remote_entry_text(gen_remote_url_row);
+    g_autofree gchar *host = NULL;
+    gint port = 0;
+    gboolean tls = FALSE;
+    g_autofree gchar *err = NULL;
+    g_autofree gchar *normalized = gen_remote_validate_and_normalize_url(
+        url, &host, &port, &tls, &err);
+    if (!normalized) {
+        gtk_widget_set_sensitive(gen_remote_test_btn, TRUE);
+        g_autofree gchar *line = g_strdup_printf("⚠️ %s", err ? err : "invalid URL");
+        gen_remote_set_test_status(line);
+        g_clear_object(&gen_remote_probe_cancel);
+        return;
+    }
+    /* Probe the normalized URL so the operator sees a single canonical
+     * string across validate → probe → persist. */
+    remote_probe_direct_async(normalized,
+                              gen_remote_probe_cancel,
+                              gen_remote_probe_done, NULL);
+}
+
+static gchar* gen_remote_resolve_config_path(void) {
+    g_autofree gchar *profile = NULL;
+    g_autofree gchar *state_dir = NULL;
+    g_autofree gchar *config_path = NULL;
+    systemd_get_runtime_context(&profile, &state_dir, &config_path);
+
+    GatewayConfig *cfg = gateway_client_get_config();
+    RuntimeEffectivePaths paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &paths);
+    gchar *out = paths.effective_config_path
+                 ? g_strdup(paths.effective_config_path) : NULL;
+    runtime_effective_paths_clear(&paths);
+    return out;
+}
+
+static void on_gen_remote_apply_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    (void)user_data;
+
+    const gchar *transport = gen_remote_selected_transport();
+    const gchar *url = gen_remote_entry_text(gen_remote_url_row);
+    const gchar *ssh_target = gen_remote_entry_text(gen_remote_ssh_target_row);
+    const gchar *ssh_identity = gen_remote_entry_text(gen_remote_ssh_identity_row);
+    const gchar *remote_token = gen_remote_entry_text(gen_remote_token_row);
+    const gchar *remote_password = gen_remote_entry_text(gen_remote_password_row);
+
+    /*
+     * Pre-validate before touching disk and, for the direct transport,
+     * normalize the URL so we persist the canonical ws/wss form that
+     * gateway_remote_config_parse will accept on reload.
+     */
+    g_autofree gchar *normalized_url = NULL;
+    if (g_strcmp0(transport, "ssh") == 0) {
+        gchar *u = NULL, *h = NULL;
+        gint p = 22;
+        if (!gateway_remote_config_parse_ssh_target(ssh_target, &u, &h, &p)) {
+            gen_remote_set_test_status(
+                "⚠️ invalid SSH target — expected user@host[:port]");
+            g_free(u); g_free(h);
+            return;
+        }
+        g_free(u); g_free(h);
+    } else {
+        g_autofree gchar *host = NULL;
+        gint port = 0; gboolean tls = FALSE;
+        g_autofree gchar *err = NULL;
+        normalized_url = gen_remote_validate_and_normalize_url(
+            url, &host, &port, &tls, &err);
+        if (!normalized_url) {
+            g_autofree gchar *line = g_strdup_printf("⚠️ %s",
+                                                     err ? err : "invalid URL");
+            gen_remote_set_test_status(line);
+            return;
+        }
+    }
+
+    g_autofree gchar *config_path = gen_remote_resolve_config_path();
+    if (!config_path || config_path[0] == '\0') {
+        gen_remote_set_test_status("⚠️ could not resolve config path");
+        return;
+    }
+
+    g_autofree gchar *write_err = NULL;
+    /*
+     * For direct transport, persist the normalized URL so the file
+     * always contains a ws/wss form even when the operator typed a
+     * shorthand (e.g. "wss://gw"). For ssh transport, pass an empty
+     * string so the writer REMOVES gateway.remote.url — the URL row is
+     * hidden in SSH mode but may still contain stale/invalid text from
+     * a previous direct edit, and gateway_remote_config_parse rejects
+     * any present-but-invalid gateway.remote.url on reload.
+     */
+    const gchar *url_to_persist =
+        (g_strcmp0(transport, "ssh") == 0)
+            ? ""
+            : (normalized_url ? normalized_url : "");
+    if (!gateway_config_write_remote_settings(config_path,
+                                              "remote",
+                                              transport,
+                                              url_to_persist,
+                                              ssh_target,
+                                              ssh_identity,
+                                              remote_token,
+                                              remote_password,
+                                              &write_err)) {
+        g_autofree gchar *line = g_strdup_printf("⚠️ save failed — %s",
+                                                 write_err ? write_err : "?");
+        gen_remote_set_test_status(line);
+        return;
+    }
+
+    /* Persist the connection-mode intent and trigger the gateway client
+     * to re-resolve transport. The product coordinator already handles
+     * the gateway_client_refresh() side-effect. */
+    if (!product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_REMOTE)) {
+        gen_remote_set_test_status("⚠️ failed to set connection mode to remote");
+        return;
+    }
+    /* Force a config reload so the new gateway.remote.* fields take effect. */
+    gateway_client_refresh();
+    gen_remote_set_test_status("✅ Remote settings saved and applied");
+}
+
 static GtkWidget* general_build(void) {
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
@@ -250,7 +680,7 @@ static GtkWidget* general_build(void) {
 
     GtkStringList *connection_mode_model = gtk_string_list_new(NULL);
     gtk_string_list_append(connection_mode_model, "Local (this machine)");
-    gtk_string_list_append(connection_mode_model, "Remote (coming soon)");
+    gtk_string_list_append(connection_mode_model, "Remote (over SSH or direct)");
     ui_combo_row_replace_model(gen_connection_mode_dropdown,
                                (gpointer *)&gen_connection_mode_dropdown_model,
                                G_LIST_MODEL(connection_mode_model),
@@ -263,6 +693,93 @@ static GtkWidget* general_build(void) {
     gen_connection_mode_detail_row = general_note_row("Availability");
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(connection_group), gen_connection_mode_detail_row);
     refresh_general_connection_mode_controls();
+
+    /* ── Remote settings group (visible only in remote mode) ── */
+    gen_remote_group = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(gen_remote_group), "Remote Settings");
+    adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(gen_remote_group),
+        "Configure how this companion reaches the gateway when connection mode is Remote.");
+    adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(gen_remote_group));
+
+    gen_remote_transport_dropdown = adw_combo_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(gen_remote_transport_dropdown), "Transport");
+    GtkStringList *transport_model = gtk_string_list_new(NULL);
+    gtk_string_list_append(transport_model, "Direct (gateway reachable on the network)");
+    gtk_string_list_append(transport_model, "SSH (forward through a remote host)");
+    ui_combo_row_replace_model(gen_remote_transport_dropdown,
+                               (gpointer *)&gen_remote_transport_model,
+                               G_LIST_MODEL(transport_model),
+                               0);
+    g_signal_connect(gen_remote_transport_dropdown, "notify::selected",
+                     G_CALLBACK(on_gen_remote_transport_notify), NULL);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group),
+                              gen_remote_transport_dropdown);
+
+    gen_remote_url_row = gen_remote_entry_row("Gateway URL");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group), gen_remote_url_row);
+
+    gen_remote_ssh_target_row = gen_remote_entry_row("SSH Target (user@host[:port])");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group), gen_remote_ssh_target_row);
+
+    gen_remote_ssh_identity_row = gen_remote_entry_row("SSH Identity (private key path, optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group),
+                              gen_remote_ssh_identity_row);
+
+    /*
+     * Gateway auth rows (gateway.remote.token / gateway.remote.password).
+     * Always visible — both transports may need a bearer or password
+     * depending on the gateway-side auth configuration. AdwEntryRow
+     * is used for the token (operators frequently need to verify a
+     * pasted JWT visually) and AdwPasswordEntryRow for the password
+     * so it is masked by default.
+     */
+    gen_remote_token_row = gen_remote_entry_row("Gateway Token (optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group),
+                              gen_remote_token_row);
+
+    gen_remote_password_row = adw_password_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(gen_remote_password_row),
+                                  "Gateway Password (optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group),
+                              gen_remote_password_row);
+
+    gen_remote_status_row = general_note_row("Endpoint Status");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group), gen_remote_status_row);
+
+    /* Action row hosting Test + Apply buttons + a small status label. */
+    GtkWidget *remote_actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gen_remote_test_btn = gtk_button_new_with_label("Test Connection");
+    g_signal_connect(gen_remote_test_btn, "clicked",
+                     G_CALLBACK(on_gen_remote_test_clicked), NULL);
+    gtk_box_append(GTK_BOX(remote_actions), gen_remote_test_btn);
+
+    gen_remote_apply_btn = gtk_button_new_with_label("Save & Apply");
+    gtk_widget_add_css_class(gen_remote_apply_btn, "suggested-action");
+    g_signal_connect(gen_remote_apply_btn, "clicked",
+                     G_CALLBACK(on_gen_remote_apply_clicked), NULL);
+    gtk_box_append(GTK_BOX(remote_actions), gen_remote_apply_btn);
+
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group),
+                              general_action_row("Apply",
+                                                 "Test the configured endpoint, then save and apply.",
+                                                 remote_actions));
+
+    gen_remote_test_status_label = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(gen_remote_test_status_label), 0.0f);
+    gtk_label_set_wrap(GTK_LABEL(gen_remote_test_status_label), TRUE);
+    gtk_widget_add_css_class(gen_remote_test_status_label, "dim-label");
+    GtkWidget *status_holder = adw_action_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(status_holder), "Last Action");
+    adw_action_row_add_suffix(ADW_ACTION_ROW(status_holder), gen_remote_test_status_label);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gen_remote_group), status_holder);
+
+    /* Live endpoint updates. */
+    if (!gen_remote_endpoint_sub) {
+        gen_remote_endpoint_sub = remote_endpoint_subscribe(on_gen_remote_endpoint_changed, NULL);
+    }
+    gen_remote_seed_from_config();
+    gen_remote_refresh_status_row();
+    gen_remote_refresh_group_visibility();
 
     GtkWidget *gateway_group = adw_preferences_group_new();
     adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(gateway_group), "Gateway");
@@ -429,6 +946,8 @@ static void general_refresh(void) {
     runtime_effective_paths_clear(&effective_paths);
 
     refresh_general_connection_mode_controls();
+    gen_remote_refresh_group_visibility();
+    gen_remote_refresh_status_row();
 
     gtk_widget_set_sensitive(gen_btn_start, dm.can_start);
     gtk_widget_set_sensitive(gen_btn_stop, dm.can_stop);
@@ -459,6 +978,31 @@ static void general_destroy(void) {
     gen_btn_stop = NULL;
     gen_btn_restart = NULL;
     gen_btn_open_dashboard = NULL;
+
+    /* Remote group cleanup. */
+    if (gen_remote_endpoint_sub) {
+        remote_endpoint_unsubscribe(gen_remote_endpoint_sub);
+        gen_remote_endpoint_sub = 0;
+    }
+    if (gen_remote_probe_cancel) {
+        g_cancellable_cancel(gen_remote_probe_cancel);
+        g_clear_object(&gen_remote_probe_cancel);
+    }
+    ui_combo_row_detach_model(gen_remote_transport_dropdown,
+                              (gpointer *)&gen_remote_transport_model);
+    gen_remote_transport_dropdown = NULL;
+    gen_remote_transport_model = NULL;
+    gen_remote_transport_programmatic_change = FALSE;
+    gen_remote_group = NULL;
+    gen_remote_url_row = NULL;
+    gen_remote_ssh_target_row = NULL;
+    gen_remote_ssh_identity_row = NULL;
+    gen_remote_token_row = NULL;
+    gen_remote_password_row = NULL;
+    gen_remote_status_row = NULL;
+    gen_remote_test_btn = NULL;
+    gen_remote_apply_btn = NULL;
+    gen_remote_test_status_label = NULL;
 }
 
 static void general_invalidate(void) {

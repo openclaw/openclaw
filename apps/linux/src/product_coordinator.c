@@ -36,11 +36,6 @@ typedef struct {
 
 static ProductCoordinatorState g_coordinator = {0};
 
-static void product_coordinator_route_remote_guidance(void) {
-    app_window_show();
-    app_window_navigate_to(SECTION_GENERAL);
-}
-
 static void product_coordinator_boot_runtime_lanes(void) {
     state_init();
     product_state_init();
@@ -56,10 +51,14 @@ static ProductStartupPresentationAction product_coordinator_decide_startup_prese
     AppState runtime_state,
     ProductConnectionMode effective_mode,
     guint onboarding_seen_version) {
-    if (effective_mode == PRODUCT_CONNECTION_MODE_REMOTE) {
-        return PRODUCT_STARTUP_PRESENTATION_NOOP;
-    }
-
+    /*
+     * Remote mode is now a first-class connection mode, not a guidance
+     * cul-de-sac. We use the same onboarding-routing decision as local
+     * — if onboarding has been seen at this version we skip; otherwise
+     * we present onboarding which itself routes through the remote
+     * subflow when the operator selects it.
+     */
+    (void)effective_mode;
     OnboardingRoute route = onboarding_routing_decide(runtime_state,
                                                       (int)onboarding_seen_version,
                                                       ONBOARDING_CURRENT_VERSION);
@@ -99,30 +98,15 @@ void product_coordinator_reconcile_startup_presentation(void) {
 }
 
 void product_coordinator_request_show_main(void) {
-    if (product_state_get_effective_connection_mode() == PRODUCT_CONNECTION_MODE_REMOTE) {
-        product_coordinator_route_remote_guidance();
-        return;
-    }
-
     app_window_show();
 }
 
 void product_coordinator_request_show_section(AppSection section) {
-    if (product_state_get_effective_connection_mode() == PRODUCT_CONNECTION_MODE_REMOTE) {
-        product_coordinator_route_remote_guidance();
-        return;
-    }
-
     app_window_show();
     app_window_navigate_to(section);
 }
 
 void product_coordinator_request_rerun_onboarding(void) {
-    if (product_state_get_effective_connection_mode() == PRODUCT_CONNECTION_MODE_REMOTE) {
-        product_coordinator_route_remote_guidance();
-        return;
-    }
-
     onboarding_show();
 }
 
@@ -136,11 +120,14 @@ gboolean product_coordinator_request_set_connection_mode(ProductConnectionMode m
         return FALSE;
     }
 
-    if (product_state_get_effective_connection_mode() == PRODUCT_CONNECTION_MODE_REMOTE) {
-        product_coordinator_route_remote_guidance();
-        return TRUE;
-    }
-
+    /*
+     * Mode switches are durable intent that the connection-mode resolver
+     * folds into the effective mode; gateway_client_refresh() picks that
+     * change up and re-applies the connection-mode coordinator, which in
+     * turn drives the remote tunnel / endpoint lifecycle. This replaces
+     * the previous "route to a guidance page" stub.
+     */
+    gateway_client_refresh();
     app_window_refresh_snapshot();
 
     if (product_state_get_onboarding_seen_version() < ONBOARDING_CURRENT_VERSION) {
