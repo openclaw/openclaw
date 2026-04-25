@@ -469,6 +469,21 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("passes audioAsVoice to media attachments", async () => {
+    const { options } = createDispatcherHarness();
+    await options.deliver(
+      { mediaUrl: "https://example.com/reply.mp3", audioAsVoice: true },
+      { kind: "final" },
+    );
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("falls back to legacy mediaUrl when mediaUrls is an empty array", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver(
