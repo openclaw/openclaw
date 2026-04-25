@@ -478,6 +478,131 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("preserves model catalog metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "moonshot",
+      providers: ["moonshot"],
+      modelCatalog: {
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            api: "openai-responses",
+            headers: {
+              "x-provider": "moonshot",
+            },
+            models: [
+              {
+                id: "kimi-k2.6",
+                name: "Kimi K2.6",
+                input: ["text", "image", "bogus"],
+                reasoning: true,
+                contextWindow: 256000,
+                maxTokens: 128000,
+                cost: {
+                  input: 0.6,
+                  output: 2.5,
+                  cacheRead: 0.15,
+                  tieredPricing: [
+                    {
+                      input: 0.6,
+                      output: 2.5,
+                      range: [0, 256000],
+                    },
+                  ],
+                },
+                compat: {
+                  supportsTools: true,
+                },
+                status: "available",
+                tags: ["default"],
+              },
+            ],
+          },
+        },
+        aliases: {
+          kimi: {
+            provider: "moonshot",
+            api: "openai-responses",
+          },
+        },
+        suppressions: [
+          {
+            provider: "openai",
+            model: "legacy-kimi",
+            reason: "superseded by moonshot/kimi-k2.6",
+          },
+        ],
+        discovery: {
+          moonshot: "static",
+          ignored: "unknown",
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "moonshot",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.modelCatalog).toEqual({
+      providers: {
+        moonshot: {
+          baseUrl: "https://api.moonshot.ai/v1",
+          api: "openai-responses",
+          headers: {
+            "x-provider": "moonshot",
+          },
+          models: [
+            {
+              id: "kimi-k2.6",
+              name: "Kimi K2.6",
+              input: ["text", "image"],
+              reasoning: true,
+              contextWindow: 256000,
+              maxTokens: 128000,
+              cost: {
+                input: 0.6,
+                output: 2.5,
+                cacheRead: 0.15,
+                tieredPricing: [
+                  {
+                    input: 0.6,
+                    output: 2.5,
+                    range: [0, 256000],
+                  },
+                ],
+              },
+              compat: {
+                supportsTools: true,
+              },
+              status: "available",
+              tags: ["default"],
+            },
+          ],
+        },
+      },
+      aliases: {
+        kimi: {
+          provider: "moonshot",
+          api: "openai-responses",
+        },
+      },
+      suppressions: [
+        {
+          provider: "openai",
+          model: "legacy-kimi",
+          reason: "superseded by moonshot/kimi-k2.6",
+        },
+      ],
+      discovery: {
+        moonshot: "static",
+      },
+    });
+  });
+
   it("reports non-bundled providerAuthEnvVars as deprecated compat metadata", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
