@@ -7,7 +7,7 @@ on:
 jobs:
   exclusive-channel-label:
     runs-on: ubuntu-latest
-    if: github.event.label.name == 'channel: ALL'
+    if: ${{ github.event.label.name == 'channel: ALL' }}
     steps:
       - name: Remove individual channel labels when channel:ALL is applied
         uses: actions/github-script@v7
