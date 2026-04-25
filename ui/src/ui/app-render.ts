@@ -7,6 +7,7 @@ import {
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { restoreChatQueue } from "./chat-queue-persistence.ts";
 import { refreshChat } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -1487,6 +1488,11 @@ export function renderApp(state: AppViewState) {
                 state.chatStream = null;
                 state.chatRunId = null;
                 state.chatQueue = [];
+                // Restore persisted queue for the new session (if any).
+                const restoredQueue = restoreChatQueue(next, state.chatQueue as any[]);
+                if (restoredQueue.length > 0) {
+                  state.chatQueue = restoredQueue as any;
+                }
                 state.resetToolStream();
                 state.applySettings({
                   ...state.settings,

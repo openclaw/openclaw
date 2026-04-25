@@ -1,4 +1,5 @@
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
+import { persistChatQueue as persistQueue, restoreChatQueue as restoreQueue } from "./chat-queue-persistence.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
@@ -133,6 +134,7 @@ function enqueueChatMessage(
       localCommandName: localCommand?.name,
     },
   ];
+  persistQueue(host.sessionKey, host.chatQueue);
 }
 
 function enqueuePendingRunMessage(
@@ -157,6 +159,7 @@ function enqueuePendingRunMessage(
       pendingRunId,
     },
   ];
+  persistQueue(host.sessionKey, host.chatQueue);
 }
 
 async function sendChatMessageNow(
@@ -197,7 +200,7 @@ async function sendChatMessageNow(
   // Force scroll after sending to ensure viewport is at bottom for incoming stream
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
   if (ok && !host.chatRunId) {
-    void flushChatQueue(host);
+    void flushChatQueueInternal(host);
   }
   if (ok && opts?.refreshSessions && runId) {
     host.refreshSessionsAfterChat.add(runId);
@@ -256,6 +259,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.map((entry) =>
     entry.id === id ? { ...entry, kind: "steered", pendingRunId: activeRunId } : entry,
   );
+  persistQueue(host.sessionKey, host.chatQueue);
   const runId = await sendSteerChatMessage(
     host as unknown as ChatState,
     message,
@@ -263,6 +267,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   );
   if (!runId) {
     host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
+    persistQueue(host.sessionKey, host.chatQueue);
     return;
   }
   setLastActiveSessionKey(
@@ -272,7 +277,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
-async function flushChatQueue(host: ChatHost) {
+async function flushChatQueueInternal(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
   }
@@ -282,6 +287,7 @@ async function flushChatQueue(host: ChatHost) {
   }
   const next = host.chatQueue[nextIndex];
   host.chatQueue = host.chatQueue.filter((_, index) => index !== nextIndex);
+  persistQueue(host.sessionKey, host.chatQueue);
   let ok = false;
   try {
     if (next.localCommandName) {
@@ -298,14 +304,16 @@ async function flushChatQueue(host: ChatHost) {
   }
   if (!ok) {
     host.chatQueue = [next, ...host.chatQueue];
+    persistQueue(host.sessionKey, host.chatQueue);
   } else if (host.chatQueue.length > 0) {
     // Continue draining — local commands don't block on server response
-    void flushChatQueue(host);
+    void flushChatQueueInternal(host);
   }
 }
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+  persistQueue(host.sessionKey, host.chatQueue);
 }
 
 export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | undefined) {
@@ -313,6 +321,11 @@ export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | und
     return;
   }
   host.chatQueue = host.chatQueue.filter((item) => item.pendingRunId !== runId);
+  persistQueue(host.sessionKey, host.chatQueue);
+}
+
+export function flushChatQueue(host: ChatHost): void {
+  void flushChatQueueInternal(host);
 }
 
 export async function handleSendChat(
