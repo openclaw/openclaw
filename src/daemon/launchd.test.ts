@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   bootstrapCode: 1,
   kickstartError: "",
+  kickstartCode: 1,
   kickstartFailuresRemaining: 0,
   disableError: "",
   disableCode: 1,
@@ -178,7 +179,7 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "kickstart") {
       if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
         state.kickstartFailuresRemaining -= 1;
-        return { stdout: "", stderr: state.kickstartError, code: 1 };
+        return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
       }
       state.serviceLoaded = true;
       state.serviceRunning = true;
@@ -262,6 +263,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.kickstartError = "";
+  state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
   state.disableError = "";
   state.disableCode = 1;
