@@ -50,6 +50,9 @@ Docs: https://docs.openclaw.ai
   Thanks @FuncWei.
 - WhatsApp/TTS: send visible text separately from PTT voice-note audio instead
   of relying on hidden voice-note captions. Fixes #51081.
+- Browser/client: avoid telling agents to restart OpenClaw for dispatcher
+  timeouts on external browser profiles such as `attachOnly`, remote CDP, and
+  existing-session. (#40815) Thanks @0xsline.
 - Agents/TTS: preserve `[[audio_as_voice]]` directives on trusted text
   tool-result `MEDIA:` payloads so generated audio still delivers as a voice
   note. (#46535) Thanks @azade-c.

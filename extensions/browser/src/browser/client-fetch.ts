@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
@@ -105,7 +106,39 @@ function isRateLimitStatus(status: number): boolean {
   return status === 429;
 }
 
-function resolveBrowserFetchOperatorHint(url: string): string {
+type BrowserControlOwnership = "local-managed" | "external-browser" | "unknown";
+
+function resolveDispatcherBrowserControlOwnership(url: string): BrowserControlOwnership {
+  if (isAbsoluteHttp(url)) {
+    return "unknown";
+  }
+  try {
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg?.browser, cfg);
+    const parsed = new URL(url, "http://localhost");
+    const requestedProfile = parsed.searchParams.get("profile")?.trim();
+    const profile = resolveProfile(resolved, requestedProfile || resolved.defaultProfile);
+    if (!profile) {
+      return "unknown";
+    }
+    return profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly
+      ? "local-managed"
+      : "external-browser";
+  } catch {
+    return "unknown";
+  }
+}
+
+function resolveBrowserFetchOperatorHint(
+  url: string,
+  opts?: { ownership?: BrowserControlOwnership },
+): string {
+  if (opts?.ownership === "external-browser") {
+    return (
+      "The browser profile is external to OpenClaw; make sure its browser/CDP endpoint " +
+      "is running and reachable. Restarting the OpenClaw gateway will not launch it."
+    );
+  }
   const isLocal = !isAbsoluteHttp(url);
   return isLocal
     ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
@@ -159,10 +192,10 @@ async function discardResponseBody(res: Response): Promise<void> {
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
   const kind = classifyBrowserFetchFailure(err);
+  const ownership = resolveDispatcherBrowserControlOwnership(url);
+  const operatorHint = resolveBrowserFetchOperatorHint(url, { ownership });
   const suffix =
-    kind === "persistent"
-      ? `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`
-      : resolveBrowserFetchOperatorHint(url);
+    kind === "persistent" ? `${operatorHint} ${BROWSER_TOOL_MODEL_HINT}` : operatorHint;
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
 }
