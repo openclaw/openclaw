@@ -399,7 +399,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions: stop session write-lock timeouts from entering model failover, so local lock contention surfaces directly instead of cascading across providers. (#68700) Thanks @MonkeyLeeT.
 - Auto-reply: run inbound reply delivery through `message_sending` hooks so plugins can transform or cancel generated replies before they are sent. (#70118) Thanks @jzakirov.
 - CI/release-checks: pass workflow inputs and matrix values through step environment variables instead of embedding them directly into `run:` shell commands, reducing template-injection surface in the cross-OS release-check workflow. (#66884) Thanks @alexlomt.
-- Agents/failover: classify the bare `An unknown error occurred` stream-wrapper message that pi-ai providers throw when streams end with `stopReason: "aborted" | "error"` as a transient timeout regardless of provider, so configured fallback chains rotate for non-Anthropic providers (Google, OpenRouter, Bedrock, etc.) instead of surfacing the literal string to users. Fixes #71620. Thanks @mattcproctor.
+- Agents/failover: classify the bare `An unknown error occurred` stream-wrapper message that pi-ai providers throw when streams end with `stopReason: "aborted" | "error"` as a transient timeout regardless of provider, so configured fallback chains rotate for non-Anthropic providers (Google, OpenRouter, Bedrock, etc.) instead of surfacing the literal string to users. Fixes #71620. Thanks @willamhou and @mattcproctor.
 
 ## 2026.4.23
 
