@@ -19,6 +19,12 @@ The design goal is to use PR #71676 as the behavior contract and parity oracle,
 not as the merge target. The hook PR should be small, additive,
 backwards-compatible, and covered by fixture-plugin tests.
 
+<Warning>
+  This page is an RFC proposal, not implemented SDK reference. The APIs and
+  hooks named here are design targets for a future host-hook PR; they are not
+  available on current `main`.
+</Warning>
+
 ## Maintainer Packet
 
 Read [the full RFC packet](/plan/plan-mode-plugin-host-hooks-rfc) for:

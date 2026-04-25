@@ -1178,6 +1178,10 @@
                     ]
                   },
                   {
+                    "group": "Plugin design RFCs",
+                    "pages": ["plugins/plan-mode-plugin-host-hooks"]
+                  },
+                  {
                     "group": "SDK reference",
                     "pages": [
                       "plugins/sdk-overview",
@@ -1189,8 +1193,7 @@
                       "plugins/sdk-testing",
                       "plugins/manifest",
                       "plugins/architecture",
-                      "plugins/architecture-internals",
-                      "plugins/plan-mode-plugin-host-hooks"
+                      "plugins/architecture-internals"
                     ]
                   }
                 ]

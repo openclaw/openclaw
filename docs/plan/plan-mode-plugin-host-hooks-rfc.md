@@ -11,6 +11,12 @@ read_when:
 
 Draft maintainer RFC packet.
 
+<Warning>
+  This document is a proposal and maintainer handoff, not implemented SDK
+  reference. The named APIs are contract targets for a future host-hook PR and
+  should not be documented as available until that implementation lands.
+</Warning>
+
 Primary behavior source:
 
 - PR #71676, "Plan Mode rebased onto upstream/main + executing-state subsystem"
@@ -234,6 +240,30 @@ host code. That breadth is the evidence for the missing seams.
 
 The host-hook PR should not copy those implementations. It should replace the
 host-specific edits with generic extension points.
+
+## PR 71676 Entry-Point Coverage Map
+
+The goal is not to preserve every file touched by PR #71676. The goal is to
+preserve every behavior class while moving Plan Mode-specific code into a
+plugin package. This map is the parity checklist for the future implementation
+PR.
+
+| PR #71676 entry point                                                         | Current patch shape                                                                           | Required SDK hook family                        | Parity requirement for plugin port                                                                                                                                  |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session model, gateway schema, and generated app client models                | Adds root session fields and updates gateway/client model shapes.                             | RFC A plus RFC E projection.                    | Plugin state lives under a namespaced session extension, projects safe public fields to gateway rows/details, and keeps client model generation additive.           |
+| `sessions.patch` and approval mutation routing                                | Adds Plan Mode-specific patch actions and validation.                                         | RFC A plus RFC D for command-triggered actions. | Plugin patch actions use host validation, authorization, error codes, persistence, and session-change broadcasts.                                                   |
+| Agent prompt preparation and pending interaction queue                        | Adds pending injections and runner wiring.                                                    | RFC B.                                          | Approval accept, revise, question answer, nudge, and subagent follow-up instructions reach the next turn exactly once across retry/fallback/provider transforms.    |
+| Plan prompt rules and runtime state hydration                                 | Adds Plan Mode runtime context to prompt assembly.                                            | RFC B plus RFC F run context.                   | Plugin contributes deterministic turn-preparation context without editing runner internals or global prompt files.                                                  |
+| Tool mutation gate while approval is pending                                  | Adds Plan Mode logic around tool execution.                                                   | RFC C.                                          | Trusted bundled policy blocks or requires approval before ordinary plugin `before_tool_call` hooks can mutate or reorder the call.                                  |
+| Plan Mode tools and `update_plan` integration                                 | Adds or modifies tool registrations, catalog data, display data, and plan telemetry behavior. | RFC C.                                          | Plugin-owned tools publish metadata; core-owned tools such as `update_plan` are either safely decorated or explicitly left as telemetry with parallel plugin tools. |
+| Slash commands in web, text channels, and Telegram flows                      | Adds `/plan` handling and text-channel behaviors.                                             | RFC D plus RFC B.                               | Plugin commands declare scopes, mutate plugin state, enqueue continuations, and optionally resume the agent without channel-specific core patches.                  |
+| Control UI mode switcher, approval/question cards, composer behavior, and CSS | Adds host-known Plan Mode UI components.                                                      | RFC E.                                          | UI consumes descriptor-only plugin contributions for modes, generic cards, status surfaces, event classifiers, and input guards.                                    |
+| Agent events, plan snapshots, approval lifecycle, and subagent gates          | Adds Plan Mode-specific event subscribers and derived state persistence.                      | RFC F plus RFC A.                               | Plugin receives typed/sanitized events, stores derived state in its extension, and tracks per-run/subagent data with host-owned cleanup.                            |
+| Cron jobs, nudges, and heartbeat prompt content                               | Adds Plan Mode-specific scheduling and heartbeat prompt behavior.                             | RFC F plus RFC B.                               | Plugin creates session-owned jobs, cleans them on reset/delete/disable, and contributes heartbeat or next-turn context through a documented hook.                   |
+| Docs, skills, QA scenarios, rollout patch, and operator runbooks              | Adds product documentation and testing around Plan Mode behavior.                             | Plugin package docs plus fixture tests.         | Hook PR keeps only generic SDK docs/tests; Plan Mode plugin owns product docs, skills, prompts, QA, rollout, and channel-specific behavior.                         |
+
+If a future hook implementation PR cannot satisfy a row above with a fixture
+plugin, the Plan Mode plugin port should not claim 100% parity with PR #71676.
 
 ## Current Plugin Surface Gap Analysis
 
@@ -1217,200 +1247,31 @@ All changes should be additive:
 6. Run parity audit against PR #71676.
 7. Close or replace PR #71676 once the plugin port matches behavior.
 
-## Copy-Ready RFC Issue Packet
-
-### Issue A Title
-
-`[RFC] Plugin session extensions and patch actions`
-
-### Issue A Body
-
-Summary:
-
-Add a namespaced plugin session extension API so bundled plugins can persist
-typed per-session state, expose an explicit public projection to gateway/UI
-clients, and mutate that state through gateway-authorized patch actions.
-
-Problem:
-
-Plan Mode currently requires root `SessionEntry` fields and hardcoded
-`sessions.patch` behavior. A first-class plugin needs the same durability,
-validation, projection, broadcast, and lifecycle behavior without Plan
-Mode-specific core fields.
-
-Required decisions:
-
-- `sessions.pluginPatch` method vs `sessions.patch.plugin` envelope
-- public projection shape
-- lifecycle hooks for reset/delete/compaction/migration
-- stable error codes
-
-Acceptance:
-
-- fixture plugin can persist extension state
-- invalid payload fails closed
-- projection appears in session rows
-- private fields do not leak
-- reset/delete cleans extension state
-
-### Issue B Title
-
-`[RFC] Durable next-turn injections and agent turn preparation hooks`
-
-### Issue B Body
-
-Summary:
-
-Add a host-owned queue for plugin next-turn injections plus an
-`agent_turn_prepare` hook so plugins can schedule future prompt additions with
-exactly-once semantics.
-
-Problem:
-
-Plan Mode approval acceptance, revision, question answering, nudges, and
-subagent follow-ups must affect a future run exactly once. `before_prompt_build`
-is not durable enough and should not be used as a pending interaction queue.
-
-Required decisions:
-
-- storage location for pending injections
-- dequeue timing relative to retries and provider transforms
-- prompt ordering relative to `before_prompt_build`
-- expiry and dedupe behavior
-
-Acceptance:
-
-- fixture injection reaches next run once
-- retry/fallback does not duplicate it
-- expired injection is discarded
-- plugin disablement suppresses injections
-
-### Issue C Title
-
-`[RFC] Trusted tool policy stage and plugin tool metadata`
-
-### Issue C Body
-
-Summary:
-
-Add a trusted pre-plugin tool policy stage and plugin-owned tool metadata so
-bundled plugins can enforce host-level policy and display first-class tool UI.
-
-Problem:
-
-Plan Mode must block mutating tools before normal plugin `before_tool_call`
-hooks. Plan Mode tools also need catalog/display/safety metadata without core
-tool catalog patches.
-
-Required decisions:
-
-- trust tier for pre-plugin policy hooks
-- policy decision shape
-- plugin tool display metadata schema
-- whether core-owned tools such as `update_plan` can be decorated
-
-Acceptance:
-
-- fixture policy blocks before normal hooks
-- normal plugin cannot override trusted block
-- external plugin cannot register trusted policy
-- fixture tool metadata appears in UI/tool display lookup
-
-### Issue D Title
-
-`[RFC] Scoped plugin commands, trusted command ownership, and continuation`
-
-### Issue D Body
-
-Summary:
-
-Extend plugin commands with declarative gateway scopes, trusted command-root
-ownership, and a `continueAgent` result for commands that should resume an
-agent run after handling.
-
-Problem:
-
-Plan Mode `/plan accept`, `/plan revise`, and `/plan answer` must patch state,
-enqueue a continuation, and resume the agent. Current plugin commands do not
-declare required scopes and default to stopping.
-
-Required decisions:
-
-- command scope declaration shape
-- reserved command ownership model
-- `continueAgent` result semantics
-- command discovery before plugin runtime activation
-
-Acceptance:
-
-- fixture command enforces `operator.approvals`
-- read-only command works with read scope
-- `continueAgent: true` resumes execution
-- existing commands preserve current behavior
-
-### Issue E Title
-
-`[RFC] Control UI plugin contribution slots`
-
-### Issue E Body
-
-Summary:
-
-Add data-driven Control UI contribution slots for plugin chat modes, approval
-cards, event classifiers, input guards, and status surfaces.
-
-Problem:
-
-Plan Mode should not patch `mode-switcher`, `app-tool-stream`, `app-render`, or
-custom CSS to become visible in the web UI. A first-class plugin needs UI
-contribution descriptors exposed by the gateway.
-
-Required decisions:
-
-- manifest vs runtime contribution projection
-- initial component catalog
-- event classifier descriptor shape
-- input guard behavior
-- disablement semantics
-
-Acceptance:
-
-- fixture chat mode appears only when plugin is enabled
-- fixture approval payload renders through generic card slot
-- fixture action sends plugin patch action
-- input guard reflects projected plugin session state
-
-### Issue F Title
-
-`[RFC] Agent event subscriptions, run context, scheduler lifecycle, and heartbeat contributions`
-
-### Issue F Body
-
-Summary:
-
-Expose safe plugin subscriptions to agent events, run-scoped plugin context,
-session-scoped scheduler helpers, and heartbeat prompt contributions.
-
-Problem:
-
-Plan Mode parity requires plan snapshot persistence, subagent tracking, run
-completion cleanup, scheduled nudges, and heartbeat prompt nudges. Plugins need
-stable helpers for those behaviors without raw event-bus access.
-
-Required decisions:
-
-- event types exposed to plugins
-- run-context storage lifecycle
-- session-scoped scheduler ownership model
-- dedicated heartbeat hook vs `agent_turn_prepare`
-
-Acceptance:
-
-- fixture plugin observes one agent event
-- fixture plugin writes derived extension state
-- run context is cleaned after completion
-- session reset deletes fixture jobs
-- heartbeat contribution appears only when state requests it
+## Filed RFC Issue Body Standard
+
+The six GitHub issues are the authoritative decision threads. Each issue body
+should stay self-contained and should not rely on PR comments for key context.
+Each filed RFC issue should include:
+
+- a clear warning that the APIs are proposed SDK surface, not implemented API
+- the Plan Mode parity pressure from PR #71676
+- the current SDK surface and why it is adjacent but insufficient
+- the proposed host seam and at least one TypeScript-shaped API sketch
+- reusable non-Plan plugin examples
+- maintainer decisions needed before implementation
+- fixture-plugin acceptance criteria
+- links back to this RFC PR and PR #71676
+
+Current filed issues:
+
+| RFC | Issue                                                       | SDK primitive                                                             | Non-Plan examples emphasized                                                                                       |
+| --- | ----------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| A   | [#71732](https://github.com/openclaw/openclaw/issues/71732) | Plugin session extensions and patch actions                               | review gates, releases, memory managers, budgets, channel bindings, incidents                                      |
+| B   | [#71733](https://github.com/openclaw/openclaw/issues/71733) | Durable next-turn injection queue and agent turn preparation              | review follow-ups, deployment checklists, memory hydration, incident handoffs, CI diagnostics, channel replies     |
+| C   | [#71734](https://github.com/openclaw/openclaw/issues/71734) | Trusted tool policy and plugin tool metadata                              | budget guards, workspace policy, deployment freezes, dangerous-action wrappers, compliance labels, catalog plugins |
+| D   | [#71735](https://github.com/openclaw/openclaw/issues/71735) | Scoped commands, trusted command ownership, and continuation              | deploy, review, budget, incident, memory, policy, and channel slash commands                                       |
+| E   | [#71736](https://github.com/openclaw/openclaw/issues/71736) | Control UI contribution descriptors                                       | approval cards, release dashboards, budget warnings, memory panels, incident banners, channel auth cards           |
+| F   | [#71737](https://github.com/openclaw/openclaw/issues/71737) | Agent events, run context, session scheduler, and heartbeat contributions | telemetry exporters, memory indexers, CI watchers, incident escalations, channel retries, long-running jobs        |
 
 ## Open Questions
 
