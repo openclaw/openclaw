@@ -90,6 +90,34 @@ describe("native hook relay registry", () => {
     ]);
   });
 
+  it("retains bounded payload snapshots in invocation history", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        tool_name: "mcp__filesystem__read_file",
+        tool_use_id: "large-payload-call",
+        tool_input: { path: "/repo/large.txt" },
+        tool_response: "x".repeat(50_000),
+      },
+    });
+
+    const [recorded] = __testing.getNativeHookRelayInvocationsForTests();
+    expect(JSON.stringify(recorded?.rawPayload).length).toBeLessThan(25_000);
+    expect(recorded?.rawPayload).toMatchObject({
+      tool_response: expect.stringContaining("[truncated]"),
+    });
+  });
+
   it("removes retained invocations when a relay is unregistered", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -200,6 +228,99 @@ describe("native hook relay registry", () => {
         relayId: relay.relayId,
         event: "pre_tool_use",
         rawPayload,
+      }),
+    ).rejects.toThrow("JSON-compatible");
+  });
+
+  it("rejects broad object payloads before reading children beyond the JSON node budget", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+    const rawPayload: Record<string, unknown> = {};
+    for (let index = 0; index < 19_999; index += 1) {
+      rawPayload[`k${index}`] = index;
+    }
+    let overBudgetValueRead = false;
+    Object.defineProperty(rawPayload, "overBudget", {
+      enumerable: true,
+      get() {
+        overBudgetValueRead = true;
+        return "should not be read";
+      },
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload,
+      }),
+    ).rejects.toThrow("JSON-compatible");
+    expect(overBudgetValueRead).toBe(false);
+  });
+
+  it("rejects payloads beyond the relay string budget", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload: {
+          tool_response: "x".repeat(1_000_001),
+        },
+      }),
+    ).rejects.toThrow("JSON-compatible");
+  });
+
+  it("rejects payloads beyond the relay aggregate string budget", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload: Array.from({ length: 5 }, () => "x".repeat(900_000)),
+      }),
+    ).rejects.toThrow("JSON-compatible");
+  });
+
+  it("rejects payloads beyond the relay object key budget", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["permission_request"],
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "permission_request",
+        rawPayload: {
+          hook_event_name: "PermissionRequest",
+          tool_name: "mcp__shell__run_command",
+          tool_input: {
+            ["x".repeat(1_000_001)]: "value",
+          },
+        },
       }),
     ).rejects.toThrow("JSON-compatible");
   });
@@ -377,6 +498,217 @@ describe("native hook relay registry", () => {
     );
   });
 
+  it("maps Codex MCP PreToolUse to OpenClaw before_tool_call and can block", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      block: true,
+      blockReason: "MCP writes require review",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        model: "gpt-5.4",
+        tool_name: "mcp__memory__create_entities",
+        tool_use_id: "mcp-call-1",
+        tool_input: {
+          entities: [{ name: "OpenClaw", entityType: "project", observations: ["test"] }],
+        },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "MCP writes require review",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "mcp__memory__create_entities",
+        params: {
+          entities: [{ name: "OpenClaw", entityType: "project", observations: ["test"] }],
+        },
+        runId: "run-1",
+        toolCallId: "mcp-call-1",
+      }),
+      expect.objectContaining({
+        toolName: "mcp__memory__create_entities",
+        toolCallId: "mcp-call-1",
+      }),
+    );
+  });
+
+  it("lets security-style plugins block native MCP calls by scanning tool params", async () => {
+    const beforeToolCall = vi.fn(async (event: unknown) => {
+      const hookEvent = event as { params?: unknown; toolName?: string };
+      const serializedParams = JSON.stringify(hookEvent.params ?? {});
+      if (hookEvent.toolName?.startsWith("mcp__") && serializedParams.includes("rm -rf")) {
+        return {
+          block: true,
+          blockReason: "Blocked by security policy: destructive MCP command detected",
+        };
+      }
+      return undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "mcp__shell__run_command",
+        tool_use_id: "mcp-call-security",
+        tool_input: {
+          command: "rm -rf /tmp/openclaw-important-state",
+        },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Blocked by security policy: destructive MCP command detected",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "mcp__shell__run_command",
+        params: {
+          command: "rm -rf /tmp/openclaw-important-state",
+        },
+        toolCallId: "mcp-call-security",
+      }),
+      expect.objectContaining({
+        toolName: "mcp__shell__run_command",
+        toolCallId: "mcp-call-security",
+      }),
+    );
+  });
+
+  it("maps Codex MCP PostToolUse to OpenClaw after_tool_call observation", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        tool_name: "mcp__filesystem__read_file",
+        tool_use_id: "mcp-call-2",
+        tool_input: { path: "/repo/package.json" },
+        tool_response: {
+          content: [{ type: "text", text: '{ "name": "openclaw" }' }],
+          structuredContent: { bytes: 22 },
+        },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(afterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "mcp__filesystem__read_file",
+        params: { path: "/repo/package.json" },
+        runId: "run-1",
+        toolCallId: "mcp-call-2",
+        result: {
+          content: [{ type: "text", text: '{ "name": "openclaw" }' }],
+          structuredContent: { bytes: 22 },
+        },
+      }),
+      expect.objectContaining({
+        toolName: "mcp__filesystem__read_file",
+        toolCallId: "mcp-call-2",
+      }),
+    );
+  });
+
+  it("routes Codex MCP PermissionRequest payloads through OpenClaw approval policy", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow" as const);
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo",
+        model: "gpt-5.4",
+        tool_name: "mcp__github__create_issue",
+        tool_use_id: "mcp-call-3",
+        tool_input: {
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "Test issue",
+        },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "allow" },
+      },
+    });
+    expect(approvalRequester).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        toolName: "mcp__github__create_issue",
+        toolCallId: "mcp-call-3",
+        toolInput: {
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "Test issue",
+        },
+      }),
+    );
+  });
+
   it("maps PermissionRequest approval allow and deny decisions to Codex hook output", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -516,6 +848,63 @@ describe("native hook relay registry", () => {
         },
       },
     ]);
+  });
+
+  it("does not reuse pending PermissionRequest approvals when a tool call id is reused with different input", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    let resolveDecision: ((decision: "allow") => void) | undefined;
+    const pendingDecision = new Promise<"allow">((resolve) => {
+      resolveDecision = resolve;
+    });
+    const approvalRequester = vi.fn(async (request: { toolInput?: Record<string, unknown> }) => {
+      return request.toolInput?.command === "git status" ? pendingDecision : "deny";
+    });
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    const first = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_use_id: "reused-call-id",
+        tool_input: { command: "git status" },
+      },
+    });
+    const second = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_use_id: "reused-call-id",
+        tool_input: { command: "rm -rf /tmp/openclaw-important-state" },
+      },
+    });
+
+    await Promise.resolve();
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    const secondResponse = await second;
+    expect(JSON.parse(secondResponse.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "Denied by user" },
+      },
+    });
+    resolveDecision?.("allow");
+    const firstResponse = await first;
+    expect(JSON.parse(firstResponse.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "allow" },
+      },
+    });
   });
 
   it("defers PermissionRequest approvals after the per-relay approval budget is exhausted", async () => {

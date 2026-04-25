@@ -92,6 +92,16 @@ describe("Codex native hook relay config", () => {
     });
   });
 
+  it("leaves matchers open so Codex MCP tool names reach the relay", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay(),
+      events: ["pre_tool_use", "post_tool_use"],
+    });
+
+    expect(config["hooks.PreToolUse"]).toEqual([expect.objectContaining({ matcher: null })]);
+    expect(config["hooks.PostToolUse"]).toEqual([expect.objectContaining({ matcher: null })]);
+  });
+
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
       "features.codex_hooks": false,
