@@ -657,6 +657,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Run attempts",
       });
+      const toolLoopCounter = meter.createCounter("openclaw.tool.loop", {
+        unit: "1",
+        description: "Detected repetitive tool-call loop events",
+      });
       const modelCallDurationHistogram = meter.createHistogram("openclaw.model_call.duration_ms", {
         unit: "ms",
         description: "Model call duration",
@@ -1093,6 +1097,35 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         runAttemptCounter.add(1, { "openclaw.attempt": evt.attempt });
       };
 
+      const toolLoopAttrs = (
+        evt: Extract<DiagnosticEventPayload, { type: "tool.loop" }>,
+      ): Record<string, string | number> => ({
+        "openclaw.toolName": lowCardinalityAttr(evt.toolName, "tool"),
+        "openclaw.loop.level": evt.level,
+        "openclaw.loop.action": evt.action,
+        "openclaw.loop.detector": evt.detector,
+        "openclaw.loop.count": evt.count,
+        ...(evt.pairedToolName
+          ? { "openclaw.loop.paired_tool": lowCardinalityAttr(evt.pairedToolName, "tool") }
+          : {}),
+      });
+
+      const recordToolLoop = (evt: Extract<DiagnosticEventPayload, { type: "tool.loop" }>) => {
+        const attrs = toolLoopAttrs(evt);
+        toolLoopCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = spanWithDuration("openclaw.tool.loop", attrs, 0, { endTimeMs: evt.ts });
+        if (evt.level === "critical" || evt.action === "block") {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: `${evt.detector}:${evt.action}`,
+          });
+        }
+        span.end(evt.ts);
+      };
+
       const recordRunCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
         metadata: DiagnosticEventMetadata,
@@ -1435,6 +1468,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordLogRecord?.(evt, metadata);
               return;
             case "tool.loop":
+              recordToolLoop(evt);
+              return;
             case "tool.execution.started":
             case "run.started":
             case "model.call.started":

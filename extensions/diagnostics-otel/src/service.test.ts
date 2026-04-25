@@ -1050,6 +1050,56 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports tool loop diagnostics without loop messages or session identifiers", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "tool.loop",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      toolName: "process",
+      level: "critical",
+      action: "block",
+      detector: "known_poll_no_progress",
+      count: 20,
+      message: "CRITICAL: repeated secret-bearing tool output",
+      pairedToolName: "read",
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.counters.get("openclaw.tool.loop")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.toolName": "process",
+      "openclaw.loop.level": "critical",
+      "openclaw.loop.action": "block",
+      "openclaw.loop.detector": "known_poll_no_progress",
+      "openclaw.loop.count": 20,
+      "openclaw.loop.paired_tool": "read",
+    });
+    const loopSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.tool.loop",
+    );
+    expect(loopSpanCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.toolName": "process",
+        "openclaw.loop.level": "critical",
+        "openclaw.loop.action": "block",
+        "openclaw.loop.detector": "known_poll_no_progress",
+        "openclaw.loop.count": 20,
+        "openclaw.loop.paired_tool": "read",
+      },
+    });
+    const loopSpan = telemetryState.spans.find((span) => span.name === "openclaw.tool.loop");
+    expect(loopSpan?.setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "known_poll_no_progress:block",
+    });
+    expect(JSON.stringify(loopSpanCall)).not.toContain("session-key");
+    expect(JSON.stringify(loopSpanCall)).not.toContain("secret-bearing");
+    await service.stop?.(ctx);
+  });
+
   test("parents trusted diagnostic lifecycle spans from explicit parent ids", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
