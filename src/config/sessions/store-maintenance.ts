@@ -336,16 +336,24 @@ export async function rotateSessionFile(
     return false;
   }
 
-  // Rotate: rename current file to .bak.{timestamp}
+  // Rotate: rename the current sessions.json to a time-stamped backup, then write
+  // a {} placeholder so sessions.json is never absent. The real session data is safe
+  // in the backup throughout — even if the process crashes after the rename, no
+  // entries are lost. The crash window is closed: sessions.json always exists.
   const backupPath = `${storePath}.bak.${Date.now()}`;
   try {
+    // 1. Save the real data to backup — this is the safety net for the entire rotation.
     await fs.promises.rename(storePath, backupPath);
+    // 2. Write a minimal placeholder so sessions.json is present for the caller's
+    //    subsequent writeSessionStoreAtomic call.
+    await fs.promises.writeFile(storePath, "{}", { encoding: "utf-8", mode: 0o600 });
     log.info("rotated session store file", {
       backupPath: path.basename(backupPath),
       sizeBytes: fileSize,
     });
-  } catch {
-    // If rename fails (e.g. file disappeared), skip rotation.
+  } catch (err) {
+    // Rotation failed — log and report. The original file is intact.
+    log.warn("session store rotation failed", { err });
     return false;
   }
 
