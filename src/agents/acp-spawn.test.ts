@@ -168,6 +168,8 @@ type AgentCallParams = {
   channel?: string;
   to?: string;
   threadId?: string;
+  lane?: string;
+  timeout?: number;
 };
 type CrossAgentWorkspaceFixture = {
   workspaceRoot: string;
@@ -330,6 +332,12 @@ function expectAgentGatewayCall(overrides: AgentCallParams): void {
   expect(agentCall?.params?.channel).toBe(overrides.channel);
   expect(agentCall?.params?.to).toBe(overrides.to);
   expect(agentCall?.params?.threadId).toBe(overrides.threadId);
+  if (Object.hasOwn(overrides, "lane")) {
+    expect(agentCall?.params?.lane).toBe(overrides.lane);
+  }
+  if (Object.hasOwn(overrides, "timeout")) {
+    expect(agentCall?.params?.timeout).toBe(overrides.timeout);
+  }
 }
 
 function resolveMatrixRoomTargetForTest(value: string | undefined): string | undefined {
@@ -701,6 +709,7 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.to).toBe("channel:child-thread");
     expect(agentCall?.params?.threadId).toBe("child-thread");
     expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.lane).toBe("subagent");
     expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: expect.stringMatching(/^agent:codex:acp:/),
@@ -740,6 +749,33 @@ describe("spawnAcpDirect", () => {
         },
       }),
     );
+  });
+
+  it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        runTimeoutSeconds: 45,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        agent: "codex",
+        runtimeOptions: {
+          timeoutSeconds: 45,
+        },
+      }),
+    );
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.lane).toBe("subagent");
+    expect(agentCall?.params?.timeout).toBe(45);
   });
 
   it("rejects OpenClaw config agent ids when runtime=acp targets a native agent", async () => {

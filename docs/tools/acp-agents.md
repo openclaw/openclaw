@@ -336,6 +336,7 @@ Interface details:
 - `resumeSessionId` (optional): resume an existing ACP session instead of creating a new one. The agent replays its conversation history via `session/load`. Requires `runtime: "acp"`.
 - `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+- `runTimeoutSeconds` (optional): aborts the ACP child turn after N seconds. `0` keeps the turn on the gateway's no-timeout path. The same value is applied to the Gateway run and ACP runtime so stalled/quota-exhausted harnesses do not occupy the parent agent lane indefinitely.
 - `model` (optional): explicit model override for the ACP child session. Codex ACP spawns normalize OpenClaw Codex refs such as `openai-codex/gpt-5.4` to Codex ACP startup config before `session/new`; slash forms such as `openai-codex/gpt-5.4/high` also set Codex ACP reasoning effort. Other harnesses must advertise ACP `models` and support `session/set_model`; otherwise OpenClaw/acpx fails clearly instead of silently falling back to the target agent default.
 - `thinking` (optional): explicit thinking/reasoning effort for the ACP child session. For Codex ACP, `minimal` maps to low effort, `low`/`medium`/`high`/`xhigh` map directly, and `off` omits the reasoning-effort startup override.
 
@@ -359,6 +360,7 @@ One-shot ACP sessions spawned by another agent run are background children, simi
 
 - The parent asks for work with `sessions_spawn({ runtime: "acp", mode: "run" })`.
 - The child runs in its own ACP harness session.
+- Child turns run on the same background lane used by native sub-agent spawns, so a slow ACP harness does not block unrelated main-session work.
 - Completion reports back through the internal task-completion announce path.
 - The parent rewrites the child result in normal assistant voice when a user-facing reply is useful.
 

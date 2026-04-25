@@ -260,6 +260,7 @@ export function createSessionsSpawnTool(
             resumeSessionId,
             model: modelOverride,
             thinking: thinkingOverrideRaw,
+            runTimeoutSeconds,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,

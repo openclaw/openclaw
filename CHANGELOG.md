@@ -79,6 +79,9 @@ Docs: https://docs.openclaw.ai
 - ACP/sessions_spawn: reject normal OpenClaw config agent ids when callers
   explicitly request `runtime="acp"`, while allowing agents configured with
   `runtime.type="acp"` to resolve to their ACP harness id. Fixes #63914.
+- ACP/sessions_spawn: apply `runTimeoutSeconds` to ACP child turns and dispatch
+  those turns on the background subagent lane, so quota-stalled ACP harnesses do
+  not occupy the main agent lane indefinitely. Fixes #68823.
 - ACP/models: document that non-Codex ACP model overrides require adapter
   support for ACP `models` plus `session/set_model`, so unsupported harnesses
   fail clearly instead of silently falling back to their defaults.
