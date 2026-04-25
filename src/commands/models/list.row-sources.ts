@@ -77,7 +77,7 @@ export async function appendAllModelRowSources(
     seenKeys,
   });
 
-  if (params.modelRegistry && !params.context.filter.provider) {
+  if (params.modelRegistry) {
     await appendCatalogSupplementRows({
       rows: params.rows,
       modelRegistry: params.modelRegistry,
