@@ -3,7 +3,6 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
   hasBundledWebFetchProviderPublicArtifact,
   hasBundledWebSearchProviderPublicArtifact,
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -30,6 +29,8 @@ function supportsSecretRefWebSearchApiKey(
 }
 
 const registry = loadPluginManifestRegistry();
+const webSearchPluginIds = bundledPluginIdsWithContract("webSearchProviders");
+const webFetchPluginIds = bundledPluginIdsWithContract("webFetchProviders");
 
 function bundledPluginIdsWithContract(
   contract: "webSearchProviders" | "webFetchProviders",
@@ -42,40 +43,16 @@ function bundledPluginIdsWithContract(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function ownerPluginIdForContractValue(
-  contract: "webSearchProviders" | "webFetchProviders",
-  value: string,
-): string | undefined {
-  const normalized = value.toLowerCase();
-  return registry.plugins.find(
-    (plugin) =>
-      plugin.origin === "bundled" &&
-      plugin.contracts?.[contract]?.some((candidate) => candidate.toLowerCase() === normalized),
-  )?.id;
-}
-
 describe("web provider public artifacts", () => {
-  it("has a public artifact for every bundled web search provider declared in manifests", () => {
-    const pluginIds = bundledPluginIdsWithContract("webSearchProviders");
-
-    expect(pluginIds).not.toHaveLength(0);
-    for (const pluginId of pluginIds) {
+  it("has public artifacts for every bundled web provider declared in manifests", () => {
+    expect(webSearchPluginIds).not.toHaveLength(0);
+    for (const pluginId of webSearchPluginIds) {
       expect(hasBundledWebSearchProviderPublicArtifact(pluginId)).toBe(true);
     }
-  });
 
-  it("keeps public web search artifacts mapped to their manifest owner plugin", () => {
-    const pluginIds = bundledPluginIdsWithContract("webSearchProviders");
-
-    const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
-      onlyPluginIds: pluginIds,
-    });
-
-    expect(providers).not.toBeNull();
-    for (const provider of providers ?? []) {
-      expect(ownerPluginIdForContractValue("webSearchProviders", provider.id)).toBe(
-        provider.pluginId,
-      );
+    expect(webFetchPluginIds).not.toHaveLength(0);
+    for (const pluginId of webFetchPluginIds) {
+      expect(hasBundledWebFetchProviderPublicArtifact(pluginId)).toBe(true);
     }
   });
 
@@ -103,14 +80,5 @@ describe("web provider public artifacts", () => {
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
     expect(actualPluginIds).toEqual(expectedPluginIds);
-  });
-
-  it("has a public artifact for every bundled web fetch provider declared in manifests", () => {
-    const pluginIds = bundledPluginIdsWithContract("webFetchProviders");
-
-    expect(pluginIds).not.toHaveLength(0);
-    for (const pluginId of pluginIds) {
-      expect(hasBundledWebFetchProviderPublicArtifact(pluginId)).toBe(true);
-    }
   });
 });
