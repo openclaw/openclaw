@@ -65,6 +65,10 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: keep queued subagent announces session-only when the
   requester has no external channel target, avoiding ambiguous multi-channel
   delivery failures. Fixes #59201. Thanks @larrylhollan.
+- Image understanding: preserve configured provider-prefixed vision model
+  metadata when callers request the model without the provider prefix, so custom
+  image models keep their `input: ["text", "image"]` capability. Fixes #33185.
+  Thanks @Kobe9312 and @vincentkoc.
 - Gateway/subagents: keep direct-loopback backend RPCs authenticated with the
   shared gateway token/password off stale CLI paired-device scope baselines, so
   internal calls no longer hit `scope-upgrade` pairing prompts while remote,

@@ -421,6 +421,71 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text", "image"]);
   });
 
+  it("propagates image input when configured model ids include the provider prefix", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("custom/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom",
+      id: "custom/vision-model",
+      input: ["text", "image"],
+    });
+  });
+
+  it("prefers provider-prefixed configured metadata over discovered text-only models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "vision-model",
+      templateModel: {
+        ...makeModel("vision-model"),
+        provider: "custom",
+        input: ["text"],
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("custom/vision-model"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom",
+      id: "custom/vision-model",
+      input: ["text", "image"],
+    });
+  });
+
   it("keeps unknown fallback models text-only instead of borrowing image input from another configured model", () => {
     const cfg = {
       models: {
