@@ -740,6 +740,30 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("keeps GenAI token usage metric model attribute present when model is unavailable", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      provider: "openai",
+      usage: { input: 2 },
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.histograms.get("gen_ai.client.token.usage")?.record).toHaveBeenCalledWith(
+      2,
+      {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "unknown",
+        "gen_ai.token.type": "input",
+      },
+    );
+    await service.stop?.(ctx);
+  });
+
   test("exports GenAI usage attributes on model usage spans without diagnostic identifiers", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
