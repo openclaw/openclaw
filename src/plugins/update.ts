@@ -12,6 +12,7 @@ import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
+  getExternalizedBundledPluginLegacyPathSuffix,
   getExternalizedBundledPluginLookupIds,
   getExternalizedBundledPluginTargetId,
   type ExternalizedBundledPluginBridge,
@@ -222,10 +223,6 @@ function pathEndsWithSegment(params: {
   return Boolean(value && segment && (value === segment || value.endsWith(`/${segment}`)));
 }
 
-function bundledExtensionPathSegment(bundledDirName: string): string {
-  return ["extensions", bundledDirName].join("/");
-}
-
 function isBridgeBundledPathRecord(params: {
   bridge: ExternalizedBundledPluginBridge;
   bundledLocalPath?: string;
@@ -242,16 +239,16 @@ function isBridgeBundledPathRecord(params: {
   ) {
     return true;
   }
-  const bundledDirName = params.bridge.bundledDirName ?? params.bridge.bundledPluginId;
+  const bundledPathSuffix = getExternalizedBundledPluginLegacyPathSuffix(params.bridge);
   return (
     pathEndsWithSegment({
       value: params.record.sourcePath,
-      segment: bundledExtensionPathSegment(bundledDirName),
+      segment: bundledPathSuffix,
       env: params.env,
     }) ||
     pathEndsWithSegment({
       value: params.record.installPath,
-      segment: bundledExtensionPathSegment(bundledDirName),
+      segment: bundledPathSuffix,
       env: params.env,
     })
   );
@@ -262,11 +259,11 @@ function removeBridgeBundledLoadPaths(params: {
   loadPaths: ReturnType<typeof buildLoadPathHelpers>;
   env: NodeJS.ProcessEnv;
 }) {
-  const bundledDirName = params.bridge.bundledDirName ?? params.bridge.bundledPluginId;
+  const bundledPathSuffix = getExternalizedBundledPluginLegacyPathSuffix(params.bridge);
   params.loadPaths.removeMatching((entry) =>
     pathEndsWithSegment({
       value: entry,
-      segment: bundledExtensionPathSegment(bundledDirName),
+      segment: bundledPathSuffix,
       env: params.env,
     }),
   );
@@ -298,7 +295,7 @@ function isBridgeChannelEnabledByConfig(params: {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
     }
-    if ((entry as Record<string, unknown>).enabled === true) {
+    if (Object.is((entry as Record<string, unknown>).enabled, true)) {
       return true;
     }
   }
@@ -317,7 +314,8 @@ function isExternalizedBundledPluginEnabled(params: {
   if (
     pluginIds.some(
       (pluginId) =>
-        normalized.deny.includes(pluginId) || normalized.entries[pluginId]?.enabled === false,
+        normalized.deny.includes(pluginId) ||
+        Object.is(normalized.entries[pluginId]?.enabled, false),
     )
   ) {
     return false;
@@ -908,7 +906,6 @@ export async function syncPluginsForUpdateChannel(params: {
         existing &&
         !isBridgeBundledPathRecord({
           bridge,
-          bundledLocalPath: undefined,
           record: existing.record,
           env,
         })
