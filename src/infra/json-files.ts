@@ -36,7 +36,7 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   }
 }
 
-export function readJsonFileSync<T>(filePath: string): T | null {
+export function readJsonFileSync(filePath: string): unknown {
   try {
     const raw = readFileSync(filePath, "utf8");
     return JSON.parse(raw) as T;

@@ -130,7 +130,7 @@ export async function readPersistedInstalledPluginIndex(
 export function readPersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): InstalledPluginIndex | null {
-  const parsed = readJsonFileSync<unknown>(resolveInstalledPluginIndexStorePath(options));
+  const parsed = readJsonFileSync(resolveInstalledPluginIndexStorePath(options));
   return parseInstalledPluginIndex(parsed);
 }
 
