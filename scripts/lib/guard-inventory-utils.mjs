@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const parsedTypeScriptSourceCache = new Map();
+const sourceTextCache = new Map();
 
 export function normalizeRepoPath(repoRoot, filePath) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
@@ -118,7 +119,11 @@ export async function collectTypeScriptInventory(params) {
     const cacheKey = `${scriptKind}:${filePath}`;
     let sourceFile = parsedTypeScriptSourceCache.get(cacheKey);
     if (!sourceFile) {
-      const source = await fs.readFile(filePath, "utf8");
+      let source = sourceTextCache.get(filePath);
+      if (source === undefined) {
+        source = await fs.readFile(filePath, "utf8");
+        sourceTextCache.set(filePath, source);
+      }
       if (params.shouldParseSource && !params.shouldParseSource(source, filePath)) {
         continue;
       }

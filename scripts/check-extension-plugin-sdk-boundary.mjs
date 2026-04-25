@@ -101,9 +101,12 @@ async function collectParsedExtensionSourceFiles() {
   if (!parsedExtensionSourceFilesPromise) {
     parsedExtensionSourceFilesPromise = (async () => {
       const files = await collectExtensionSourceFiles(extensionsRoot);
-      return await Promise.all(
+      const parsed = await Promise.all(
         files.map(async (filePath) => {
           const source = await fs.readFile(filePath, "utf8");
+          if (!mayContainModuleSpecifier(source)) {
+            return null;
+          }
           const scriptKind =
             filePath.endsWith(".tsx") || filePath.endsWith(".jsx")
               ? ts.ScriptKind.TSX
@@ -120,9 +123,18 @@ async function collectParsedExtensionSourceFiles() {
           };
         }),
       );
+      return parsed.filter(Boolean);
     })();
   }
   return await parsedExtensionSourceFilesPromise;
+}
+
+function mayContainModuleSpecifier(source) {
+  return (
+    /\bfrom\s*["']/.test(source) ||
+    /\bimport\s*(?:\(|["']|type\b|[\w*{])/.test(source) ||
+    /\bexport\s*(?:type\s+)?(?:\*|{)[^;\n]*\bfrom\s*["']/.test(source)
+  );
 }
 
 function resolveExtensionRoot(filePath) {
