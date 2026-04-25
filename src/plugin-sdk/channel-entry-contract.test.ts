@@ -357,4 +357,5 @@ describe("loadBundledEntryExportSync", () => {
       }),
     ).toThrow(`resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`);
   });
+
 });

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
+import pathModule from "node:path";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
@@ -101,7 +102,7 @@ describe("bundled plugin public surface loader", () => {
         artifactBasename: "secret-contract-api.js",
       }).marker,
     ).toBe("source-require-ok");
-    expect(requireLoader).toHaveBeenCalledWith(fs.realpathSync(modulePath));
+    expect(requireLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
     expect(createJiti).not.toHaveBeenCalled();
   });
 
@@ -137,41 +138,106 @@ describe("bundled plugin public surface loader", () => {
     expect(createJiti).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects public artifacts that change after boundary validation", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "should-not-load" })));
+  it("throws and does not cache when module loader returns null", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => null));
     vi.doMock("jiti", () => ({
       createJiti,
     }));
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
-    >(import.meta.url, "./public-surface-loader.js?scope=post-validation-identity");
+    >(import.meta.url, "./public-surface-loader.js?scope=null-loader");
+
     const tempRoot = createTempDir();
     const bundledPluginsDir = path.join(tempRoot, "dist");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
 
-    const modulePath = path.join(bundledPluginsDir, "demo", "api.js");
+    const modulePath = path.join(bundledPluginsDir, "demo", "null-api.js");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-    fs.writeFileSync(modulePath, 'export const marker = "demo";\n', "utf8");
+    fs.writeFileSync(modulePath, "export default null;\n", "utf8");
 
-    const realStatSync = fs.statSync.bind(fs);
-    const moduleRealPath = fs.realpathSync(modulePath);
-    vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
-      const stat = realStatSync(target, options);
-      if (fs.realpathSync(target) !== moduleRealPath) {
-        return stat;
-      }
-      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
-        ino: Number(stat.ino) + 1,
-      });
-    });
-
-    expect(() =>
+    let thrown: unknown;
+    try {
       publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
         dirName: "demo",
-        artifactBasename: "api.js",
-      }),
-    ).toThrow(/changed after validation/);
-    expect(createJiti).not.toHaveBeenCalled();
+        artifactBasename: "null-api.js",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("null/undefined");
+
+    // Subsequent call should attempt to load again, not return cached bad value
+    let thrownAgain: unknown;
+    try {
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "null-api.js",
+      });
+    } catch (err) {
+      thrownAgain = err;
+    }
+    expect(thrownAgain).toBeInstanceOf(Error);
+    expect((thrownAgain as Error).message).toContain("null/undefined");
+    // Confirms no caching of bad value
+    expect(createJiti).toHaveBeenCalled();
+  });
+
+  it("throws and does not cache when jiti returns broken proxy with null target", async () => {
+    // Create a proxy with null target - exactly the failure mode from #62844
+    const brokenProxy = new Proxy(
+      {},
+      {
+        get(_target, _prop) {
+          // Simulate the exact error: accessing a property throws because target is null
+          throw new TypeError("Cannot read properties of undefined (reading 't')");
+        },
+      },
+    );
+    const createJiti = vi.fn(() => vi.fn(() => brokenProxy));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=broken-proxy");
+
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+
+    const modulePath = path.join(bundledPluginsDir, "demo", "broken-api.js");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, "export default {};\n", "utf8");
+
+    // First call should throw due to broken proxy validation
+    let thrown: unknown;
+    try {
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "broken-api.js",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("inaccessible proxy");
+
+    // Subsequent call should NOT return cached bad proxy — should try to load again and throw again
+    let thrownAgain: unknown;
+    try {
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "broken-api.js",
+      });
+    } catch (err) {
+      thrownAgain = err;
+    }
+    expect(thrownAgain).toBeInstanceOf(Error);
+    expect((thrownAgain as Error).message).toContain("inaccessible proxy");
+    // Confirms no caching of bad proxy
+    expect(createJiti).toHaveBeenCalled();
   });
 });

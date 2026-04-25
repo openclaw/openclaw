@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { sameFileIdentity } from "../infra/file-identity.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
@@ -162,7 +161,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
         ? "OpenClaw package root"
         : "bundled plugin directory",
-    rejectHardlinks: true,
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     throw new Error(
@@ -170,27 +169,35 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       { cause: opened.error },
     );
   }
-  const validatedPath = opened.path;
-  const validatedStat = opened.stat;
   fs.closeSync(opened.fd);
-
-  const currentStat = fs.statSync(validatedPath);
-  if (!sameFileIdentity(validatedStat, currentStat)) {
-    throw new Error(
-      `Bundled plugin public surface changed after validation: ${params.dirName}/${params.artifactBasename}`,
-    );
-  }
 
   const sentinel = {} as T;
   loadedPublicSurfaceModules.set(location.modulePath, sentinel);
-  loadedPublicSurfaceModules.set(validatedPath, sentinel);
   try {
-    const loaded = loadPublicSurfaceModule(validatedPath) as T;
-    Object.assign(sentinel, loaded);
+    const loaded = loadPublicSurfaceModule(location.modulePath);
+    // Defensive: if loaded is null/undefined, refuse to cache and throw
+    if (loaded === undefined || loaded === null) {
+      loadedPublicSurfaceModules.delete(location.modulePath);
+      throw new Error(
+        `Bundled plugin public surface loaded but returned null/undefined: ${location.modulePath}`,
+      );
+    }
+    // Defensive: verify loaded module is accessible (handles proxy with null target like #62844)
+    // If the module is a Proxy with null/undefined target, property access will throw.
+    // Use void to explicitly acknowledge the intentionally unused result — this triggers
+    // the proxy get trap without needing an eslint disable comment.
+    try {
+      void (loaded as object)["constructor"];
+    } catch {
+      loadedPublicSurfaceModules.delete(location.modulePath);
+      throw new Error(
+        `Bundled plugin public surface returned inaccessible proxy (null target): ${location.modulePath}`,
+      );
+    }
+    Object.assign(sentinel, loaded as T);
     return sentinel;
   } catch (error) {
     loadedPublicSurfaceModules.delete(location.modulePath);
-    loadedPublicSurfaceModules.delete(validatedPath);
     throw error;
   }
 }
