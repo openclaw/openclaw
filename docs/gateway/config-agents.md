@@ -443,6 +443,7 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
           sessionArg: "--session",
           sessionMode: "existing",
           systemPromptArg: "--system",
+          // Or use systemPromptFileArg when the CLI accepts a prompt file flag.
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",

@@ -735,6 +735,47 @@ describe("browser config", () => {
     );
   });
 
+  it("resolves Chrome MCP command, args, and endpoint URL for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          cdpUrl: "http://127.0.0.1:9222/",
+          mcpCommand: " /usr/local/bin/chrome-devtools-mcp ",
+          mcpArgs: ["--no-usage-statistics", " ", "--performanceCrux", "false"],
+          color: "#00AA00",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "chrome-live");
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(profile?.cdpHost).toBe("127.0.0.1");
+    expect(profile?.cdpIsLoopback).toBe(true);
+    expect(profile?.mcpCommand).toBe("/usr/local/bin/chrome-devtools-mcp");
+    expect(profile?.mcpArgs).toEqual(["--no-usage-statistics", "--performanceCrux", "false"]);
+  });
+
+  it("preserves direct websocket cdpUrl for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key",
+          color: "#00AA00",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "chrome-live");
+    expect(profile?.cdpUrl).toBe("ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key");
+    expect(profile?.cdpHost).toBe("127.0.0.1");
+    expect(profile?.cdpIsLoopback).toBe(true);
+  });
+
   it("sets usesChromeMcp only for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
