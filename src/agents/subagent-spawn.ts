@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
@@ -863,7 +864,10 @@ export async function spawnSubagentDirect(
     childSessionKey,
     label: label || undefined,
     task,
-    acpEnabled: cfg.acp?.enabled !== false && !childRuntime.sandboxed,
+    acpEnabled: isAcpRuntimeSpawnAvailable({
+      config: cfg,
+      sandboxed: childRuntime.sandboxed,
+    }),
     childDepth,
     maxSpawnDepth,
   });

@@ -7,6 +7,7 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
@@ -1117,7 +1118,10 @@ export async function runEmbeddedAttempt(
         workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,
         promptMode: effectivePromptMode,
-        acpEnabled: params.config?.acp?.enabled !== false,
+        acpEnabled: isAcpRuntimeSpawnAvailable({
+          config: params.config,
+          sandboxed: sandboxInfo?.enabled === true,
+        }),
         runtimeInfo,
         messageToolHints,
         sandboxInfo,

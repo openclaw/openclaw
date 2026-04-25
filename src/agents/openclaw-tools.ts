@@ -303,6 +303,7 @@ export function createOpenClawTools(
             agentGroupSpace: options?.agentGroupSpace,
             agentMemberRoleIds: options?.agentMemberRoleIds,
             sandboxed: options?.sandboxed,
+            config: resolvedConfig,
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
           }),

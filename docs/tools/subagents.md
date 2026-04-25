@@ -60,7 +60,7 @@ transcript path on disk when you need the raw full transcript.
 - `--model` and `--thinking` override defaults for that specific run.
 - Use `info`/`log` to inspect details and output after completion.
 - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
-- For ACP harness sessions (Codex, Claude Code, Gemini CLI, OpenCode), use `sessions_spawn` with `runtime: "acp"` and see [ACP Agents](/tools/acp-agents), especially the [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. `runtime: "acp"` expects an external ACP harness id, or an `agents.list[]` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
+- For ACP harness sessions (Codex, Claude Code, Gemini CLI, OpenCode), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime, and see [ACP Agents](/tools/acp-agents), especially the [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.list[]` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
 
 Primary goals:
 

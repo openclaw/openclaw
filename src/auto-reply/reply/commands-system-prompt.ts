@@ -1,4 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
@@ -162,7 +163,10 @@ export async function resolveCommandsSystemPromptBundle(
     skillsPrompt,
     heartbeatPrompt: undefined,
     ttsHint,
-    acpEnabled: params.cfg?.acp?.enabled !== false,
+    acpEnabled: isAcpRuntimeSpawnAvailable({
+      config: params.cfg,
+      sandboxed: sandboxRuntime.sandboxed,
+    }),
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,

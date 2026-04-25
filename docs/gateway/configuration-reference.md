@@ -950,7 +950,7 @@ Notes:
 ```json5
 {
   acp: {
-    enabled: false,
+    enabled: true,
     dispatch: { enabled: true },
     backend: "acpx",
     defaultAgent: "main",
@@ -974,9 +974,10 @@ Notes:
 }
 ```
 
-- `enabled`: global ACP feature gate (default: `false`).
+- `enabled`: global ACP feature gate (default: `true`; set `false` to hide ACP dispatch and spawn affordances).
 - `dispatch.enabled`: independent gate for ACP session turn dispatch (default: `true`). Set `false` to keep ACP commands available while blocking execution.
 - `backend`: default ACP runtime backend id (must match a registered ACP runtime plugin).
+  If `plugins.allow` is set, include the backend plugin id (for example `acpx`) or the bundled default plugin will not load.
 - `defaultAgent`: fallback ACP target agent id when spawns do not specify an explicit target.
 - `allowedAgents`: allowlist of agent ids permitted for ACP runtime sessions; empty means no additional restriction.
 - `maxConcurrentSessions`: maximum concurrently active ACP sessions.

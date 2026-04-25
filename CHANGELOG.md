@@ -66,6 +66,9 @@ Docs: https://docs.openclaw.ai
   directly for owner-authorized senders instead of returning `cronParams` and
   relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937)
   Thanks @GaosCode.
+- Agents/ACP: hide `sessions_spawn` ACP runtime options unless an ACP backend is
+  loaded, and make `/acp doctor` call out `plugins.allow` blocking bundled
+  `acpx`. Thanks @vincentkoc.
 - Agents/subagents: keep queued subagent announces session-only when the
   requester has no external channel target, avoiding ambiguous multi-channel
   delivery failures. Fixes #59201. Thanks @larrylhollan.

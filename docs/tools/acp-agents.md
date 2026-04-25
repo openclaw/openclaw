@@ -37,6 +37,7 @@ Usually, yes. Fresh installs ship the bundled `acpx` runtime plugin enabled by d
 
 First-run gotchas:
 
+- If `plugins.allow` is set, it is a restrictive plugin inventory and must include `acpx`; otherwise the bundled default is intentionally blocked and `/acp doctor` reports the missing allowlist entry.
 - Target harness adapters (Codex, Claude, etc.) may be fetched on demand with `npx` the first time you use them.
 - Vendor auth still has to exist on the host for that harness.
 - If the host has no npm or network access, first-run adapter fetches fail until caches are pre-warmed or the adapter is installed another way.
@@ -78,12 +79,14 @@ Natural-language triggers that should route to the ACP runtime:
 
 OpenClaw picks `runtime: "acp"`, resolves the harness `agentId`, binds to the current conversation or thread when supported, and routes follow-ups to that session until close/expiry. Codex only follows this path when ACP is explicit or the requested background runtime still needs ACP.
 
-For `sessions_spawn`, `runtime: "acp"` targets ACP harness ids such as `codex`,
-`claude`, `gemini`, or `opencode`. Do not pass a normal OpenClaw config agent
-id from `agents_list` unless that entry is explicitly configured with
-`agents.list[].runtime.type="acp"`; otherwise use the default sub-agent runtime.
-When an OpenClaw agent is configured with `runtime.type="acp"`, OpenClaw uses
-`runtime.acp.agent` as the underlying harness id.
+For `sessions_spawn`, `runtime: "acp"` is advertised only when ACP is enabled,
+the requester is not sandboxed, and an ACP runtime backend is loaded. It targets
+ACP harness ids such as `codex`, `claude`, `gemini`, or `opencode`. Do not pass
+a normal OpenClaw config agent id from `agents_list` unless that entry is
+explicitly configured with `agents.list[].runtime.type="acp"`; otherwise use
+the default sub-agent runtime. When an OpenClaw agent is configured with
+`runtime.type="acp"`, OpenClaw uses `runtime.acp.agent` as the underlying
+harness id.
 
 ## ACP versus sub-agents
 
@@ -551,7 +554,7 @@ plugin-tools and OpenClaw-tools MCP bridges, and ACP permission modes, see
 
 | Symptom                                                                     | Likely cause                                                                    | Fix                                                                                                                                                                      |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ACP runtime backend is not configured`                                     | Backend plugin missing or disabled.                                             | Install and enable backend plugin, then run `/acp doctor`.                                                                                                               |
+| `ACP runtime backend is not configured`                                     | Backend plugin missing, disabled, or blocked by `plugins.allow`.                | Install and enable backend plugin, include `acpx` in `plugins.allow` when that allowlist is set, then run `/acp doctor`.                                                 |
 | `ACP is disabled by policy (acp.enabled=false)`                             | ACP globally disabled.                                                          | Set `acp.enabled=true`.                                                                                                                                                  |
 | `ACP dispatch is disabled by policy (acp.dispatch.enabled=false)`           | Dispatch from normal thread messages disabled.                                  | Set `acp.dispatch.enabled=true`.                                                                                                                                         |
 | `ACP agent "<id>" is not allowed by policy`                                 | Agent not in allowlist.                                                         | Use allowed `agentId` or update `acp.allowedAgents`.                                                                                                                     |
