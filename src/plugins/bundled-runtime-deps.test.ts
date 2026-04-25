@@ -60,13 +60,19 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
       "acpx@0.5.3",
     ]);
     expect(
-      createBundledRuntimeDepsInstallEnv({
-        PATH: "/usr/bin:/bin",
-        npm_config_global: "true",
-        npm_config_prefix: "/opt/homebrew",
-      }),
+      createBundledRuntimeDepsInstallEnv(
+        {
+          PATH: "/usr/bin:/bin",
+          NPM_CONFIG_CACHE: "/Users/alice/.npm-uppercase",
+          npm_config_cache: "/Users/alice/.npm",
+          npm_config_global: "true",
+          npm_config_prefix: "/opt/homebrew",
+        },
+        { cacheDir: "/opt/openclaw/runtime-cache" },
+      ),
     ).toEqual({
       PATH: "/usr/bin:/bin",
+      npm_config_cache: "/opt/openclaw/runtime-cache",
       npm_config_legacy_peer_deps: "true",
       npm_config_package_lock: "false",
       npm_config_save: "false",
@@ -258,6 +264,49 @@ describe("installBundledRuntimeDeps", () => {
       expect.any(Array),
       expect.objectContaining({
         cwd: installExecutionRoot,
+      }),
+    );
+  });
+
+  it("uses an OpenClaw-owned npm cache for runtime dependency installs", () => {
+    const installRoot = makeTempDir();
+    spawnSyncMock.mockReturnValue({
+      pid: 123,
+      output: [],
+      stdout: "",
+      stderr: "",
+      signal: null,
+      status: 0,
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["tokenjuice@0.6.1"],
+      env: {
+        HOME: "/Users/alice",
+        NPM_CONFIG_CACHE: "/Users/alice/.npm-uppercase",
+        npm_config_cache: "/Users/alice/.npm",
+      },
+    });
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        cwd: installRoot,
+        env: expect.objectContaining({
+          HOME: "/Users/alice",
+          npm_config_cache: path.join(installRoot, ".openclaw-npm-cache"),
+        }),
+      }),
+    );
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          NPM_CONFIG_CACHE: expect.any(String),
+        }),
       }),
     );
   });
