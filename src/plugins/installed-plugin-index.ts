@@ -87,8 +87,10 @@ export type InstalledPluginIndexRecord = {
   packageInstall?: PluginInstallSourceInfo;
   manifestPath: string;
   manifestHash: string;
-  packageJsonPath?: string;
-  packageJsonHash?: string;
+  packageJson?: {
+    path: string;
+    hash: string;
+  };
   rootDir: string;
   origin: PluginManifestRecord["origin"];
   enabled: boolean;
@@ -242,6 +244,30 @@ function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string 
   }
   const packageJsonPath = path.join(candidate.packageDir, "package.json");
   return fs.existsSync(packageJsonPath) ? packageJsonPath : undefined;
+}
+
+function resolvePackageJsonRecord(params: {
+  candidate: PluginCandidate | undefined;
+  packageJsonPath: string | undefined;
+  diagnostics: PluginDiagnostic[];
+  pluginId: string;
+}): InstalledPluginIndexRecord["packageJson"] | undefined {
+  if (!params.candidate?.packageDir || !params.packageJsonPath) {
+    return undefined;
+  }
+  const hash = safeHashFile({
+    filePath: params.packageJsonPath,
+    pluginId: params.pluginId,
+    diagnostics: params.diagnostics,
+    required: false,
+  });
+  if (!hash) {
+    return undefined;
+  }
+  return {
+    path: path.relative(params.candidate.rootDir, params.packageJsonPath) || "package.json",
+    hash,
+  };
 }
 
 function describePackageInstallSource(
@@ -416,14 +442,12 @@ function buildInstalledPluginIndex(
         diagnostics,
         required: true,
       }) ?? "";
-    const packageJsonHash = packageJsonPath
-      ? safeHashFile({
-          filePath: packageJsonPath,
-          pluginId: record.id,
-          diagnostics,
-          required: false,
-        })
-      : undefined;
+    const packageJson = resolvePackageJsonRecord({
+      candidate,
+      packageJsonPath,
+      diagnostics,
+      pluginId: record.id,
+    });
     const enabled = resolveEffectiveEnableState({
       id: record.id,
       origin: record.origin,
@@ -457,11 +481,8 @@ function buildInstalledPluginIndex(
     if (packageInstall) {
       indexRecord.packageInstall = packageInstall;
     }
-    if (packageJsonPath) {
-      indexRecord.packageJsonPath = packageJsonPath;
-    }
-    if (packageJsonHash) {
-      indexRecord.packageJsonHash = packageJsonHash;
+    if (packageJson) {
+      indexRecord.packageJson = packageJson;
     }
     return indexRecord;
   });
@@ -698,7 +719,8 @@ export function diffInstalledPluginIndexInvalidationReasons(
     }
     if (
       previousPlugin.packageVersion !== currentPlugin.packageVersion ||
-      previousPlugin.packageJsonHash !== currentPlugin.packageJsonHash
+      previousPlugin.packageJson?.path !== currentPlugin.packageJson?.path ||
+      previousPlugin.packageJson?.hash !== currentPlugin.packageJson?.hash
     ) {
       reasons.add("stale-package");
     }

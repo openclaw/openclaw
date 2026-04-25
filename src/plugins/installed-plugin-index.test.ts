@@ -196,8 +196,10 @@ describe("installed plugin index", () => {
       ],
     });
     expect(index.plugins[0]?.manifestHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(index.plugins[0]?.packageJsonHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(index.plugins[0]?.packageJsonPath).toBe(path.join(fixture.rootDir, "package.json"));
+    expect(index.plugins[0]?.packageJson).toMatchObject({
+      path: "package.json",
+      hash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
 

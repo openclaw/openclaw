@@ -56,8 +56,12 @@ const InstalledPluginIndexRecordSchema = z
     packageInstall: z.unknown().optional(),
     manifestPath: z.string(),
     manifestHash: z.string(),
-    packageJsonPath: z.string().optional(),
-    packageJsonHash: z.string().optional(),
+    packageJson: z
+      .object({
+        path: z.string(),
+        hash: z.string(),
+      })
+      .optional(),
     rootDir: z.string(),
     origin: z.string(),
     enabled: z.boolean(),
