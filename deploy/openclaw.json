@@ -1,0 +1,69 @@
+{
+  "$schema": "https://docs.openclaw.ai/schemas/openclaw.schema.json",
+  "gateway": {
+    "mode": "remote",
+    "host": "0.0.0.0",
+    "port": 7080,
+    "publicUrl": "https://a.arhan.dev"
+  },
+  "agents": {
+    "defaults": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "thinking": "high"
+    }
+  },
+  "providers": {
+    "anthropic": {
+      "apiKey": "${ANTHROPIC_API_KEY}"
+    }
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "pluginHooks": {
+        "messageReceived": true
+      }
+    }
+  },
+  "plugins": {
+    "memory-supabase": {
+      "embedding": {
+        "apiKey": "${OPENAI_API_KEY}",
+        "model": "text-embedding-3-small",
+        "dimensions": 1536
+      },
+      "supabase": {
+        "url": "${SUPABASE_URL}",
+        "serviceRoleKey": "${SUPABASE_SERVICE_ROLE_KEY}",
+        "userId": "arhan"
+      },
+      "autoIndex": true,
+      "autoRecall": true,
+      "consentDefault": true,
+      "captureMaxChars": 2000
+    },
+    "inbox-triage": {
+      "gmail": {
+        "user": "${GMAIL_USER}",
+        "clientId": "${GMAIL_OAUTH_CLIENT_ID}",
+        "clientSecret": "${GMAIL_OAUTH_CLIENT_SECRET}",
+        "refreshToken": "${GMAIL_OAUTH_REFRESH_TOKEN}"
+      },
+      "deliver": {
+        "channel": "whatsapp",
+        "target": "${OPENCLAW_WHATSAPP_SELF_JID}"
+      },
+      "lookbackHours": 24,
+      "draftReplies": true
+    }
+  },
+  "skills": {
+    "include": ["inbox-triage", "memory-second-brain"]
+  },
+  "meta": {
+    "ownerEmail": "arhan.harchandani@gmail.com",
+    "deployment": "contabo-vps"
+  }
+}

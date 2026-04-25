@@ -1,0 +1,57 @@
+# OpenClaw — single-user VPS deployment
+#
+# Stack:
+#   - openclaw   : the gateway daemon, built from this fork's Dockerfile
+#   - caddy      : TLS-terminating reverse proxy at https://a.arhan.dev
+#
+# State volumes:
+#   - openclaw_state : cron jobs, sessions, plugin state
+#   - openclaw_wa    : WhatsApp (Baileys) auth so the QR scan survives restarts
+#   - caddy_data     : Let's Encrypt certs
+
+services:
+  openclaw:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: openclaw
+    env_file: .env
+    environment:
+      OPENCLAW_HOME: /root/.openclaw
+      OPENCLAW_GATEWAY_HOST: 0.0.0.0
+      OPENCLAW_GATEWAY_PORT: "7080"
+      NODE_ENV: production
+    volumes:
+      - ./openclaw.json:/root/.openclaw/openclaw.json:ro
+      - ./cron:/root/.openclaw/cron
+      - openclaw_state:/root/.openclaw/state
+      - openclaw_wa:/root/.openclaw/whatsapp
+    expose:
+      - "7080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2
+    container_name: openclaw-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      openclaw:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  openclaw_state: {}
+  openclaw_wa: {}
+  caddy_data: {}
+  caddy_config: {}

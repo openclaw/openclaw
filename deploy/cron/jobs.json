@@ -1,0 +1,27 @@
+{
+  "$schema": "https://docs.openclaw.ai/schemas/cron-jobs.schema.json",
+  "jobs": [
+    {
+      "id": "daily-inbox-triage",
+      "name": "Daily inbox triage",
+      "cron": "0 7 * * *",
+      "tz": "Europe/London",
+      "session": "isolated",
+      "skills": ["inbox-triage"],
+      "systemEvent": "Run the inbox-triage skill: call inbox_triage_run() and then briefly summarise what you delivered.",
+      "deliver": {
+        "channel": "whatsapp",
+        "target": "self"
+      }
+    },
+    {
+      "id": "daily-journal",
+      "name": "Daily journal",
+      "cron": "0 22 * * *",
+      "tz": "Europe/London",
+      "session": "isolated",
+      "skills": ["memory-second-brain"],
+      "systemEvent": "Use memory_search with the query 'today' (k=20). Read the most relevant items and write a short (3-5 sentence) journal entry summarising the day. Save it via memory_remember with tags ['journal', '<today's date YYYY-MM-DD>']."
+    }
+  ]
+}

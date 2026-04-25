@@ -1,0 +1,32 @@
+# Caddy config for the openclaw gateway.
+#
+# Caddy obtains and rotates a Let's Encrypt cert automatically on first
+# request, so there's no manual certbot. DNS A record for a.arhan.dev must
+# point to this VPS before the first request.
+
+{
+    # Use this email for ACME account / cert renewal notices
+    email arhan.harchandani@gmail.com
+}
+
+a.arhan.dev {
+    encode zstd gzip
+
+    # Optional: simple bearer-token gate for the gateway endpoints. Pair
+    # with OPENCLAW_GATEWAY_TOKEN in .env if you want to lock /rpc down.
+    # Uncomment and set the token as a Caddy var if you want this layer:
+    #
+    # @authed header Authorization "Bearer {env.OPENCLAW_GATEWAY_TOKEN}"
+    # handle /rpc* {
+    #     reverse_proxy @authed openclaw:7080
+    #     respond 401
+    # }
+
+    reverse_proxy openclaw:7080
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options    "nosniff"
+        Referrer-Policy           "no-referrer"
+    }
+}
