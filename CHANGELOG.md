@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Browser/Playwright: ignore benign already-handled route races during guarded navigation so browser-page tasks no longer fail when Playwright tears down a route mid-flight. (#68708) Thanks @Steady-ai.
+- Telegram: prevent duplicate in-process long pollers for the same bot token and add clearer `getUpdates` conflict diagnostics for external duplicate pollers. Fixes #56230.
 - Browser/Linux: detect Chromium-based installs under `/opt/google`, `/opt/brave.com`, `/usr/lib/chromium`, and `/usr/lib/chromium-browser` before asking users to set `browser.executablePath`. (#48563) Thanks @lupuletic.
 - Sessions/browser: close tracked browser tabs when idle, daily, `/new`, or `/reset` session rollover archives the previous transcript, preventing tabs from leaking past the old session. Thanks @jakozloski.
 - Sessions/forking: fall back to transcript-estimated parent token counts when cached totals are stale or missing, so oversized thread forks start fresh instead of cloning the full parent transcript. Thanks @jalehman.
@@ -49,6 +50,7 @@ Docs: https://docs.openclaw.ai
 - Browser/config: support per-profile `browser.profiles.<name>.headless` overrides for locally launched browser profiles, so one profile can run headless without forcing all browser profiles headless. Thanks @nakamotoliu.
 - Plugins/PDF: move local PDF extraction into a bundled `document-extract` plugin so core no longer owns `pdfjs-dist` or PDF image-rendering dependencies. Thanks @vincentkoc.
 - Dependencies/memory: stop installing `node-llama-cpp` by default; local embeddings now load it only when operators install the optional runtime package. Thanks @vincentkoc.
+- Dependencies/media: replace the tiny core media host's Express server with `node:http`, so Express is no longer a root runtime dependency. Thanks @vincentkoc.
 - Matrix: require full cross-signing identity trust for self-device verification and add `openclaw matrix verify self` so operators can establish that trust from the CLI. (#70401) Thanks @gumadeiras.
 - WebChat/sessions: keep runtime-only prompt context out of visible transcript history and scrub legacy wrappers from session history surfaces. Thanks @91wan.
 - Gradium: add a bundled text-to-speech provider with voice-note and telephony output support. (#64958) Thanks @LaurentMazare.

@@ -1615,7 +1615,6 @@
     "commander": "^14.0.3",
     "croner": "^10.0.1",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
     "file-type": "22.0.1",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
