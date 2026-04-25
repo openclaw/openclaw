@@ -160,16 +160,37 @@ function describeChatForError(values: {
   return parts.length === 0 ? "<unknown chat>" : parts.join(", ");
 }
 
+function buildCrossChatError(
+  inputId: string,
+  inputKind: "short" | "uuid",
+  cached: BlueBubblesReplyCacheEntry,
+  ctx: BlueBubblesChatContext,
+): Error {
+  const remediation =
+    inputKind === "short"
+      ? `Retry with the full message GUID to avoid cross-chat reactions/replies landing in the wrong conversation.`
+      : `Retry with the correct chat target — even the full GUID cannot be reused across chats.`;
+  return new Error(
+    `BlueBubbles message id "${inputId}" belongs to a different chat ` +
+      `(${describeChatForError(cached)}) than the current call target ` +
+      `(${describeChatForError(ctx)}). ${remediation}`,
+  );
+}
+
 /**
  * Resolves a short message ID (e.g., "1", "2") to a full BlueBubbles GUID.
  * Returns the input unchanged if it's already a GUID or not found in the mapping.
  *
  * When `chatContext` is provided, the resolved UUID's cached chat must match
- * the caller's chat or the call throws. This prevents a short ID that points
+ * the caller's chat or the call throws. This prevents a message id that points
  * at a message in chat A from being silently reused in chat B — the common
  * symptom being tapbacks and quoted replies landing in the wrong conversation
  * (e.g. a group reaction showing up in a DM) because short IDs are allocated
  * from a single global counter across every account and chat.
+ *
+ * The guard runs on both numeric short ids AND full GUIDs: an agent can paste
+ * a GUID it harvested from history, a previous tool result, or another chat's
+ * transcript, and that path used to bypass the cross-chat check entirely.
  */
 export function resolveBlueBubblesMessageId(
   shortOrUuid: string,
@@ -187,12 +208,7 @@ export function resolveBlueBubblesMessageId(
       if (opts?.chatContext) {
         const cached = blueBubblesReplyCacheByMessageId.get(uuid);
         if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
-          throw new Error(
-            `BlueBubbles short message id "${trimmed}" belongs to a different chat ` +
-              `(${describeChatForError(cached)}) than the current call target ` +
-              `(${describeChatForError(opts.chatContext)}). Retry with the full message GUID ` +
-              `to avoid cross-chat reactions/replies landing in the wrong conversation.`,
-          );
+          throw buildCrossChatError(trimmed, "short", cached, opts.chatContext);
         }
       }
       return uuid;
@@ -202,9 +218,18 @@ export function resolveBlueBubblesMessageId(
         `BlueBubbles short message id "${trimmed}" is no longer available. Use MessageSidFull.`,
       );
     }
+    return trimmed;
   }
 
-  // Return as-is (either already a UUID or not found)
+  // Full GUID input — guard still applies. Cache miss falls through to
+  // returning the input unchanged so callers that supply a fresh-from-the-wire
+  // GUID (not yet seen by reply cache) keep working.
+  if (opts?.chatContext) {
+    const cached = blueBubblesReplyCacheByMessageId.get(trimmed);
+    if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
+      throw buildCrossChatError(trimmed, "uuid", cached, opts.chatContext);
+    }
+  }
   return trimmed;
 }
 

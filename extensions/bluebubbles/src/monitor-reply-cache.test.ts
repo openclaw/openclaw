@@ -148,15 +148,105 @@ describe("resolveBlueBubblesMessageId chat-scoped short-id guard", () => {
     ).toThrow(/different chat/);
   });
 
-  it("accepts a full uuid input unchanged regardless of chat context", () => {
-    // Non-numeric input is treated as a full GUID already; the guard does
-    // not apply. Callers supplying the full GUID have presumably resolved
-    // the chat themselves.
+  it("passes a full uuid through unchanged when not in the reply cache", () => {
+    // Cache miss falls through. Callers supplying a GUID that the cache
+    // hasn't observed get the input back so fresh-from-the-wire GUIDs
+    // (e.g. from a `find` API call) still work.
     const resolved = resolveBlueBubblesMessageId("1E7E6B6A-0000-4C6C-BCA7-000000000001", {
       requireKnownShortId: true,
       chatContext: { chatGuid: "iMessage;+;anything" },
     });
     expect(resolved).toBe("1E7E6B6A-0000-4C6C-BCA7-000000000001");
+  });
+
+  it("passes a full uuid through unchanged when caller supplies no chat context", () => {
+    // Belt-and-braces: even when the cache knows the GUID, callers that
+    // can't supply any chat hint at all (legacy tool invocations) fall
+    // through to preserve prior behavior.
+    seedMessage({
+      accountId: "default",
+      messageId: "uuid-known",
+      chatGuid: "iMessage;+;chat240698944142298252",
+    });
+    expect(resolveBlueBubblesMessageId("uuid-known")).toBe("uuid-known");
+    expect(resolveBlueBubblesMessageId("uuid-known", { chatContext: {} })).toBe("uuid-known");
+  });
+
+  it("accepts a full uuid that points at a same-chat cached entry", () => {
+    seedMessage({
+      accountId: "default",
+      messageId: "uuid-in-group",
+      chatGuid: "iMessage;+;chat240698944142298252",
+    });
+
+    const resolved = resolveBlueBubblesMessageId("uuid-in-group", {
+      chatContext: { chatGuid: "iMessage;+;chat240698944142298252" },
+    });
+    expect(resolved).toBe("uuid-in-group");
+  });
+
+  it("REJECTS a full uuid that points at a different chat in the cache", () => {
+    // Candidate-1 regression: the previous implementation only ran the
+    // cross-chat guard on numeric short ids. After the short-id guard
+    // landed, agents that retried with a full GUID (because the short id
+    // got rejected) silently bypassed the check. Group GUIDs reused in
+    // DM tool calls again leaked group reactions into DMs.
+    seedMessage({
+      accountId: "default",
+      messageId: "uuid-in-group",
+      chatGuid: "iMessage;+;chat240698944142298252",
+    });
+
+    expect(() =>
+      resolveBlueBubblesMessageId("uuid-in-group", {
+        chatContext: { chatGuid: "iMessage;-;+8618621181874" },
+      }),
+    ).toThrow(/different chat/);
+  });
+
+  it("uuid-path error message hints at fixing the chat target, not the id format", () => {
+    // The short-id error tells the agent to retry with the full GUID.
+    // For UUID input that's already failed, advising "use the full GUID"
+    // would be wrong — the agent already supplied one. Make the
+    // remediation hint differ so a retrying agent is steered toward
+    // fixing the chat target.
+    seedMessage({
+      accountId: "default",
+      messageId: "uuid-in-group",
+      chatGuid: "iMessage;+;chat240698944142298252",
+    });
+
+    try {
+      resolveBlueBubblesMessageId("uuid-in-group", {
+        chatContext: { chatGuid: "iMessage;-;+8618621181874" },
+      });
+      expect.fail("expected cross-chat guard to throw");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      expect(message).toContain("iMessage;+;chat240698944142298252");
+      expect(message).toContain("iMessage;-;+8618621181874");
+      expect(message).toContain("correct chat target");
+      expect(message).not.toContain("Retry with the full message GUID");
+    }
+  });
+
+  it("applies the chatIdentifier fallback to full uuid input as well", () => {
+    // Same handle-only-caller scenario as the short-id case: a tool
+    // invocation might only resolve the chatIdentifier (the bare handle).
+    // The guard must catch GUID reuse across mismatched chatIdentifiers
+    // even when the caller has no chatGuid hint.
+    seedMessage({
+      accountId: "default",
+      messageId: "uuid-in-group",
+      chatGuid: "iMessage;+;chat240698944142298252",
+      chatIdentifier: "chat240698944142298252",
+    });
+
+    expect(() =>
+      resolveBlueBubblesMessageId("uuid-in-group", {
+        chatContext: { chatIdentifier: "+8618621181874" },
+      }),
+    ).toThrow(/different chat/);
   });
 
   it("reports the conflicting chats in the error message for debugability", () => {
