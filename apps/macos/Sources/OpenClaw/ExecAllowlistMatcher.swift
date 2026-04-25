@@ -24,6 +24,7 @@ enum ExecAllowlistMatcher {
         return nil
     }
 
+    // swiftformat:disable:next wrapMultilineStatementBraces
     static func matchAll(
         entries: [ExecAllowlistEntry],
         resolutions: [ExecCommandResolution]) -> [ExecAllowlistEntry]

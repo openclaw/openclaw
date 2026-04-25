@@ -629,6 +629,7 @@ enum ExecApprovalsStore {
 
         switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
         case let .valid(pattern):
+            // swiftformat:disable:next wrapMultilineStatementBraces
             return ExecAllowlistEntry(
                 id: entry.id,
                 pattern: pattern,
@@ -638,6 +639,7 @@ enum ExecApprovalsStore {
         case .invalid:
             switch ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved) {
             case let .valid(migratedPattern):
+                // swiftformat:disable:next wrapMultilineStatementBraces
                 return ExecAllowlistEntry(
                     id: entry.id,
                     pattern: migratedPattern,
