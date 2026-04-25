@@ -139,6 +139,8 @@ Docs: https://docs.openclaw.ai
 - ACP/oneshot: reconcile runtime session identity before closing completed
   oneshot ACP runs, so finished `sessions.json` entries do not stay stuck with
   `acp.identity.state="pending"`.
+- ACPX: bundle `acpx@0.6.1` so unsupported generic model overrides fail
+  clearly instead of silently falling back to the target adapter default.
 - ACP/models: document that non-Codex ACP model overrides require adapter
   support for ACP `models` plus `session/set_model`, so unsupported harnesses
   fail clearly instead of silently falling back to their defaults.
