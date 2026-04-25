@@ -160,14 +160,11 @@ function createChatHeaderState(
   return { state, request };
 }
 
-async function flushTasks(turns = 6) {
+async function flushTasks(turns = 8) {
   for (let i = 0; i < turns; i += 1) {
     await Promise.resolve();
   }
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
-  for (let i = 0; i < turns; i += 1) {
-    await Promise.resolve();
-  }
+  await vi.dynamicImportSettled();
 }
 
 afterEach(() => {
