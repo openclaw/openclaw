@@ -307,6 +307,10 @@ Notes:
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
+- Set `OPENCLAW_OTEL_PRELOADED=1` when another preload or host process already
+  registered the global OpenTelemetry SDK. In that mode the plugin does not start
+  or shut down its own SDK, but it still wires OpenClaw diagnostic listeners and
+  honors `diagnostics.otel.traces`, `metrics`, and `logs`.
 
 ### Exported metrics (names + types)
 
@@ -389,6 +393,8 @@ classes you opted into.
   `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - If the endpoint already contains `/v1/traces` or `/v1/metrics`, it is used as-is.
 - If the endpoint already contains `/v1/logs`, it is used as-is for logs.
+- `OPENCLAW_OTEL_PRELOADED=1` reuses an externally registered OpenTelemetry SDK
+  for traces/metrics instead of starting a plugin-owned NodeSDK.
 - `diagnostics.otel.logs` enables OTLP log export for the main logger output.
 
 ### Log export behavior
