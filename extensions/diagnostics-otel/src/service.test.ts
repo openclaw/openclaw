@@ -989,6 +989,67 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports trusted context assembly spans without prompt content", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "context.assembled",
+      runId: "run-1",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "webchat",
+      trigger: "message",
+      messageCount: 12,
+      historyTextChars: 1234,
+      historyImageBlocks: 2,
+      maxMessageTextChars: 456,
+      systemPromptChars: 789,
+      promptChars: 42,
+      promptImages: 1,
+      contextTokenBudget: 128_000,
+      reserveTokens: 4096,
+      trace: {
+        traceId: TRACE_ID,
+        spanId: GRANDCHILD_SPAN_ID,
+        parentSpanId: SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const contextCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.context.assembled",
+    );
+    expect(contextCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.provider": "openai",
+        "openclaw.model": "gpt-5.4",
+        "openclaw.channel": "webchat",
+        "openclaw.trigger": "message",
+        "openclaw.context.message_count": 12,
+        "openclaw.context.history_text_chars": 1234,
+        "openclaw.context.history_image_blocks": 2,
+        "openclaw.context.max_message_text_chars": 456,
+        "openclaw.context.system_prompt_chars": 789,
+        "openclaw.context.prompt_chars": 42,
+        "openclaw.context.prompt_images": 1,
+        "openclaw.context.token_budget": 128_000,
+        "openclaw.context.reserve_tokens": 4096,
+      },
+    });
+    expect(JSON.stringify(contextCall)).not.toContain("session-key");
+    expect(JSON.stringify(contextCall)).not.toContain("prompt text");
+    expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ traceId: TRACE_ID, spanId: SPAN_ID }),
+    );
+    await service.stop?.(ctx);
+  });
+
   test("parents trusted diagnostic lifecycle spans from explicit parent ids", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });

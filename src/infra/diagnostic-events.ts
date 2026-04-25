@@ -280,6 +280,26 @@ export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
   errorCategory: string;
 };
 
+export type DiagnosticContextAssembledEvent = DiagnosticBaseEvent & {
+  type: "context.assembled";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  channel?: string;
+  trigger?: string;
+  messageCount: number;
+  historyTextChars: number;
+  historyImageBlocks: number;
+  maxMessageTextChars: number;
+  systemPromptChars: number;
+  promptChars: number;
+  promptImages: number;
+  contextTokenBudget?: number;
+  reserveTokens?: number;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
@@ -355,6 +375,7 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallStartedEvent
   | DiagnosticModelCallCompletedEvent
   | DiagnosticModelCallErrorEvent
+  | DiagnosticContextAssembledEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent
@@ -401,6 +422,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "context.assembled",
   "log.record",
 ]);
 

@@ -1129,6 +1129,36 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordContextAssembled = (
+        evt: Extract<DiagnosticEventPayload, { type: "context.assembled" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          "openclaw.context.message_count": evt.messageCount,
+          "openclaw.context.history_text_chars": evt.historyTextChars,
+          "openclaw.context.history_image_blocks": evt.historyImageBlocks,
+          "openclaw.context.max_message_text_chars": evt.maxMessageTextChars,
+          "openclaw.context.system_prompt_chars": evt.systemPromptChars,
+          "openclaw.context.prompt_chars": evt.promptChars,
+          "openclaw.context.prompt_images": evt.promptImages,
+        };
+        addRunAttrs(spanAttrs, evt);
+        if (evt.contextTokenBudget !== undefined) {
+          spanAttrs["openclaw.context.token_budget"] = evt.contextTokenBudget;
+        }
+        if (evt.reserveTokens !== undefined) {
+          spanAttrs["openclaw.context.reserve_tokens"] = evt.reserveTokens;
+        }
+        const span = spanWithDuration("openclaw.context.assembled", spanAttrs, 0, {
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        span.end(evt.ts);
+      };
+
       const modelCallMetricAttrs = (evt: ModelCallLifecycleDiagnosticEvent) => ({
         "openclaw.provider": evt.provider,
         "openclaw.model": evt.model,
@@ -1382,6 +1412,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "run.completed":
               recordRunCompleted(evt, metadata);
+              return;
+            case "context.assembled":
+              recordContextAssembled(evt, metadata);
               return;
             case "model.call.completed":
               recordModelCallCompleted(evt, metadata);
