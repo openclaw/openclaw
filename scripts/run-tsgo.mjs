@@ -5,6 +5,7 @@ import { readFlagValue } from "./lib/arg-utils.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
+  resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
 import {
@@ -12,7 +13,10 @@ import {
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mjs";
 
-const { args: finalArgs, env } = applyLocalTsgoPolicy(process.argv.slice(2), process.env);
+const { args: finalArgs, env } = applyLocalTsgoPolicy(
+  process.argv.slice(2),
+  resolveLocalHeavyCheckEnv(process.env),
+);
 
 const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
 const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
