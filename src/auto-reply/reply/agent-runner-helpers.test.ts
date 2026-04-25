@@ -31,6 +31,7 @@ const {
   createShouldEmitToolResult,
   finalizeWithFollowup,
   isAudioPayload,
+  scheduleFollowupDrainAfterActiveRun,
   signalTypingIfNeeded,
 } = await import("./agent-runner-helpers.js");
 
@@ -99,6 +100,24 @@ describe("agent runner helpers", () => {
     const value = { ok: true };
     expect(finalizeWithFollowup(value, "queue-key", runFollowupTurn)).toBe(value);
     expect(hoisted.scheduleFollowupDrainMock).toHaveBeenCalledWith("queue-key", runFollowupTurn);
+  });
+
+  it("kicks followup drain after an active run becomes idle", async () => {
+    vi.useFakeTimers();
+    try {
+      let active = true;
+      const runFollowupTurn = vi.fn();
+      scheduleFollowupDrainAfterActiveRun("queue-key", runFollowupTurn, () => active);
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(hoisted.scheduleFollowupDrainMock).not.toHaveBeenCalled();
+
+      active = false;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(hoisted.scheduleFollowupDrainMock).toHaveBeenCalledWith("queue-key", runFollowupTurn);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("signals typing only when any payload has text or media", async () => {

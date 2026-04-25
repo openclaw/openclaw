@@ -37,6 +37,7 @@ import {
   createShouldEmitToolResult,
   finalizeWithFollowup,
   isAudioPayload,
+  scheduleFollowupDrainAfterActiveRun,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
 import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -250,7 +251,7 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(
+    const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
       resolvedQueue,
@@ -262,6 +263,13 @@ export async function runReplyAgent(params: {
     // the followup queue idle if the original run already finished.
     if (!isRunActive?.()) {
       finalizeWithFollowup(undefined, queueKey, queuedRunFollowupTurn);
+    } else if (enqueued) {
+      // Safety net for the narrow tail window where this turn observes an
+      // active run, enqueues as a followup, and the active run finishes without
+      // the queued drain being kicked (for example around streaming close /
+      // dispatcher settlement races). scheduleFollowupDrain is idempotent for
+      // an already-draining queue, so this only wakes genuinely stuck followups.
+      scheduleFollowupDrainAfterActiveRun(queueKey, queuedRunFollowupTurn, isRunActive);
     }
     await touchActiveSessionEntry();
     typing.cleanup();

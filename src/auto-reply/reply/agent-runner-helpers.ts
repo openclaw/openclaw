@@ -6,8 +6,12 @@ import { loadSessionStore } from "../../config/sessions.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { scheduleFollowupDrain } from "./queue.js";
+import { scheduleFollowupDrain, type FollowupRun } from "./queue.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+const FOLLOWUP_IDLE_DRAIN_RECHECK_MS = 500;
+const FOLLOWUP_IDLE_DRAIN_MAX_RECHECKS = 3_600; // 30 minutes.
+const FOLLOWUP_IDLE_DRAIN_RECHECK_QUEUES = new Set<string>();
 
 const hasAudioMedia = (urls?: string[]): boolean =>
   Boolean(urls?.some((url) => isAudioFileName(url)));
@@ -62,6 +66,46 @@ export const finalizeWithFollowup = <T>(
   scheduleFollowupDrain(queueKey, runFollowupTurn);
   return value;
 };
+
+function scheduleFollowupIdleRecheck(callback: () => void): void {
+  const timer = setTimeout(callback, FOLLOWUP_IDLE_DRAIN_RECHECK_MS);
+  timer.unref?.();
+}
+
+export function scheduleFollowupDrainAfterActiveRun(
+  queueKey: string,
+  runFollowupTurn: (run: FollowupRun) => Promise<void>,
+  isRunActive?: () => boolean,
+): void {
+  if (!isRunActive) {
+    return;
+  }
+  if (!isRunActive()) {
+    finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    return;
+  }
+  if (FOLLOWUP_IDLE_DRAIN_RECHECK_QUEUES.has(queueKey)) {
+    return;
+  }
+  FOLLOWUP_IDLE_DRAIN_RECHECK_QUEUES.add(queueKey);
+
+  let attempts = 0;
+  const recheck = () => {
+    attempts += 1;
+    if (!isRunActive()) {
+      FOLLOWUP_IDLE_DRAIN_RECHECK_QUEUES.delete(queueKey);
+      finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      return;
+    }
+    if (attempts >= FOLLOWUP_IDLE_DRAIN_MAX_RECHECKS) {
+      FOLLOWUP_IDLE_DRAIN_RECHECK_QUEUES.delete(queueKey);
+      return;
+    }
+    scheduleFollowupIdleRecheck(recheck);
+  };
+
+  scheduleFollowupIdleRecheck(recheck);
+}
 
 export const signalTypingIfNeeded = async (
   payloads: ReplyPayload[],
