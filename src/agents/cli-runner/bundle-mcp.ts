@@ -418,12 +418,10 @@ export async function prepareCliBundleMcpConfig(params: {
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
   const configuredMcp = normalizeConfiguredMcpServers(params.config?.mcp?.servers);
   if (Object.keys(configuredMcp).length > 0) {
+    const existingMcpServers = mergedConfig.mcpServers;
     mergedConfig = {
       ...mergedConfig,
-      mcpServers: {
-        ...(mergedConfig.mcpServers ?? {}),
-        ...configuredMcp,
-      },
+      mcpServers: existingMcpServers ? { ...existingMcpServers, ...configuredMcp } : configuredMcp,
     } satisfies BundleMcpConfig;
   }
   if (params.additionalConfig) {
