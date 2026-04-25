@@ -143,6 +143,13 @@ function scopedExecEventWakeOptions(sessionKey: string) {
       heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
     });
   }
+  if (sessionKey.trim() === "global") {
+    return {
+      ...wakeOptions,
+      sessionKey: "global",
+      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
+    };
+  }
   return scopedHeartbeatWakeOptions(sessionKey, wakeOptions);
 }
 

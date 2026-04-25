@@ -803,9 +803,11 @@ describe("exec notifyOnExit", () => {
     });
   });
 
-  it("keeps notifyOnExit heartbeat wake unscoped for the global session key", async () => {
+  it("scopes notifyOnExit heartbeat wake to the global session key", async () => {
     await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
       reason: "exec-event",
+      sessionKey: "global",
+      heartbeat: { target: "last", to: undefined, accountId: undefined, isolatedSession: false },
     });
   });
 
