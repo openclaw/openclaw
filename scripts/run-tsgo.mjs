@@ -21,7 +21,9 @@ if (tsBuildInfoFile) {
 }
 const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd: process.cwd() });
 const releaseLock =
-  sparseGuardError || !shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env)
+  sparseGuardError ||
+  env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" ||
+  !shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env)
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
         cwd: process.cwd(),
