@@ -24,11 +24,8 @@ import {
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "./message-extract.ts";
-import {
-  isToolResultMessage,
-  normalizeMessage,
-  normalizeRoleForGrouping,
-} from "./message-normalizer.ts";
+import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
+import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
 import {
   extractToolCards,
