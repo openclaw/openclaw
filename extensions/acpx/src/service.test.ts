@@ -276,6 +276,32 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("formats non-string doctor details without losing object payloads", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime({
+      doctor: async () => ({
+        ok: false,
+        message: "probe failed",
+        details: [{ code: "ACP_CLOSED", agent: "codex" }, new Error("stdin closed")],
+      }),
+      isHealthy: () => false,
+    });
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
+    await vi.waitFor(() => {
+      expect(ctx.logger.warn).toHaveBeenCalledWith(
+        'embedded acpx runtime backend probe failed: probe failed ({"code":"ACP_CLOSED","agent":"codex"}; stdin closed)',
+      );
+    });
+
+    await service.stop?.(ctx);
+  });
+
   it("can skip the embedded runtime backend via env", async () => {
     process.env.OPENCLAW_SKIP_ACPX_RUNTIME = "1";
     const workspaceDir = await makeTempDir();
