@@ -6,8 +6,7 @@ read_when:
 title: "Model providers"
 ---
 
-This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
-For model selection rules, see [Models](/concepts/models).
+Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram). For model selection rules, see [Models](/concepts/models).
 
 ## Quick rules
 
