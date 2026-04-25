@@ -29,8 +29,10 @@ export function logGatewayStartup(params: {
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
   const startupDurationLabel =
     startupDurationMs == null ? null : `${(startupDurationMs / 1000).toFixed(1)}s`;
+  // Keep the `ready (` marker for existing tooling/tests while clarifying the meaning:
+  // this indicates the gateway is listening, not that all channels have recovered.
   params.log.info(
-    `gateway listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
+    `ready (gateway listening; ${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {

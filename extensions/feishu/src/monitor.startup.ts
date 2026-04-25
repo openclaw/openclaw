@@ -68,7 +68,14 @@ export async function fetchBotIdentityForMonitor(
     timeoutMs,
     abortSignal: options.abortSignal,
   });
-  const typed = result as unknown as { ok?: boolean; error?: string; botOpenId?: string; botName?: string };
+  // Keep this local typing strict (ok is required) even if extension build typings
+  // temporarily lose the BaseProbeResult fields.
+  const typed = result as unknown as {
+    ok: boolean;
+    error?: string | null;
+    botOpenId?: string;
+    botName?: string;
+  };
   if (typed.ok) {
     return { botOpenId: typed.botOpenId, botName: typed.botName };
   }

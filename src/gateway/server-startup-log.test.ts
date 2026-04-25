@@ -70,6 +70,8 @@ describe("gateway startup log", () => {
     const readyMessages = info.mock.calls
       .map((call) => call[0])
       .filter((message) => message.startsWith("ready ("));
-    expect(readyMessages).toEqual(["ready (3 plugins: alpha, beta, delta; 16.0s)"]);
+    expect(readyMessages).toEqual([
+      "ready (gateway listening; 3 plugins: alpha, beta, delta; 16.0s)",
+    ]);
   });
 });

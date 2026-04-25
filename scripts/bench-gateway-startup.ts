@@ -502,7 +502,7 @@ async function runGatewaySample(options: {
       output.splice(0, output.length - 20);
     }
     for (const line of text.split(/\r?\n/u)) {
-      if (line.includes("ready (") && readyLogMs == null) {
+      if ((line.includes("ready (") || line.includes("gateway listening (")) && readyLogMs == null) {
         readyLogMs = performance.now() - startAt;
       }
       collectStartupTrace(line, startupTrace);
