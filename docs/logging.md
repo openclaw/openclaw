@@ -1,13 +1,11 @@
 ---
-summary: "Logging overview: file logs, console output, CLI tailing, and the Control UI"
+summary: "File logs, console output, CLI tailing, and the Control UI Logs tab"
 read_when:
-  - You need a beginner-friendly overview of logging
-  - You want to configure log levels or formats
+  - You need a beginner-friendly overview of OpenClaw logging
+  - You want to configure log levels, formats, or redaction
   - You are troubleshooting and need to find logs quickly
-title: "Logging overview"
+title: "Logging"
 ---
-
-# Logging
 
 OpenClaw has two main log surfaces:
 
@@ -171,308 +169,35 @@ Tool summaries can redact sensitive tokens before they hit the console:
 
 Redaction affects **console output only** and does not alter file logs.
 
-## Diagnostics + OpenTelemetry
+## Diagnostics and OpenTelemetry
 
-Diagnostics are structured, machine-readable events for model runs **and**
+Diagnostics are structured, machine-readable events for model runs and
 message-flow telemetry (webhooks, queueing, session state). They do **not**
-replace logs; they exist to feed metrics, traces, and other exporters.
+replace logs — they feed metrics, traces, and exporters. Events are emitted
+in-process whether or not you export them.
 
-Diagnostics events are emitted in-process, but exporters only attach when
-diagnostics + the exporter plugin are enabled.
+Two adjacent surfaces:
 
-### OpenTelemetry vs OTLP
+- **OpenTelemetry export** — send metrics, traces, and logs over OTLP/HTTP to
+  any OpenTelemetry-compatible collector or backend (Grafana, Datadog,
+  Honeycomb, New Relic, Tempo, etc.). Full configuration, signal catalog,
+  metric/span names, env vars, and privacy model live on a dedicated page:
+  [OpenTelemetry export](/gateway/opentelemetry).
+- **Diagnostics flags** — targeted debug-log flags that route extra logs to
+  `logging.file` without raising `logging.level`. Flags are case-insensitive
+  and support wildcards (`telegram.*`, `*`). Configure under `diagnostics.flags`
+  or via the `OPENCLAW_DIAGNOSTICS=...` env override. Full guide:
+  [Diagnostics flags](/diagnostics/flags).
 
-- **OpenTelemetry (OTel)**: the data model + SDKs for traces, metrics, and logs.
-- **OTLP**: the wire protocol used to export OTel data to a collector/backend.
-- OpenClaw exports via **OTLP/HTTP (protobuf)** today.
+To enable diagnostics events for plugins or custom sinks without OTLP export:
 
-### Signals exported
-
-- **Metrics**: counters + histograms (token usage, message flow, queueing).
-- **Traces**: spans for model usage + webhook/message processing.
-- **Logs**: exported over OTLP when `diagnostics.otel.logs` is enabled. Log
-  volume can be high; keep `logging.level` and exporter filters in mind.
-
-### Diagnostic event catalog
-
-Model usage:
-
-- `model.usage`: tokens, cost, duration, context, provider/model/channel, session ids.
-  `usage` is provider/turn accounting for cost and telemetry; `context.used`
-  is the current prompt/context snapshot and can be lower than provider
-  `usage.total` when cached input or tool-loop calls are involved.
-
-Message flow:
-
-- `webhook.received`: webhook ingress per channel.
-- `webhook.processed`: webhook handled + duration.
-- `webhook.error`: webhook handler errors.
-- `message.queued`: message enqueued for processing.
-- `message.processed`: outcome + duration + optional error.
-- `message.delivery.started`: outbound delivery attempt started.
-- `message.delivery.completed`: outbound delivery attempt finished + duration/result count.
-- `message.delivery.error`: outbound delivery attempt failed + duration/bounded error category.
-
-Queue + session:
-
-- `queue.lane.enqueue`: command queue lane enqueue + depth.
-- `queue.lane.dequeue`: command queue lane dequeue + wait time.
-- `session.state`: session state transition + reason.
-- `session.stuck`: session stuck warning + age.
-- `run.attempt`: run retry/attempt metadata.
-- `diagnostic.heartbeat`: aggregate counters (webhooks/queue/session).
-
-Exec:
-
-- `exec.process.completed`: terminal exec process outcome, duration, target, mode,
-  exit code, and failure kind. Command text and working directories are not
-  included.
-
-### Enable diagnostics (no exporter)
-
-Use this if you want diagnostics events available to plugins or custom sinks:
-
-```json
+```json5
 {
-  "diagnostics": {
-    "enabled": true
-  }
+  diagnostics: { enabled: true },
 }
 ```
 
-### Diagnostics flags (targeted logs)
-
-Use flags to turn on extra, targeted debug logs without raising `logging.level`.
-Flags are case-insensitive and support wildcards (e.g. `telegram.*` or `*`).
-
-```json
-{
-  "diagnostics": {
-    "flags": ["telegram.http"]
-  }
-}
-```
-
-Env override (one-off):
-
-```
-OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
-```
-
-Notes:
-
-- Flag logs go to the standard log file (same as `logging.file`).
-- Output is still redacted according to `logging.redactSensitive`.
-- Full guide: [/diagnostics/flags](/diagnostics/flags).
-
-### Export to OpenTelemetry
-
-Diagnostics can be exported via the `diagnostics-otel` plugin (OTLP/HTTP). This
-works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
-
-```json
-{
-  "plugins": {
-    "allow": ["diagnostics-otel"],
-    "entries": {
-      "diagnostics-otel": {
-        "enabled": true
-      }
-    }
-  },
-  "diagnostics": {
-    "enabled": true,
-    "otel": {
-      "enabled": true,
-      "endpoint": "http://otel-collector:4318",
-      "protocol": "http/protobuf",
-      "serviceName": "openclaw-gateway",
-      "traces": true,
-      "metrics": true,
-      "logs": true,
-      "sampleRate": 0.2,
-      "flushIntervalMs": 60000,
-      "captureContent": {
-        "enabled": false,
-        "inputMessages": false,
-        "outputMessages": false,
-        "toolInputs": false,
-        "toolOutputs": false,
-        "systemPrompt": false
-      }
-    }
-  }
-}
-```
-
-Notes:
-
-- You can also enable the plugin with `openclaw plugins enable diagnostics-otel`.
-- `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
-- Metrics include token usage, cost, context size, run duration, and message-flow
-  counters/histograms (webhooks, queueing, session state, queue depth/wait),
-  plus GenAI token usage and model-call duration histograms.
-- Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
-  include model usage spans plus webhook/message processing spans when enabled.
-- Raw model/tool content is not exported by default. Use
-  `diagnostics.otel.captureContent` only when your collector and retention policy
-  are approved for prompt, response, tool, or system prompt text.
-- Set `headers` when your collector requires auth.
-- Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
-  `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
-- Set `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` to emit the
-  latest experimental GenAI provider span attribute (`gen_ai.provider.name`)
-  instead of the legacy span attribute (`gen_ai.system`). GenAI metrics always
-  use bounded, low-cardinality semantic attributes.
-- Set `OPENCLAW_OTEL_PRELOADED=1` when another preload or host process already
-  registered the global OpenTelemetry SDK. In that mode the plugin does not start
-  or shut down its own SDK, but it still wires OpenClaw diagnostic listeners and
-  honors `diagnostics.otel.traces`, `metrics`, and `logs`.
-
-### Exported metrics (names + types)
-
-Model usage:
-
-- `openclaw.tokens` (counter, attrs: `openclaw.token`, `openclaw.channel`,
-  `openclaw.provider`, `openclaw.model`)
-- `openclaw.cost.usd` (counter, attrs: `openclaw.channel`, `openclaw.provider`,
-  `openclaw.model`)
-- `openclaw.run.duration_ms` (histogram, attrs: `openclaw.channel`,
-  `openclaw.provider`, `openclaw.model`)
-- `openclaw.context.tokens` (histogram, attrs: `openclaw.context`,
-  `openclaw.channel`, `openclaw.provider`, `openclaw.model`)
-- `gen_ai.client.token.usage` (histogram, GenAI semantic-conventions metric,
-  attrs: `gen_ai.token.type` = `input`/`output`, `gen_ai.provider.name`,
-  `gen_ai.operation.name`, `gen_ai.request.model`)
-- `gen_ai.client.operation.duration` (histogram, seconds, GenAI
-  semantic-conventions metric, attrs: `gen_ai.provider.name`,
-  `gen_ai.operation.name`, `gen_ai.request.model`, optional `error.type`)
-
-Message flow:
-
-- `openclaw.webhook.received` (counter, attrs: `openclaw.channel`,
-  `openclaw.webhook`)
-- `openclaw.webhook.error` (counter, attrs: `openclaw.channel`,
-  `openclaw.webhook`)
-- `openclaw.webhook.duration_ms` (histogram, attrs: `openclaw.channel`,
-  `openclaw.webhook`)
-- `openclaw.message.queued` (counter, attrs: `openclaw.channel`,
-  `openclaw.source`)
-- `openclaw.message.processed` (counter, attrs: `openclaw.channel`,
-  `openclaw.outcome`)
-- `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`,
-  `openclaw.outcome`)
-- `openclaw.message.delivery.started` (counter, attrs: `openclaw.channel`,
-  `openclaw.delivery.kind`)
-- `openclaw.message.delivery.duration_ms` (histogram, attrs:
-  `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`,
-  `openclaw.errorCategory`)
-
-Queues + sessions:
-
-- `openclaw.queue.lane.enqueue` (counter, attrs: `openclaw.lane`)
-- `openclaw.queue.lane.dequeue` (counter, attrs: `openclaw.lane`)
-- `openclaw.queue.depth` (histogram, attrs: `openclaw.lane` or
-  `openclaw.channel=heartbeat`)
-- `openclaw.queue.wait_ms` (histogram, attrs: `openclaw.lane`)
-- `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
-- `openclaw.session.stuck` (counter, attrs: `openclaw.state`)
-- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`)
-- `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
-
-Exec:
-
-- `openclaw.exec.duration_ms` (histogram, attrs: `openclaw.exec.target`,
-  `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`)
-
-Diagnostics internals (memory + tool loop):
-
-- `openclaw.memory.heap_used_bytes` (histogram, attrs: `openclaw.memory.kind`)
-- `openclaw.memory.rss_bytes` (histogram)
-- `openclaw.memory.pressure` (counter, attrs: `openclaw.memory.level`)
-- `openclaw.tool.loop.iterations` (counter, attrs: `openclaw.toolName`,
-  `openclaw.outcome`)
-- `openclaw.tool.loop.duration_ms` (histogram, attrs: `openclaw.toolName`,
-  `openclaw.outcome`)
-
-### Exported spans (names + key attributes)
-
-- `openclaw.model.usage`
-  - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
-  - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
-  - `gen_ai.system` by default, or `gen_ai.provider.name` when latest GenAI
-    semantic conventions are opted in
-  - `gen_ai.request.model`, `gen_ai.operation.name`, `gen_ai.usage.*`
-- `openclaw.run`
-  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`,
-    `openclaw.model`, `openclaw.errorCategory`
-- `openclaw.model.call`
-  - `gen_ai.system` by default, or `gen_ai.provider.name` when latest GenAI
-    semantic conventions are opted in
-  - `gen_ai.request.model`, `gen_ai.operation.name`,
-    `openclaw.provider`, `openclaw.model`, `openclaw.api`,
-    `openclaw.transport`, `openclaw.provider.request_id_hash` (bounded
-    SHA-based hash of the upstream provider request id; raw ids are not
-    exported)
-- `openclaw.tool.execution`
-  - `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.errorCategory`,
-    `openclaw.tool.params.*`
-- `openclaw.exec`
-  - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`,
-    `openclaw.failureKind`, `openclaw.exec.command_length`,
-    `openclaw.exec.exit_code`, `openclaw.exec.timed_out`
-- `openclaw.webhook.processed`
-  - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`
-- `openclaw.webhook.error`
-  - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`,
-    `openclaw.error`
-- `openclaw.message.processed`
-  - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`,
-    `openclaw.messageId`, `openclaw.reason`
-- `openclaw.message.delivery`
-  - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`,
-    `openclaw.errorCategory`, `openclaw.delivery.result_count`
-- `openclaw.session.stuck`
-  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
-- `openclaw.context.assembled`
-  - `openclaw.prompt.size`, `openclaw.history.size`,
-    `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt,
-    history, response, or session-key content)
-- `openclaw.tool.loop`
-  - `openclaw.toolName`, `openclaw.outcome`, `openclaw.iterations`,
-    `openclaw.errorCategory` (no loop messages, params, or tool output)
-- `openclaw.memory.pressure`
-  - `openclaw.memory.level`, `openclaw.memory.heap_used_bytes`,
-    `openclaw.memory.rss_bytes`
-
-When content capture is explicitly enabled, model/tool spans can also include
-bounded, redacted `openclaw.content.*` attributes for the specific content
-classes you opted into.
-
-### Sampling + flushing
-
-- Trace sampling: `diagnostics.otel.sampleRate` (0.0–1.0, root spans only).
-- Metric export interval: `diagnostics.otel.flushIntervalMs` (min 1000ms).
-
-### Protocol notes
-
-- OTLP/HTTP endpoints can be set via `diagnostics.otel.endpoint` or
-  `OTEL_EXPORTER_OTLP_ENDPOINT`.
-- If the endpoint already contains `/v1/traces` or `/v1/metrics`, it is used as-is.
-- If the endpoint already contains `/v1/logs`, it is used as-is for logs.
-- `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` controls only the
-  GenAI span provider attribute shape. Existing dashboards that read
-  `gen_ai.system` can keep the default until they migrate.
-- `OPENCLAW_OTEL_PRELOADED=1` reuses an externally registered OpenTelemetry SDK
-  for traces/metrics instead of starting a plugin-owned NodeSDK.
-- `diagnostics.otel.logs` enables OTLP log export for the main logger output.
-
-### Log export behavior
-
-- OTLP logs use the same structured records written to `logging.file`.
-- Respect `logging.level` (file log level). Console redaction does **not** apply
-  to OTLP logs.
-- High-volume installs should prefer OTLP collector sampling/filtering.
+For OTLP export to a collector, see [OpenTelemetry export](/gateway/opentelemetry).
 
 ## Troubleshooting tips
 
@@ -483,5 +208,7 @@ classes you opted into.
 
 ## Related
 
-- [Gateway Logging Internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
-- [Diagnostics](/gateway/configuration-reference#diagnostics) — OpenTelemetry export and cache trace config
+- [OpenTelemetry export](/gateway/opentelemetry) — OTLP/HTTP export, metric/span catalog, privacy model
+- [Diagnostics flags](/diagnostics/flags) — targeted debug-log flags
+- [Gateway logging internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
+- [Configuration reference](/gateway/configuration-reference#diagnostics) — full `diagnostics.*` field reference

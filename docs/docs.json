@@ -1436,11 +1436,12 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
-                      "gateway/diagnostics",
                       "gateway/heartbeat",
                       "gateway/doctor",
-                      "gateway/logging",
                       "logging",
+                      "gateway/opentelemetry",
+                      "gateway/logging",
+                      "gateway/diagnostics",
                       "gateway/troubleshooting"
                     ]
                   },
