@@ -8,6 +8,7 @@ import {
   resolveFailoverStatus,
 } from "./failover-error.js";
 import { classifyFailoverSignal } from "./pi-embedded-helpers/errors.js";
+import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -360,25 +361,24 @@ describe("failover-error", () => {
   });
 
   it("does not classify session lock wait errors as model timeout failover", () => {
-    const sessionLockMessage =
-      "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock";
-    expect(
-      resolveFailoverReasonFromError({
-        message: sessionLockMessage,
-      }),
-    ).toBeNull();
-    expect(isTimeoutError({ message: sessionLockMessage })).toBe(false);
+    const sessionLockError = new SessionWriteLockTimeoutError({
+      timeoutMs: 10_000,
+      owner: "pid=37121",
+      lockPath: "/tmp/openclaw/session.jsonl.lock",
+    });
+    expect(resolveFailoverReasonFromError(sessionLockError)).toBeNull();
+    expect(isTimeoutError(sessionLockError)).toBe(false);
 
     const wrappedLockError = Object.assign(new Error("operation timed out"), {
       name: "AbortError",
-      cause: new Error(sessionLockMessage),
+      cause: sessionLockError,
     });
     expect(resolveFailoverReasonFromError(wrappedLockError)).toBeNull();
     expect(isTimeoutError(wrappedLockError)).toBe(false);
 
     const abortWrappedLockError = Object.assign(new Error("request was aborted"), {
       name: "AbortError",
-      cause: new Error(sessionLockMessage),
+      cause: sessionLockError,
     });
     expect(resolveFailoverReasonFromError(abortWrappedLockError)).toBeNull();
     expect(isTimeoutError(abortWrappedLockError)).toBe(false);
@@ -390,9 +390,11 @@ describe("failover-error", () => {
         status: 429,
         code: "RESOURCE_EXHAUSTED",
         message: "upstream quota pressure",
-        cause: new Error(
-          "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock",
-        ),
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
       }),
     ).toBe("rate_limit");
   });
@@ -401,9 +403,11 @@ describe("failover-error", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "HTTP 429: upstream quota pressure",
-        cause: new Error(
-          "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock",
-        ),
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
       }),
     ).toBe("rate_limit");
   });
@@ -414,9 +418,11 @@ describe("failover-error", () => {
         name: "AbortError",
         code: "ABORT_ERR",
         message: "The operation was aborted",
-        cause: new Error(
-          "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock",
-        ),
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
       }),
     ).toBeNull();
   });
@@ -425,9 +431,11 @@ describe("failover-error", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "wrapper",
-        reason: new Error(
-          "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock",
-        ),
+        reason: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
         cause: new Error("operation timed out"),
       }),
     ).toBeNull();

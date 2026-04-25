@@ -8,10 +8,10 @@ import {
 } from "./pi-embedded-helpers/errors.js";
 import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
-const SESSION_LOCK_ERROR_RE = /\bsession file locked\b/i;
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -200,9 +200,8 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   };
 }
 
-function isSessionLockError(err: unknown, seen: Set<object> = new Set()): boolean {
-  const directMessage = readDirectErrorMessage(err);
-  if (directMessage && SESSION_LOCK_ERROR_RE.test(directMessage)) {
+function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (isSessionWriteLockTimeoutError(err)) {
     return true;
   }
   if (!err || typeof err !== "object") {
@@ -214,9 +213,9 @@ function isSessionLockError(err: unknown, seen: Set<object> = new Set()): boolea
   seen.add(err);
   const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
   return (
-    isSessionLockError(candidate.error, seen) ||
-    isSessionLockError(candidate.cause, seen) ||
-    isSessionLockError(candidate.reason, seen)
+    hasSessionWriteLockTimeout(candidate.error, seen) ||
+    hasSessionWriteLockTimeout(candidate.cause, seen) ||
+    hasSessionWriteLockTimeout(candidate.reason, seen)
   );
 }
 
@@ -224,7 +223,7 @@ function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (isSessionLockError(err)) {
+  if (hasSessionWriteLockTimeout(err)) {
     return false;
   }
   if (readErrorName(err) === "TimeoutError") {
@@ -244,7 +243,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (readErrorName(err) !== "AbortError") {
     return false;
   }
-  if (isSessionLockError(err)) {
+  if (hasSessionWriteLockTimeout(err)) {
     return false;
   }
   const message = getErrorMessage(err);
@@ -351,7 +350,7 @@ function resolveFailoverClassificationFromErrorInternal(
   const hasExplicitFailoverMetadata =
     typeof inferSignalStatus(signal) === "number" ||
     (codeReason !== null && codeReason !== "timeout");
-  const hasSessionLock = isSessionLockError(err);
+  const hasSessionLock = hasSessionWriteLockTimeout(err);
 
   const classification = classifyFailoverSignal(signal);
   const nestedCandidates = getNestedErrorCandidates(err);
