@@ -737,6 +737,35 @@ export default definePluginEntry({
           }
         }
 
+        // Filter for capturable content
+        const toCapture = texts.filter(
+          (text) => text && shouldCapture(text, { maxChars: currentCfg.captureMaxChars }),
+        );
+        if (toCapture.length === 0) {
+          return;
+        }
+
+        // Store each capturable piece (limit to 3 per conversation)
+        let stored = 0;
+        for (const text of toCapture.slice(-3)) {
+          const category = detectCategory(text);
+          const vector = await embeddings.embed(text);
+
+          // Check for duplicates (high similarity threshold)
+          const existing = await db.search(vector, 1, 0.95);
+          if (existing.length > 0) {
+            continue;
+          }
+
+          await db.store({
+            text,
+            vector,
+            importance: 0.7,
+            category,
+          });
+          stored++;
+        }
+
         if (stored > 0) {
           api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
         }
