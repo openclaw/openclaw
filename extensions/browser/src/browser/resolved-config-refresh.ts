@@ -27,6 +27,13 @@ function changedProfileInvariants(
   ) {
     changed.push("headless");
   }
+  if (
+    currentUsesLocalManagedLaunch &&
+    nextUsesLocalManagedLaunch &&
+    current.executablePath !== next.executablePath
+  ) {
+    changed.push("executablePath");
+  }
   if (current.attachOnly !== next.attachOnly) {
     changed.push("attachOnly");
   }

@@ -214,6 +214,11 @@ Operational guidance:
 - Start child work once and wait for completion events instead of building poll
   loops around `sessions_list`, `sessions_history`, `/subagents list`, or
   `exec` sleep commands.
+- `sessions_list` and `/subagents list` keep child-session relationships focused
+  on live work: live children remain attached, ended children stay visible for a
+  short recent window, and stale store-only child links are ignored after their
+  freshness window. This prevents old `spawnedBy` / `parentSessionKey` metadata
+  from resurrecting ghost children after restart.
 - If a child completion event arrives after you already sent the final answer,
   the correct follow-up is the exact silent token `NO_REPLY` / `no_reply`.
 

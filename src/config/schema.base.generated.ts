@@ -750,6 +750,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
                 },
+                executablePath: {
+                  type: "string",
+                },
                 attachOnly: {
                   type: "boolean",
                   title: "Browser Profile Attach-only Mode",

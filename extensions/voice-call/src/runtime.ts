@@ -158,6 +158,40 @@ function isLoopbackBind(bind: string | undefined): boolean {
   return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
 }
 
+function providerRequiresPublicWebhook(providerName: VoiceCallProvider["name"]): boolean {
+  return providerName === "twilio" || providerName === "telnyx" || providerName === "plivo";
+}
+
+function isLocalOnlyWebhookHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase();
+  if (!host) {
+    return false;
+  }
+  if (
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host.startsWith("127.")
+  ) {
+    return true;
+  }
+  if (host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) {
+    return true;
+  }
+  const private172 = /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+  return private172 || host.startsWith("fc") || host.startsWith("fd");
+}
+
+function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
+  try {
+    const parsed = new URL(webhookUrl);
+    return isLocalOnlyWebhookHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
@@ -375,6 +409,17 @@ export async function createVoiceCallRuntime(params: {
     }
 
     const webhookUrl = publicUrl ?? localUrl;
+
+    if (
+      providerRequiresPublicWebhook(provider.name) &&
+      isProviderUnreachableWebhookUrl(webhookUrl)
+    ) {
+      throw new Error(
+        `[voice-call] ${provider.name} requires a publicly reachable webhook URL. ` +
+          `Refusing to use local-only webhook ${webhookUrl}. ` +
+          "Set plugins.entries.voice-call.config.publicUrl or enable tunnel/tailscale exposure.",
+      );
+    }
 
     if (publicUrl && provider.name === "twilio") {
       (provider as TwilioProvider).setPublicUrl(publicUrl);

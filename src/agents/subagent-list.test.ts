@@ -115,7 +115,50 @@ describe("buildSubagentList", () => {
     });
 
     expect(list.active[0]?.status).toBe("active (waiting on 1 child)");
+    expect(list.active[0]?.childSessions).toEqual([
+      "agent:main:subagent:orchestrator-ended:subagent:child",
+    ]);
     expect(list.recent).toEqual([]);
+  });
+
+  it("omits old ended descendants from child session summaries", () => {
+    const now = Date.now();
+    const parentRun = {
+      runId: "run-parent-active-old-child",
+      childSessionKey: "agent:main:subagent:parent-active-old-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "parent active",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(parentRun);
+    addSubagentRunForTests({
+      runId: "run-old-ended-child-summary",
+      childSessionKey: `${parentRun.childSessionKey}:subagent:old-ended-child`,
+      requesterSessionKey: parentRun.childSessionKey,
+      requesterDisplayKey: "subagent:parent-active-old-child",
+      task: "old ended child",
+      cleanup: "keep",
+      createdAt: now - 60 * 60_000,
+      startedAt: now - 59 * 60_000,
+      endedAt: now - 31 * 60_000,
+      outcome: { status: "ok" },
+    });
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [parentRun],
+      recentMinutes: 30,
+      taskMaxChars: 110,
+    });
+
+    expect(list.active[0]?.childSessions).toBeUndefined();
   });
 
   it("formats io and prompt/cache usage from session entries", async () => {

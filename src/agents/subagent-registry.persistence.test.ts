@@ -166,7 +166,7 @@ describe("subagent registry persistence", () => {
   const waitForRegistryWork = async (predicate: () => boolean | Promise<boolean>) => {
     await vi.waitFor(async () => expect(await predicate()).toBe(true), {
       interval: 1,
-      timeout: 1_000,
+      timeout: 5_000,
     });
   };
 

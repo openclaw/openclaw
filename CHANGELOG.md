@@ -69,7 +69,13 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Talk/TTS: resolve configured extension speech providers from the active runtime registry before provider-list discovery, so Talk mode no longer rejects valid plugin speech providers as unsupported.
+- Sessions/subagents: stop stale ended runs and old store-only child reverse links from reappearing in `childSessions`, while keeping live descendants and recently-ended children visible. Fixes #57920.
 - Subagents: stop stale unended runs from counting as active or pending forever, while preserving restart-aborted recovery for recoverable child sessions. Fixes #71252. Thanks @hclsys.
+- Gateway/tools: allow `POST /tools/invoke` to reach plugin-backed catalog tools such as `browser` when no core implementation exists, while still preferring built-in tools for real core names. Thanks @chat2way.
+- Browser/security: require `operator.admin` for the `browser.request` gateway method, matching the host/browser-node control authority exposed by that route. Thanks @RichardCao.
+- Browser/profiles: allow local managed profiles to override `browser.executablePath`, so different profiles can launch different Chromium-based browsers. Thanks @nobrainer-tech.
+- Agents/replay: repair displaced or missing tool results before strict provider replay, use Codex-compatible `aborted` outputs for OpenAI Responses history, and drop partial aborted/error transport turns before retries.
 - Reply media: allow sandboxed replies to deliver OpenClaw-managed `media/outbound` and `media/tool-*` attachments without treating them as sandbox escapes, while keeping alias-escape checks on the managed media root. Fixes #71138. Thanks @mayor686, @truffle-dev, and @neeravmakwana.
 - CLI/agent: keep `openclaw agent --json` stdout reserved for the JSON response by routing gateway, plugin, and embedded-fallback diagnostics to stderr before execution starts. Fixes #71319.
 - Agents/Gemini: retry reasoning-only, empty, and planning-only Gemini turns instead of letting sessions silently stall. Fixes #71074. (#71362) Thanks @neeravmakwana.
@@ -77,6 +83,8 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: allow bare command-name allowlist patterns to match PATH-resolved executable basenames without trusting `./tool` or absolute path-selected binaries. Fixes #71315. Thanks @chen-zhang-cs-code and @dengluozhang.
 - Config/recovery: skip whole-file last-known-good rollback when invalidity is scoped to `plugins.entries.*`, preserving unrelated user settings during plugin schema or host-version skew. Fixes #71289. Thanks @jalehman.
 - Agents/tools: keep resolved reply-run configs from being overwritten by stale runtime snapshots, and let empty web runtime metadata fall back to configured provider auto-detection so standard and queued turns expose the same tool set. Fixes #71355. Thanks @c-g14.
+- Agents/TTS: pass the resolved shared config into the `tts` tool, so tool-triggered speech uses configured providers and voices instead of falling back to a fresh config load.
+- Reply media: strip `MEDIA:` attachments from final replies when the same media already went out through block streaming, preventing duplicate Telegram voice notes and files. Fixes #65468. Thanks @aurora-openclaw.
 - Agents/TTS: preserve voice media when a tool-generated reply is paired with an exact `NO_REPLY` sentinel, stripping the sentinel text instead of dropping the audio payload. Fixes #66092.
 - Compaction: honor explicit `agents.defaults.compaction.keepRecentTokens` for manual `/compact`, re-distill safeguard summaries instead of snowballing previous summaries, and enable safeguard summary quality checks by default. Fixes #71357. Thanks @WhiteGiverMa.
 - Sessions: honor configured `session.maintenance` settings during load-time maintenance instead of falling back to default entry caps. Fixes #71356. Thanks @comolago.
@@ -102,6 +110,8 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenRouter: add an OpenRouter TTS provider using the OpenAI-compatible `/audio/speech` endpoint and `OPENROUTER_API_KEY`. Fixes #71268.
 - macOS Talk Mode: retry failed local ElevenLabs stream playback through gateway `talk.speak` before falling back to the system voice, so configured ElevenLabs voices still play when streaming playback fails. Fixes #65662.
 - Plugins/Voice Call: reap stale pre-answer calls by default, honor configured TTS timeouts for Twilio media-stream playback, and fail empty telephony audio instead of completing as silence. Fixes #42071; supersedes #60957. Thanks @Ryce and @sliekens.
+- Plugins/Voice Call: fail fast when Twilio, Telnyx, or Plivo would fall back to a loopback/private webhook URL, so calls do not start with an unreachable callback endpoint. Thanks @artemgetmann.
+- Plugins/Voice Call: resolve queued-but-not-yet-playing Twilio TTS entries when barge-in or stream teardown clears the playback queue, so callers awaiting `queueTts()` do not hang. Thanks @kevinWangSheng.
 - Plugins/Voice Call: terminate expired restored call sessions with the provider and restart restored max-duration timers with only the remaining duration, preventing stale outbound retry loops after Gateway restarts. Fixes #48739. Thanks @mira-solari.
 - Plugins/Voice Call: start provider STT after Telnyx outbound conversation greetings and pass configured Telnyx voice IDs through to the speak action. Fixes #56091. Thanks @Roshan.
 - Skills: honor legacy `metadata.clawdbot` requirements and installer hints when `metadata.openclaw` is absent, so older skills no longer appear ready when required binaries are missing. Fixes #71323. Thanks @chen-zhang-cs-code.
@@ -235,6 +245,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat: include async exec completion details in heartbeat prompts so command-finished notifications relay the actual output. (#71213) Thanks @GodsBoy.
 - Memory search: apply session visibility and agent-to-agent policy to session transcript hits, and keep `corpus=sessions` ranking scoped to session collections before result limiting. (#70761) Thanks @nefainl.
 - Agents/sessions: stop session write-lock timeouts from entering model failover, so local lock contention surfaces directly instead of cascading across providers. (#68700) Thanks @MonkeyLeeT.
+- Auto-reply: run inbound reply delivery through `message_sending` hooks so plugins can transform or cancel generated replies before they are sent. (#70118) Thanks @jzakirov.
 
 ## 2026.4.23
 

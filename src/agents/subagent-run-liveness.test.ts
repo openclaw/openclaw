@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   isLiveUnendedSubagentRun,
+  RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   isStaleUnendedSubagentRun,
   STALE_UNENDED_SUBAGENT_RUN_MS,
+  shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
 
 describe("subagent run liveness", () => {
@@ -71,5 +73,44 @@ describe("subagent run liveness", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps child links only while live, recently ended, or waiting on descendants", () => {
+    expect(shouldKeepSubagentRunChildLink({ createdAt: now - 60_000 }, { now })).toBe(true);
+    expect(
+      shouldKeepSubagentRunChildLink(
+        {
+          createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
+          endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS + 1,
+        },
+        { now },
+      ),
+    ).toBe(true);
+    expect(
+      shouldKeepSubagentRunChildLink(
+        {
+          createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
+          endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 1,
+        },
+        { now },
+      ),
+    ).toBe(false);
+    expect(
+      shouldKeepSubagentRunChildLink(
+        {
+          createdAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 60_000,
+          endedAt: now - RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS - 1,
+        },
+        { activeDescendants: 1, now },
+      ),
+    ).toBe(true);
+    expect(
+      shouldKeepSubagentRunChildLink(
+        {
+          createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+        },
+        { now },
+      ),
+    ).toBe(false);
   });
 });
