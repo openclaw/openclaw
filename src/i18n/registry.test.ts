@@ -74,11 +74,14 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
   });
 
   it("loads lazy locale translations from the registry", async () => {
-    const de = await registry.loadLazyLocaleTranslation("de");
-    const es = await registry.loadLazyLocaleTranslation("es");
-    const ptBR = await registry.loadLazyLocaleTranslation("pt-BR");
-    const zhCN = await registry.loadLazyLocaleTranslation("zh-CN");
-    const th = await registry.loadLazyLocaleTranslation("th");
+    const [de, es, ptBR, zhCN, th, en] = await Promise.all([
+      registry.loadLazyLocaleTranslation("de"),
+      registry.loadLazyLocaleTranslation("es"),
+      registry.loadLazyLocaleTranslation("pt-BR"),
+      registry.loadLazyLocaleTranslation("zh-CN"),
+      registry.loadLazyLocaleTranslation("th"),
+      registry.loadLazyLocaleTranslation("en"),
+    ]);
 
     expect(getNestedTranslation(de, "common", "health")).toBe("Status");
     expect(getNestedTranslation(es, "common", "health")).toBe("Estado");
@@ -86,6 +89,6 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
     expect(getNestedTranslation(th, "languages", "en")).toBeTruthy();
-    expect(await registry.loadLazyLocaleTranslation("en")).toBeNull();
+    expect(en).toBeNull();
   });
 });
