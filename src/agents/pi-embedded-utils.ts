@@ -10,6 +10,28 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
 }
 
 /**
+ * Normalize message content to ContentBlock[] for providers that return plain strings.
+ *
+ * Anthropic/OpenAI SDKs return `content` as `ContentBlock[]`, but some providers
+ * (e.g. MiniMax) return it as a plain `string`. Downstream code assumes arrays
+ * and calls `.flatMap()`, `.filter()`, `.map()` directly, causing TypeErrors.
+ *
+ * This helper mutates the message in place for efficiency, matching the pattern
+ * already used in `proxy-stream-wrappers.ts` for system/developer messages.
+ */
+export function normalizeAgentMessageContent(msg: AgentMessage): void {
+  if (!msg || typeof msg !== "object") {
+    return;
+  }
+  const rawContent = (msg as { content?: unknown }).content;
+  if (typeof rawContent === "string") {
+    (msg as { content: Array<{ type: "text"; text: string }> }).content = [
+      { type: "text", text: rawContent },
+    ];
+  }
+}
+
+/**
  * Strip malformed Minimax tool invocations that leak into text content.
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
  * proper structured tool calls. This removes:

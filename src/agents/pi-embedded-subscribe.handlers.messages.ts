@@ -21,6 +21,7 @@ import {
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   formatReasoningMessage,
+  normalizeAgentMessageContent,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
@@ -175,6 +176,10 @@ export function handleMessageStart(
   if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
+
+  // Normalize string content to ContentBlock[] for providers like MiniMax that
+  // don't follow the Anthropic/OpenAI SDK convention (#67933).
+  normalizeAgentMessageContent(msg);
 
   // KNOWN: Resetting at `text_end` is unsafe (late/duplicate end events).
   // ASSUME: `message_start` is the only reliable boundary for “new assistant message begins”.
@@ -385,6 +390,10 @@ export function handleMessageEnd(
   if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
+
+  // Final normalize in case the provider only delivers string content at the
+  // end of the message stream (#67933).
+  normalizeAgentMessageContent(msg);
 
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
