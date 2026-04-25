@@ -136,6 +136,11 @@ model refs, `contextPruning.mode: "cache-ttl"` is allowed because OpenRouter
 handles provider-side prompt caching automatically. OpenClaw does not inject
 Anthropic `cache_control` markers into those requests.
 
+DeepSeek cache construction is best-effort and can take a few seconds. An
+immediate follow-up may still show `cached_tokens: 0`; verify with a repeated
+same-prefix request after a short delay and use `usage.prompt_tokens_details.cached_tokens`
+as the cache-hit signal.
+
 If you repoint the model at an arbitrary OpenAI-compatible proxy URL, OpenClaw
 stops injecting those OpenRouter-specific Anthropic cache markers.
 
