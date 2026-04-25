@@ -9,9 +9,13 @@ export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   config: OpenClawConfig;
   writeConfig: (config: OpenClawConfig) => Promise<void>;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
+  cliBind?: string;
+  cliPort?: number;
 }): Promise<{ config: OpenClawConfig; persistedAllowedOriginsSeed: boolean }> {
   const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config, {
     isContainerEnvironment,
+    cliBind: params.cliBind,
+    cliPort: params.cliPort,
   });
   if (!seeded.seededOrigins || !seeded.bind) {
     return { config: params.config, persistedAllowedOriginsSeed: false };
