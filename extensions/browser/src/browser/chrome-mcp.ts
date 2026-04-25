@@ -463,37 +463,6 @@ async function getExistingSession(
   }
 }
 
-async function waitForChromeMcpReady(
-  session: ChromeMcpSession,
-  profileName: string,
-  timeoutMs?: number,
-): Promise<void> {
-  if (!timeoutMs || timeoutMs <= 0) {
-    await session.ready;
-    return;
-  }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      session.ready,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(
-            new BrowserProfileUnavailableError(
-              `Chrome MCP existing-session attach for profile "${profileName}" timed out after ${timeoutMs}ms.`,
-            ),
-          );
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 async function createEphemeralSession(
   profileName: string,
   userDataDir?: string,
