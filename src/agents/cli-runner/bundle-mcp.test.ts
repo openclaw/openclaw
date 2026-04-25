@@ -315,7 +315,7 @@ describe("prepareCliBundleMcpConfig", () => {
         config: {
           plugins: {
             entries: {
-              omi: { enabled: true, path: pluginDir },
+              omi: { enabled: true },
             },
           },
           mcp: {
