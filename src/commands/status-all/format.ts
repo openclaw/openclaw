@@ -169,6 +169,7 @@ export function resolveStatusDashboardUrl(params: {
     bind: params.cfg.gateway?.bind,
     customBindHost: params.cfg.gateway?.customBindHost,
     basePath: params.cfg.gateway?.controlUi?.basePath,
+    tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
   }).httpUrl;
 }
 

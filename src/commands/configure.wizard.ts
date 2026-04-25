@@ -108,6 +108,7 @@ async function runGatewayHealthCheck(params: {
     port: params.port,
     customBindHost: params.cfg.gateway?.customBindHost,
     basePath: undefined,
+    tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
   });
   const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
   const wsUrl = params.cfg.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
@@ -754,6 +755,7 @@ export async function runConfigureWizard(
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     const newPassword =
       process.env.OPENCLAW_GATEWAY_PASSWORD ??
