@@ -24,6 +24,7 @@ describe("Google Meet OAuth", () => {
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("scope")).toContain("meetings.space.created");
     expect(url.searchParams.get("scope")).toContain("meetings.conference.media.readonly");
+    expect(url.searchParams.get("scope")).toContain("calendar.events.readonly");
 
     await expect(
       resolveGoogleMeetAccessToken({

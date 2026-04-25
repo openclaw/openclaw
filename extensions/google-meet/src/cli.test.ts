@@ -67,6 +67,19 @@ function stubMeetArtifactsApi() {
           meetingUri: "https://meet.google.com/abc-defg-hij",
         });
       }
+      if (url.pathname === "/calendar/v3/calendars/primary/events") {
+        return jsonResponse({
+          items: [
+            {
+              id: "event-1",
+              summary: "Project sync",
+              hangoutLink: "https://meet.google.com/abc-defg-hij",
+              start: { dateTime: "2026-04-25T10:00:00Z" },
+              end: { dateTime: "2026-04-25T10:30:00Z" },
+            },
+          ],
+        });
+      }
       if (url.pathname === "/v2/conferenceRecords") {
         return jsonResponse({
           conferenceRecords: [
@@ -92,7 +105,7 @@ function stubMeetArtifactsApi() {
           participants: [
             {
               name: "conferenceRecords/rec-1/participants/p1",
-              signedinUser: { displayName: "Alice" },
+              signedinUser: { user: "users/alice", displayName: "Alice" },
             },
           ],
         });
@@ -317,6 +330,30 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("prints the latest conference record from today's calendar", async () => {
+    stubMeetArtifactsApi();
+    const stdout = captureStdout();
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "latest",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--today",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain("calendar event: Project sync");
+      expect(stdout.output()).toContain("conference record: conferenceRecords/rec-1");
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("prints markdown artifact and attendance output", async () => {
     stubMeetArtifactsApi();
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));
@@ -376,6 +413,73 @@ describe("google-meet CLI", () => {
       );
     } finally {
       attendanceStdout.restore();
+    }
+  });
+
+  it("prints CSV attendance output", async () => {
+    stubMeetArtifactsApi();
+    const stdout = captureStdout();
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "attendance",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--format",
+          "csv",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain("conferenceRecord,displayName,user");
+      expect(stdout.output()).toContain("conferenceRecords/rec-1,Alice,users/alice");
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("writes an export bundle", async () => {
+    stubMeetArtifactsApi();
+    const stdout = captureStdout();
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-"));
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "export",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--output",
+          tempDir,
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain(`export: ${tempDir}`);
+      expect(readFileSync(path.join(tempDir, "summary.md"), "utf8")).toContain(
+        "# Google Meet Artifacts",
+      );
+      expect(readFileSync(path.join(tempDir, "attendance.csv"), "utf8")).toContain(
+        "conferenceRecords/rec-1,Alice,users/alice",
+      );
+      expect(readFileSync(path.join(tempDir, "transcript.md"), "utf8")).toContain(
+        "Hello from the transcript.",
+      );
+      expect(JSON.parse(readFileSync(path.join(tempDir, "artifacts.json"), "utf8"))).toMatchObject({
+        conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
+      });
+    } finally {
+      stdout.restore();
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
