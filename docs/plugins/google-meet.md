@@ -158,7 +158,7 @@ the microphone/speaker path used by OpenClaw. For clean duplex audio, use
 separate virtual devices or a Loopback-style graph; a single BlackHole device is
 enough for a first smoke test but can echo.
 
-### Local Gateway + Parallels Chrome
+### Local gateway + Parallels Chrome
 
 You do **not** need a full OpenClaw Gateway or model API key inside a macOS VM
 just to make the VM own Chrome. Run the Gateway and agent locally, then run a

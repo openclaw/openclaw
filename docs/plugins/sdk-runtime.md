@@ -462,6 +462,6 @@ Beyond `api.runtime`, the API object also provides:
 
 ## Related
 
-- [SDK Overview](/plugins/sdk-overview) -- subpath reference
-- [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` options
-- [Plugin Internals](/plugins/architecture) -- capability model and registry
+- [SDK overview](/plugins/sdk-overview) — subpath reference
+- [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` options
+- [Plugin internals](/plugins/architecture) — capability model and registry

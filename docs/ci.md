@@ -79,7 +79,7 @@ gh workflow run duplicate-after-merge.yml \
 | `android`                        | Android unit tests for both flavors plus one debug APK build                                 | Android-relevant changes             |
 | `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                    | Main CI success or manual dispatch   |
 
-## Fail-Fast Order
+## Fail-fast order
 
 Jobs are ordered so cheap checks fail before expensive ones run:
 
