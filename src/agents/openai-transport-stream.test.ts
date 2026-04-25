@@ -466,6 +466,63 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("skips null and non-object OpenAI-compatible stream chunks", async () => {
+    const model = {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    async function* mockStream() {
+      yield null as never;
+      yield "not-a-chunk" as never;
+      yield {
+        id: "chatcmpl-vllm",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, content: "ok" },
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      };
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toContainEqual({ type: "text", text: "ok" });
+    expect(output.stopReason).toBe("stop");
+  });
+
   it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", async () => {
     const streamFn = buildTransportAwareSimpleStreamFn(
       attachModelProviderRequestTransport(

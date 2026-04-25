@@ -1292,7 +1292,11 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     appendTextDeltaInternal(text);
   };
-  for await (const chunk of responseStream) {
+  for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+    if (!rawChunk || typeof rawChunk !== "object") {
+      continue;
+    }
+    const chunk = rawChunk as ChatCompletionChunk;
     output.responseId ||= chunk.id;
     if (chunk.usage) {
       output.usage = parseTransportChunkUsage(chunk.usage, model);
