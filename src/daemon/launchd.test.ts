@@ -241,6 +241,14 @@ vi.mock("node:fs/promises", async () => {
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
     }),
+    readFile: vi.fn(async (p: string) => {
+      const key = p;
+      const value = state.files.get(key);
+      if (value !== undefined) {
+        return value;
+      }
+      throw new Error(`ENOENT: no such file or directory, open '${key}'`);
+    }),
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
       const key = p;
       state.files.set(key, data);
