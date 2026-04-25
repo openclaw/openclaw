@@ -31,6 +31,30 @@ The registry is the source for maintainer planning and future plugin inspector
 checks. If a plugin-facing behavior changes, add or update the compatibility
 record in the same change that adds the adapter.
 
+## Plugin inspector package
+
+The plugin inspector should live outside the core OpenClaw repo as a separate
+package/repository backed by the versioned compatibility and manifest
+contracts.
+
+The day-one CLI should be:
+
+```sh
+openclaw-plugin-inspector ./my-plugin
+```
+
+It should emit:
+
+- manifest/schema validation
+- the contract compatibility version being checked
+- install/source metadata checks
+- cold-path import checks
+- deprecation and compatibility warnings
+
+Use `--json` for stable machine-readable output in CI annotations. OpenClaw
+core should expose contracts and fixtures the inspector can consume, but should
+not publish the inspector binary from the main `openclaw` package.
+
 ## Deprecation policy
 
 OpenClaw should not remove a documented plugin contract in the same release
