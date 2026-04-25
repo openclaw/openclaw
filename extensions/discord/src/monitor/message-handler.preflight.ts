@@ -661,7 +661,7 @@ export async function preflightDiscordMessage(
         userId: author.id,
       }) ?? `user:${author.id}`)
     : messageChannelId;
-  let threadBinding: SessionBindingRecord;
+  let threadBinding: SessionBindingRecord | undefined;
   threadBinding =
     conversationRuntime.getSessionBindingService().resolveByConversation({
       channel: "discord",
