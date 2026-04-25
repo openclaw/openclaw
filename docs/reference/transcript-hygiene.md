@@ -7,8 +7,6 @@ read_when:
 title: "Transcript hygiene"
 ---
 
-# Transcript Hygiene (Provider Fixups)
-
 This document describes **provider-specific fixes** applied to transcripts before a run
 (building model context). These are **in-memory** adjustments used to satisfy strict
 provider requirements. These hygiene steps do **not** rewrite the stored JSONL transcript
@@ -18,6 +16,7 @@ file is backed up alongside the session file.
 
 Scope includes:
 
+- Runtime-only prompt context staying out of user-visible transcript turns
 - Tool call id sanitization
 - Tool call input validation
 - Tool result pairing repair
@@ -29,6 +28,20 @@ Scope includes:
 If you need transcript storage details, see:
 
 - [/reference/session-management-compaction](/reference/session-management-compaction)
+
+---
+
+## Global rule: runtime context is not user transcript
+
+Runtime/system context can be added to the model prompt for a turn, but it is
+not end-user-authored content. OpenClaw keeps a separate transcript-facing
+prompt body for Gateway replies, queued followups, ACP, CLI, and embedded Pi
+runs. Stored visible user turns use that transcript body instead of the
+runtime-enriched prompt.
+
+For legacy sessions that already persisted runtime wrappers, Gateway history
+surfaces apply a display projection before returning messages to WebChat,
+TUI, REST, or SSE clients.
 
 ---
 

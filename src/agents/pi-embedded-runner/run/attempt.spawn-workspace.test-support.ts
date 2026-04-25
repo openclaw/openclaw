@@ -236,6 +236,7 @@ vi.mock("../../../infra/machine-name.js", () => ({
 }));
 
 vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
+  DEFAULT_UNDICI_STREAM_TIMEOUT_MS: 120_000,
   ensureGlobalUndiciEnvProxyDispatcher: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
   ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
@@ -281,6 +282,8 @@ vi.mock("../../pi-project-settings.js", () => ({
   createPreparedEmbeddedPiSettingsManager: () => ({
     getCompactionReserveTokens: () => 0,
     getCompactionKeepRecentTokens: () => 40_000,
+    getGlobalSettings: () => ({}),
+    getProjectSettings: () => ({}),
     applyOverrides: () => {},
     setCompactionEnabled: () => {},
   }),
@@ -302,6 +305,7 @@ vi.mock("../extensions.js", () => ({
 }));
 
 vi.mock("../replay-history.js", () => ({
+  normalizeAssistantReplayContent: <T>(messages: T) => messages,
   sanitizeSessionHistory: async ({ messages }: { messages: unknown[] }) => messages,
   validateReplayTurns: async ({ messages }: { messages: unknown[] }) => messages,
 }));

@@ -108,6 +108,11 @@ import {
   toClientToolDefinitions,
 } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicyForSession,
+} from "../../pi-tools.policy.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
@@ -126,10 +131,18 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../../subagent-capabilities.js";
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import {
+  buildEmptyExplicitToolAllowlistError,
+  collectExplicitToolAllowlistSources,
+} from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   resolveTranscriptPolicy,
@@ -288,6 +301,7 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
+import { rewriteSubmittedPromptTranscript } from "./transcript-prompt-rewrite.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -439,6 +453,14 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+function hasPromptSubmissionContent(params: {
+  prompt: string;
+  messages: readonly AgentMessage[];
+  imageCount: number;
+}): boolean {
+  return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
+}
+
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -448,6 +470,79 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   }
   const allowSet = new Set(toolsAllow);
   return tools.filter((tool) => allowSet.has(tool.name));
+}
+
+function collectAttemptExplicitToolAllowlistSources(params: {
+  config?: EmbeddedRunAttemptParams["config"];
+  sessionKey?: string;
+  sandboxSessionKey?: string;
+  agentId?: string;
+  modelProvider?: string;
+  modelId?: string;
+  messageProvider?: string;
+  agentAccountId?: string | null;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
+  toolsAllow?: string[];
+}) {
+  const { agentId, globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
+    resolveEffectiveToolPolicy({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+    });
+  const groupPolicy = resolveGroupToolPolicy({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    spawnedBy: params.spawnedBy,
+    messageProvider: params.messageProvider,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    accountId: params.agentAccountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  const subagentStore = resolveSubagentCapabilityStore(params.sandboxSessionKey, {
+    cfg: params.config,
+  });
+  const subagentPolicy =
+    params.sandboxSessionKey &&
+    isSubagentEnvelopeSession(params.sandboxSessionKey, {
+      cfg: params.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(params.config, params.sandboxSessionKey, {
+          store: subagentStore,
+        })
+      : undefined;
+  return collectExplicitToolAllowlistSources([
+    { label: "tools.allow", allow: globalPolicy?.allow },
+    { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
+    {
+      label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+      allow: agentPolicy?.allow,
+    },
+    {
+      label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+      allow: agentProviderPolicy?.allow,
+    },
+    { label: "group tools.allow", allow: groupPolicy?.allow },
+    { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
+    { label: "subagent tools.allow", allow: subagentPolicy?.allow },
+    { label: "runtime toolsAllow", allow: params.toolsAllow },
+  ]);
 }
 
 export async function runEmbeddedAttempt(
@@ -729,16 +824,23 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
-    const tools = normalizeProviderToolSchemas({
-      tools: toolsEnabled ? toolsRaw : [],
-      provider: params.provider,
-      config: params.config,
+    const runtimePlanModelContext = {
       workspaceDir: effectiveWorkspace,
-      env: process.env,
-      modelId: params.modelId,
       modelApi: params.model.api,
       model: params.model,
-    });
+    };
+    const tools =
+      params.runtimePlan?.tools.normalize(toolsEnabled ? toolsRaw : [], runtimePlanModelContext) ??
+      normalizeProviderToolSchemas({
+        tools: toolsEnabled ? toolsRaw : [],
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        model: params.model,
+      });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpSessionRuntime = toolsEnabled
       ? await getOrCreateSessionMcpRuntime({
@@ -794,16 +896,46 @@ export async function runEmbeddedAttempt(
       tools: effectiveTools,
       clientTools,
     });
-    logProviderToolSchemaDiagnostics({
-      tools: effectiveTools,
-      provider: params.provider,
+    const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
       config: params.config,
-      workspaceDir: effectiveWorkspace,
-      env: process.env,
+      sessionKey: params.sessionKey,
+      sandboxSessionKey,
+      agentId: sessionAgentId,
+      modelProvider: params.provider,
       modelId: params.modelId,
-      modelApi: params.model.api,
-      model: params.model,
+      messageProvider: params.messageChannel ?? params.messageProvider,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      sandboxToolPolicy: sandbox?.tools,
+      toolsAllow: params.toolsAllow,
     });
+    const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
+      sources: explicitToolAllowlistSources,
+      callableToolNames: effectiveTools.map((tool) => tool.name),
+      toolsEnabled,
+      disableTools: params.disableTools,
+    });
+    if (params.runtimePlan) {
+      params.runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
+    } else {
+      logProviderToolSchemaDiagnostics({
+        tools: effectiveTools,
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        model: params.model,
+      });
+    }
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -929,22 +1061,25 @@ export async function runEmbeddedAttempt(
           defaultAgentId,
         })
       : undefined;
-    const promptContribution = resolveProviderSystemPromptContribution({
-      provider: params.provider,
+    const promptContributionContext = {
       config: params.config,
+      agentDir: params.agentDir,
       workspaceDir: effectiveWorkspace,
-      context: {
-        config: params.config,
-        agentDir: params.agentDir,
-        workspaceDir: effectiveWorkspace,
+      provider: params.provider,
+      modelId: params.modelId,
+      promptMode: effectivePromptMode,
+      runtimeChannel,
+      runtimeCapabilities,
+      agentId: sessionAgentId,
+    };
+    const promptContribution =
+      params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
+      resolveProviderSystemPromptContribution({
         provider: params.provider,
-        modelId: params.modelId,
-        promptMode: effectivePromptMode,
-        runtimeChannel,
-        runtimeCapabilities,
-        agentId: sessionAgentId,
-      },
-    });
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        context: promptContributionContext,
+      });
 
     const builtAppendPrompt =
       resolveSystemPromptOverride({
@@ -1045,15 +1180,17 @@ export async function runEmbeddedAttempt(
         .then(() => true)
         .catch(() => false);
 
-      const transcriptPolicy = resolveTranscriptPolicy({
-        modelApi: params.model?.api,
-        provider: params.provider,
-        modelId: params.modelId,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        env: process.env,
-        model: params.model,
-      });
+      const transcriptPolicy =
+        params.runtimePlan?.transcript.resolvePolicy(runtimePlanModelContext) ??
+        resolveTranscriptPolicy({
+          modelApi: params.model?.api,
+          provider: params.provider,
+          modelId: params.modelId,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+          env: process.env,
+          model: params.model,
+        });
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
@@ -1414,24 +1551,37 @@ export async function runEmbeddedAttempt(
         });
       }
 
+      const resolvedTransport = resolveExplicitSettingsTransport({
+        settingsManager,
+        sessionTransport: activeSession.agent.transport,
+      });
+      const streamExtraParamsOverride = {
+        ...params.streamParams,
+        fastMode: params.fastMode,
+      };
+      const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
+        extraParamsOverride: streamExtraParamsOverride,
+        thinkingLevel: params.thinkLevel,
+        agentId: sessionAgentId,
+        workspaceDir: effectiveWorkspace,
+        model: params.model,
+        resolvedTransport,
+      });
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
         params.provider,
         params.modelId,
-        {
-          ...params.streamParams,
-          fastMode: params.fastMode,
-        },
+        streamExtraParamsOverride,
         params.thinkLevel,
         sessionAgentId,
         effectiveWorkspace,
         params.model,
         agentDir,
-        resolveExplicitSettingsTransport({
-          settingsManager,
-          sessionTransport: activeSession.agent.transport,
-        }),
+        resolvedTransport,
+        preparedRuntimeExtraParams
+          ? { preparedExtraParams: preparedRuntimeExtraParams }
+          : undefined,
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
@@ -2001,6 +2151,12 @@ export async function runEmbeddedAttempt(
       let skipPromptSubmission = false;
       try {
         const promptStartedAt = Date.now();
+        if (emptyExplicitToolAllowlistError) {
+          promptError = emptyExplicitToolAllowlistError;
+          promptErrorSource = "precheck";
+          skipPromptSubmission = true;
+          log.warn(`[tools] ${emptyExplicitToolAllowlistError.message}`);
+        }
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
@@ -2225,6 +2381,28 @@ export async function runEmbeddedAttempt(
             transcriptLeafId,
           });
 
+          if (
+            !skipPromptSubmission &&
+            !hasPromptSubmissionContent({
+              prompt: effectivePrompt,
+              messages: activeSession.messages,
+              imageCount: imageResult.images.length,
+            })
+          ) {
+            skipPromptSubmission = true;
+            log.info(
+              `embedded run prompt skipped: empty prompt/history/images ` +
+                `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
+                `provider=${params.provider}/${params.modelId}`,
+            );
+            trajectoryRecorder?.recordEvent("prompt.skipped", {
+              reason: "empty_prompt_history_images",
+              prompt: effectivePrompt,
+              messages: activeSession.messages,
+              imagesCount: imageResult.images.length,
+            });
+          }
+
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
           if (log.isEnabled("debug")) {
             const msgCount = activeSession.messages.length;
@@ -2395,6 +2573,13 @@ export async function runEmbeddedAttempt(
             } else {
               await abortable(activeSession.prompt(effectivePrompt));
             }
+            rewriteSubmittedPromptTranscript({
+              sessionManager,
+              sessionFile: params.sessionFile,
+              previousLeafId: transcriptLeafId,
+              submittedPrompt: effectivePrompt,
+              transcriptPrompt: params.transcriptPrompt,
+            });
           }
         } catch (err) {
           yieldAborted =
@@ -2762,7 +2947,12 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               provider: params.provider,
               model: params.modelId,
-              resolvedRef: `${params.provider}/${params.modelId}`,
+              resolvedRef:
+                params.runtimePlan?.observability.resolvedRef ??
+                `${params.provider}/${params.modelId}`,
+              ...(params.runtimePlan?.observability.harnessId
+                ? { harnessId: params.runtimePlan.observability.harnessId }
+                : {}),
               assistantTexts,
               lastAssistant,
               usage: attemptUsage,

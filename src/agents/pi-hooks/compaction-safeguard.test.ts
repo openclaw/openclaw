@@ -1286,6 +1286,52 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
   });
 
+  it("adds Copilot IDE headers to built-in compaction summarization", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      provider: "github-copilot",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.githubcopilot.com",
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+      ok: true,
+      apiKey: "github-token",
+      headers: { "X-Test": "1" },
+    });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock,
+    });
+    const compactionHandler = createCompactionHandler();
+    const event = createCompactionEvent({
+      messageText: "summarize me",
+      tokensBefore: 1000,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    const summaryCall = mockSummarizeInStages.mock.calls.at(-1)?.[0];
+    expect(summaryCall?.headers).toMatchObject({
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Openai-Organization": "github-copilot",
+      "User-Agent": "GitHubCopilotChat/0.26.7",
+      "X-Test": "1",
+      "x-initiator": "user",
+    });
+  });
+
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("summary missing headings");

@@ -15,6 +15,7 @@ export function makeBrowserProfile(
     cdpPort: 18800,
     color: "#FF4500",
     driver: "openclaw",
+    headless: false,
     attachOnly: false,
     ...overrides,
   };

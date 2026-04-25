@@ -7,8 +7,6 @@ read_when:
 title: "CLI backends"
 ---
 
-# CLI backends (fallback runtime)
-
 OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
 rate-limited, or temporarily misbehaving. This is intentionally conservative:
 

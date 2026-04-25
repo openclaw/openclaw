@@ -6,8 +6,6 @@ read_when:
 title: "Heartbeat"
 ---
 
-# Heartbeat (Gateway)
-
 > **Heartbeat vs Cron?** See [Automation & Tasks](/automation) for guidance on when to use each.
 
 Heartbeat runs **periodic agent turns** in the main session so the model can

@@ -390,6 +390,7 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("./extra-params.js", () => ({
     applyExtraParamsToAgent: applyExtraParamsToAgentMock,
     resolveAgentTransportOverride: resolveAgentTransportOverrideMock,
+    resolvePreparedExtraParams: vi.fn(() => ({})),
   }));
 
   vi.doMock("./tool-split.js", () => ({

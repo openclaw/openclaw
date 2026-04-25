@@ -1,31 +1,20 @@
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
-import type { BrowserTab, BrowserTransport, SnapshotAriaNode } from "./client.types.js";
+import type {
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+  SnapshotAriaNode,
+} from "./client.types.js";
+import type { BrowserDoctorReport } from "./doctor.js";
 
-export type { BrowserTab, BrowserTransport, SnapshotAriaNode } from "./client.types.js";
-
-export type BrowserStatus = {
-  enabled: boolean;
-  profile?: string;
-  driver?: "openclaw" | "existing-session";
-  transport?: BrowserTransport;
-  running: boolean;
-  cdpReady?: boolean;
-  cdpHttp?: boolean;
-  pid: number | null;
-  cdpPort: number | null;
-  cdpUrl?: string | null;
-  chosenBrowser: string | null;
-  detectedBrowser?: string | null;
-  detectedExecutablePath?: string | null;
-  detectError?: string | null;
-  userDataDir: string | null;
-  color: string;
-  headless: boolean;
-  noSandbox?: boolean;
-  executablePath?: string | null;
-  attachOnly: boolean;
-};
+export type {
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+  SnapshotAriaNode,
+} from "./client.types.js";
+export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
 export type ProfileStatus = {
   name: string;
@@ -85,6 +74,16 @@ export async function browserStatus(
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
     timeoutMs: 1500,
+  });
+}
+
+export async function browserDoctor(
+  baseUrl?: string,
+  opts?: { profile?: string },
+): Promise<BrowserDoctorReport> {
+  const q = buildProfileQuery(opts?.profile);
+  return await fetchBrowserJson<BrowserDoctorReport>(withBaseUrl(baseUrl, `/doctor${q}`), {
+    timeoutMs: 3000,
   });
 }
 
@@ -200,13 +199,13 @@ export async function browserTabs(
 export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; label?: string },
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, ...(opts?.label ? { label: opts.label } : {}) }),
     timeoutMs: 15000,
   });
 }
@@ -271,6 +270,7 @@ export async function browserSnapshot(
     selector?: string;
     frame?: string;
     labels?: boolean;
+    urls?: boolean;
     mode?: "efficient";
     profile?: string;
   },
@@ -308,6 +308,9 @@ export async function browserSnapshot(
   }
   if (opts.labels === true) {
     q.set("labels", "1");
+  }
+  if (opts.urls === true) {
+    q.set("urls", "1");
   }
   if (opts.mode) {
     q.set("mode", opts.mode);

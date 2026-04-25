@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
@@ -16,9 +17,48 @@ import {
   getPageForTargetId,
   gotoPageWithNavigationGuard,
   storeRoleRefsForTarget,
-  type WithSnapshotForAI,
 } from "./pw-session.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+
+type SnapshotUrlEntry = {
+  text: string;
+  url: string;
+};
+
+async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
+  const urls = await page
+    .evaluate(() => {
+      const seen = new Set<string>();
+      const out: SnapshotUrlEntry[] = [];
+      for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+        const href = anchor instanceof HTMLAnchorElement ? anchor.href : "";
+        if (!href || seen.has(href)) {
+          continue;
+        }
+        const text =
+          (anchor.textContent || anchor.getAttribute("aria-label") || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 120) || href;
+        seen.add(href);
+        out.push({ text, url: href });
+        if (out.length >= 100) {
+          break;
+        }
+      }
+      return out;
+    })
+    .catch(() => []);
+  return Array.isArray(urls) ? urls : [];
+}
+
+function appendSnapshotUrls(snapshot: string, urls: SnapshotUrlEntry[]): string {
+  if (urls.length === 0) {
+    return snapshot;
+  }
+  const lines = urls.map((entry, index) => `${index + 1}. ${entry.text} -> ${entry.url}`);
+  return `${snapshot}\n\nLinks:\n${lines.join("\n")}`;
+}
 
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
@@ -63,6 +103,7 @@ export async function snapshotAiViaPlaywright(opts: {
   targetId?: string;
   timeoutMs?: number;
   maxChars?: number;
+  urls?: boolean;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
   const page = await getPageForTargetId({
@@ -80,16 +121,13 @@ export async function snapshotAiViaPlaywright(opts: {
     });
   }
 
-  const maybe = page as unknown as WithSnapshotForAI;
-  if (!maybe._snapshotForAI) {
-    throw new Error("Playwright _snapshotForAI is not available. Upgrade playwright-core.");
-  }
-
-  const result = await maybe._snapshotForAI({
+  let snapshot = await page.ariaSnapshot({
+    mode: "ai",
     timeout: Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000))),
-    track: "response",
   });
-  let snapshot = result?.full ?? "";
+  if (opts.urls) {
+    snapshot = appendSnapshotUrls(snapshot, await collectSnapshotUrls(page));
+  }
   const maxChars = opts.maxChars;
   const limit =
     typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
@@ -119,6 +157,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   frameSelector?: string;
   refsMode?: "role" | "aria";
   options?: RoleSnapshotOptions;
+  urls?: boolean;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   snapshot: string;
@@ -144,15 +183,14 @@ export async function snapshotRoleViaPlaywright(opts: {
     if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
       throw new Error("refs=aria does not support selector/frame snapshots yet.");
     }
-    const maybe = page as unknown as WithSnapshotForAI;
-    if (!maybe._snapshotForAI) {
-      throw new Error("refs=aria requires Playwright _snapshotForAI support.");
-    }
-    const result = await maybe._snapshotForAI({
+    const snapshot = await page.ariaSnapshot({
+      mode: "ai",
       timeout: 5000,
-      track: "response",
     });
-    const built = buildRoleSnapshotFromAiSnapshot(result?.full ?? "", opts.options);
+    const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
+    const snapshotWithUrls = opts.urls
+      ? appendSnapshotUrls(built.snapshot, await collectSnapshotUrls(page))
+      : built.snapshot;
     storeRoleRefsForTarget({
       page,
       cdpUrl: opts.cdpUrl,
@@ -161,9 +199,9 @@ export async function snapshotRoleViaPlaywright(opts: {
       mode: "aria",
     });
     return {
-      snapshot: built.snapshot,
+      snapshot: snapshotWithUrls,
       refs: built.refs,
-      stats: getRoleSnapshotStats(built.snapshot, built.refs),
+      stats: getRoleSnapshotStats(snapshotWithUrls, built.refs),
     };
   }
 
@@ -179,6 +217,9 @@ export async function snapshotRoleViaPlaywright(opts: {
 
   const ariaSnapshot = await locator.ariaSnapshot();
   const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
+  const snapshotWithUrls = opts.urls
+    ? appendSnapshotUrls(built.snapshot, await collectSnapshotUrls(page))
+    : built.snapshot;
   storeRoleRefsForTarget({
     page,
     cdpUrl: opts.cdpUrl,
@@ -188,9 +229,9 @@ export async function snapshotRoleViaPlaywright(opts: {
     mode: "role",
   });
   return {
-    snapshot: built.snapshot,
+    snapshot: snapshotWithUrls,
     refs: built.refs,
-    stats: getRoleSnapshotStats(built.snapshot, built.refs),
+    stats: getRoleSnapshotStats(snapshotWithUrls, built.refs),
   };
 }
 

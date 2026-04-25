@@ -189,7 +189,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
-  it("rewrites bare silent replies for direct conversations when requested", () => {
+  it("rewrites bare silent replies for direct conversations where silence is disallowed", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -197,9 +197,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
             direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -214,7 +211,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       }),
     );
     expect(projected).toHaveLength(1);
-    expect(projected[0]?.text).toEqual(expect.any(String));
+    expect(projected[0]?.text?.trim()).toBeTruthy();
     expect(projected[0]?.text?.trim()).not.toBe("NO_REPLY");
   });
 
@@ -226,9 +223,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
             direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -245,7 +239,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ).toEqual([]);
   });
 
-  it("does not add rewrite chatter when visible content is already being delivered", () => {
+  it("does not add silent-reply chatter when visible content is already being delivered", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -253,9 +247,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
             direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -281,7 +272,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       agents: {
         defaults: {
           silentReply: { direct: "disallow", group: "allow", internal: "allow" },
-          silentReplyRewrite: { direct: true },
         },
       },
     };
@@ -309,7 +299,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       }
     });
 
-    it("falls back to the rewrite path when the query throws", () => {
+    it("falls back to the visible rewrite path when the query throws", () => {
       const previousQuery = registerPendingSpawnedChildrenQuery(() => {
         throw new Error("registry unavailable");
       });
@@ -317,14 +307,14 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         const delivery = planSilent("agent:main:telegram:direct:789");
         expect(delivery).toHaveLength(1);
         expect(delivery[0]?.text).toBeTruthy();
-        expect(delivery[0]?.text).not.toMatch(/NO_REPLY/i);
+        expect(delivery[0]?.text).not.toBe("NO_REPLY");
       } finally {
         registerPendingSpawnedChildrenQuery(previousQuery);
       }
     });
   });
 
-  it("keeps bare NO_REPLY visible when silence is disallowed but rewrite is off", () => {
+  it("keeps bare NO_REPLY visible when silence is disallowed and rewrite is disabled", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {

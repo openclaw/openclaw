@@ -112,7 +112,7 @@ title: "Thinking levels"
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
 - Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
 - The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model's provider thinking profile plus the same fallback logic that `/status` and `session_status` use.
-- The picker uses `thinkingOptions` returned by the gateway session row. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
+- The picker uses `thinkingLevels` returned by the gateway session row/defaults, with `thinkingOptions` kept as a legacy label list. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.
 
 ## Provider profiles
@@ -120,4 +120,4 @@ title: "Thinking levels"
 - Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
 - Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, or `max`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
 - Published legacy hooks (`supportsXHighThinking`, `isBinaryThinking`, and `resolveDefaultThinkingLevel`) remain as compatibility adapters, but new custom level sets should use `resolveThinkingProfile`.
-- Gateway rows expose `thinkingOptions` and `thinkingDefault` so ACP/chat clients render the same profile that runtime validation uses.
+- Gateway rows/defaults expose `thinkingLevels`, `thinkingOptions`, and `thinkingDefault` so ACP/chat clients render the same profile ids and labels that runtime validation uses.

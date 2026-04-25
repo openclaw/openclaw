@@ -1,13 +1,14 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { Command } from "commander";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
 import plugin from "./index.js";
+import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig, resolveGoogleMeetConfigWithEnv } from "./src/config.js";
 import {
   buildGoogleMeetPreflightReport,
+  createGoogleMeetSpace,
   fetchGoogleMeetSpace,
   normalizeGoogleMeetSpaceName,
 } from "./src/meet.js";
@@ -19,6 +20,12 @@ import {
 import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
 import { startCommandRealtimeAudioBridge } from "./src/realtime.js";
 import { normalizeMeetUrl } from "./src/runtime.js";
+import type { GoogleMeetRuntime } from "./src/runtime.js";
+import {
+  captureStdout,
+  noopLogger,
+  setupGoogleMeetPlugin,
+} from "./src/test-support/plugin-harness.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./src/transports/twilio.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
@@ -50,12 +57,12 @@ vi.mock("./src/voice-call-gateway.js", () => ({
   endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
 }));
 
-const noopLogger = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
-};
+function setup(
+  config?: Parameters<typeof setupGoogleMeetPlugin>[1],
+  options?: Parameters<typeof setupGoogleMeetPlugin>[2],
+) {
+  return setupGoogleMeetPlugin(plugin, config, options);
+}
 
 type TestBridgeProcess = {
   stdin?: { write(chunk: unknown): unknown } | null;
@@ -65,92 +72,6 @@ type TestBridgeProcess = {
   kill: ReturnType<typeof vi.fn>;
   on: EventEmitter["on"];
 };
-
-type NodeListResult = {
-  nodes: Array<{
-    nodeId: string;
-    displayName?: string;
-    connected?: boolean;
-    commands?: string[];
-    remoteIp?: string;
-  }>;
-};
-
-function setup(
-  config: Record<string, unknown> = {},
-  options: {
-    nodesListResult?: NodeListResult;
-    nodesInvokeResult?: unknown;
-    nodesInvokeHandler?: (params: {
-      nodeId: string;
-      command: string;
-      params?: unknown;
-      timeoutMs?: number;
-    }) => Promise<unknown>;
-  } = {},
-) {
-  const methods = new Map<string, unknown>();
-  const tools: unknown[] = [];
-  const cliRegistrations: unknown[] = [];
-  const nodeHostCommands: unknown[] = [];
-  const nodesList = vi.fn(
-    async () =>
-      options.nodesListResult ?? {
-        nodes: [
-          {
-            nodeId: "node-1",
-            displayName: "parallels-macos",
-            connected: true,
-            commands: ["googlemeet.chrome"],
-          },
-        ],
-      },
-  );
-  const nodesInvoke = vi.fn(async (params) =>
-    options.nodesInvokeHandler
-      ? options.nodesInvokeHandler(params)
-      : (options.nodesInvokeResult ?? { launched: true }),
-  );
-  const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
-    if (argv[0] === "/usr/sbin/system_profiler") {
-      return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
-    }
-    return { code: 0, stdout: "", stderr: "" };
-  });
-  const api = createTestPluginApi({
-    id: "google-meet",
-    name: "Google Meet",
-    description: "test",
-    version: "0",
-    source: "test",
-    pluginConfig: config,
-    runtime: {
-      system: {
-        runCommandWithTimeout,
-        formatNativeDependencyHint: vi.fn(() => "Install with brew install blackhole-2ch."),
-      },
-      nodes: {
-        list: nodesList,
-        invoke: nodesInvoke,
-      },
-    } as unknown as OpenClawPluginApi["runtime"],
-    logger: noopLogger,
-    registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
-    registerTool: (tool: unknown) => tools.push(tool),
-    registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
-    registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
-  });
-  plugin.register(api);
-  return {
-    cliRegistrations,
-    methods,
-    tools,
-    runCommandWithTimeout,
-    nodesList,
-    nodesInvoke,
-    nodeHostCommands,
-  };
-}
 
 describe("google-meet plugin", () => {
   beforeEach(() => {
@@ -171,6 +92,10 @@ describe("google-meet plugin", () => {
       chrome: {
         audioBackend: "blackhole-2ch",
         launch: true,
+        guestName: "OpenClaw Agent",
+        reuseExistingTab: true,
+        autoJoin: true,
+        waitForInCallMs: 20000,
         audioInputCommand: [
           "rec",
           "-q",
@@ -285,7 +210,17 @@ describe("google-meet plugin", () => {
       properties: {
         action: {
           type: "string",
-          enum: ["join", "status", "setup_status", "resolve_space", "preflight", "leave", "speak"],
+          enum: [
+            "join",
+            "create",
+            "status",
+            "setup_status",
+            "resolve_space",
+            "preflight",
+            "leave",
+            "speak",
+            "test_speech",
+          ],
         },
         transport: { type: "string", enum: ["chrome", "chrome-node", "twilio"] },
         mode: { type: "string", enum: ["realtime", "transcribe"] },
@@ -341,6 +276,37 @@ describe("google-meet plugin", () => {
     );
   });
 
+  it("creates Meet spaces and returns the meeting URL", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          name: "spaces/new-space",
+          meetingCode: "new-abcd-xyz",
+          meetingUri: "https://meet.google.com/new-abcd-xyz",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createGoogleMeetSpace({ accessToken: "token" })).resolves.toMatchObject({
+      meetingUri: "https://meet.google.com/new-abcd-xyz",
+      space: { name: "spaces/new-space" },
+    });
+    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://meet.googleapis.com/v2/spaces",
+        init: expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ Authorization: "Bearer token" }),
+          body: "{}",
+        }),
+        policy: { allowedHostnames: ["meet.googleapis.com"] },
+        auditContext: "google-meet.spaces.create",
+      }),
+    );
+  });
+
   it("surfaces Developer Preview acknowledgment blockers in preflight reports", () => {
     expect(
       buildGoogleMeetPreflightReport({
@@ -368,6 +334,7 @@ describe("google-meet plugin", () => {
     expect(url.searchParams.get("client_id")).toBe("client-id");
     expect(url.searchParams.get("code_challenge")).toBe("challenge");
     expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("scope")).toContain("meetings.space.created");
     expect(url.searchParams.get("scope")).toContain("meetings.conference.media.readonly");
 
     await expect(
@@ -484,6 +451,153 @@ describe("google-meet plugin", () => {
     expect(result.details.ok).toBe(true);
   });
 
+  it("reports Twilio delegation readiness when voice-call is enabled", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
+    const { tools } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet", "voice-call"],
+            entries: {
+              "voice-call": {
+                enabled: true,
+                config: { provider: "twilio" },
+              },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status" });
+
+    expect(result.details.ok).toBe(true);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "twilio-voice-call-plugin",
+          ok: true,
+        }),
+        expect.objectContaining({
+          id: "twilio-voice-call-credentials",
+          ok: true,
+        }),
+      ]),
+    );
+  });
+
+  it("reports missing voice-call wiring for Twilio transport", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "");
+    const { tools } = setup(
+      { defaultTransport: "twilio" },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet"],
+            entries: {
+              "voice-call": { enabled: false },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status" });
+
+    expect(result.details.ok).toBe(false);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "twilio-voice-call-plugin",
+          ok: false,
+        }),
+        expect.objectContaining({
+          id: "twilio-voice-call-credentials",
+          ok: false,
+        }),
+      ]),
+    );
+  });
+
+  it("CLI setup prints human-readable checks by default", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () =>
+        ({
+          setupStatus: () => ({
+            ok: true,
+            checks: [
+              {
+                id: "audio-bridge",
+                ok: true,
+                message: "Chrome command-pair realtime audio bridge configured",
+              },
+            ],
+          }),
+        }) as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(["googlemeet", "setup"], { from: "user" });
+      expect(stdout.output()).toContain("Google Meet setup: OK");
+      expect(stdout.output()).toContain(
+        "[ok] audio-bridge: Chrome command-pair realtime audio bridge configured",
+      );
+      expect(stdout.output()).not.toContain('"checks"');
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI setup preserves JSON output with --json", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () =>
+        ({
+          setupStatus: () => ({
+            ok: false,
+            checks: [{ id: "twilio-voice-call-plugin", ok: false, message: "missing" }],
+          }),
+        }) as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(["googlemeet", "setup", "--json"], { from: "user" });
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        ok: false,
+        checks: [{ id: "twilio-voice-call-plugin", ok: false }],
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("launches Chrome after the BlackHole check", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
@@ -549,11 +663,22 @@ describe("google-meet plugin", () => {
     expect(nodesInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          path: "/tabs/open",
+          body: { url: "https://meet.google.com/abc-defg-hij" },
+        }),
+      }),
+    );
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "node-1",
         command: "googlemeet.chrome",
         params: expect.objectContaining({
           action: "start",
           url: "https://meet.google.com/abc-defg-hij",
           mode: "transcribe",
+          launch: false,
         }),
       }),
     );
@@ -563,6 +688,138 @@ describe("google-meet plugin", () => {
         chrome: {
           nodeId: "node-1",
           launched: true,
+        },
+      },
+    });
+  });
+
+  it("reuses an active Meet session for the same URL and transport", async () => {
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        defaultMode: "transcribe",
+      },
+      {
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+            browser: { inCall: true, micMuted: false },
+          },
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.join") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const first = vi.fn();
+    const second = vi.fn();
+
+    await handler?.({
+      params: { url: "https://meet.google.com/abc-defg-hij" },
+      respond: first,
+    });
+    await handler?.({
+      params: { url: "https://meet.google.com/abc-defg-hij" },
+      respond: second,
+    });
+
+    expect(
+      nodesInvoke.mock.calls.filter(([call]) => call.command === "googlemeet.chrome"),
+    ).toHaveLength(1);
+    expect(second.mock.calls[0]?.[1]).toMatchObject({
+      session: {
+        chrome: { health: { inCall: true, micMuted: false } },
+        notes: expect.arrayContaining(["Reused existing active Meet session."]),
+      },
+    });
+  });
+
+  it("exposes a test-speech action that joins the requested meeting", async () => {
+    const { tools, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+      },
+      {
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+            browser: { inCall: true },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { createdSession?: boolean } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "test_speech",
+      url: "https://meet.google.com/abc-defg-hij",
+      message: "Say exactly: hello.",
+    });
+
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "googlemeet.chrome",
+        params: expect.objectContaining({ action: "start" }),
+      }),
+    );
+    expect(result.details).toMatchObject({ createdSession: true });
+  });
+
+  it("reports manual action when the browser profile needs Google login", async () => {
+    const { tools } = setup(
+      {
+        defaultTransport: "chrome-node",
+      },
+      {
+        browserActResult: {
+          inCall: false,
+          manualActionRequired: true,
+          manualActionReason: "google-login-required",
+          manualActionMessage:
+            "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.",
+          title: "Sign in - Google Accounts",
+          url: "https://accounts.google.com/signin",
+        },
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{
+        details: {
+          manualActionRequired?: boolean;
+          manualActionReason?: string;
+          session?: { chrome?: { health?: { manualActionRequired?: boolean } } };
+        };
+      }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "test_speech",
+      url: "https://meet.google.com/abc-defg-hij",
+      message: "Say exactly: hello.",
+    });
+
+    expect(result.details).toMatchObject({
+      manualActionRequired: true,
+      manualActionReason: "google-login-required",
+      session: {
+        chrome: {
+          health: {
+            manualActionRequired: true,
+            manualActionReason: "google-login-required",
+          },
         },
       },
     });
@@ -604,13 +861,15 @@ describe("google-meet plugin", () => {
               nodeId: "node-1",
               displayName: "parallels-macos",
               connected: true,
-              commands: ["googlemeet.chrome"],
+              caps: ["browser"],
+              commands: ["browser.proxy", "googlemeet.chrome"],
             },
             {
               nodeId: "node-2",
               displayName: "mac-studio-vm",
               connected: true,
-              commands: ["googlemeet.chrome"],
+              caps: ["browser"],
+              commands: ["browser.proxy", "googlemeet.chrome"],
             },
           ],
         },
@@ -781,7 +1040,7 @@ describe("google-meet plugin", () => {
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2, 3]));
     expect(outputStdinWrites).toEqual([Buffer.from([4, 5])]);
     expect(bridge.acknowledgeMark).toHaveBeenCalled();
-    expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say exactly: I'm here and listening.");
+    expect(bridge.triggerGreeting).not.toHaveBeenCalled();
     handle.speak("Say exactly: hello from the meeting.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the meeting.");
     expect(callbacks).toMatchObject({
@@ -922,7 +1181,7 @@ describe("google-meet plugin", () => {
         text: "Use the launch update.",
       });
     });
-    expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say exactly: I'm here and listening.");
+    expect(bridge.triggerGreeting).not.toHaveBeenCalled();
     handle.speak("Say exactly: hello from the node.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the node.");
     expect(callbacks).toMatchObject({
