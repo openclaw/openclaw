@@ -942,7 +942,7 @@ export function attachGatewayWsMessageHandler(params: {
               ...clientPairingMetadata,
               ...(bootstrapPairingRoles ? { roles: bootstrapPairingRoles } : {}),
               silent:
-                reason === "scope-upgrade"
+                reason === "scope-upgrade" && hasBrowserOriginHeader
                   ? false
                   : allowSilentLocalPairing || allowSilentBootstrapPairing,
             });
