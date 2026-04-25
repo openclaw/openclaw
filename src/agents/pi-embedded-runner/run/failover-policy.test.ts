@@ -99,6 +99,44 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("surfaces timed-out assistant attempts so local timeout recovery can run", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: null,
+    });
+  });
+
+  it("falls back for classified assistant timeout errors when model fallbacks are configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        timedOut: false,
+        timedOutDuringCompaction: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
   it("does nothing for assistant turns without failover signals", () => {
     expect(
       resolveRunFailoverDecision({

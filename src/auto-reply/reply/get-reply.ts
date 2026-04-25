@@ -10,6 +10,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { removeSystemEvents } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -18,6 +19,7 @@ import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { cancelContinuationTimer } from "./agent-runner.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -460,6 +462,12 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (directiveResult.kind === "reply") {
+    // Directive-handled replies bypass runReplyAgent — cancel pending timers,
+    // reset chain metadata, and drain stale wake events.
+    if (sessionKey && !opts?.isHeartbeat) {
+      cancelContinuationTimer(sessionKey, { sessionEntry, sessionStore, storePath });
+      removeSystemEvents(sessionKey, (e) => e.text?.startsWith("[continuation:wake]") ?? false);
+    }
     return directiveResult.reply;
   }
 
@@ -557,6 +565,13 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (inlineActionResult.kind === "reply") {
+    // Inline actions (slash commands, status, etc.) bypass runReplyAgent but
+    // represent real user input — cancel timers, reset chain metadata, drain
+    // stale wake events.
+    if (sessionKey && !opts?.isHeartbeat) {
+      cancelContinuationTimer(sessionKey, { sessionEntry, sessionStore, storePath });
+      removeSystemEvents(sessionKey, (e) => e.text?.startsWith("[continuation:wake]") ?? false);
+    }
     await maybeEmitMissingResetHooks();
     return inlineActionResult.reply;
   }

@@ -41,4 +41,7 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  silentAnnounce?: boolean;
+  /** When true (with silentAnnounce), trigger a generation cycle after enrichment delivery. */
+  wakeOnReturn?: boolean;
 };

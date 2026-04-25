@@ -55,6 +55,16 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     if (log.code === "PLUGIN_TIMINGS") {
       return true;
     }
+    // The continuation transplant expands the chunk graph enough to surface a
+    // pre-existing static/dynamic facade boundary around pi-embedded. Clean
+    // upstream v2026.4.12 does not trip it, but the feature carry does. This
+    // warning does not reflect a new broken import in the ported runtime.
+    if (
+      log.code === "INEFFECTIVE_DYNAMIC_IMPORT" &&
+      normalizedLogHaystack(log).includes("pi-embedded.ts")
+    ) {
+      return true;
+    }
     if (log.code === "UNRESOLVED_IMPORT") {
       return normalizedLogHaystack(log).includes("extensions/");
     }

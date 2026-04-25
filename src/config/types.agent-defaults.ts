@@ -410,6 +410,26 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Agent self-elected turn continuation (CONTINUE_WORK signal). */
+  continuation?: {
+    enabled?: boolean;
+    /** Use Task Flow-backed delegate store (SQLite persistence, cancel/retry). Default: false. */
+    taskFlowDelegates?: boolean;
+    defaultDelayMs?: number;
+    minDelayMs?: number;
+    maxDelayMs?: number;
+    maxChainLength?: number;
+    costCapTokens?: number;
+    /** Maximum number of continue_delegate tool calls per agent turn (default: 5). */
+    maxDelegatesPerTurn?: number;
+    /**
+     * Context-pressure awareness threshold (exclusive (0.0, 1.0]). When the session's token
+     * usage exceeds this fraction of the context window, a [system:context-pressure]
+     * event is injected pre-run so the agent can elect evacuation. Disabled when
+     * unset. Recommended: 0.8 (80%).
+     */
+    contextPressureThreshold?: number;
+  };
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

@@ -5,7 +5,6 @@ type SessionStoreCacheEntry = {
   store: Record<string, SessionEntry>;
   mtimeMs?: number;
   sizeBytes?: number;
-  serialized?: string;
 };
 
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
@@ -13,7 +12,9 @@ const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
 const SESSION_STORE_CACHE = createExpiringMapCache<string, SessionStoreCacheEntry>({
   ttlMs: getSessionStoreTtl,
 });
-const SESSION_STORE_SERIALIZED_CACHE = new Map<string, string>();
+const SESSION_STORE_SERIALIZED_CACHE = createExpiringMapCache<string, string>({
+  ttlMs: getSessionStoreTtl,
+});
 
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
@@ -50,6 +51,7 @@ export function setSerializedSessionStore(storePath: string, serialized?: string
 
 export function dropSessionStoreObjectCache(storePath: string): void {
   SESSION_STORE_CACHE.delete(storePath);
+  SESSION_STORE_SERIALIZED_CACHE.delete(storePath);
 }
 
 export function readSessionStoreCache(params: {
@@ -73,15 +75,10 @@ export function writeSessionStoreCache(params: {
   store: Record<string, SessionEntry>;
   mtimeMs?: number;
   sizeBytes?: number;
-  serialized?: string;
 }): void {
   SESSION_STORE_CACHE.set(params.storePath, {
     store: structuredClone(params.store),
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
-    serialized: params.serialized,
   });
-  if (params.serialized !== undefined) {
-    SESSION_STORE_SERIALIZED_CACHE.set(params.storePath, params.serialized);
-  }
 }
