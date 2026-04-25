@@ -1,11 +1,24 @@
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import {
-  clearMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "../../../../src/plugins/memory-embedding-providers.js";
 import { createEmbeddingProvider } from "./embeddings.js";
+
+const mockEmbeddingRegistry = vi.hoisted(() => ({
+  adapters: [] as MemoryEmbeddingProviderAdapter[],
+}));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
+  DEFAULT_LOCAL_MODEL: "nomic-embed-text",
+  createLocalEmbeddingProvider: async () => {
+    throw new Error("local embedding provider is not used by these tests");
+  },
+  getMemoryEmbeddingProvider: (id: string) =>
+    mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id),
+  listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
+  listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
+  listRegisteredMemoryEmbeddingProviders: () =>
+    mockEmbeddingRegistry.adapters.map((adapter) => ({ adapter })),
+}));
 
 const missingBedrockCredentialsError = new Error(
   'No API key found for provider "bedrock". AWS credentials are not available.',
@@ -50,6 +63,17 @@ function createMissingCredentialsAdapter(
     },
     ...overrides,
   };
+}
+
+function clearMemoryEmbeddingProviders(): void {
+  mockEmbeddingRegistry.adapters = [];
+}
+
+function registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter): void {
+  mockEmbeddingRegistry.adapters = mockEmbeddingRegistry.adapters.filter(
+    (candidate) => candidate.id !== adapter.id,
+  );
+  mockEmbeddingRegistry.adapters.push(adapter);
 }
 
 describe("createEmbeddingProvider", () => {
