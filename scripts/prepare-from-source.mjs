@@ -108,12 +108,12 @@ try {
   // builds only what the CLI needs (tsdown + build-stamp).
   run("node scripts/build-all.mjs gitInstall");
 
-  // Clean up pnpm's workspace node_modules. After the build, dist/ has all
-  // compiled artifacts. When npm continues its lifecycle (pack → global install),
-  // leftover pnpm symlinks and hoisted packages confuse npm's bin-linking and
-  // dependency reconciliation (e.g. ENOENT chmod on transitive bin entries).
-  // npm will install production deps from scratch in the global location.
-  run("rm -rf node_modules");
+  // Note: do NOT rm -rf node_modules here. npm keeps internal references to
+  // node_modules/.bin PATH entries during the git-install lifecycle. Deleting
+  // the directory corrupts npm's child_process.spawn, causing ENOENT errors
+  // for all subsequent install scripts (sharp, koffi, etc.). The tarball
+  // produced by npm pack excludes node_modules by default, so leaving it
+  // has no effect on the published package size.
 } catch (err) {
   console.error("[prepare] build from source failed:", err.message);
   process.exit(1);

@@ -68,11 +68,14 @@ export async function setupGemmaCommand(
       runtime.log(`Smoke test passed. Response: "${verification.content}"`);
       runtime.log("");
       runtime.log("Setup complete! Your Gemma assistant is ready.");
-      runtime.log(`  API: ${result.handle.apiBaseUrl}/v1/chat/completions`);
       runtime.log(`  Model: ${result.modelId}`);
-      runtime.log(`  PID: ${result.handle.pid}`);
+      runtime.log(`  API: ${result.handle.apiBaseUrl}/v1/chat/completions`);
       runtime.log("");
-      runtime.log(`To stop it: kill ${result.handle.pid}`);
+      runtime.log("Next steps:");
+      runtime.log("  Chat in terminal:  gemmaclaw chat");
+      runtime.log("  Chat in browser:   gemmaclaw start, then open http://localhost:18789");
+      runtime.log("");
+      runtime.log(`Backend PID: ${result.handle.pid} (stop with: kill ${result.handle.pid})`);
     } else {
       runtime.error(`Smoke test failed: ${verification.error}`);
       runtime.error("The backend started but could not generate a response.");

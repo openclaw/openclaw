@@ -54,30 +54,39 @@ Phase 2 tooling is live: `gemmaclaw setup` auto-detects hardware and provisions 
 
 No pre-installed Ollama, llama.cpp, or gemma.cpp required. Gemmaclaw downloads and manages everything under `~/.gemmaclaw/`.
 
-### Quick setup (recommended)
+### Install
 
-Install the CLI globally, then run the setup wizard:
-
-```bash
-npm install -g github:gemmaclaw/gemmaclaw#main
-gemmaclaw setup
-```
-
-That's it. The setup command detects your hardware, picks the best backend, downloads the model, and runs a smoke test. When it finishes, your Gemma assistant is ready.
-
-### Developer install
-
-If you want to hack on Gemmaclaw itself, clone and build from source. You will need [pnpm](https://pnpm.io/installation) in addition to Node.js.
+Clone the repo, build, and install the CLI globally:
 
 ```bash
 git clone https://github.com/gemmaclaw/gemmaclaw.git
 cd gemmaclaw
-pnpm install
+corepack enable && pnpm install
 pnpm build
-gemmaclaw setup
+npm install -g .
 ```
 
-From a dev install you can also run commands directly via `node gemmaclaw.mjs <command>`.
+Then run the setup wizard and start chatting:
+
+```bash
+gemmaclaw setup
+gemmaclaw chat
+```
+
+`gemmaclaw setup` detects your hardware, picks the best backend, downloads the model, and runs a smoke test. `gemmaclaw chat` opens a terminal UI where you can talk to your Gemma assistant directly.
+
+### Developer install
+
+Same as above, but skip the global install and run commands directly:
+
+```bash
+git clone https://github.com/gemmaclaw/gemmaclaw.git
+cd gemmaclaw
+corepack enable && pnpm install
+pnpm build
+node gemmaclaw.mjs setup
+node gemmaclaw.mjs chat
+```
 
 Example output:
 
@@ -159,6 +168,12 @@ All managed runtimes and models are stored under `~/.gemmaclaw/` (override with 
 ```
 
 ### Running E2E tests in Docker
+
+Verify the install path works on a fresh machine:
+
+```bash
+docker build --no-cache -f test/e2e/Dockerfile.install .
+```
 
 To verify all backends work from a clean environment:
 
