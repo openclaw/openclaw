@@ -361,6 +361,7 @@ flowchart TD
     Common log signatures:
 
     - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
+    - `GatewayClientRequestError: unknown method: browser.request` plus a version mismatch like `Config was last written by a newer OpenClaw ... current version is ...` → the running Gateway process may be coming from an older OpenClaw build than the CLI currently on your PATH. On macOS, prefer restarting/updating the Gateway via the OpenClaw Mac app, or run `openclaw gateway install --force` (or `openclaw doctor`) to repair the install state, instead of editing startup files manually.
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
     - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme.

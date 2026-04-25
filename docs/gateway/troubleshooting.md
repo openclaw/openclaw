@@ -471,6 +471,7 @@ Common signatures:
 
 - `unknown command "browser"` or `unknown command 'browser'` → the bundled browser plugin is excluded by `plugins.allow`.
 - browser tool missing / unavailable while `browser.enabled=true` → `plugins.allow` excludes `browser`, so the plugin never loaded.
+- `GatewayClientRequestError: unknown method: browser.request` together with version mismatch output such as `Config was last written by a newer OpenClaw ... current version is ...` → the running Gateway process may be coming from an older OpenClaw install/version than the CLI you are invoking. On macOS, prefer restarting/updating the Gateway via the OpenClaw Mac app, or run `openclaw gateway install --force` (or `openclaw doctor`) to repair the install state, instead of editing startup files manually.
 - `Failed to start Chrome CDP on port` → browser process failed to launch.
 - `browser.executablePath not found` → configured path is invalid.
 - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
