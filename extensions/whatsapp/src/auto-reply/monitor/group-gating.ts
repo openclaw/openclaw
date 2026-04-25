@@ -41,6 +41,7 @@ type ApplyGroupGatingParams = {
   agentId: string;
   sessionKey: string;
   baseMentionConfig: MentionConfig;
+  providerMentionPatterns?: Parameters<typeof resolveMentionPatternsEnabled>[0]["providerPolicy"];
   authDir?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
@@ -136,6 +137,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     provider: "whatsapp",
     conversationId: params.conversationId,
     agentId: params.agentId,
+    providerPolicy: params.providerMentionPatterns,
   });
   const routeMentionConfig = buildMentionConfig(params.cfg, params.agentId);
   const mentionConfig = {

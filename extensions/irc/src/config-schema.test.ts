@@ -76,6 +76,16 @@ describe("irc config schema", () => {
     expect(parsed.groups?.["#ops"]?.allowFrom).toEqual([42, "alice"]);
   });
 
+  it("preserves legacy mentionPatterns arrays and accepts mentionPatternPolicy", () => {
+    const parsed = IrcConfigSchema.parse({
+      mentionPatterns: ["\\bopenclaw\\b"],
+      mentionPatternPolicy: { mode: "deny" },
+    });
+
+    expect(parsed.mentionPatterns).toEqual(["\\bopenclaw\\b"]);
+    expect(parsed.mentionPatternPolicy?.mode).toBe("deny");
+  });
+
   it("rejects nickserv register without registerEmail", () => {
     const issues = expectInvalidConfig(
       IrcConfigSchema.safeParse({

@@ -347,9 +347,9 @@ Replying to a bot message counts as an implicit mention when the channel support
     - `mentionPatterns` are case-insensitive safe regex pattern strings; write the regex body only (for example `scoo+b`, not `/scoo+b/`). Invalid patterns and unsafe nested-repetition forms are ignored.
     - Surfaces that provide explicit mentions still pass; patterns are a fallback.
     - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
-    - Providers can add a global mode such as `channels.discord.mentionPatternPolicy: "allow" | "deny"`.
+    - Providers can add a global mode such as `channels.discord.mentionPatterns.mode: "allow" | "deny"`.
     - Providers can add scoped overrides such as `channels.discord.mentionPatterns` with exact `allowIn` / `denyIn` conversation IDs. In `allow` mode, patterns are already enabled everywhere except `denyIn`; `allowIn` only opens specific conversations when the effective mode is `deny`. Native platform mentions still work when configured patterns are disabled.
-    - `allowIn` / `denyIn` IDs use the runtime conversation id for that surface. Group rooms/channels usually use group/channel/room ids. Direct-message conversations may use the peer/sender id instead (for example iMessage sender id, Signal sender peer id, Mattermost sender id), so prefer these scoped policies for group surfaces unless you know the channel's DM conversation id format.
+    - `allowIn` / `denyIn` IDs use the runtime conversation id for that surface. Group rooms/channels usually use group/channel/room ids. Direct-message conversations may use a peer-specific id instead (for example iMessage sender id, Signal sender peer id, Mattermost sender id, or the IRC bot nick for private messages), so prefer these scoped policies for group surfaces unless you know the channel's DM conversation id format.
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.

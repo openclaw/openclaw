@@ -160,6 +160,7 @@ export function resolveIMessageInboundDecision(params: {
     ) => boolean;
   };
   selfChatCache?: SelfChatCache;
+  providerMentionPatterns?: Parameters<typeof resolveMentionPatternsEnabled>[0]["providerPolicy"];
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
@@ -332,6 +333,7 @@ export function resolveIMessageInboundDecision(params: {
     provider: "imessage",
     conversationId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
     agentId: route.agentId,
+    providerPolicy: params.providerMentionPatterns,
   })
     ? buildMentionRegexes(params.cfg, route.agentId)
     : [];

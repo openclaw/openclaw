@@ -477,6 +477,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       accountUuid: accountInfo.config.accountUuid,
       accountId: accountInfo.accountId,
+      providerMentionPatterns: accountInfo.config.mentionPatterns,
       blockStreaming: accountInfo.config.blockStreaming,
       historyLimit,
       groupHistories,

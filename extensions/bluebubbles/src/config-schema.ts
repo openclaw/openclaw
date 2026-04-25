@@ -5,6 +5,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
@@ -109,6 +110,7 @@ const bluebubblesAccountSchema = z
      */
     replyContextApiFallback: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
+    mentionPatterns: MentionPatternsPolicySchema.optional(),
     coalesceSameSenderDms: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {

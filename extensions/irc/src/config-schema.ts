@@ -4,6 +4,7 @@ import {
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
+  MentionPatternsPolicySchema,
   buildChannelConfigSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -63,6 +64,7 @@ const IrcAccountSchemaBase = z
     groups: z.record(z.string(), IrcGroupSchema.optional()).optional(),
     channels: z.array(z.string()).optional(),
     mentionPatterns: z.array(z.string()).optional(),
+    mentionPatternPolicy: MentionPatternsPolicySchema.optional(),
     markdown: MarkdownConfigSchema,
     ...ReplyRuntimeConfigSchemaShape,
   })

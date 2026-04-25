@@ -2,6 +2,7 @@ import type {
   ChannelPreviewStreamingConfig,
   StreamingMode,
 } from "openclaw/plugin-sdk/channel-streaming";
+import type { MentionPatternsPolicyConfig } from "openclaw/plugin-sdk/config-types";
 import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
 import type { SecretInput } from "./secret-input.js";
 
@@ -43,6 +44,8 @@ export type MattermostAccountConfig = {
   oncharPrefixes?: string[];
   /** Require @mention to respond in channels. Default: true. */
   requireMention?: boolean;
+  /** Per-provider mention-pattern allow/deny policy for group/channel conversations. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Direct message policy (pairing/allowlist/open/disabled). */
   dmPolicy?: DmPolicy;
   /** Allowlist for direct messages (user ids or @usernames). */

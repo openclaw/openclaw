@@ -204,6 +204,43 @@ describe("resolveTelegramInboundBody", () => {
     });
   });
 
+  it("uses canonical group topic ids for mention pattern policy scopes", async () => {
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: {
+          telegram: {
+            mentionPatterns: {
+              allowIn: ["-1001234567893:topic:7"],
+            },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: ["\\bbot\\b"], mentionPatternsMode: "deny" } },
+      } as never,
+      msg: {
+        message_id: 12,
+        date: 1_700_000_012,
+        chat: { id: -1001234567893, type: "supergroup", title: "Test Group" },
+        from: { id: 46, first_name: "Eve" },
+        text: "hey bot",
+        message_thread_id: 7,
+        entities: [],
+      } as never,
+      isGroup: true,
+      chatId: -1001234567893,
+      resolvedThreadId: 7,
+      senderId: "46",
+      senderUsername: "",
+      effectiveGroupAllow: normalizeAllowFrom(["999"]),
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+    });
+
+    expect(result).toMatchObject({
+      rawBody: "hey bot",
+      effectiveWasMentioned: true,
+    });
+  });
+
   it("transcribes DM voice notes via preflight (not only groups)", async () => {
     transcribeFirstAudioMock.mockReset();
     transcribeFirstAudioMock.mockResolvedValueOnce("hello from a voice note");

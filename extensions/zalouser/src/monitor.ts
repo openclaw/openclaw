@@ -482,6 +482,7 @@ async function processMessage(
     provider: "zalouser",
     conversationId: chatId,
     agentId: route.agentId,
+    providerPolicy: account.config.mentionPatterns,
   })
     ? core.channel.mentions.buildMentionRegexes(config, route.agentId)
     : [];

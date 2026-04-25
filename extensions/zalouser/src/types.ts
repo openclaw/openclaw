@@ -1,4 +1,5 @@
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+import type { MentionPatternsPolicyConfig } from "openclaw/plugin-sdk/config-types";
 import type { Style } from "./zca-constants.js";
 
 export type ZcaFriend = {
@@ -105,6 +106,7 @@ type ZalouserSharedConfig = {
   historyLimit?: number;
   groupAllowFrom?: Array<string | number>;
   groupPolicy?: "open" | "allowlist" | "disabled";
+  mentionPatterns?: MentionPatternsPolicyConfig;
   groups?: Record<string, ZalouserGroupConfig>;
   messagePrefix?: string;
   responsePrefix?: string;

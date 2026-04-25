@@ -416,15 +416,6 @@ export const MentionPatternsPolicySchema = z
   })
   .strict();
 
-export const AgentGroupChatSchema = z
-  .object({
-    mentionPatterns: z.array(z.string()).optional(),
-    mentionPatternsMode: MentionPatternsModeSchema.optional(),
-    historyLimit: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
@@ -434,6 +425,8 @@ export const GroupChatSchema = z
   })
   .strict()
   .optional();
+
+export const AgentGroupChatSchema = GroupChatSchema;
 
 export const DmConfigSchema = z
   .object({

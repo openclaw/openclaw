@@ -9,7 +9,7 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channels.js";
-import type { DmConfig } from "./types.messages.js";
+import type { DmConfig, MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type IMessageAccountConfig = {
@@ -41,6 +41,8 @@ export type IMessageAccountConfig = {
   defaultTo?: string;
   /** Optional allowlist for group senders or chat_id targets. */
   groupAllowFrom?: Array<string | number>;
+  /** Per-provider mention-pattern allow/deny policy for group/channel conversations. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom; mention-gating applies

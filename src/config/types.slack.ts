@@ -10,7 +10,11 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channels.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type {
+  DmConfig,
+  MentionPatternsPolicyConfig,
+  ProviderCommandsConfig,
+} from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
@@ -171,6 +175,8 @@ export type SlackAccountConfig = {
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: SlackChannelStreamingConfig;
   mediaMaxMb?: number;
+  /** Scoped policy for configured mention regexes. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */

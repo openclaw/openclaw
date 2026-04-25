@@ -60,6 +60,7 @@ function makeGroupEvent(opts: GroupEventOpts) {
 function createMentionHandler(params: {
   requireMention: boolean;
   mentionPattern?: string;
+  providerMentionPatterns?: { mode?: "inherit" | "allow" | "deny" };
   historyLimit?: number;
   groupHistories?: ReturnType<typeof createBaseSignalEventHandlerDeps>["groupHistories"];
 }) {
@@ -69,6 +70,7 @@ function createMentionHandler(params: {
         requireMention: params.requireMention,
         mentionPattern: params.mentionPattern,
       }),
+      providerMentionPatterns: params.providerMentionPatterns,
       ...(typeof params.historyLimit === "number" ? { historyLimit: params.historyLimit } : {}),
       ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
     }),
@@ -124,6 +126,17 @@ describe("signal mention gating", () => {
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
     expect(capturedCtx).toBeTruthy();
     expect(getCapturedCtx()?.WasMentioned).toBe(true);
+  });
+
+  it("honors merged account mention-pattern policy", async () => {
+    const handler = createMentionHandler({
+      requireMention: false,
+      providerMentionPatterns: { mode: "deny" },
+    });
+
+    await handler(makeGroupEvent({ message: "hey @bot what's up" }));
+    expect(capturedCtx).toBeTruthy();
+    expect(getCapturedCtx()?.WasMentioned).toBe(false);
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {

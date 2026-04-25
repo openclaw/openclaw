@@ -449,6 +449,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       provider: "line",
       conversationId: peerId,
       agentId,
+      providerPolicy: account.config.mentionPatterns,
     })
       ? buildMentionRegexes(cfg, agentId)
       : [];

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
@@ -1506,7 +1507,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as OpenClawConfig,
         discordConfig: {
           mentionPatterns: {
             mode: "deny",

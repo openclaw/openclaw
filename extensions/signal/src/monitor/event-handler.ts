@@ -692,6 +692,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       provider: "signal",
       conversationId: groupId ?? senderPeerId,
       agentId: route.agentId,
+      providerPolicy: deps.providerMentionPatterns,
     })
       ? buildMentionRegexes(deps.cfg, route.agentId)
       : [];

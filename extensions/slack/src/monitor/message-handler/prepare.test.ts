@@ -1477,6 +1477,86 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeNull();
   });
 
+  it("honors Slack account-scoped mention pattern denial", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            groupPolicy: "open",
+            mentionPatterns: { mode: "allow" },
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all", mentionPatterns: { mode: "deny" } }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "Bill send a subagent to review GitHub issue #50621",
+        ts: "1777244692.409919",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeNull();
+  });
+
+  it("honors Slack account-scoped mention pattern allow lists", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            groupPolicy: "open",
+            mentionPatterns: { mode: "deny" },
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({
+        replyToMode: "all",
+        mentionPatterns: { mode: "deny", allowIn: ["C0AHZFCAS1K"] },
+      }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "Bill send a subagent to review GitHub issue #50621",
+        ts: "1777244692.409919",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+  });
+
   it("keeps a regex-mentioned Slack thread root and URL-only follow-up on one parent session", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";

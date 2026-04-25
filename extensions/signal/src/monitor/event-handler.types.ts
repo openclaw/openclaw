@@ -82,6 +82,9 @@ export type SignalEventHandlerDeps = {
   account?: string;
   accountUuid?: string;
   accountId: string;
+  providerMentionPatterns?: Parameters<
+    typeof import("openclaw/plugin-sdk/channel-inbound").resolveMentionPatternsEnabled
+  >[0]["providerPolicy"];
   blockStreaming?: boolean;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;

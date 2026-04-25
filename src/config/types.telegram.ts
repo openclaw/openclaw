@@ -12,7 +12,11 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channels.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type {
+  DmConfig,
+  MentionPatternsPolicyConfig,
+  ProviderCommandsConfig,
+} from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -141,6 +145,8 @@ export type TelegramAccountConfig = {
   contextVisibility?: ContextVisibilityMode;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Per-provider mention-pattern allow/deny policy for group/channel conversations. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
   /** Per-DM config overrides keyed by user ID. */

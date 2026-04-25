@@ -1,3 +1,4 @@
+import type { MentionPatternsPolicyConfig } from "openclaw/plugin-sdk/config-types";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -55,6 +56,8 @@ export type BlueBubblesAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Group message handling policy. */
   groupPolicy?: GroupPolicy;
+  /** Per-provider mention-pattern allow/deny policy for group/channel conversations. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Enrich unnamed group participants with local macOS Contacts names after gating. Default: true. */
   enrichGroupParticipantsFromContacts?: boolean;
   /** Max group messages to keep as history context (0 disables). */

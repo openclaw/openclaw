@@ -794,7 +794,7 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
 - **Text patterns**: Safe regex pattern strings in `agents.list[].groupChat.mentionPatterns`. Write the regex body only (for example `openclaw`, not `/openclaw/`). Invalid patterns and unsafe nested repetition are ignored.
 - `messages.groupChat.mentionPatternsMode` sets the global default for configured pattern matching (`allow` by default).
 - Provider overrides such as `channels.discord.mentionPatterns` can add exact conversation-id `allowIn` / `denyIn` scopes for configured pattern matching. In `allow` mode, patterns are already enabled everywhere except `denyIn`; `allowIn` only opens specific conversations when the effective mode is `deny`.
-- `allowIn` / `denyIn` IDs use the runtime conversation id for that surface. Group rooms/channels usually use group/channel/room ids. Direct-message conversations may use the peer/sender id instead (for example iMessage sender id, Signal sender peer id, Mattermost sender id).
+- `allowIn` / `denyIn` IDs use the runtime conversation id for that surface. Group rooms/channels usually use group/channel/room ids. Direct-message conversations may use a peer-specific id instead (for example iMessage sender id, Signal sender peer id, Mattermost sender id, or the IRC bot nick for private messages).
 - Native platform mentions and reply-to-bot implicit mentions are unchanged when configured pattern matching is disabled.
 - Mention gating is enforced only when detection is possible (native mentions or at least one pattern).
 

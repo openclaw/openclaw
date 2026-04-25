@@ -1,3 +1,4 @@
+import type { MentionPatternsPolicyConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   BlockStreamingCoalesceConfig,
   DmConfig,
@@ -54,6 +55,7 @@ export type IrcAccountConfig = {
   groups?: Record<string, IrcChannelConfig>;
   channels?: string[];
   mentionPatterns?: string[];
+  mentionPatternPolicy?: MentionPatternsPolicyConfig;
   markdown?: MarkdownConfig;
   historyLimit?: number;
   dmHistoryLimit?: number;

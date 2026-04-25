@@ -220,6 +220,7 @@ export async function handleNextcloudTalkInbound(params: {
     provider: CHANNEL_ID,
     conversationId: roomToken,
     agentId: route.agentId,
+    providerPolicy: account.config.mentionPatterns,
   })
     ? core.channel.mentions.buildMentionRegexes(config as OpenClawConfig, route.agentId)
     : [];

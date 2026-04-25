@@ -1,5 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+import type { MentionPatternsPolicyConfig } from "openclaw/plugin-sdk/config-types";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
@@ -26,6 +27,7 @@ interface LineAccountBaseConfig {
   groupAllowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
+  mentionPatterns?: MentionPatternsPolicyConfig;
   responsePrefix?: string;
   mediaMaxMb?: number;
   webhookPath?: string;

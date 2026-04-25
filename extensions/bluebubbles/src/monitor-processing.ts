@@ -1093,6 +1093,7 @@ async function processMessageAfterDedupe(
     provider: "bluebubbles",
     conversationId: peerId,
     agentId: route.agentId,
+    providerPolicy: account.config.mentionPatterns,
   })
     ? core.channel.mentions.buildMentionRegexes(config, route.agentId)
     : [];
