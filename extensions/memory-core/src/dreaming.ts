@@ -663,6 +663,12 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
 
 export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
   let resolveStartupCron: (() => CronServiceLike | null) | null = null;
+  // Hold a live reference to the gateway context so we can retry cron resolution at runtime.
+  // The startup capture may fail if the cron service isn't available yet (race condition in
+  // startGatewaySidecars — the startup event fires via setTimeout(250ms) before deps.cron is
+  // attached). By keeping the context, we can call getCron() again on later reconciliation
+  // attempts when the service is guaranteed to be ready.  Fixes #67362.
+  let gatewayContext: { getCron?: () => CronServiceLike | null } | null = null;
   let unavailableCronWarningEmitted = false;
   let lastRuntimeReconcileAtMs = 0;
   let lastRuntimeConfigKey: string | null = null;
@@ -708,25 +714,19 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       resolveStartupCron = params.startupCron ?? null;
     }
     let cron = resolveStartupCron?.() ?? null;
-    // Fallback: try to obtain cron service from plugin runtime when startup capture was null.
-    // This handles the case where the cron service wasn't available during gateway_start
-    // but becomes available later (e.g., after a delayed initialization or hot-reload).
-    if (!cron && params.reason === "runtime") {
+    // Runtime fallback: retry resolving the cron service from the gateway context.
+    // This handles the case where the cron service was not yet available during
+    // gateway_start (250ms deferred init race in startGatewaySidecars) but is
+    // available now.  Fixes #67362.
+    if (!cron && params.reason === "runtime" && gatewayContext) {
       try {
-        const runtimeAny = api.runtime as Record<string, unknown> | undefined;
-        if (runtimeAny && typeof runtimeAny === "object") {
-          const candidate = runtimeAny.cron ?? runtimeAny.getCron?.();
-          if (
-            candidate &&
-            typeof candidate === "object" &&
-            typeof (candidate as CronServiceLike).list === "function" &&
-            typeof (candidate as CronServiceLike).add === "function"
-          ) {
-            cron = candidate as CronServiceLike;
-          }
+        cron = resolveCronServiceFromGatewayContext(gatewayContext);
+        if (cron) {
+          // Refresh the startup capture so subsequent calls resolve immediately.
+          resolveStartupCron = () => cron;
         }
       } catch {
-        // Ignore errors from runtime access — fall through with cron = null
+        // Ignore — fall through with cron = null
       }
     }
     const configKey = runtimeConfigKey(config);
@@ -772,6 +772,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   };
 
   api.on("gateway_start", async (_event, ctx) => {
+    // Store the gateway context for runtime cron resolution retries.
+    gatewayContext = ctx as unknown as { getCron?: () => CronServiceLike | null };
     try {
       await reconcileManagedDreamingCron({
         reason: "startup",
