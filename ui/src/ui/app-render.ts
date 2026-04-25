@@ -135,11 +135,7 @@ import {
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { getPresetById, type ConfigPresetId } from "./views/config-presets.ts";
-import {
-  renderQuickSettings,
-  type QuickSettingsChannel,
-  type QuickSettingsApiKey,
-} from "./views/config-quick.ts";
+import { renderQuickSettings, type QuickSettingsChannel } from "./views/config-quick.ts";
 import { renderConfig, type ConfigProps } from "./views/config.ts";
 import {
   renderCronQuickCreate,
@@ -430,13 +426,6 @@ const KNOWN_CHANNEL_IDS = [
   { id: "imessage", label: "iMessage" },
 ] as const;
 
-const KNOWN_PROVIDER_KEYS = [
-  { provider: "anthropic", label: "Anthropic", envKey: "ANTHROPIC_API_KEY" },
-  { provider: "openai", label: "OpenAI", envKey: "OPENAI_API_KEY" },
-  { provider: "google", label: "Google", envKey: "GOOGLE_API_KEY" },
-  { provider: "openrouter", label: "OpenRouter", envKey: "OPENROUTER_API_KEY" },
-] as const;
-
 function formatQuickSettingsLabel(id: string): string {
   const trimmed = id.trim();
   if (!trimmed) {
@@ -481,20 +470,6 @@ function extractQuickSettingsChannels(state: AppViewState): QuickSettingsChannel
     });
   }
   return channels;
-}
-
-function extractQuickSettingsApiKeys(state: AppViewState): QuickSettingsApiKey[] {
-  const config = state.configForm ?? state.configSnapshot?.config;
-  const env = config && typeof config === "object" ? config.env : null;
-  const envObj = env && typeof env === "object" ? (env as Record<string, unknown>) : {};
-  const envVars =
-    envObj.vars && typeof envObj.vars === "object" ? (envObj.vars as Record<string, unknown>) : {};
-  return KNOWN_PROVIDER_KEYS.map(({ provider, label, envKey }) => {
-    const value = typeof envVars[envKey] === "string" ? envVars[envKey] : envObj[envKey];
-    const isSet = typeof value === "string" && value.trim().length > 0;
-    const masked = isSet ? `••••${value.slice(-4)}` : undefined;
-    return { provider, label, masked, isSet };
-  });
 }
 
 function extractMcpServerCount(state: AppViewState): number {
@@ -985,12 +960,6 @@ export function renderApp(state: AppViewState) {
             onChannelConfigure: () => {
               state.tab = "communications" as import("./navigation.ts").Tab;
               state.communicationsActiveSection = "channels";
-              requestHostUpdate?.();
-            },
-            apiKeys: extractQuickSettingsApiKeys(state),
-            onApiKeyChange: () => {
-              state.configSettingsMode = "advanced";
-              state.configActiveSection = "env";
               requestHostUpdate?.();
             },
             automation: {

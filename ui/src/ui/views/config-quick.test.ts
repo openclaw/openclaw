@@ -14,8 +14,6 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onFastModeToggle: vi.fn(),
     channels: [],
     onChannelConfigure: vi.fn(),
-    apiKeys: [],
-    onApiKeyChange: vi.fn(),
     automation: {
       cronJobCount: 0,
       skillCount: 0,
