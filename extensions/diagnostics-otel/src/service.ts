@@ -904,7 +904,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const genAiAttrs: Record<string, string> = {
           "gen_ai.operation.name": "chat",
           "gen_ai.provider.name": lowCardinalityAttr(evt.provider),
-          ...(evt.model ? { "gen_ai.request.model": lowCardinalityAttr(evt.model) } : {}),
+          "gen_ai.request.model": lowCardinalityAttr(evt.model),
         };
 
         const usage = evt.usage;
