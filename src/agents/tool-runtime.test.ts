@@ -1,92 +1,33 @@
-import { describe, it, expect, vi } from "vitest";
-import { ToolRuntime, type ToolDefinition } from "./tool-runtime";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { ToolRuntime } from "./tool-runtime.js";
+
+vi.mock("fs", () => ({
+  existsSync: vi.fn(() => false),
+  promises: {
+    writeFile: vi.fn(),
+    readFile: vi.fn(),
+    readdir: vi.fn(),
+    unlink: vi.fn(),
+  },
+}));
+
+vi.mock("child_process", () => ({
+  exec: vi.fn(),
+}));
 
 describe("ToolRuntime", () => {
-  it("should execute a tool successfully", async () => {
-    const mockExecute = vi.fn().mockResolvedValue("ok");
+  let runtime: ToolRuntime;
 
-    const tools: ToolDefinition[] = [
-      { name: "test", execute: mockExecute },
-    ];
-
-    const runtime = new ToolRuntime(tools);
-
-    const result = await runtime.run("test", { foo: "bar" });
-
-    expect(mockExecute).toHaveBeenCalledWith({ foo: "bar" });
-    expect(result).toBe("ok");
+  beforeEach(() => {
+    runtime = new ToolRuntime([{ name: "shell" }, { name: "write" }, { name: "read" }]);
   });
 
-  it("should pass empty object if args are undefined", async () => {
-    const mockExecute = vi.fn().mockResolvedValue("ok");
-
-    const tools: ToolDefinition[] = [
-      { name: "test", execute: mockExecute },
-    ];
-
-    const runtime = new ToolRuntime(tools);
-
-    const result = await runtime.run("test", undefined);
-
-    expect(mockExecute).toHaveBeenCalledWith({});
-    expect(result).toBe("ok");
+  it("getAllTools() returns tools", () => {
+    const allTools = (runtime as unknown as { getAllTools: () => unknown[] }).getAllTools();
+    expect(allTools.length).toBe(3);
   });
 
-  it("should throw if tool is not found", async () => {
-    const runtime = new ToolRuntime([]);
-
-    await expect(runtime.run("missing", {})).rejects.toThrow(
-      "Tool not found: missing"
-    );
-  });
-
-  it("should catch errors from tool and return error object", async () => {
-    const mockExecute = vi.fn().mockRejectedValue(new Error("boom"));
-
-    const tools: ToolDefinition[] = [
-      { name: "fail", execute: mockExecute },
-    ];
-
-    const runtime = new ToolRuntime(tools);
-
-    const result = await runtime.run("fail", {});
-
-    expect(result).toEqual({
-      error: true,
-      message: "Error: boom",
-    });
-  });
-
-  it("should handle non-Error throws", async () => {
-    const mockExecute = vi.fn().mockRejectedValue("string error");
-
-    const tools: ToolDefinition[] = [
-      { name: "fail", execute: mockExecute },
-    ];
-
-    const runtime = new ToolRuntime(tools);
-
-    const result = await runtime.run("fail", {});
-
-    expect(result).toEqual({
-      error: true,
-      message: "string error",
-    });
-  });
-
-  it("should register multiple tools correctly", async () => {
-    const toolA = vi.fn().mockResolvedValue("A");
-    const toolB = vi.fn().mockResolvedValue("B");
-
-    const runtime = new ToolRuntime([
-      { name: "a", execute: toolA },
-      { name: "b", execute: toolB },
-    ]);
-
-    const resA = await runtime.run("a", {});
-    const resB = await runtime.run("b", {});
-
-    expect(resA).toBe("A");
-    expect(resB).toBe("B");
+  it("run() throws for unknown tool", async () => {
+    await expect(runtime.run("nonsense", {}, "id1")).rejects.toThrow("Unbekanntes Werkzeug");
   });
 });

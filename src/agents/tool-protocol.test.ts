@@ -1,9 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import {
-  normalizeContextMessages,
-  buildOpenAITools,
-  safeJsonParse,
-} from "./tool-protocol";
+import { describe, it, expect } from "vitest";
+import { normalizeContextMessages, buildOpenAITools, safeJsonParse } from "./tool-protocol.js";
 
 describe("normalizeContextMessages", () => {
   it("should convert toolResult to tool message", () => {
@@ -15,7 +11,7 @@ describe("normalizeContextMessages", () => {
       },
     ];
 
-    const result = normalizeContextMessages(input);
+    const result = normalizeContextMessages(input) as Array<Record<string, unknown>>;
 
     expect(result[0]).toEqual({
       role: "tool",
@@ -32,7 +28,7 @@ describe("normalizeContextMessages", () => {
       },
     ];
 
-    const result = normalizeContextMessages(input);
+    const result = normalizeContextMessages(input) as Array<Record<string, unknown>>;
 
     expect(result[0].role).toBe("tool");
     expect(result[0].tool_call_id).toMatch(/^tool_/);
@@ -48,7 +44,7 @@ describe("normalizeContextMessages", () => {
       },
     ];
 
-    const result = normalizeContextMessages(input);
+    const result = normalizeContextMessages(input) as Array<Record<string, unknown>>;
 
     expect(result[0]).toEqual({
       role: "assistant",
@@ -65,7 +61,7 @@ describe("normalizeContextMessages", () => {
       },
     ];
 
-    const result = normalizeContextMessages(input);
+    const result = normalizeContextMessages(input) as Array<Record<string, unknown>>;
 
     expect(result[0].tool_calls).toEqual([{ id: "1" }]);
   });
@@ -81,7 +77,7 @@ describe("normalizeContextMessages", () => {
       },
     ];
 
-    const result = normalizeContextMessages(input);
+    const result = normalizeContextMessages(input) as Array<Record<string, unknown>>;
 
     expect(result[0]).toEqual({
       role: "user",
@@ -100,7 +96,7 @@ describe("normalizeContextMessages", () => {
       },
     ];
 
-    const result = normalizeContextMessages(input);
+    const result = normalizeContextMessages(input) as Array<Record<string, unknown>>;
 
     expect(result[0].content).toBe("\nok");
   });
@@ -113,7 +109,7 @@ describe("normalizeContextMessages", () => {
       },
     ];
 
-    const result = normalizeContextMessages(input);
+    const result = normalizeContextMessages(input) as Array<Record<string, unknown>>;
 
     expect(result[0]).toEqual({
       role: "user",

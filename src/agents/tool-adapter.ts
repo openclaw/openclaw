@@ -1,12 +1,19 @@
 // src/agents/tool-adapter.ts
 
-import type { AnyAgentTool } from "../plugins/tools.js";
+// AnyAgentTool ist nicht mehr aus ../plugins/tools.js exportiert,
+// daher lokal definieren, um die Abhängigkeit zu entkoppeln.
+type AnyAgentTool = {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  execute: (...args: unknown[]) => Promise<unknown>;
+};
 
 export interface ToolDefinition {
   name: string;
   description?: string;
-  parameters?: any;
-  execute: (args: any) => Promise<any>;
+  parameters?: Record<string, unknown>;
+  execute: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
 /**
@@ -19,13 +26,13 @@ export function adaptTool(tool: AnyAgentTool): ToolDefinition {
     description: tool.description,
     parameters: tool.parameters,
 
-    async execute(args: any): Promise<any> {
+    async execute(args: Record<string, unknown>): Promise<unknown> {
       try {
         const result = await tool.execute(
-          "toolcall",   // toolCallId (dummy)
+          "toolcall", // toolCallId (dummy)
           args,
-          undefined,    // AbortSignal
-          undefined     // onUpdate
+          undefined, // AbortSignal
+          undefined, // onUpdate
         );
 
         // 🔑 WICHTIG: normalize output → verhindert Hallucinationen
@@ -45,10 +52,9 @@ export function adaptTool(tool: AnyAgentTool): ToolDefinition {
 
         // fallback (letzter Ausweg)
         return JSON.stringify(result, null, 2);
-
-      } catch (err: any) {
-        return `Tool execution failed: ${err?.message || err}`;
+      } catch (err: unknown) {
+        return `Tool execution failed: ${(err as Error)?.message || String(err)}`;
       }
-    }
+    },
   };
 }

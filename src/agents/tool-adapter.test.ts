@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { adaptTool } from "./tool-adapter";
+import { adaptTool } from "./tool-adapter.js";
 
 describe("adaptTool", () => {
   // ✅ Basis: execute wird erzeugt
@@ -9,7 +9,7 @@ describe("adaptTool", () => {
       description: "desc",
       parameters: {},
       execute: vi.fn(async () => "ok"),
-    } as any;
+    };
 
     const adapted = adaptTool(tool);
 
@@ -24,18 +24,13 @@ describe("adaptTool", () => {
     const tool = {
       name: "test",
       execute: mockExecute,
-    } as any;
+    };
 
     const adapted = adaptTool(tool);
 
     await adapted.execute({ foo: 1 });
 
-    expect(mockExecute).toHaveBeenCalledWith(
-      "toolcall",
-      { foo: 1 },
-      undefined,
-      undefined
-    );
+    expect(mockExecute).toHaveBeenCalledWith("toolcall", { foo: 1 }, undefined, undefined);
   });
 
   // ✅ STRING passthrough
@@ -43,7 +38,7 @@ describe("adaptTool", () => {
     const tool = {
       name: "test",
       execute: vi.fn(async () => "hello"),
-    } as any;
+    };
 
     const adapted = adaptTool(tool);
 
@@ -59,7 +54,7 @@ describe("adaptTool", () => {
       execute: vi.fn(async () => ({
         content: "from-content",
       })),
-    } as any;
+    };
 
     const adapted = adaptTool(tool);
 
@@ -75,7 +70,7 @@ describe("adaptTool", () => {
       execute: vi.fn(async () => ({
         output: "from-output",
       })),
-    } as any;
+    };
 
     const adapted = adaptTool(tool);
 
@@ -91,7 +86,7 @@ describe("adaptTool", () => {
       execute: vi.fn(async () => ({
         foo: "bar",
       })),
-    } as any;
+    };
 
     const adapted = adaptTool(tool);
 
@@ -107,7 +102,7 @@ describe("adaptTool", () => {
       execute: vi.fn(async () => {
         throw new Error("boom");
       }),
-    } as any;
+    };
 
     const adapted = adaptTool(tool);
 

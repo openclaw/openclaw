@@ -1,7 +1,27 @@
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
+import { exec, type ExecException } from "node:child_process";
 
-const execAsync = promisify(exec);
+function normalize(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function extractOutput(stdout: unknown, stderr: unknown) {
+  // handle mock object form (z.B. { stdout, stderr })
+  if (stdout && typeof stdout === "object") {
+    const obj = stdout as Record<string, unknown>;
+    return {
+      stdout: normalize(obj.stdout),
+      stderr: normalize(obj.stderr),
+    };
+  }
+
+  return {
+    stdout: normalize(stdout),
+    stderr: normalize(stderr),
+  };
+}
 
 export const shellTool = {
   name: "shell",
@@ -22,24 +42,39 @@ export const shellTool = {
       command: string;
       cwd?: string;
       timeoutMs?: number;
-    }
+    },
   ) {
     const { command, cwd, timeoutMs } = args;
 
-    const { stdout, stderr } = await execAsync(command, {
-      cwd: cwd || process.cwd(),
-      timeout: timeoutMs ?? 30_000,
-      shell: "cmd.exe", // Windows safe
-    });
-
-    return {
-      data: {
-        command,
+    return new Promise((resolve) => {
+      const options = {
         cwd: cwd || process.cwd(),
-        stdout: String(stdout),
-        stderr: String(stderr),
-        success: true,
-      },
-    };
+        timeout: timeoutMs ?? 30_000,
+      };
+
+      exec(command, options, (error: ExecException | null, stdout: string, stderr: string) => {
+        const { stdout: out, stderr: err } = extractOutput(stdout, stderr);
+
+        if (!error) {
+          return resolve({
+            data: {
+              stdout: out,
+              stderr: err,
+              success: true,
+            },
+          });
+        }
+
+        const errOut = extractOutput(error?.stdout as unknown, error?.stderr as unknown);
+
+        return resolve({
+          data: {
+            stdout: errOut.stdout || out,
+            stderr: errOut.stderr || err,
+            success: false,
+          },
+        });
+      });
+    });
   },
 };

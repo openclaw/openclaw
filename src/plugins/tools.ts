@@ -1,7 +1,7 @@
-import { shellTool } from "../tools/system/shell.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { shellTool } from "../tools/system/shell.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -73,14 +73,14 @@ export function resolvePluginTools(params: {
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
-  const existingNormalized = new Set(
-    Array.from(existing, (tool) => normalizeToolName(tool))
-  );
+  const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const blockedPlugins = new Set<string>();
 
   for (const entry of registry.tools) {
-    if (blockedPlugins.has(entry.pluginId)) {continue;}
+    if (blockedPlugins.has(entry.pluginId)) {
+      continue;
+    }
 
     const pluginIdKey = normalizeToolName(entry.pluginId);
 
@@ -110,7 +110,9 @@ export function resolvePluginTools(params: {
       continue;
     }
 
-    if (!resolved) {continue;}
+    if (!resolved) {
+      continue;
+    }
 
     const listRaw = Array.isArray(resolved) ? resolved : [resolved];
 
@@ -120,11 +122,13 @@ export function resolvePluginTools(params: {
             toolName: tool.name,
             pluginId: entry.pluginId,
             allowlist,
-          })
+          }),
         )
       : listRaw;
 
-    if (list.length === 0) {continue;}
+    if (list.length === 0) {
+      continue;
+    }
 
     const nameSet = new Set<string>();
 
