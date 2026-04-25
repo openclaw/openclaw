@@ -250,6 +250,14 @@ vi.mock("node:fs/promises", async () => {
       }
       throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
     }),
+    readFile: vi.fn(async (p: string) => {
+      const key = p;
+      const data = state.files.get(key);
+      if (data !== undefined) {
+        return data;
+      }
+      throw new Error(`ENOENT: no such file or directory, open '${key}'`);
+    }),
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
     }),
@@ -494,7 +502,6 @@ describe("launchd install", () => {
     const plistPath = resolveLaunchAgentPlistPath(env);
     state.serviceLoaded = false;
     state.kickstartError = "Could not find service";
-    state.kickstartCode = 113;
     state.kickstartFailuresRemaining = 1;
     state.files.set(
       plistPath,
