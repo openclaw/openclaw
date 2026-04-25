@@ -8,13 +8,24 @@ import {
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-helpers.js";
+import {
+  pendingDelegateCount,
+  stagedPostCompactionDelegateCount,
+} from "../auto-reply/continuation-delegate-store.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { resolveContinuationRuntimeConfig } from "../auto-reply/reply/continuation-runtime.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -265,6 +276,24 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
     });
   }
+  let continuationLine: string | undefined;
+  const continuation = cfg.agents?.defaults?.continuation;
+  if (continuation?.enabled && sessionKey) {
+    const chainCount = sessionEntry?.continuationChainCount ?? 0;
+    const { maxChainLength } = resolveContinuationRuntimeConfig(cfg);
+    const pending = pendingDelegateCount(sessionKey);
+    const staged = stagedPostCompactionDelegateCount(sessionKey);
+    const volitional = getVolitionalCompactionCount(sessionKey);
+    const parts = [`chain ${chainCount}/${maxChainLength}`];
+    if (pending > 0) {
+      parts.push(`${pending} delegates pending`);
+    }
+    if (staged > 0) {
+      parts.push(`${staged} post-compaction staged`);
+    }
+    parts.push(`volitional: ${volitional}`);
+    continuationLine = `🔄 Continuation: ${parts.join(" | ")}`;
+  }
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
@@ -339,6 +368,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     },
     subagentsLine,
     taskLine,
+    continuationLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });

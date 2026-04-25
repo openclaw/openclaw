@@ -167,7 +167,6 @@ function updateSessionStoreWriteCaches(params: {
     store: params.store,
     mtimeMs: fileStat?.mtimeMs,
     sizeBytes: fileStat?.sizeBytes,
-    serialized: params.serialized,
   });
 }
 

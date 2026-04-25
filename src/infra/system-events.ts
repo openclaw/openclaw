@@ -184,6 +184,39 @@ export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }
 
+/**
+ * Remove system events matching a predicate without draining the entire queue.
+ * Returns the removed events; non-matching events stay queued.
+ */
+export function removeSystemEvents(
+  sessionKey: string,
+  predicate: (event: SystemEvent) => boolean,
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = queues.get(key);
+  if (!entry || entry.queue.length === 0) {
+    return [];
+  }
+  const removed: SystemEvent[] = [];
+  entry.queue = entry.queue.filter((event) => {
+    if (predicate(event)) {
+      removed.push(event);
+      return false;
+    }
+    return true;
+  });
+  if (entry.queue.length === 0) {
+    queues.delete(key);
+  } else if (removed.length > 0) {
+    // Reset dedup state to reflect actual queue contents — prevents stale
+    // lastText from silently dropping future events that match removed text.
+    const last = entry.queue[entry.queue.length - 1];
+    entry.lastText = last.text;
+    entry.lastContextKey = last.contextKey ?? null;
+  }
+  return removed;
+}
+
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
   return getSessionQueue(sessionKey)?.queue.map(cloneSystemEvent) ?? [];
 }

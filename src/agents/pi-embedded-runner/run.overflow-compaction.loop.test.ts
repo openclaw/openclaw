@@ -91,11 +91,40 @@ describe("overflow compaction in run loop", () => {
         "context overflow detected (attempt 1/3); attempting auto-compaction",
       ),
     );
+    // Regression guard (#61 / #289): overflow compaction must also emit a
+    // [context-pressure:fire] anchor so operators grepping for mid-turn
+    // pressure triggers (trigger F, per RFC §4.1) find the in-turn event
+    // that bypasses the pre-run checkContextPressure() path.
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[context-pressure:fire] mid-turn trigger=overflow"),
+    );
     expect(mockedLog.info).toHaveBeenCalledWith(
       expect.stringContaining("auto-compaction succeeded"),
     );
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("emits [context-pressure:event-skipped] when sessionKey is missing on overflow path", async () => {
+    // Same overflow trigger as the first test but with empty sessionKey — the
+    // enqueueSystemEvent gate should skip and leave a breadcrumb.
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+
+    await runEmbeddedPiAgent({ ...baseParams, sessionKey: "" });
+
+    // The mid-turn [context-pressure:fire] anchor still emits (it uses
+    // sessionKey ?? sessionId as a display value, not as a gate).
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[context-pressure:fire] mid-turn trigger=overflow"),
+    );
+    // But the system-event enqueue was skipped → breadcrumb emitted.
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[context-pressure:event-skipped]"),
+    );
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("trigger=overflow"));
   });
 
   it("retries after successful compaction on likely-overflow promptError variants", async () => {

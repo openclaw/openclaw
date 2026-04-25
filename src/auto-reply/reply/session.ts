@@ -22,7 +22,11 @@ import {
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  updateSessionStore,
+} from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -746,12 +750,22 @@ export async function initSessionState(params: {
     sessionEntry.contextTokens = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
-  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  {
+    const resolved = resolveSessionStoreEntry({ store: sessionStore, sessionKey });
+    sessionStore[resolved.normalizedKey] = { ...resolved.existing, ...sessionEntry };
+    for (const legacyKey of resolved.legacyKeys) {
+      delete sessionStore[legacyKey];
+    }
+  }
   await updateSessionStore(
     storePath,
     (store) => {
+      const resolved = resolveSessionStoreEntry({ store, sessionKey });
       // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      store[resolved.normalizedKey] = { ...resolved.existing, ...sessionEntry };
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
       if (retiredLegacyMainDelivery) {
         store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
       }

@@ -7,6 +7,7 @@ import {
 } from "../../agents/model-selection-shared.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStoreEntry, updateSessionStore } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -99,15 +100,15 @@ function applySelectionToSession(params: {
   }
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
-    void import("../../config/sessions.js")
-      .then(({ updateSessionStore }) =>
-        updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        }),
-      )
-      .catch(() => {
-        // Ignore persistence errors; session still proceeds.
-      });
+    updateSessionStore(storePath, (store) => {
+      const resolved = resolveSessionStoreEntry({ store, sessionKey });
+      store[resolved.normalizedKey] = sessionEntry;
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
+    }).catch(() => {
+      // Ignore persistence errors; session still proceeds.
+    });
   }
 }
 

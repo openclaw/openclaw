@@ -65,6 +65,7 @@ vi.mock("../agents/pi-embedded.runtime.js", () => ({
 }));
 
 vi.mock("./reply/agent-runner.runtime.js", () => ({
+  clearDelegatePending: vi.fn(),
   runReplyAgent: async (params: {
     commandBody: string;
     followupRun: {

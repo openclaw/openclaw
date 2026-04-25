@@ -603,6 +603,8 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: entry.spawnMode,
         expectsCompletionMessage: entry.expectsCompletionMessage,
         wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+        silentAnnounce: entry.silentAnnounce,
+        wakeOnReturn: entry.wakeOnReturn,
       })
       .then((didAnnounce) => {
         finalizeAnnounceCleanup(didAnnounce);

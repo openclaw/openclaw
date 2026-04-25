@@ -595,6 +595,7 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let cleanupbundlemcponrunend: Bool?
+    public let continuationtrigger: String?
     public let extrasystemprompt: String?
     public let bootstrapcontextmode: AnyCodable?
     public let bootstrapcontextrunkind: AnyCodable?
@@ -602,6 +603,7 @@ public struct AgentParams: Codable, Sendable {
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
+    public let drainscontinuationdelegatequeue: Bool?
 
     public init(
         message: String,
@@ -627,13 +629,15 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         cleanupbundlemcponrunend: Bool?,
+        continuationtrigger: String?,
         extrasystemprompt: String?,
         bootstrapcontextmode: AnyCodable?,
         bootstrapcontextrunkind: AnyCodable?,
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
-        label: String?)
+        label: String?,
+        drainscontinuationdelegatequeue: Bool?)
     {
         self.message = message
         self.agentid = agentid
@@ -658,6 +662,7 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.cleanupbundlemcponrunend = cleanupbundlemcponrunend
+        self.continuationtrigger = continuationtrigger
         self.extrasystemprompt = extrasystemprompt
         self.bootstrapcontextmode = bootstrapcontextmode
         self.bootstrapcontextrunkind = bootstrapcontextrunkind
@@ -665,6 +670,7 @@ public struct AgentParams: Codable, Sendable {
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
+        self.drainscontinuationdelegatequeue = drainscontinuationdelegatequeue
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -691,6 +697,7 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case cleanupbundlemcponrunend = "cleanupBundleMcpOnRunEnd"
+        case continuationtrigger = "continuationTrigger"
         case extrasystemprompt = "extraSystemPrompt"
         case bootstrapcontextmode = "bootstrapContextMode"
         case bootstrapcontextrunkind = "bootstrapContextRunKind"
@@ -698,6 +705,7 @@ public struct AgentParams: Codable, Sendable {
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label
+        case drainscontinuationdelegatequeue = "drainsContinuationDelegateQueue"
     }
 }
 

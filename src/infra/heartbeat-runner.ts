@@ -1067,6 +1067,14 @@ export async function runHeartbeatOnce(opts: {
       typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    // Map heartbeat wake reason to structured continuation trigger.
+    // "continuation" = CONTINUE_WORK timer fired; "silent-wake-enrichment" = delegate returned.
+    const continuationTrigger =
+      opts.reason === "continuation"
+        ? ("work-wake" as const)
+        : opts.reason === "silent-wake-enrichment"
+          ? ("delegate-return" as const)
+          : undefined;
     const replyOpts = {
       isHeartbeat: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
@@ -1074,6 +1082,7 @@ export async function runHeartbeatOnce(opts: {
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,
       bootstrapContextMode,
+      continuationTrigger,
     };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;

@@ -358,6 +358,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupChannel?: string;
       groupSpace?: string;
       lane?: string;
+      continuationTrigger?: "work-wake" | "delegate-return";
+      /** When true, the run drains the continuation delegate queue after completion.
+       *  Set by continuation delegate spawns so sub-agents can use the continue_delegate tool. */
+      drainsContinuationDelegateQueue?: boolean;
       extraSystemPrompt?: string;
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
@@ -995,6 +999,8 @@ export const agentHandlers: GatewayRequestHandlers = {
           runId,
           lane: request.lane,
           cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
+          continuationTrigger: request.continuationTrigger,
+          drainsContinuationDelegateQueue: request.drainsContinuationDelegateQueue,
           extraSystemPrompt: request.extraSystemPrompt,
           bootstrapContextMode: request.bootstrapContextMode,
           bootstrapContextRunKind: request.bootstrapContextRunKind,

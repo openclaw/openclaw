@@ -330,6 +330,17 @@ export function createOpenClawCodingTools(options?: {
   hasRepliedRef?: { value: boolean };
   /** Allow plugin tools for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /** Callback for continue_work to request a post-turn continuation. */
+  continueWorkOpts?: {
+    requestContinuation: (
+      request: import("./tools/continue-work-tool.js").ContinueWorkRequest,
+    ) => void;
+  };
+  /** Closures for request_compaction tool (Trigger E). */
+  requestCompactionOpts?: {
+    getContextUsage: () => number;
+    triggerCompaction: () => Promise<{ ok: boolean; compacted: boolean; reason?: string }>;
+  };
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
@@ -632,6 +643,8 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       onYield: options?.onYield,
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+      continueWorkOpts: options?.continueWorkOpts,
+      requestCompactionOpts: options?.requestCompactionOpts,
     }),
   ];
   const toolsForMemoryFlush =

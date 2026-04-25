@@ -143,6 +143,7 @@ import type { EmbeddedPiCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 export type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
+export type { CompactionMessageMetrics } from "./compact.types.js";
 
 function hasRealConversationContent(
   msg: AgentMessage,
@@ -775,6 +776,7 @@ export async function compactEmbeddedPiSessionDirect(
           config: params.config,
           workspaceDir: effectiveWorkspace,
           context: {
+            systemPrompt: builtSystemPrompt,
             config: params.config,
             agentDir,
             workspaceDir: effectiveWorkspace,
@@ -784,7 +786,6 @@ export async function compactEmbeddedPiSessionDirect(
             runtimeChannel,
             runtimeCapabilities,
             agentId: sessionAgentId,
-            systemPrompt: builtSystemPrompt,
           },
         }),
       );
