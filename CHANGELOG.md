@@ -80,6 +80,9 @@ Docs: https://docs.openclaw.ai
 - Agents/Bedrock: prevent empty assistant stream-error turns from poisoning
   Converse replay by persisting, repairing, and replaying a non-empty fallback
   block. Fixes #71572. (#71627) Thanks @openperf.
+- Agents/Anthropic/Bedrock: preserve stripped thinking-only assistant replay
+  turns with non-empty omitted-reasoning text so provider adapters keep strict
+  user/assistant turn shape. Thanks @wujiaming88.
 - Browser/CDP: make readiness diagnostics use the same discovery-first fallback as reachability for bare `ws://` Browserless and Browserbase CDP URLs. Fixes #69532.
 - Browser/CDP: explain that loopback Browserless or other externally managed CDP services need `attachOnly: true` and matching Browserless `EXTERNAL` endpoint when reporting local port ownership conflicts, and fall back to the configured bare WebSocket root when a discovered Browserless endpoint rejects CDP. Fixes #49815.
 - Gateway/reload: preserve indefinite `gateway.reload.deferralTimeoutMs: 0` semantics for channel hot reload deferrals so active agent runs are not interrupted by a forced channel restart. (#71637) Thanks @Poo-Squirry.
