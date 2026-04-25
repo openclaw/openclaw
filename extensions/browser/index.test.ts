@@ -118,6 +118,17 @@ describe("browser plugin", () => {
     });
   });
 
+  it("registers browser.request as an admin gateway method", () => {
+    const { api, registerGatewayMethod } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(registerGatewayMethod).toHaveBeenCalledWith(
+      "browser.request",
+      runtimeApiMocks.handleBrowserGatewayRequest,
+      { scope: "operator.admin" },
+    );
+  });
+
   it("declares setup auto-enable reasons for browser config surfaces", () => {
     const probe = registerBrowserAutoEnableProbe();
 
