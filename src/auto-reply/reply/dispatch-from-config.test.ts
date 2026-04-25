@@ -3236,6 +3236,63 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("poisons inbound dedupe when error fires after a reply was emitted (#69303)", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550125",
+      To: "whatsapp:+15555550125",
+      AccountId: "default",
+      MessageSid: "msg-poison-after-emit",
+      SessionKey: "agent:main:whatsapp:direct:+15555550125",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+    });
+    // First call emits a block reply (externally visible) and then throws —
+    // the catch path should poison rather than release. Second call is set
+    // up only to prove the retry never reaches the resolver.
+    const replyResolver = vi
+      .fn<
+        (_ctx: MsgContext, _opts?: GetReplyOptions, _cfg?: OpenClawConfig) => Promise<ReplyPayload>
+      >()
+      .mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "partial" });
+        throw new Error("post-dispatch failure");
+      })
+      .mockResolvedValueOnce({ text: "retry should be skipped" });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      }),
+    ).rejects.toThrow("post-dispatch failure");
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    // Retry must be skipped at the inbound entrypoint — replay would surface
+    // a duplicate visible message and re-run any associated turn-state side
+    // effects.
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        outcome: "skipped",
+        reason: "duplicate",
+      }),
+    );
+  });
+
   it("passes configOverride to replyResolver when provided", async () => {
     setNoAbort();
     const cfg = emptyConfig;

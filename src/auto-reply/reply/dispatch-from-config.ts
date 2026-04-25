@@ -480,6 +480,15 @@ export async function dispatchReplyFromConfig(
     });
   };
 
+  // Tracks whether ANY externally-visible dispatch has fired in this turn —
+  // final reply, TTS-only reply, plugin binding notice, fast-abort reply,
+  // tool result delivery, or block reply. Read by the catch path below to
+  // choose between releaseInboundDedupe (safe-retry on transient pre-dispatch
+  // failure) and poisonInboundDedupe (block replay once anything has gone
+  // out). Set by the dispatch closures defined below and the inline reply /
+  // TTS-only sites in the main try-block. See #69303.
+  let outboundReplyDispatched = false;
+
   /**
    * Helper to send a payload via route-reply (async).
    * Only used when actually routing to a different provider.
@@ -506,6 +515,9 @@ export async function dispatchReplyFromConfig(
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
+    if (result?.ok) {
+      outboundReplyDispatched = true;
+    }
   };
 
   const sendBindingNotice = async (
@@ -519,11 +531,17 @@ export async function dispatchReplyFromConfig(
           `dispatch-from-config: route-reply (plugin binding notice) failed: ${result.error ?? "unknown error"}`,
         );
       }
+      if (result.ok) {
+        outboundReplyDispatched = true;
+      }
       return result.ok;
     }
-    return mode === "additive"
-      ? dispatcher.sendToolResult(payload)
-      : dispatcher.sendFinalReply(payload);
+    const queued =
+      mode === "additive" ? dispatcher.sendToolResult(payload) : dispatcher.sendFinalReply(payload);
+    if (queued) {
+      outboundReplyDispatched = true;
+    }
+    return queued;
   };
 
   const pluginOwnedBindingRecord =
@@ -676,12 +694,6 @@ export async function dispatchReplyFromConfig(
 
   markProcessing();
 
-  // Tracks whether an outbound reply has been dispatched in this turn. Used by
-  // the catch path below to choose between releaseInboundDedupe (safe-retry on
-  // transient pre-dispatch failure) and poisonInboundDedupe (block replay once
-  // any externally-visible reply has gone out). See #69303.
-  let outboundReplyDispatched = false;
-
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -703,6 +715,7 @@ export async function dispatchReplyFromConfig(
           queuedFinal = result.ok;
           if (result.ok) {
             routedFinalCount += 1;
+            outboundReplyDispatched = true;
           }
           if (!result.ok) {
             logVerbose(
@@ -711,6 +724,9 @@ export async function dispatchReplyFromConfig(
           }
         } else {
           queuedFinal = dispatcher.sendFinalReply(payload);
+          if (queuedFinal) {
+            outboundReplyDispatched = true;
+          }
         }
       } else {
         logVerbose(
@@ -1038,6 +1054,7 @@ export async function dispatchReplyFromConfig(
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
               dispatcher.sendToolResult(deliveryPayload);
+              outboundReplyDispatched = true;
             }
           };
           return run();
@@ -1121,6 +1138,7 @@ export async function dispatchReplyFromConfig(
               await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
             } else {
               dispatcher.sendBlockReply(normalizedPayload);
+              outboundReplyDispatched = true;
             }
           };
           return run();
