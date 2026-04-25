@@ -15,6 +15,7 @@ import {
   decorateOpenClawProfile,
   diagnoseChromeCdp,
   ensureProfileCleanExit,
+  findChromeExecutableLinux,
   findChromeExecutableMac,
   findChromeExecutableWindows,
   formatChromeCdpDiagnostic,
@@ -292,6 +293,38 @@ describe("browser chrome helpers", () => {
   it("returns null when no Chrome candidate exists", () => {
     const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     expect(findChromeExecutableMac()).toBeNull();
+    exists.mockRestore();
+  });
+
+  it("finds common Linux Chromium package paths", () => {
+    for (const target of [
+      "/usr/lib/chromium/chromium",
+      "/usr/lib/chromium-browser/chromium-browser",
+    ]) {
+      const exists = mockExistsSync((pathValue) => pathValue === target);
+      const exe = findChromeExecutableLinux();
+      expect(exe).toEqual({ kind: "chromium", path: target });
+      exists.mockRestore();
+    }
+  });
+
+  it("finds common Linux /opt Chrome and Brave paths", () => {
+    const cases = [
+      { kind: "chrome", path: "/opt/google/chrome/chrome" },
+      { kind: "brave", path: "/opt/brave.com/brave/brave-browser" },
+    ] as const;
+
+    for (const candidate of cases) {
+      const exists = mockExistsSync((pathValue) => pathValue === candidate.path);
+      const exe = findChromeExecutableLinux();
+      expect(exe).toEqual(candidate);
+      exists.mockRestore();
+    }
+  });
+
+  it("returns null when no Chrome candidate exists on Linux", () => {
+    const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    expect(findChromeExecutableLinux()).toBeNull();
     exists.mockRestore();
   });
 
@@ -663,6 +696,17 @@ describe("chrome executables", () => {
     expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
       kind: "canary",
       path: "/usr/bin/google-chrome-unstable",
+    });
+  });
+
+  it("finds Linux Google Chrome under /opt", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return String(candidate) === "/opt/google/chrome/chrome";
+    });
+
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "chrome",
+      path: "/opt/google/chrome/chrome",
     });
   });
 });
