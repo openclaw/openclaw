@@ -64,6 +64,9 @@ Docs: https://docs.openclaw.ai
 - CLI/gateway: keep diagnostic probes from creating first-time read-only device
   pairings, while still reusing cached device tokens for detailed read probes.
   Fixes #71766. Thanks @SunboZ.
+- CLI/plugins: keep `message` startup, `channels logs`, `agents delete`, and
+  `agents set-identity` off broad plugin preloading; message delivery still
+  loads plugins when the action actually runs.
 - CLI/agents: keep `agents bind`, `agents unbind`, and `agents bindings` on
   setup-safe channel metadata paths so they do not preload bundled plugin
   runtimes or stage runtime dependencies. Fixes #71743.
