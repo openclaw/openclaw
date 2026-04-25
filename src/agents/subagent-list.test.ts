@@ -179,23 +179,53 @@ describe("isActiveSubagentRun orphan cutoff (#71252)", () => {
     expect(isActiveSubagentRun(entry, noPendingChildren)).toBe(true);
   });
 
+  it("short-circuits fresh runs without calling pendingDescendantCount", () => {
+    const entry = makeEntry({ sessionStartedAt: Date.now() - 60_000 });
+    let calls = 0;
+    const counter = () => {
+      calls += 1;
+      return 0;
+    };
+    expect(isActiveSubagentRun(entry, counter)).toBe(true);
+    expect(calls).toBe(0);
+  });
+
   it("returns false for an orphan run older than the 2h cutoff", () => {
     const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1_000;
     const entry = makeEntry({ sessionStartedAt: threeHoursAgo });
     expect(isActiveSubagentRun(entry, noPendingChildren)).toBe(false);
   });
 
-  it("keeps an old run active when pending descendants remain", () => {
+  it("keeps an old unended run active when pending descendants remain", () => {
     const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1_000;
     const entry = makeEntry({ sessionStartedAt: threeHoursAgo });
     expect(isActiveSubagentRun(entry, () => 1)).toBe(true);
   });
 
-  it("returns false when endedAt is set regardless of age", () => {
+  it("returns false for an ended run with no pending descendants", () => {
     const entry = makeEntry({
       sessionStartedAt: Date.now() - 60_000,
       endedAt: Date.now(),
     });
     expect(isActiveSubagentRun(entry, noPendingChildren)).toBe(false);
+  });
+
+  it("keeps an ended run active while descendants are still settling", () => {
+    const entry = makeEntry({
+      sessionStartedAt: Date.now() - 60_000,
+      endedAt: Date.now(),
+    });
+    expect(isActiveSubagentRun(entry, () => 1)).toBe(true);
+  });
+
+  it("treats createdAt-only entries with no sessionStartedAt/startedAt as orphan after cutoff", () => {
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1_000;
+    const entry = makeEntry({ createdAt: threeHoursAgo });
+    expect(isActiveSubagentRun(entry, noPendingChildren)).toBe(false);
+  });
+
+  it("keeps createdAt-only fresh entries active", () => {
+    const entry = makeEntry({ createdAt: Date.now() - 60_000 });
+    expect(isActiveSubagentRun(entry, noPendingChildren)).toBe(true);
   });
 });

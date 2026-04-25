@@ -141,19 +141,25 @@ export function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
 ) {
-  if (pendingDescendantCount(entry.childSessionKey) > 0) {
+  // Ended runs only stay "active" while descendants are still settling —
+  // only traverse the descendant graph when we actually need that signal.
+  if (entry.endedAt) {
+    return pendingDescendantCount(entry.childSessionKey) > 0;
+  }
+  // Fresh in-flight runs short-circuit before any descendant lookup so
+  // list/status calls don't pay the traversal cost for the common case.
+  const startedAt = getSubagentSessionStartedAt(entry);
+  if (
+    typeof startedAt !== "number" ||
+    startedAt <= 0 ||
+    Date.now() - startedAt <= SUBAGENT_ORPHAN_CUTOFF_MS
+  ) {
     return true;
   }
-  if (entry.endedAt) {
-    return false;
-  }
-  const startedAt = getSubagentSessionStartedAt(entry);
-  if (typeof startedAt === "number" && startedAt > 0) {
-    if (Date.now() - startedAt > SUBAGENT_ORPHAN_CUTOFF_MS) {
-      return false;
-    }
-  }
-  return true;
+  // Past the cutoff with no endedAt: likely an orphan, but still keep it
+  // active while descendants are pending (an outer run that is waiting on
+  // in-flight children should not collapse).
+  return pendingDescendantCount(entry.childSessionKey) > 0;
 }
 
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
