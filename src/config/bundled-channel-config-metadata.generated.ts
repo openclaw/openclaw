@@ -12673,6 +12673,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           ],
         },
         replyToModeByChatType: {
+          default: {
+            direct: "off",
+            group: "all",
+          },
           type: "object",
           properties: {
             direct: {
@@ -13760,6 +13764,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 ],
               },
               replyToModeByChatType: {
+                default: {
+                  direct: "off",
+                  group: "all",
+                },
                 type: "object",
                 properties: {
                   direct: {
@@ -14624,7 +14632,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 ],
               },
             },
-            required: ["dmPolicy", "groupPolicy"],
+            required: ["dmPolicy", "replyToModeByChatType", "groupPolicy"],
             additionalProperties: false,
           },
         },
@@ -14632,7 +14640,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
         },
       },
-      required: ["dmPolicy", "groupPolicy"],
+      required: ["dmPolicy", "replyToModeByChatType", "groupPolicy"],
       additionalProperties: false,
     },
     uiHints: {
