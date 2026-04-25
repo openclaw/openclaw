@@ -35,6 +35,42 @@ export type GoogleMeetBrowserCreateResult = {
   source: "browser";
 };
 
+export type GoogleMeetBrowserManualAction = {
+  source: "browser";
+  error: string;
+  manualActionRequired: true;
+  manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+  manualActionMessage: string;
+  browser: {
+    nodeId: string;
+    targetId?: string;
+    browserUrl?: string;
+    browserTitle?: string;
+    notes?: string[];
+  };
+};
+
+export class GoogleMeetBrowserManualActionError extends Error {
+  readonly payload: GoogleMeetBrowserManualAction;
+
+  constructor(payload: Omit<GoogleMeetBrowserManualAction, "source" | "error">) {
+    const prefix = payload.manualActionReason ? `${payload.manualActionReason}: ` : "";
+    super(`${prefix}${payload.manualActionMessage}`);
+    this.name = "GoogleMeetBrowserManualActionError";
+    this.payload = {
+      source: "browser",
+      error: this.message,
+      ...payload,
+    };
+  }
+}
+
+export function isGoogleMeetBrowserManualActionError(
+  error: unknown,
+): error is GoogleMeetBrowserManualActionError {
+  return error instanceof GoogleMeetBrowserManualActionError;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -298,10 +334,18 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         };
       }
       if (result.manualAction) {
-        if (result.manualActionReason) {
-          throw new Error(`${result.manualActionReason}: ${result.manualAction}`);
-        }
-        throw new Error(result.manualAction);
+        throw new GoogleMeetBrowserManualActionError({
+          manualActionRequired: true,
+          manualActionReason: result.manualActionReason,
+          manualActionMessage: result.manualAction,
+          browser: {
+            nodeId,
+            targetId,
+            browserUrl: result.browserUrl,
+            browserTitle: result.browserTitle,
+            notes: [...notes],
+          },
+        });
       }
       await sleep(result.retryAfterMs ?? GOOGLE_MEET_BROWSER_POLL_MS);
     } catch (error) {

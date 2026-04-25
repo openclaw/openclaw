@@ -512,6 +512,30 @@ Example JSON output from the browser fallback:
 }
 ```
 
+If the browser fallback hits Google login or a Meet permission blocker before it
+can create the URL, the Gateway method returns a failed response and the
+`google_meet` tool returns structured details instead of a plain string:
+
+```json
+{
+  "source": "browser",
+  "error": "google-login-required: Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+  "manualActionRequired": true,
+  "manualActionReason": "google-login-required",
+  "manualActionMessage": "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+  "browser": {
+    "nodeId": "ba0f4e4bc...",
+    "targetId": "tab-1",
+    "browserUrl": "https://accounts.google.com/signin",
+    "browserTitle": "Sign in - Google Accounts"
+  }
+}
+```
+
+When an agent sees `manualActionRequired: true`, it should report the
+`manualActionMessage` plus the browser node/tab context and stop opening new
+Meet tabs until the operator completes the browser step.
+
 Example JSON output from API create:
 
 ```json
@@ -888,6 +912,10 @@ to the pinned Chrome node browser. Confirm:
 - For browser fallback: retries reuse an existing `https://meet.google.com/new`
   or Google account prompt tab before opening a new tab. If an agent times out,
   retry the tool call rather than manually opening another Meet tab.
+- For browser fallback: if the tool returns `manualActionRequired: true`, use
+  the returned `browser.nodeId`, `browser.targetId`, `browserUrl`, and
+  `manualActionMessage` to guide the operator. Do not retry in a loop until that
+  action is complete.
 - For browser fallback: if Meet shows "Do you want people to hear you in the
   meeting?", leave the tab open. OpenClaw should click **Use microphone** or, for
   create-only fallback, **Continue without microphone** through browser

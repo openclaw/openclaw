@@ -19,6 +19,7 @@ import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./src/meet
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
+import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
 
 const googleMeetConfigSchema = {
   parse(value: unknown) {
@@ -250,8 +251,11 @@ export default definePluginEntry({
       return runtime;
     };
 
+    const formatGatewayError = (err: unknown) =>
+      isGoogleMeetBrowserManualActionError(err) ? err.payload : { error: formatErrorMessage(err) };
+
     const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
-      respond(false, { error: formatErrorMessage(err) });
+      respond(false, formatGatewayError(err));
     };
 
     api.registerGatewayMethod(
@@ -485,7 +489,7 @@ export default definePluginEntry({
               throw new Error("unknown google_meet action");
           }
         } catch (err) {
-          return json({ error: formatErrorMessage(err) });
+          return json(formatGatewayError(err));
         }
       },
     });

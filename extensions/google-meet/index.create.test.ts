@@ -197,6 +197,80 @@ describe("google-meet create flow", () => {
     );
   });
 
+  it("reports structured manual action when browser creation needs Google login", async () => {
+    const { methods } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        nodesInvokeHandler: async (params) => {
+          const proxy = params.params as { path?: string; body?: { url?: string } };
+          if (proxy.path === "/tabs") {
+            return { payload: { result: { tabs: [] } } };
+          }
+          if (proxy.path === "/tabs/open") {
+            return {
+              payload: {
+                result: {
+                  targetId: "login-tab",
+                  title: "New Tab",
+                  url: proxy.body?.url,
+                },
+              },
+            };
+          }
+          if (proxy.path === "/act") {
+            return {
+              payload: {
+                result: {
+                  ok: true,
+                  targetId: "login-tab",
+                  result: {
+                    manualActionReason: "google-login-required",
+                    manualAction:
+                      "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+                    browserUrl: "https://accounts.google.com/signin",
+                    browserTitle: "Sign in - Google Accounts",
+                    notes: ["Sign-in page detected."],
+                  },
+                },
+              },
+            };
+          }
+          throw new Error(`unexpected browser proxy path ${proxy.path}`);
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.create") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: {}, respond });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      source: "browser",
+      error:
+        "google-login-required: Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+      manualActionRequired: true,
+      manualActionReason: "google-login-required",
+      manualActionMessage:
+        "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+      browser: {
+        nodeId: "node-1",
+        targetId: "login-tab",
+        browserUrl: "https://accounts.google.com/signin",
+        browserTitle: "Sign in - Google Accounts",
+        notes: ["Sign-in page detected."],
+      },
+    });
+  });
+
   it("creates and joins a Meet through the create tool action by default", async () => {
     const { tools, nodesInvoke } = setup(
       {
@@ -290,6 +364,71 @@ describe("google-meet create flow", () => {
         }),
       }),
     );
+  });
+
+  it("returns structured manual action from the create tool action", async () => {
+    const { tools } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        nodesInvokeHandler: async (params) => {
+          const proxy = params.params as { path?: string; body?: { url?: string } };
+          if (proxy.path === "/tabs") {
+            return { payload: { result: { tabs: [] } } };
+          }
+          if (proxy.path === "/tabs/open") {
+            return {
+              payload: {
+                result: {
+                  targetId: "permission-tab",
+                  title: "Meet",
+                  url: proxy.body?.url,
+                },
+              },
+            };
+          }
+          if (proxy.path === "/act") {
+            return {
+              payload: {
+                result: {
+                  ok: true,
+                  targetId: "permission-tab",
+                  result: {
+                    manualActionReason: "meet-permission-required",
+                    manualAction:
+                      "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+                    browserUrl: "https://meet.google.com/new",
+                    browserTitle: "Meet",
+                  },
+                },
+              },
+            };
+          }
+          throw new Error(`unexpected browser proxy path ${proxy.path}`);
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: Record<string, unknown> }>;
+    };
+
+    const result = await tool.execute("id", { action: "create" });
+
+    expect(result.details).toMatchObject({
+      source: "browser",
+      manualActionRequired: true,
+      manualActionReason: "meet-permission-required",
+      manualActionMessage:
+        "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+      browser: {
+        nodeId: "node-1",
+        targetId: "permission-tab",
+        browserUrl: "https://meet.google.com/new",
+        browserTitle: "Meet",
+      },
+    });
   });
 
   it("reuses an existing browser create tab instead of opening duplicates", async () => {
