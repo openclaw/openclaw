@@ -1,8 +1,10 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { googleApiError } from "./google-api-errors.js";
 
 const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
+const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
 
 type GoogleCalendarEventDate = {
   date?: string;
@@ -40,6 +42,15 @@ export type GoogleMeetCalendarLookupResult = {
   calendarId: string;
   event: GoogleMeetCalendarEvent;
   meetingUri: string;
+};
+
+export type GoogleMeetCalendarEventsResult = {
+  calendarId: string;
+  events: Array<{
+    event: GoogleMeetCalendarEvent;
+    meetingUri: string;
+    selected: boolean;
+  }>;
 };
 
 function appendQuery(url: string, query: Record<string, string | number | boolean | undefined>) {
@@ -133,7 +144,7 @@ function chooseBestMeetCalendarEvent(
     .toSorted((left, right) => rankCalendarEvent(left, nowMs) - rankCalendarEvent(right, nowMs))[0];
 }
 
-export async function findGoogleMeetCalendarEvent(params: {
+async function fetchGoogleCalendarEvents(params: {
   accessToken: string;
   calendarId?: string;
   eventQuery?: string;
@@ -141,7 +152,7 @@ export async function findGoogleMeetCalendarEvent(params: {
   timeMax?: string;
   maxResults?: number;
   now?: Date;
-}): Promise<GoogleMeetCalendarLookupResult> {
+}): Promise<{ calendarId: string; events: GoogleMeetCalendarEvent[]; now: Date }> {
   const calendarId = params.calendarId?.trim() || "primary";
   const now = params.now ?? new Date();
   const defaultTimeMax = new Date(now);
@@ -171,25 +182,62 @@ export async function findGoogleMeetCalendarEvent(params: {
   try {
     if (!response.ok) {
       const detail = await response.text();
-      throw new Error(`Google Calendar events.list failed (${response.status}): ${detail}`);
+      throw await googleApiError({
+        response,
+        detail,
+        prefix: "Google Calendar events.list",
+        scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
+      });
     }
     const payload = (await response.json()) as { items?: unknown };
     if (payload.items !== undefined && !Array.isArray(payload.items)) {
       throw new Error("Google Calendar events.list response had non-array items");
     }
-    const event = chooseBestMeetCalendarEvent(
-      (payload.items ?? []) as GoogleMeetCalendarEvent[],
-      now,
-    );
-    if (!event) {
-      throw new Error("No Google Calendar event with a Google Meet link matched the query");
-    }
-    const meetingUri = extractGoogleMeetUriFromCalendarEvent(event);
-    if (!meetingUri) {
-      throw new Error("Matched Google Calendar event did not include a Google Meet link");
-    }
-    return { calendarId, event, meetingUri };
+    return { calendarId, events: (payload.items ?? []) as GoogleMeetCalendarEvent[], now };
   } finally {
     await release();
   }
+}
+
+export async function listGoogleMeetCalendarEvents(params: {
+  accessToken: string;
+  calendarId?: string;
+  eventQuery?: string;
+  timeMin?: string;
+  timeMax?: string;
+  maxResults?: number;
+  now?: Date;
+}): Promise<GoogleMeetCalendarEventsResult> {
+  const { calendarId, events, now } = await fetchGoogleCalendarEvents(params);
+  const best = chooseBestMeetCalendarEvent(events, now);
+  return {
+    calendarId,
+    events: events
+      .map((event) => {
+        const meetingUri = extractGoogleMeetUriFromCalendarEvent(event);
+        return meetingUri ? { event, meetingUri, selected: event === best } : undefined;
+      })
+      .filter((event): event is GoogleMeetCalendarEventsResult["events"][number] => Boolean(event)),
+  };
+}
+
+export async function findGoogleMeetCalendarEvent(params: {
+  accessToken: string;
+  calendarId?: string;
+  eventQuery?: string;
+  timeMin?: string;
+  timeMax?: string;
+  maxResults?: number;
+  now?: Date;
+}): Promise<GoogleMeetCalendarLookupResult> {
+  const result = await listGoogleMeetCalendarEvents(params);
+  const selected = result.events.find((event) => event.selected) ?? result.events[0];
+  if (!selected) {
+    throw new Error("No Google Calendar event with a Google Meet link matched the query");
+  }
+  return {
+    calendarId: result.calendarId,
+    event: selected.event,
+    meetingUri: selected.meetingUri,
+  };
 }

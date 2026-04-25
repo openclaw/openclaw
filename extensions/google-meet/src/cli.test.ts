@@ -166,6 +166,18 @@ function stubMeetArtifactsApi() {
           ],
         });
       }
+      if (url.pathname === "/drive/v3/files/doc-1/export") {
+        return new Response("Transcript document body.", {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
+      if (url.pathname === "/drive/v3/files/notes-1/export") {
+        return new Response("Smart note document body.", {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
       return new Response("not found", { status: 404 });
     }),
   );
@@ -354,6 +366,31 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("prints calendar event previews", async () => {
+    stubMeetArtifactsApi();
+    const stdout = captureStdout();
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "calendar-events",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--today",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain("meet events: 1");
+      expect(stdout.output()).toContain("* Project sync");
+      expect(stdout.output()).toContain("https://meet.google.com/abc-defg-hij");
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("prints markdown artifact and attendance output", async () => {
     stubMeetArtifactsApi();
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));
@@ -459,6 +496,8 @@ describe("google-meet CLI", () => {
           String(Date.now() + 120_000),
           "--conference-record",
           "rec-1",
+          "--include-doc-bodies",
+          "--zip",
           "--output",
           tempDir,
         ],
@@ -474,12 +513,18 @@ describe("google-meet CLI", () => {
       expect(readFileSync(path.join(tempDir, "transcript.md"), "utf8")).toContain(
         "Hello from the transcript.",
       );
+      expect(readFileSync(path.join(tempDir, "transcript.md"), "utf8")).toContain(
+        "Transcript document body.",
+      );
       expect(JSON.parse(readFileSync(path.join(tempDir, "artifacts.json"), "utf8"))).toMatchObject({
         conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
+        artifacts: [{ transcripts: [{ documentText: "Transcript document body." }] }],
       });
+      expect(readFileSync(`${tempDir}.zip`).subarray(0, 4).toString("hex")).toBe("504b0304");
     } finally {
       stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
+      rmSync(`${tempDir}.zip`, { force: true });
     }
   });
 
