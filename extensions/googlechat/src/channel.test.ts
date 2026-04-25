@@ -693,3 +693,56 @@ describe("googlechatPlugin security", () => {
     );
   });
 });
+
+
+describe("googlechatPlugin threading replyToMode off", () => {
+  it("resolves replyToMode 'off' from channel config", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          replyToMode: "off",
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = googlechatThreadingAdapter.scopedAccountReplyToMode.resolveAccount(
+      cfg,
+      "default",
+    );
+
+    expect(
+      googlechatThreadingAdapter.scopedAccountReplyToMode.resolveReplyToMode(account),
+    ).toBe("off");
+  });
+
+  it("resolves replyToMode 'off' per-account override", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          replyToMode: "all",
+          accounts: {
+            dm: {
+              replyToMode: "off",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const dmAccount = googlechatThreadingAdapter.scopedAccountReplyToMode.resolveAccount(
+      cfg,
+      "dm",
+    );
+    const defaultAccount = googlechatThreadingAdapter.scopedAccountReplyToMode.resolveAccount(
+      cfg,
+      "default",
+    );
+
+    expect(
+      googlechatThreadingAdapter.scopedAccountReplyToMode.resolveReplyToMode(dmAccount),
+    ).toBe("off");
+    expect(
+      googlechatThreadingAdapter.scopedAccountReplyToMode.resolveReplyToMode(defaultAccount),
+    ).toBe("all");
+  });
+});
