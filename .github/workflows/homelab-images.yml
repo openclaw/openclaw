@@ -299,18 +299,36 @@ jobs:
           auth_header="Authorization: Bearer ${APP_TOKEN}"
           accept_header='Accept: application/vnd.github+json'
           pr_number='${{ steps.create-pr.outputs.pr_number }}'
-          pr_json="$(curl --fail --silent --show-error \
-            -H "${auth_header}" \
-            -H "${accept_header}" \
-            "https://api.github.com/repos/${HOMELAB_REPO}/pulls/${pr_number}")"
-          mergeable_state="$(printf '%s' "${pr_json}" | jq -r '.mergeable_state // "unknown"')"
-          draft="$(printf '%s' "${pr_json}" | jq -r '.draft')"
-          if [ "${draft}" = "true" ]; then
-            echo "Homelab PR #${pr_number} is draft; refusing to merge automatically." >&2
-            exit 1
-          fi
+          pr_json=''
+          mergeable_state='unknown'
+          draft='false'
+          mergeable='null'
+          for attempt in $(seq 1 12); do
+            pr_json="$(curl --fail --silent --show-error \
+              -H "${auth_header}" \
+              -H "${accept_header}" \
+              "https://api.github.com/repos/${HOMELAB_REPO}/pulls/${pr_number}")"
+            mergeable_state="$(printf '%s' "${pr_json}" | jq -r '.mergeable_state // "unknown"')"
+            draft="$(printf '%s' "${pr_json}" | jq -r '.draft')"
+            mergeable="$(printf '%s' "${pr_json}" | jq -r 'if .mergeable == null then "null" else (.mergeable | tostring) end')"
+            if [ "${draft}" = "true" ]; then
+              echo "Homelab PR #${pr_number} is draft; refusing to merge automatically." >&2
+              exit 1
+            fi
+            if [ "${mergeable_state}" = "clean" ] || [ "${mergeable_state}" = "unstable" ] || [ "${mergeable_state}" = "has_hooks" ]; then
+              break
+            fi
+            if [ "${mergeable_state}" != "unknown" ] && [ "${mergeable_state}" != "blocked" ] && [ "${mergeable_state}" != "behind" ]; then
+              echo "Homelab PR #${pr_number} is not merge-ready (mergeable_state=${mergeable_state})." >&2
+              printf '%s\n' "${pr_json}" | jq '{number, state, draft, mergeable, mergeable_state}' >&2
+              exit 1
+            fi
+            if [ "${attempt}" -lt 12 ]; then
+              sleep 5
+            fi
+          done
           if [ "${mergeable_state}" != "clean" ] && [ "${mergeable_state}" != "unstable" ] && [ "${mergeable_state}" != "has_hooks" ]; then
-            echo "Homelab PR #${pr_number} is not merge-ready (mergeable_state=${mergeable_state})." >&2
+            echo "Timed out waiting for homelab PR #${pr_number} to become merge-ready (mergeable_state=${mergeable_state}, mergeable=${mergeable})." >&2
             printf '%s\n' "${pr_json}" | jq '{number, state, draft, mergeable, mergeable_state}' >&2
             exit 1
           fi
