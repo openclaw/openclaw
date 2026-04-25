@@ -325,6 +325,7 @@ function isExternalizedBundledPluginEnabled(params: {
         origin: "bundled",
         config: normalized,
         rootConfig: params.config,
+        enabledByDefault: params.bridge.enabledByDefault,
       }).enabled
     ) {
       return true;

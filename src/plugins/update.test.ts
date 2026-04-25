@@ -1063,6 +1063,46 @@ describe("syncPluginsForUpdateChannel", () => {
     });
   });
 
+  it("externalizes bundled plugins that were enabled by default", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "default-chat",
+        targetDir: "/tmp/openclaw-plugins/default-chat",
+        version: "2.0.0",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "default-chat",
+          enabledByDefault: true,
+          npmSpec: "@openclaw/default-chat",
+          channelIds: ["default-chat"],
+        },
+      ],
+      config: {},
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/default-chat",
+        mode: "update",
+        expectedPluginId: "default-chat",
+      }),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.summary.switchedToNpm).toEqual(["default-chat"]);
+    expect(result.config.plugins?.installs?.["default-chat"]).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/default-chat",
+      installPath: "/tmp/openclaw-plugins/default-chat",
+      version: "2.0.0",
+    });
+  });
+
   it("does not externalize disabled bundled plugins", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
 
