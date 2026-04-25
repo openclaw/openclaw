@@ -311,6 +311,13 @@ describe("resolvePluginProviders", () => {
       resolveManifestContractPluginIds: (...args: Parameters<ResolveManifestContractPluginIds>) =>
         resolveManifestContractPluginIdsMock(...args),
     }));
+    vi.doMock("./installed-plugin-index-store.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
+      return {
+        ...actual,
+        readPersistedInstalledPluginIndexSync: () => null,
+      };
+    });
     ({
       resolveActivatableProviderOwnerPluginIds,
       resolveOwningPluginIdsForProvider,
