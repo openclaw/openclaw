@@ -30,13 +30,14 @@ describe("telegram custom commands schema", () => {
     }
   });
 
-  it("defaults dm/group policy", () => {
+  it("defaults dm/group policy and chat-type reply mode", () => {
     const res = TelegramConfigSchema.safeParse({});
 
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.dmPolicy).toBe("pairing");
       expect(res.data.groupPolicy).toBe("allowlist");
+      expect(res.data.replyToModeByChatType).toEqual({ direct: "off", group: "all" });
     }
   });
 

@@ -48,6 +48,12 @@ export const handlePluginCommand: CommandHandler = async (
     from: command.from,
     to: command.to,
     accountId: params.ctx.AccountId ?? undefined,
+    messageId:
+      normalizeOptionalString(params.ctx.MessageSidFull) ??
+      normalizeOptionalString(params.ctx.MessageSid),
+    replyToMessageId:
+      normalizeOptionalString(params.ctx.ReplyToIdFull) ??
+      normalizeOptionalString(params.ctx.ReplyToId),
     messageThreadId:
       typeof params.ctx.MessageThreadId === "string" ||
       typeof params.ctx.MessageThreadId === "number"

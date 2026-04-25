@@ -17,18 +17,14 @@ export function parseReplyDirectives(
   raw: string,
   options: { currentMessageId?: string; silentToken?: string } = {},
 ): ReplyDirectiveParseResult {
-  const split = splitMediaFromOutput(raw);
-  let text = split.text ?? "";
-
-  const replyParsed = parseInlineDirectives(text, {
+  const replyParsed = parseInlineDirectives(raw, {
     currentMessageId: options.currentMessageId,
     stripAudioTag: false,
     stripReplyTags: true,
   });
 
-  if (replyParsed.hasReplyTag) {
-    text = replyParsed.text;
-  }
+  const split = splitMediaFromOutput(replyParsed.hasReplyTag ? replyParsed.text : raw);
+  let text = split.text ?? "";
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyPayloadText(text, silentToken);

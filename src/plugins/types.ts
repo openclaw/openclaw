@@ -1713,6 +1713,10 @@ export type PluginCommandContext = {
   to?: string;
   /** Account id for multi-account channels */
   accountId?: string;
+  /** Provider message id for the triggering command turn when available. */
+  messageId?: string;
+  /** Provider reply target id for the triggering command turn when available. */
+  replyToMessageId?: string;
   /** Thread/topic id if available */
   messageThreadId?: string | number;
   /** Parent conversation id for thread-capable channels */

@@ -129,11 +129,14 @@ type PreparedOutboundPayloadPlanEntry = {
 
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
+  options: { currentMessageId?: string } = {},
 ): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "");
+  const parsed = parseReplyDirectives(payload.text ?? "", {
+    currentMessageId: options.currentMessageId,
+  });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
   const mergedMedia = mergeMediaUrls(
@@ -158,7 +161,7 @@ function createOutboundPayloadPlanEntry(
     mediaUrl: resolvedMediaUrl,
     replyToId: payload.replyToId ?? parsed.replyToId,
     replyToTag: payload.replyToTag || parsed.replyToTag,
-    replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
+    replyToCurrent: payload.replyToCurrent ?? parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
   };
   if (!isRenderablePayload(normalizedPayload) && !isSilent) {
@@ -176,7 +179,7 @@ function createOutboundPayloadPlanEntry(
 
 export function createOutboundPayloadPlan(
   payloads: readonly ReplyPayload[],
-  context: OutboundPayloadPlanContext = {},
+  context: OutboundPayloadPlanContext & { currentMessageId?: string } = {},
 ): OutboundPayloadPlan[] {
   // Intentionally scoped to channel-agnostic normalization and projection inputs.
   // Transport concerns (queueing, hooks, retries), channel transforms, and
@@ -191,7 +194,9 @@ export function createOutboundPayloadPlan(
     context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: PreparedOutboundPayloadPlanEntry[] = [];
   for (const payload of payloads) {
-    const entry = createOutboundPayloadPlanEntry(payload);
+    const entry = createOutboundPayloadPlanEntry(payload, {
+      currentMessageId: context.currentMessageId,
+    });
     if (!entry) {
       continue;
     }

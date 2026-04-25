@@ -479,6 +479,22 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     ]);
   });
+
+  it("resolves reply_to_current against currentMessageId during outbound planning", () => {
+    const plan = createOutboundPayloadPlan([{ text: "[[reply_to_current]] hello" }], {
+      currentMessageId: "42",
+    });
+
+    expect(plan).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "hello",
+          replyToCurrent: true,
+          replyToId: "42",
+        }),
+      }),
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {

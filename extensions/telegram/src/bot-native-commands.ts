@@ -30,7 +30,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount, resolveTelegramReplyToModeByChatType } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -474,7 +474,7 @@ export const registerTelegramNativeCommands = ({
   telegramCfg,
   allowFrom,
   groupAllowFrom,
-  replyToMode,
+  replyToMode: _replyToMode,
   textLimit,
   useAccessGroups,
   nativeEnabled,
@@ -690,6 +690,7 @@ export const registerTelegramNativeCommands = ({
   const buildCommandDeliveryBaseOptions = (params: {
     cfg: OpenClawConfig;
     chatId: string | number;
+    currentMessageId?: string;
     accountId: string;
     sessionKeyForInternalHooks?: string;
     policySessionKey?: string;
@@ -700,9 +701,11 @@ export const registerTelegramNativeCommands = ({
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: TelegramChunkMode;
     linkPreview?: boolean;
+    replyToMode: ReplyToMode;
   }) => ({
     cfg: params.cfg,
     chatId: String(params.chatId),
+    currentMessageId: params.currentMessageId,
     accountId: params.accountId,
     sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
     policySessionKey: params.policySessionKey,
@@ -712,7 +715,7 @@ export const registerTelegramNativeCommands = ({
     runtime,
     bot,
     mediaLocalRoots: params.mediaLocalRoots,
-    replyToMode,
+    replyToMode: params.replyToMode,
     textLimit,
     thread: params.threadSpec,
     tableMode: params.tableMode,
@@ -819,12 +822,25 @@ export const registerTelegramNativeCommands = ({
             );
           }
           const replyMarkup = buildInlineKeyboard(rows);
+          const effectiveReplyToMode = resolveTelegramReplyToModeByChatType({
+            account: runtimeTelegramCfg,
+            chatType: isGroup ? "group" : "direct",
+            fallbackReplyToMode: _replyToMode,
+          });
+          const menuReplyParams =
+            effectiveReplyToMode === "off"
+              ? {}
+              : {
+                  reply_to_message_id: msg.message_id,
+                  allow_sending_without_reply: true as const,
+                };
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, title, {
                 ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+                ...menuReplyParams,
                 ...threadParams,
               }),
           });
@@ -862,6 +878,7 @@ export const registerTelegramNativeCommands = ({
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: executionCfg,
           chatId,
+          currentMessageId: String(msg.message_id),
           accountId: route.accountId,
           sessionKeyForInternalHooks: commandSessionKey,
           policySessionKey: commandTargetSessionKey,
@@ -872,6 +889,11 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          replyToMode: resolveTelegramReplyToModeByChatType({
+            account: runtimeTelegramCfg,
+            chatType: isGroup ? "group" : "direct",
+            fallbackReplyToMode: _replyToMode,
+          }),
         });
         const conversationLabel = isGroup
           ? msg.chat.title
@@ -1049,6 +1071,7 @@ export const registerTelegramNativeCommands = ({
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: runtimeCfg,
           chatId,
+          currentMessageId: String(msg.message_id),
           accountId: route.accountId,
           sessionKeyForInternalHooks: route.sessionKey,
           policySessionKey: route.sessionKey,
@@ -1059,6 +1082,11 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          replyToMode: resolveTelegramReplyToModeByChatType({
+            account: runtimeTelegramCfg,
+            chatType: isGroup ? "group" : "direct",
+            fallbackReplyToMode: _replyToMode,
+          }),
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;
@@ -1100,6 +1128,11 @@ export const registerTelegramNativeCommands = ({
           from,
           to,
           accountId,
+          messageId: String(msg.message_id),
+          replyToMessageId:
+            msg.reply_to_message?.message_id == null
+              ? undefined
+              : String(msg.reply_to_message.message_id),
           messageThreadId: threadSpec.id,
         });
 
