@@ -30,7 +30,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount, resolveTelegramReplyToModeByChatType } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -474,7 +474,7 @@ export const registerTelegramNativeCommands = ({
   telegramCfg,
   allowFrom,
   groupAllowFrom,
-  replyToMode,
+  replyToMode: _replyToMode,
   textLimit,
   useAccessGroups,
   nativeEnabled,
@@ -700,6 +700,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: TelegramChunkMode;
     linkPreview?: boolean;
+    replyToMode: ReplyToMode;
   }) => ({
     cfg: params.cfg,
     chatId: String(params.chatId),
@@ -712,7 +713,7 @@ export const registerTelegramNativeCommands = ({
     runtime,
     bot,
     mediaLocalRoots: params.mediaLocalRoots,
-    replyToMode,
+    replyToMode: params.replyToMode,
     textLimit,
     thread: params.threadSpec,
     tableMode: params.tableMode,
@@ -872,6 +873,10 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          replyToMode: resolveTelegramReplyToModeByChatType({
+            account: runtimeTelegramCfg,
+            chatType: isGroup ? "group" : "direct",
+          }),
         });
         const conversationLabel = isGroup
           ? msg.chat.title
@@ -1059,6 +1064,10 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          replyToMode: resolveTelegramReplyToModeByChatType({
+            account: runtimeTelegramCfg,
+            chatType: isGroup ? "group" : "direct",
+          }),
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;

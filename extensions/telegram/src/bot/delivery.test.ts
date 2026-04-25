@@ -862,6 +862,28 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("preserves explicit replyToCurrent override when replyToMode is off", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 19,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "hello", replyToCurrent: true, replyToId: "700" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0][2]).toMatchObject({ reply_to_message_id: 700 });
+  });
+
   it("replyToMode 'first' only applies reply-to to the first text chunk", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({

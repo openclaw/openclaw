@@ -177,6 +177,24 @@ describe("registerTelegramNativeCommands", () => {
     );
   });
 
+  it("uses per-chat-type reply mode for plugin command delivery in DMs", async () => {
+    const { handler } = registerPlugCommand({
+      cfg: {
+        channels: {
+          telegram: {
+            replyToModeByChatType: { direct: "all", group: "off" },
+          },
+        },
+      } as OpenClawConfig,
+      result: { text: "ok", replyToCurrent: true, replyToId: "1" },
+    });
+
+    await handler(createPrivateCommandContext({ match: "" }));
+
+    expect(deliverReplies).toHaveBeenCalled();
+    expect(deliverReplies.mock.calls.at(-1)?.[0]).toMatchObject({ replyToMode: "all" });
+  });
+
   it("normalizes hyphenated native command names for Telegram registration", async () => {
     const setMyCommands = vi.fn().mockResolvedValue(undefined);
     const command = vi.fn();

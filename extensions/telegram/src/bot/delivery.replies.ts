@@ -676,8 +676,12 @@ export async function deliverReplies(params: {
     }
 
     const rawContent = reply.text || "";
+    const explicitReplyOverride = Boolean(reply.replyToTag) || Boolean(reply.replyToCurrent);
+    const effectiveReplyToMode = params.replyToMode;
     const replyToId =
-      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+      effectiveReplyToMode === "off" && !explicitReplyOverride
+        ? undefined
+        : resolveTelegramReplyId(reply.replyToId);
     if (hasMessageSendingHooks) {
       const hookResult = await hookRunner?.runMessageSending(
         {
@@ -725,7 +729,7 @@ export async function deliverReplies(params: {
           linkPreview: params.linkPreview,
           silent: params.silent,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       } else {
@@ -746,7 +750,7 @@ export async function deliverReplies(params: {
           replyQuoteText: params.replyQuoteText,
           replyMarkup,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       }

@@ -7,6 +7,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
 import type {
+  ReplyToMode,
   TelegramAccountConfig,
   TelegramActionConfig,
 } from "openclaw/plugin-sdk/config-runtime";
@@ -183,4 +184,26 @@ export function listEnabledTelegramAccounts(cfg: OpenClawConfig): ResolvedTelegr
   return listTelegramAccountIds(cfg)
     .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
+}
+
+type TelegramReplyToModeByChatTypeCapable = TelegramAccountConfig & {
+  replyToModeByChatType?: {
+    direct?: ReplyToMode;
+    group?: ReplyToMode;
+  };
+};
+
+export function resolveTelegramReplyToModeByChatType(params: {
+  account: TelegramAccountConfig;
+  chatType: "direct" | "group";
+}): ReplyToMode {
+  const account = params.account as TelegramReplyToModeByChatTypeCapable;
+  const perChatType = account.replyToModeByChatType?.[params.chatType];
+  if (perChatType !== undefined) {
+    return perChatType;
+  }
+  if (params.account.replyToMode !== undefined) {
+    return params.account.replyToMode;
+  }
+  return params.chatType === "direct" ? "off" : "all";
 }
