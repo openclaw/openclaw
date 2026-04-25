@@ -156,7 +156,7 @@ describe("installed plugin index", () => {
           origin: "global",
           rootDir: fixture.rootDir,
           enabled: true,
-          sourceFacts: {
+          packageInstall: {
             defaultChoice: "npm",
             npm: {
               spec: "@vendor/demo-plugin@1.2.3",
@@ -191,11 +191,104 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]?.manifestHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(index.plugins[0]?.packageJsonHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(index.plugins[0]?.packageJsonPath).toBe(path.join(fixture.rootDir, "package.json"));
+    expect(index.plugins[0]?.installRecord).toBeUndefined();
 
     const contributions = resolveInstalledPluginContributions(index);
     expect(contributions.providers.get("demo")).toEqual(["demo"]);
     expect(contributions.channels.get("demo-chat")).toEqual(["demo"]);
     expect(contributions.contracts.get("tools")).toEqual(["demo"]);
+  });
+
+  it("records the config install ledger separately from package install intent", () => {
+    const fixture = createRichPluginFixture();
+
+    const index = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "@vendor/demo-plugin@latest",
+              installPath: "plugins/demo",
+              resolvedName: "@vendor/demo-plugin",
+              resolvedVersion: "1.2.3",
+              resolvedSpec: "@vendor/demo-plugin@1.2.3",
+              integrity: "sha512-installed",
+              shasum: "abc123",
+              resolvedAt: "2026-04-25T11:00:00.000Z",
+              installedAt: "2026-04-25T11:01:00.000Z",
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      installRecord: {
+        source: "npm",
+        spec: "@vendor/demo-plugin@latest",
+        installPath: "plugins/demo",
+        resolvedName: "@vendor/demo-plugin",
+        resolvedVersion: "1.2.3",
+        resolvedSpec: "@vendor/demo-plugin@1.2.3",
+        integrity: "sha512-installed",
+        shasum: "abc123",
+        resolvedAt: "2026-04-25T11:00:00.000Z",
+        installedAt: "2026-04-25T11:01:00.000Z",
+      },
+      packageInstall: {
+        npm: {
+          spec: "@vendor/demo-plugin@1.2.3",
+          expectedIntegrity: "sha512-demo",
+          pinState: "exact-with-integrity",
+        },
+      },
+    });
+    expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("treats install ledger changes as source invalidation", () => {
+    const fixture = createRichPluginFixture();
+    const previous = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              resolvedName: "@vendor/demo-plugin",
+              resolvedVersion: "1.2.3",
+              resolvedSpec: "@vendor/demo-plugin@1.2.3",
+              integrity: "sha512-old",
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+    const current = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              resolvedName: "@vendor/demo-plugin",
+              resolvedVersion: "1.2.3",
+              resolvedSpec: "@vendor/demo-plugin@1.2.3",
+              integrity: "sha512-new",
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
+      "source-changed",
+    ]);
   });
 
   it("marks disabled plugins without dropping their cold contributions", () => {
@@ -235,6 +328,16 @@ describe("installed plugin index", () => {
     const fixture = createRichPluginFixture();
     const previous = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              resolvedVersion: "1.2.3",
+            },
+          },
+        },
+      },
       env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.25" }),
     });
 
@@ -255,6 +358,16 @@ describe("installed plugin index", () => {
             packageVersion: "1.2.4",
           },
         ],
+        config: {
+          plugins: {
+            installs: {
+              demo: {
+                source: "npm",
+                resolvedVersion: "1.2.4",
+              },
+            },
+          },
+        },
         env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
       }),
       compatRegistryVersion: "different-compat-registry",
@@ -263,6 +376,7 @@ describe("installed plugin index", () => {
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
       "compat-registry-changed",
       "host-contract-changed",
+      "source-changed",
       "stale-manifest",
       "stale-package",
     ]);
