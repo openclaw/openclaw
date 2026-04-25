@@ -14,6 +14,7 @@ import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
+import { createWhatsAppReadOnlySendError } from "../read-only.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
@@ -78,6 +79,8 @@ export type MonitorWebInboxOptions = {
   selfChatMode?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** True read-only mode: block all outbound WhatsApp sends from this transport. */
+  readOnly?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Optional debounce gating predicate. */
@@ -130,16 +133,21 @@ export async function attachWebInboxToSocket(
     onCloseResolve = null;
     resolver(reason);
   };
+  const readOnly = options.readOnly === true;
   const presence = options.selfChatMode ? "unavailable" : "available";
 
-  try {
-    await sock.sendPresenceUpdate(presence);
-    logWhatsAppVerbose(options.verbose, `Sent global '${presence}' presence on connect`);
-  } catch (err) {
-    logWhatsAppVerbose(
-      options.verbose,
-      `Failed to send '${presence}' presence on connect: ${String(err)}`,
-    );
+  if (readOnly) {
+    logWhatsAppVerbose(options.verbose, "WhatsApp readOnly mode: skipping presence on connect");
+  } else {
+    try {
+      await sock.sendPresenceUpdate(presence);
+      logWhatsAppVerbose(options.verbose, `Sent global '${presence}' presence on connect`);
+    } catch (err) {
+      logWhatsAppVerbose(
+        options.verbose,
+        `Failed to send '${presence}' presence on connect: ${String(err)}`,
+      );
+    }
   }
 
   const selfIdentity = await readWebSelfIdentityForDecision(
@@ -262,6 +270,9 @@ export async function attachWebInboxToSocket(
     content: AnyMessageContent,
     sendOptions?: MiscMessageGenerationOptions,
   ) => {
+    if (readOnly) {
+      throw createWhatsAppReadOnlySendError({ accountId: options.accountId });
+    }
     let lastErr: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt++) {
       const currentSock = getCurrentSock();
@@ -414,6 +425,7 @@ export async function attachWebInboxToSocket(
       messageTimestampMs,
       connectedAtMs,
       verbose: options.verbose,
+      readOnly,
       sock: {
         sendMessage: (jid: string, content: AnyMessageContent) => sendTrackedMessage(jid, content),
       },
@@ -439,7 +451,12 @@ export async function attachWebInboxToSocket(
 
   const maybeMarkInboundAsRead = async (inbound: NormalizedInboundMessage) => {
     const { id, remoteJid, participantJid, access } = inbound;
-    if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
+    if (id && readOnly) {
+      logWhatsAppVerbose(
+        options.verbose,
+        `WhatsApp readOnly mode: skipping read receipt for ${id}`,
+      );
+    } else if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
       try {
         await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
         const suffix = participantJid ? ` (participant ${participantJid})` : "";
@@ -526,6 +543,9 @@ export async function attachWebInboxToSocket(
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
+      if (readOnly) {
+        return;
+      }
       const currentSock = getCurrentSock();
       if (!currentSock) {
         return;
@@ -741,6 +761,9 @@ export async function attachWebInboxToSocket(
         options?: MiscMessageGenerationOptions,
       ) => sendTrackedMessage(jid, content, options),
       sendPresenceUpdate: async (presence, jid?: string) => {
+        if (readOnly) {
+          throw createWhatsAppReadOnlySendError({ accountId: options.accountId });
+        }
         const currentSock = getCurrentSock();
         if (!currentSock) {
           throw new Error(RECONNECT_IN_PROGRESS_ERROR);

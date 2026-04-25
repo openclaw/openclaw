@@ -24,6 +24,7 @@ export type ResolvedWhatsAppAccount = {
   accountId: string;
   name?: string;
   enabled: boolean;
+  readOnly: boolean;
   sendReadReceipts: boolean;
   messagePrefix?: string;
   defaultTo?: string;
@@ -135,6 +136,7 @@ export function resolveWhatsAppAccount(params: {
     accountId,
     name: normalizeOptionalString(merged.name),
     enabled,
+    readOnly: merged.readOnly === true,
     sendReadReceipts: merged.sendReadReceipts ?? true,
     messagePrefix: merged.messagePrefix ?? params.cfg.messages?.messagePrefix,
     defaultTo: merged.defaultTo,

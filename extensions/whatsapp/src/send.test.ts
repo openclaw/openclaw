@@ -118,6 +118,18 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
+  it("blocks outbound messages in readOnly mode before touching the listener", async () => {
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: { channels: { whatsapp: { readOnly: true } } } as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/readOnly mode blocks outbound message/);
+
+    expect(sendComposingTo).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses configured defaultAccount when outbound accountId is omitted", async () => {
     hoisted.controllerListeners.clear();
     hoisted.controllerListeners.set("work", {
@@ -418,6 +430,28 @@ describe("web outbound", () => {
       durationSeconds: undefined,
       durationHours: undefined,
     });
+  });
+
+  it("blocks polls and reactions in readOnly mode", async () => {
+    const cfg = { channels: { whatsapp: { readOnly: true } } } as OpenClawConfig;
+
+    await expect(
+      sendPollWhatsApp(
+        "+1555",
+        { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 2 },
+        { verbose: false, cfg },
+      ),
+    ).rejects.toThrow(/readOnly mode blocks outbound poll/);
+    await expect(
+      sendReactionWhatsApp("1555@s.whatsapp.net", "msg123", "✅", {
+        verbose: false,
+        cfg,
+        fromMe: false,
+      }),
+    ).rejects.toThrow(/readOnly mode blocks outbound reaction/);
+
+    expect(sendPoll).not.toHaveBeenCalled();
+    expect(sendReaction).not.toHaveBeenCalled();
   });
 
   it("redacts recipients and poll text in outbound logs", async () => {

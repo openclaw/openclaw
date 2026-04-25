@@ -21,6 +21,7 @@ import {
   resolveWhatsAppOutboundMediaUrls,
 } from "./outbound-media-contract.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
+import { assertWhatsAppWritable } from "./read-only.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
@@ -88,18 +89,20 @@ export async function sendMessageWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp send");
-  const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
+  const resolvedAccountId = resolveOutboundWhatsAppAccountId({ cfg, accountId: options.accountId });
+  assertWhatsAppWritable({ cfg, accountId: resolvedAccountId, action: "message" });
+  const { listener: active, accountId: activeAccountId } = requireOutboundActiveWebListener({
     cfg,
-    accountId: options.accountId,
+    accountId: resolvedAccountId,
   });
   const account = resolveWhatsAppAccount({
     cfg,
-    accountId: resolvedAccountId ?? options.accountId,
+    accountId: activeAccountId,
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "whatsapp",
-    accountId: resolvedAccountId ?? options.accountId,
+    accountId: activeAccountId,
   });
   text = convertMarkdownTables(text ?? "", tableMode);
   text = markdownToWhatsApp(text);
@@ -138,7 +141,7 @@ export async function sendMessageWhatsApp(
     logger.info({ jid: redactedJid, hasMedia: Boolean(primaryMediaUrl) }, "sending message");
     await active.sendComposingTo(to);
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
-    const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
+    const accountId = hasExplicitAccountId ? activeAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
       options.gifPlayback || accountId || documentFileName || options.quotedMessageKey
         ? {
@@ -175,9 +178,11 @@ export async function sendTypingWhatsApp(
   },
 ): Promise<void> {
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp typing send");
+  const resolvedAccountId = resolveOutboundWhatsAppAccountId({ cfg, accountId: options.accountId });
+  assertWhatsAppWritable({ cfg, accountId: resolvedAccountId, action: "typing indicator" });
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
-    accountId: options.accountId,
+    accountId: resolvedAccountId,
   });
   await active.sendComposingTo(to);
 }
@@ -196,9 +201,11 @@ export async function sendReactionWhatsApp(
 ): Promise<void> {
   const correlationId = generateSecureUuid();
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp reaction");
+  const resolvedAccountId = resolveOutboundWhatsAppAccountId({ cfg, accountId: options.accountId });
+  assertWhatsAppWritable({ cfg, accountId: resolvedAccountId, action: "reaction" });
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
-    accountId: options.accountId,
+    accountId: resolvedAccountId,
   });
   const redactedChatJid = redactIdentifier(chatJid);
   const logger = getChildLogger({
@@ -238,9 +245,11 @@ export async function sendPollWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp poll");
+  const resolvedAccountId = resolveOutboundWhatsAppAccountId({ cfg, accountId: options.accountId });
+  assertWhatsAppWritable({ cfg, accountId: resolvedAccountId, action: "poll" });
   const { listener: active } = requireOutboundActiveWebListener({
     cfg,
-    accountId: options.accountId,
+    accountId: resolvedAccountId,
   });
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({

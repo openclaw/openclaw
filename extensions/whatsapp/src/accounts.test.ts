@@ -160,6 +160,23 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.name).toBeUndefined();
   });
 
+  it("resolves readOnly from shared account config", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            readOnly: true,
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolved.readOnly).toBe(true);
+  });
   it("does not inherit default-account selfChatMode for named accounts", () => {
     const resolved = resolveWhatsAppAccount({
       cfg: {

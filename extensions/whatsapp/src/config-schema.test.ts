@@ -69,6 +69,22 @@ describe("whatsapp config schema", () => {
     });
   });
 
+  it("accepts readOnly at channel and account scope", () => {
+    const res = expectWhatsAppConfigValid({
+      readOnly: true,
+      accounts: {
+        work: {
+          readOnly: true,
+        },
+      },
+    });
+
+    if (res.success) {
+      expect(res.data.readOnly).toBe(true);
+      expect(res.data.accounts?.work?.readOnly).toBe(true);
+    }
+  });
+
   it("keeps inherited account defaults unset at account scope", () => {
     const res = expectWhatsAppConfigValid({
       dmPolicy: "allowlist",

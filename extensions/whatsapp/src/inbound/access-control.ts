@@ -38,6 +38,7 @@ export async function checkInboundAccessControl(params: {
   connectedAtMs?: number;
   pairingGraceMs?: number;
   verbose?: boolean;
+  readOnly?: boolean;
   sock: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
   };
@@ -134,6 +135,11 @@ export async function checkInboundAccessControl(params: {
         logWhatsAppVerbose(
           params.verbose,
           `Skipping pairing reply for historical DM from ${candidate}.`,
+        );
+      } else if (params.readOnly === true) {
+        logWhatsAppVerbose(
+          params.verbose,
+          `WhatsApp readOnly mode: skipping pairing reply for ${candidate}.`,
         );
       } else {
         await createChannelPairingChallengeIssuer({
