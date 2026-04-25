@@ -4479,6 +4479,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         minimum: 0,
                         maximum: 9007199254740991,
                       },
+                      embeddingBatchTimeoutSeconds: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Embedding Batch Timeout (s)",
+                        description:
+                          "Overrides the timeout for inline embedding batches during memory indexing. Leave unset to use provider defaults: 600 seconds for local/self-hosted providers such as local, Ollama, and LM Studio, and 120 seconds for hosted providers.",
+                      },
                       sessions: {
                         type: "object",
                         properties: {
@@ -6359,6 +6367,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         intervalMinutes: {
                           type: "integer",
                           minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        embeddingBatchTimeoutSeconds: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
                           maximum: 9007199254740991,
                         },
                         sessions: {
@@ -25576,6 +25589,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Memory Watch Debounce (ms)",
       help: "Debounce window in milliseconds for coalescing rapid file-watch events before reindex runs. Increase to reduce churn on frequently-written files, or lower for faster freshness.",
       tags: ["performance", "automation"],
+    },
+    "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds": {
+      label: "Embedding Batch Timeout (s)",
+      help: "Overrides the timeout for inline embedding batches during memory indexing. Leave unset to use provider defaults: 600 seconds for local/self-hosted providers such as local, Ollama, and LM Studio, and 120 seconds for hosted providers.",
+      tags: ["performance"],
     },
     "agents.defaults.memorySearch.sync.sessions.deltaBytes": {
       label: "Session Delta Bytes",

@@ -108,6 +108,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.cache.maxEntries",
   "agents.defaults.memorySearch.sync.onSearch",
   "agents.defaults.memorySearch.sync.watch",
+  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages",
   "models.mode",

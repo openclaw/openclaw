@@ -427,6 +427,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.onSearch": "Index on Search (Lazy)",
   "agents.defaults.memorySearch.sync.watch": "Watch Memory Files",
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
+  "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds": "Embedding Batch Timeout (s)",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes": "Session Delta Bytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
   "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
