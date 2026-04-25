@@ -279,6 +279,50 @@ describe("browser config", () => {
     expect(remote?.headless).toBe(false);
   });
 
+  it("inherits executablePath from global browser config when profile override is not set", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~/bin/chrome-global",
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe(path.resolve(os.homedir(), "bin/chrome-global"));
+  });
+
+  it("allows profile executablePath to override global browser executablePath", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/usr/bin/chrome-global",
+      profiles: {
+        remote: {
+          cdpUrl: "http://127.0.0.1:9222",
+          executablePath: " ~/bin/chrome-profile ",
+          color: "#0066CC",
+        },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe(path.resolve(os.homedir(), "bin/chrome-profile"));
+  });
+
+  it("falls back to global executablePath when profile executablePath is blank", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/usr/bin/chrome-global",
+      profiles: {
+        remote: {
+          cdpUrl: "http://127.0.0.1:9222",
+          executablePath: "   ",
+          color: "#0066CC",
+        },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe("/usr/bin/chrome-global");
+  });
+
   it("uses base protocol for profiles with only cdpPort", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "https://example.com:9443",

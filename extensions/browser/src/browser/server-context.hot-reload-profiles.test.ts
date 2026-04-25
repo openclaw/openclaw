@@ -6,6 +6,7 @@ type TestProfileConfig = {
   cdpUrl?: string;
   color?: string;
   headless?: boolean;
+  executablePath?: string;
   driver?: "openclaw" | "existing-session";
 };
 type TestConfig = {
@@ -273,6 +274,55 @@ describe("server-context hot-reload profiles", () => {
     expect(runtime?.profile.headless).toBe(false);
     expect(runtime?.lastTargetId).toBeNull();
     expect(runtime?.reconcile?.reason).toContain("headless");
+  });
+
+  it("marks local managed runtime state for reconcile when profile executablePath changes", async () => {
+    mockState.cfgProfiles.openclaw = {
+      cdpPort: 18800,
+      color: "#FF4500",
+      executablePath: "/usr/bin/chrome-old",
+    };
+    mockState.cachedConfig = null;
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const openclawProfile = resolveProfile(resolved, "openclaw");
+    expect(openclawProfile).toBeTruthy();
+    expect(openclawProfile?.executablePath).toBe("/usr/bin/chrome-old");
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "openclaw",
+          {
+            profile: openclawProfile!,
+            running: { pid: 123 } as never,
+            lastTargetId: "tab-1",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    mockState.cfgProfiles.openclaw = {
+      cdpPort: 18800,
+      color: "#FF4500",
+      executablePath: "/usr/bin/chrome-new",
+    };
+    mockState.cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("openclaw");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.executablePath).toBe("/usr/bin/chrome-new");
+    expect(runtime?.lastTargetId).toBeNull();
+    expect(runtime?.reconcile?.reason).toContain("executablePath");
   });
 
   it("does not reconcile existing-session runtime when only headless changes", async () => {

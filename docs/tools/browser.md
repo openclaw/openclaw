@@ -143,7 +143,12 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC", headless: true },
+      work: {
+        cdpPort: 18801,
+        color: "#0066CC",
+        headless: true,
+        executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      },
       user: {
         driver: "existing-session",
         attachOnly: true,
@@ -187,6 +192,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 - `attachOnly: true` means never launch a local browser; only attach if one is already running.
 - `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
+- `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
@@ -205,6 +211,7 @@ auto-detection. `~` expands to your OS home directory:
 
 ```bash
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
+openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
 Or set it in config, per platform:
@@ -239,6 +246,10 @@ Or set it in config, per platform:
   </Tab>
 </Tabs>
 
+Per-profile `executablePath` only affects local managed profiles that OpenClaw
+launches. `existing-session` profiles attach to an already-running browser
+instead, and remote CDP profiles use the browser behind `cdpUrl`.
+
 ## Local vs remote control
 
 - **Local control (default):** the Gateway starts the loopback control service and can launch a local browser.
@@ -246,6 +257,9 @@ Or set it in config, per platform:
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 - `headless` only affects local managed profiles that OpenClaw launches. It does not restart or change existing-session or remote CDP browsers.
+- `executablePath` follows the same local managed profile rule. Changing it on a
+  running local managed profile marks that profile for restart/reconcile so the
+  next launch uses the new binary.
 
 Stopping behavior differs by profile mode:
 

@@ -387,6 +387,32 @@ describe("chrome.ts internal", () => {
       });
     });
 
+    it("uses profile executablePath over global executablePath when launching", async () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s === "/tmp/profile-chrome" || s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return false;
+      });
+      spawnMock.mockImplementation(() => makeFakeProc());
+
+      await withMockChromeCdpServer({
+        wsPath: "/devtools/browser/PROFILE_EXE",
+        run: async (baseUrl) => {
+          const port = new URL(baseUrl).port;
+          const profile = { ...makeProfile(Number(port)), executablePath: "/tmp/profile-chrome" };
+          const resolved = {
+            ...makeResolved(),
+            executablePath: "/tmp/global-chrome",
+          } as ResolvedBrowserConfig;
+          const running = await launchOpenClawChrome(resolved, profile);
+          expect(spawnMock.mock.calls[0]?.[0]).toBe("/tmp/profile-chrome");
+          running.proc.kill?.("SIGTERM");
+        },
+      });
+    });
+
     it("throws with stderr hint + sandbox hint when CDP never becomes reachable", async () => {
       const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "linux" });
