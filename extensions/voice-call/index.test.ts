@@ -105,7 +105,10 @@ function setup(config: Record<string, unknown>): Registered {
   return { methods, tools, service };
 }
 
-async function registerVoiceCallCli(program: Command) {
+async function registerVoiceCallCli(
+  program: Command,
+  pluginConfig: Record<string, unknown> = { provider: "mock" },
+) {
   const { register } = plugin as unknown as {
     register: RegisterVoiceCall;
   };
@@ -116,7 +119,7 @@ async function registerVoiceCallCli(program: Command) {
     version: "0",
     source: "test",
     config: {},
-    pluginConfig: { provider: "mock" },
+    pluginConfig,
     runtime: { tts: { textToSpeechTelephony: vi.fn() } },
     logger: noopLogger,
     registerGatewayMethod: () => {},
@@ -362,6 +365,106 @@ describe("voice-call plugin", () => {
         from: "user",
       });
       expect(stdout.output()).toContain('"callId": "call-1"');
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI setup prints human-readable checks by default", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    await registerVoiceCallCli(program, {
+      provider: "twilio",
+      fromNumber: "+15550001234",
+      publicUrl: "https://voice.example.com/voice/webhook",
+      twilio: {
+        accountSid: "AC123",
+        authToken: "token",
+      },
+    });
+
+    try {
+      await program.parseAsync(["voicecall", "setup"], { from: "user" });
+      expect(stdout.output()).toContain("Voice Call setup: OK");
+      expect(stdout.output()).toContain("OK provider: Provider configured: twilio");
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI setup preserves JSON output with --json", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    await registerVoiceCallCli(program, {
+      provider: "twilio",
+      fromNumber: "+15550001234",
+      twilio: {
+        accountSid: "AC123",
+        authToken: "token",
+      },
+    });
+
+    try {
+      await program.parseAsync(["voicecall", "setup", "--json"], { from: "user" });
+      const parsed = JSON.parse(stdout.output()) as {
+        ok?: boolean;
+        checks?: Array<{ id: string; ok: boolean }>;
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.checks).toContainEqual(
+        expect.objectContaining({ id: "webhook-exposure", ok: false }),
+      );
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI smoke dry-runs a live call unless --yes is passed", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    await registerVoiceCallCli(program, {
+      provider: "twilio",
+      fromNumber: "+15550001234",
+      publicUrl: "https://voice.example.com/voice/webhook",
+      twilio: {
+        accountSid: "AC123",
+        authToken: "token",
+      },
+    });
+
+    try {
+      await program.parseAsync(["voicecall", "smoke", "--to", "+15550009999"], {
+        from: "user",
+      });
+      expect(stdout.output()).toContain("live-call: dry run for +15550009999");
+      expect(runtimeStub.manager.initiateCall).not.toHaveBeenCalled();
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI smoke can place a live notify call with --yes", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    await registerVoiceCallCli(program, {
+      provider: "twilio",
+      fromNumber: "+15550001234",
+      publicUrl: "https://voice.example.com/voice/webhook",
+      twilio: {
+        accountSid: "AC123",
+        authToken: "token",
+      },
+    });
+
+    try {
+      await program.parseAsync(["voicecall", "smoke", "--to", "+15550009999", "--yes"], {
+        from: "user",
+      });
+      expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith("+15550009999", undefined, {
+        message: "OpenClaw voice call smoke test.",
+        mode: "notify",
+      });
+      expect(stdout.output()).toContain("live-call: started call-1");
     } finally {
       stdout.restore();
     }
