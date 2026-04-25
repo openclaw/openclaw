@@ -157,12 +157,20 @@ export async function startGatewaySidecars(params: {
       const stateDir = resolveStateDir(process.env);
       const sessionDirs = await resolveAgentSessionDirs(stateDir);
       for (const sessionsDir of sessionDirs) {
-        await cleanStaleLockFiles({
+        const result = await cleanStaleLockFiles({
           sessionsDir,
           staleMs: SESSION_LOCK_STALE_MS,
           removeStale: true,
           log: { warn: (message) => params.log.warn(message) },
         });
+        if (result.cleaned.length > 0) {
+          const { markRestartAbortedMainSessionsFromLocks } =
+            await import("../agents/main-session-restart-recovery.js");
+          await markRestartAbortedMainSessionsFromLocks({
+            sessionsDir,
+            cleanedLocks: result.cleaned,
+          });
+        }
       }
     } catch (err) {
       params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
@@ -352,6 +360,12 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
     const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
     scheduleSubagentOrphanRecovery();
+  });
+
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    const { scheduleRestartAbortedMainSessionRecovery } =
+      await import("../agents/main-session-restart-recovery.js");
+    scheduleRestartAbortedMainSessionRecovery();
   });
 
   return { pluginServices };
