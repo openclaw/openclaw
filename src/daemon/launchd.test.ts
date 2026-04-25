@@ -238,6 +238,14 @@ vi.mock("node:fs/promises", async () => {
       }
       throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
     }),
+    readFile: vi.fn(async (p: string) => {
+      const key = p;
+      const data = state.files.get(key);
+      if (data !== undefined) {
+        return data;
+      }
+      throw new Error(`ENOENT: no such file or directory, open '${key}'`);
+    }),
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
     }),
