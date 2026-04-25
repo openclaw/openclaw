@@ -111,6 +111,42 @@ describe("renderChat", () => {
     cleanupChatModuleState();
   });
 
+  it("keeps markdown raw text toggles idempotent", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    const rawMarkdown = "```ts\nconst value = 1;\n```";
+
+    render(
+      renderChat(
+        createProps({
+          sidebarOpen: true,
+          sidebarContent: {
+            kind: "markdown",
+            content: `\`\`\`\n${rawMarkdown}\n\`\`\``,
+            rawText: rawMarkdown,
+          },
+          stream: null,
+          streamStartedAt: null,
+          onCloseSidebar: () => undefined,
+          onOpenSidebar,
+        }),
+      ),
+      container,
+    );
+
+    const rawButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.includes("View Raw Text"),
+    );
+    rawButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(rawButton).not.toBeNull();
+    expect(onOpenSidebar).toHaveBeenCalledWith({
+      kind: "markdown",
+      content: `\`\`\`\n${rawMarkdown}\n\`\`\``,
+      rawText: rawMarkdown,
+    });
+  });
+
   it("renders configured assistant text avatars in transcript groups", () => {
     const container = document.createElement("div");
 
