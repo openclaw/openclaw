@@ -82,6 +82,20 @@ function makeFakeProc(overrides: Partial<FakeProc> = {}): FakeProc {
   return Object.assign(proc, overrides);
 }
 
+function effectiveSpawnCommand(call: unknown[] | undefined): unknown {
+  const command = call?.[0];
+  const args = call?.[1];
+  if (
+    command === "/bin/sh" &&
+    Array.isArray(args) &&
+    args[0] === "-c" &&
+    typeof args[2] === "string"
+  ) {
+    return args[2];
+  }
+  return command;
+}
+
 async function withMockChromeCdpServer(params: {
   wsPath: string;
   onConnection?: (wss: WebSocketServer) => void;
@@ -388,6 +402,7 @@ describe("chrome.ts internal", () => {
     });
 
     it("uses profile executablePath over global executablePath when launching", async () => {
+      const originalPlatform = process.platform;
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
         if (s === "/tmp/profile-chrome" || s.endsWith("Local State") || s.endsWith("Preferences")) {
@@ -397,20 +412,25 @@ describe("chrome.ts internal", () => {
       });
       spawnMock.mockImplementation(() => makeFakeProc());
 
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/PROFILE_EXE",
-        run: async (baseUrl) => {
-          const port = new URL(baseUrl).port;
-          const profile = { ...makeProfile(Number(port)), executablePath: "/tmp/profile-chrome" };
-          const resolved = {
-            ...makeResolved(),
-            executablePath: "/tmp/global-chrome",
-          } as ResolvedBrowserConfig;
-          const running = await launchOpenClawChrome(resolved, profile);
-          expect(spawnMock.mock.calls[0]?.[0]).toBe("/tmp/profile-chrome");
-          running.proc.kill?.("SIGTERM");
-        },
-      });
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        await withMockChromeCdpServer({
+          wsPath: "/devtools/browser/PROFILE_EXE",
+          run: async (baseUrl) => {
+            const port = new URL(baseUrl).port;
+            const profile = { ...makeProfile(Number(port)), executablePath: "/tmp/profile-chrome" };
+            const resolved = {
+              ...makeResolved(),
+              executablePath: "/tmp/global-chrome",
+            } as ResolvedBrowserConfig;
+            const running = await launchOpenClawChrome(resolved, profile);
+            expect(effectiveSpawnCommand(spawnMock.mock.calls[0])).toBe("/tmp/profile-chrome");
+            running.proc.kill?.("SIGTERM");
+          },
+        });
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
     });
 
     it("throws with stderr hint + sandbox hint when CDP never becomes reachable", async () => {
