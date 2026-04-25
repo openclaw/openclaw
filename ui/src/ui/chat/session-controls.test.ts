@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   createModelCatalog,
@@ -146,18 +146,16 @@ function createChatHeaderState(
   return { state, request };
 }
 
-function flushTasks() {
+async function flushTasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("chat session controls", () => {
   it("patches the current session model from the chat header picker", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
     const { state, request } = createChatHeaderState();
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
@@ -170,25 +168,22 @@ describe("chat session controls", () => {
 
     modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
       model: "openai/gpt-5-mini",
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
-    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
-    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
-    vi.unstubAllGlobals();
+    await vi.waitFor(
+      () => {
+        expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+        expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
+      },
+      { interval: 1, timeout: 100 },
+    );
   });
 
   it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
     const { state, request } = createChatHeaderState();
     state.agentsPanel = "tools";
     state.agentsSelectedId = "main";
@@ -217,18 +212,10 @@ describe("chat session controls", () => {
       },
       { interval: 1, timeout: 100 },
     );
-
     expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
-    vi.unstubAllGlobals();
   });
 
   it("clears the session model override back to the default model", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
     const { state, request } = createChatHeaderState({ model: "gpt-5-mini" });
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
@@ -241,14 +228,17 @@ describe("chat session controls", () => {
 
     modelSelect!.value = "";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
       model: null,
     });
-    expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
-    vi.unstubAllGlobals();
+    await vi.waitFor(
+      () => {
+        expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
+      },
+      { interval: 1, timeout: 100 },
+    );
   });
 
   it("disables the chat header model picker while a run is active", () => {
@@ -266,12 +256,6 @@ describe("chat session controls", () => {
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
@@ -290,7 +274,6 @@ describe("chat session controls", () => {
       'select[data-chat-model-select="true"]',
     );
     expect(rerendered?.value).toBe("openai/gpt-5-mini");
-    vi.unstubAllGlobals();
   });
 
   it("uses default thinking options when the active session is absent", () => {

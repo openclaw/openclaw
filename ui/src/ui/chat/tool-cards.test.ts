@@ -13,6 +13,18 @@ vi.mock("../icons.ts", () => ({
   ),
 }));
 
+vi.mock("../tool-display.ts", () => ({
+  formatToolDetail: () => undefined,
+  resolveToolDisplay: ({ name }: { name: string }) => ({
+    name,
+    label: name
+      .split(/[._-]/g)
+      .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+      .join(" "),
+    icon: "zap",
+  }),
+}));
+
 describe("tool-cards", () => {
   it("pretty-prints structured args and pairs tool output onto the same card", () => {
     const cards = extractToolCards(
@@ -187,10 +199,10 @@ describe("tool-cards", () => {
     });
   });
 
-  it("drops tool_card-targeted canvas payloads", () => {
-    const [card] = extractToolCards(
+  it("does not create previews for non-assistant canvas or generic outputs", () => {
+    const cases = [
       {
-        role: "tool",
+        name: "tool-card target",
         toolName: "canvas_render",
         content: JSON.stringify({
           kind: "canvas",
@@ -205,16 +217,8 @@ describe("tool-cards", () => {
           },
         }),
       },
-      "msg:view:2",
-    );
-
-    expect(card?.preview).toBeUndefined();
-  });
-
-  it("does not extract inline-html canvas payloads into canvas previews", () => {
-    const [card] = extractToolCards(
       {
-        role: "tool",
+        name: "inline html",
         toolName: "canvas_render",
         content: JSON.stringify({
           kind: "canvas",
@@ -229,36 +233,30 @@ describe("tool-cards", () => {
           },
         }),
       },
-      "msg:view:3",
-    );
-
-    expect(card?.preview).toBeUndefined();
-  });
-
-  it("does not create a view preview for malformed json output", () => {
-    const [card] = extractToolCards(
       {
-        role: "tool",
+        name: "malformed json",
         toolName: "canvas_render",
         content: '{"kind":"present_view","view":{"id":"broken"}',
       },
-      "msg:view:4",
-    );
-
-    expect(card?.preview).toBeUndefined();
-  });
-
-  it("does not create a view preview for generic tool text output", () => {
-    const [card] = extractToolCards(
       {
-        role: "tool",
+        name: "generic text",
         toolName: "browser.open",
         content: "present_view: cv_widget",
       },
-      "msg:view:5",
-    );
+    ] as const;
 
-    expect(card?.preview).toBeUndefined();
+    for (const testCase of cases) {
+      const [card] = extractToolCards(
+        {
+          role: "tool",
+          toolName: testCase.toolName,
+          content: testCase.content,
+        },
+        `msg:view:${testCase.name}`,
+      );
+
+      expect(card?.preview, testCase.name).toBeUndefined();
+    }
   });
 
   it("renders expanded cards with inline input and output sections", () => {

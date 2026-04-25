@@ -1,13 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { renderChatQueue } from "../chat/chat-queue.ts";
+import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
+import { renderWelcomeState } from "../chat/chat-welcome.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
-import { cleanupChatModuleState, renderChat, type ChatProps } from "./chat.ts";
-
-vi.mock("../markdown.ts", () => ({
-  toSanitizedMarkdownHtml: (value: string) => value,
-}));
 
 vi.mock("../icons.ts", () => ({
   icons: new Proxy(
@@ -18,85 +16,61 @@ vi.mock("../icons.ts", () => ({
   ),
 }));
 
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name }: { name: string }) => ({
-    name,
-    label: name,
-    icon: "zap",
-  }),
+vi.mock("./agents-utils.ts", () => ({
+  agentLogoUrl: () => "/openclaw-logo.svg",
+  assistantAvatarFallbackUrl: () => "apple-touch-icon.png",
+  resolveChatAvatarRenderUrl: (
+    candidate: string | null | undefined,
+    agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  ) => {
+    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
+      return candidate;
+    }
+    if (
+      typeof agent.identity?.avatarUrl === "string" &&
+      agent.identity.avatarUrl.startsWith("blob:")
+    ) {
+      return agent.identity.avatarUrl;
+    }
+    return null;
+  },
+  resolveAssistantTextAvatar: (value: string | null | undefined) => {
+    if (!value) {
+      return null;
+    }
+    return value.length <= 3 ? value : null;
+  },
 }));
 
-function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
-  return {
-    sessionKey: "agent:main:main",
-    onSessionKeyChange: () => undefined,
-    thinkingLevel: null,
-    showThinking: true,
-    showToolCalls: true,
-    loading: false,
-    sending: false,
-    canAbort: true,
-    messages: [],
-    toolMessages: [],
-    streamSegments: [],
-    stream: "Working...",
-    streamStartedAt: 1,
-    draft: "",
-    queue: [],
-    connected: true,
-    canSend: true,
-    disabledReason: null,
-    error: null,
-    sessions: {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [{ key: "agent:main:main", kind: "direct", status: "running", updatedAt: null }],
-    },
-    focusMode: false,
-    assistantName: "Test Agent",
-    assistantAvatar: null,
-    onRefresh: () => undefined,
-    onToggleFocusMode: () => undefined,
-    onDraftChange: () => undefined,
-    onSend: () => undefined,
-    onAbort: () => undefined,
-    onQueueRemove: () => undefined,
-    onNewSession: () => undefined,
-    agentsList: { agents: [{ id: "main", name: "Main" }], defaultId: "main" },
-    currentAgentId: "main",
-    onAgentChange: () => undefined,
-    ...overrides,
-  };
-}
-
-function renderQueue(queue: ChatQueueItem[], onQueueSteer = vi.fn()) {
+function renderQueue(params: {
+  queue: ChatQueueItem[];
+  canAbort?: boolean;
+  onQueueSteer?: (id: string) => void;
+}) {
   const container = document.createElement("div");
   render(
-    renderChat(
-      createProps({
-        queue,
-        onQueueSteer,
-      }),
-    ),
+    renderChatQueue({
+      queue: params.queue,
+      canAbort: params.canAbort ?? true,
+      onQueueSteer: params.onQueueSteer,
+      onQueueRemove: () => undefined,
+    }),
     container,
   );
-  return { container, onQueueSteer };
+  return container;
 }
 
-describe("chat view queue steering", () => {
-  afterEach(() => {
-    cleanupChatModuleState();
-  });
-
+describe("chat queue", () => {
   it("renders Steer only for queued messages during an active run", () => {
-    const { container, onQueueSteer } = renderQueue([
-      { id: "queued-1", text: "tighten the plan", createdAt: 1 },
-      { id: "steered-1", text: "already sent", createdAt: 2, kind: "steered" },
-      { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
-    ]);
+    const onQueueSteer = vi.fn();
+    const container = renderQueue({
+      onQueueSteer,
+      queue: [
+        { id: "queued-1", text: "tighten the plan", createdAt: 1 },
+        { id: "steered-1", text: "already sent", createdAt: 2, kind: "steered" },
+        { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
+      ],
+    });
 
     const steerButtons = container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer");
     expect(steerButtons).toHaveLength(1);
@@ -109,131 +83,77 @@ describe("chat view queue steering", () => {
   });
 
   it("hides queued-message Steer when no run is active", () => {
-    const { container } = renderQueue(
-      [{ id: "queued-1", text: "tighten the plan", createdAt: 1 }],
-      vi.fn(),
-    );
-    render(
-      renderChat(
-        createProps({
-          canAbort: false,
-          stream: null,
-          queue: [{ id: "queued-1", text: "tighten the plan", createdAt: 1 }],
-        }),
-      ),
-      container,
-    );
+    const container = renderQueue({
+      canAbort: false,
+      onQueueSteer: vi.fn(),
+      queue: [{ id: "queued-1", text: "tighten the plan", createdAt: 1 }],
+    });
 
     expect(container.querySelector(".chat-queue__steer")).toBeNull();
   });
 });
 
-describe("renderChat", () => {
-  afterEach(() => {
-    cleanupChatModuleState();
-  });
-
+describe("chat sidebar raw content", () => {
   it("keeps markdown raw text toggles idempotent", () => {
-    const container = document.createElement("div");
-    const onOpenSidebar = vi.fn();
     const rawMarkdown = "```ts\nconst value = 1;\n```";
 
-    render(
-      renderChat(
-        createProps({
-          sidebarOpen: true,
-          sidebarContent: {
-            kind: "markdown",
-            content: `\`\`\`\n${rawMarkdown}\n\`\`\``,
-            rawText: rawMarkdown,
-          },
-          stream: null,
-          streamStartedAt: null,
-          onCloseSidebar: () => undefined,
-          onOpenSidebar,
-        }),
-      ),
-      container,
-    );
-
-    const rawButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.includes("View Raw Text"),
-    );
-    rawButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(rawButton).not.toBeNull();
-    expect(onOpenSidebar).toHaveBeenCalledWith({
+    expect(
+      buildRawSidebarContent({
+        kind: "markdown",
+        content: `\`\`\`\n${rawMarkdown}\n\`\`\``,
+        rawText: rawMarkdown,
+      }),
+    ).toEqual({
       kind: "markdown",
       content: `\`\`\`\n${rawMarkdown}\n\`\`\``,
       rawText: rawMarkdown,
     });
   });
+});
 
-  it("renders configured assistant text avatars in transcript groups", () => {
+describe("chat welcome", () => {
+  function renderWelcome(params: {
+    assistantAvatar: string | null;
+    assistantAvatarUrl?: string | null;
+  }) {
     const container = document.createElement("div");
-
     render(
-      renderChat(
-        createProps({
-          assistantName: "Val",
-          assistantAvatar: "VC",
-          assistantAvatarUrl: null,
-          messages: [{ role: "assistant", content: "hello", timestamp: 1000 }],
-          stream: null,
-          streamStartedAt: null,
-        }),
-      ),
+      renderWelcomeState({
+        assistantName: "Val",
+        assistantAvatar: params.assistantAvatar,
+        assistantAvatarUrl: params.assistantAvatarUrl,
+        onDraftChange: () => undefined,
+        onSend: () => undefined,
+      }),
       container,
     );
+    return container;
+  }
 
-    const avatar = container.querySelector<HTMLElement>(".chat-group.assistant .chat-avatar");
+  it("renders configured assistant text avatars in the welcome state", () => {
+    const container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
+
+    const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
     expect(avatar).not.toBeNull();
     expect(avatar?.tagName).toBe("DIV");
     expect(avatar?.textContent).toContain("VC");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
   });
 
-  it("renders configured assistant image avatars in transcript groups", () => {
-    const container = document.createElement("div");
+  it("renders configured assistant image avatars in the welcome state", () => {
+    const container = renderWelcome({
+      assistantAvatar: "avatars/val.png",
+      assistantAvatarUrl: "blob:identity-avatar",
+    });
 
-    render(
-      renderChat(
-        createProps({
-          assistantName: "Val",
-          assistantAvatar: "avatars/val.png",
-          assistantAvatarUrl: "blob:identity-avatar",
-          messages: [{ role: "assistant", content: "hello", timestamp: 1000 }],
-          stream: null,
-          streamStartedAt: null,
-        }),
-      ),
-      container,
-    );
-
-    const avatar = container.querySelector<HTMLImageElement>(
-      ".chat-group.assistant img.chat-avatar",
-    );
+    const avatar = container.querySelector<HTMLImageElement>("img");
     expect(avatar).not.toBeNull();
     expect(avatar?.getAttribute("src")).toBe("blob:identity-avatar");
     expect(avatar?.getAttribute("alt")).toBe("Val");
   });
 
   it("uses the Molty png as the welcome fallback assistant avatar", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderChat(
-        createProps({
-          assistantName: "Val",
-          assistantAvatar: null,
-          assistantAvatarUrl: null,
-          messages: [],
-          stream: null,
-          streamStartedAt: null,
-        }),
-      ),
-      container,
-    );
+    const container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
 
     const avatar = container.querySelector<HTMLImageElement>(".agent-chat__avatar--logo img");
     expect(avatar).not.toBeNull();

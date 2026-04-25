@@ -2,16 +2,24 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import {
   formatChatTimestampForDisplay,
   renderMessageGroup,
   renderStreamingGroup,
-  resolveAssistantTextAvatar,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
+
+const localStorageValues = vi.hoisted(() => new Map<string, string>());
+
+vi.mock("../../local-storage.ts", () => ({
+  getSafeLocalStorage: () => ({
+    getItem: (key: string) => localStorageValues.get(key) ?? null,
+    removeItem: (key: string) => localStorageValues.delete(key),
+    setItem: (key: string, value: string) => localStorageValues.set(key, value),
+  }),
+}));
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
@@ -68,6 +76,14 @@ vi.mock("../views/agents-utils.ts", () => {
     },
   };
 });
+
+vi.mock("./chat-avatar.ts", () => ({
+  renderChatAvatar: (role: string) => {
+    const element = document.createElement("div");
+    element.className = `chat-avatar ${role}`;
+    return element;
+  },
+}));
 
 vi.mock("../tool-display.ts", () => ({
   formatToolDetail: () => undefined,
@@ -202,11 +218,7 @@ function renderMessageGroups(
 }
 
 function clearDeleteConfirmSkip() {
-  try {
-    getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
-  } catch {
-    /* noop */
-  }
+  localStorageValues.delete("openclaw:skipDeleteConfirm");
 }
 
 async function flushAssistantAttachmentAvailabilityChecks() {
@@ -221,38 +233,6 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
-  it("falls back to the logo while authenticated avatar routes are loading", () => {
-    const container = document.createElement("div");
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Hello" }],
-      },
-      {
-        assistantAvatar: "/avatar/main",
-        assistantAttachmentAuthToken: "session-token",
-      },
-    );
-
-    const img = container.querySelector("img.chat-avatar");
-    expect(img?.getAttribute("src")).toBe("/openclaw-molty.png");
-  });
-
-  it("uses the Molty png as the default assistant transcript avatar", () => {
-    const container = document.createElement("div");
-
-    renderAssistantMessage(container, {
-      role: "assistant",
-      content: "hello",
-      timestamp: 1000,
-    });
-
-    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("/openclaw-molty.png");
-  });
-
   it("positions delete confirm by message side", () => {
     const renderDeletable = (role: "user" | "assistant") => {
       const container = document.createElement("div");
@@ -295,41 +275,6 @@ describe("grouped chat rendering", () => {
     );
     expect(assistantConfirm).not.toBeNull();
     expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
-  });
-
-  it("renders assistant avatar variants", () => {
-    const renderAvatar = (assistantAvatar: string) => {
-      const container = document.createElement("div");
-      renderAssistantMessage(
-        container,
-        {
-          role: "assistant",
-          content: "hello",
-          timestamp: 1000,
-        },
-        { assistantAvatar, assistantName: "Val" },
-      );
-      return container.querySelector<HTMLElement>(".chat-avatar.assistant");
-    };
-
-    const remoteAvatar = renderAvatar("https://example.com/avatar.png");
-    expect(remoteAvatar?.getAttribute("src")).toBe("/openclaw-molty.png");
-
-    const blobAvatar = renderAvatar("blob:managed-image");
-    expect(blobAvatar?.tagName).toBe("IMG");
-    expect(blobAvatar?.getAttribute("src")).toBe("blob:managed-image");
-
-    const textAvatar = renderAvatar("VC");
-    expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("VC");
-    expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
-  });
-
-  it("rejects unsafe invisible controls in assistant text avatars", () => {
-    expect(resolveAssistantTextAvatar("VC")).toBe("VC");
-    expect(resolveAssistantTextAvatar("\u{1F43E}")).toBe("\u{1F43E}");
-    expect(resolveAssistantTextAvatar("V\u202eC")).toBeNull();
-    expect(resolveAssistantTextAvatar("V\u200bC")).toBeNull();
   });
 
   it("renders assistant context usage from input and cache tokens", () => {
@@ -378,7 +323,7 @@ describe("grouped chat rendering", () => {
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
   });
 
-  it("renders full dates with message timestamps", () => {
+  it("renders full dates with message and streaming timestamps", () => {
     const container = document.createElement("div");
     const timestamp = Date.UTC(2026, 3, 24, 18, 30);
 
@@ -394,19 +339,14 @@ describe("grouped chat rendering", () => {
     expect(time?.dateTime).toBe(display.dateTime);
     expect(time?.textContent?.trim()).toBe(display.label);
     expect(time?.getAttribute("title")).toBe(display.title);
-  });
-
-  it("renders full dates with streaming timestamps", () => {
-    const container = document.createElement("div");
-    const timestamp = Date.UTC(2026, 3, 24, 18, 30);
 
     render(renderStreamingGroup("Working", timestamp), container);
 
-    const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
-    expect(time?.textContent?.trim()).toBe(formatChatTimestampForDisplay(timestamp).label);
+    const streamingTime = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
+    expect(streamingTime?.textContent?.trim()).toBe(display.label);
   });
 
-  it("renders configured local user names and avatar variants", () => {
+  it("renders configured local user names", () => {
     const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
       const container = document.createElement("div");
       renderGroupedMessage(
@@ -426,18 +366,8 @@ describe("grouped chat rendering", () => {
     const sender = named.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
     expect(sender?.textContent).toBe("Buns");
 
-    for (const src of ["data:image/png;base64,AAA", "/avatar/user"]) {
-      const container = renderUser({ userName: "Buns", userAvatar: src });
-      const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
-      expect(avatar?.getAttribute("src")).toBe(src);
-      expect(avatar?.getAttribute("alt")).toBe("Buns");
-    }
-
-    const textAvatar = renderUser({ userAvatar: "🦞" }).querySelector<HTMLElement>(
-      ".chat-avatar.user",
-    );
-    expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("🦞");
+    const avatar = named.querySelector<HTMLElement>(".chat-avatar.user");
+    expect(avatar?.tagName).toBe("DIV");
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
@@ -643,7 +573,7 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("MEDIA:https://example.com/photo.png");
   });
 
-  it("renders allowed transcript images and skips blocked/non-image media", () => {
+  it("renders allowed transcript and content image variants", () => {
     const renderUserMedia = (message: unknown) => {
       const container = document.createElement("div");
       renderGroupedMessage(container, message, "user", {
@@ -699,6 +629,22 @@ describe("grouped chat rendering", () => {
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fsecond.jpg&token=session-token",
     ]);
 
+    const assistantContainer = document.createElement("div");
+    renderAssistantMessage(
+      assistantContainer,
+      {
+        role: "assistant",
+        content: [{ type: "input_image", image_url: "data:image/png;base64,cG5n" }],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+    expect(
+      assistantContainer
+        .querySelector<HTMLImageElement>(".chat-message-image")
+        ?.getAttribute("src"),
+    ).toBe("data:image/png;base64,cG5n");
+
     container = renderUserMedia({
       id: "user-history-image-blocked",
       role: "user",
@@ -719,23 +665,6 @@ describe("grouped chat rendering", () => {
       timestamp: Date.now(),
     });
     expect(container.querySelector(".chat-message-image")).toBeNull();
-  });
-
-  it("renders legacy input_image image_url blocks", () => {
-    const container = document.createElement("div");
-
-    renderAssistantMessage(
-      container,
-      {
-        role: "assistant",
-        content: [{ type: "input_image", image_url: "data:image/png;base64,cG5n" }],
-        timestamp: Date.now(),
-      },
-      { showToolCalls: false },
-    );
-
-    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
-    expect(image?.getAttribute("src")).toBe("data:image/png;base64,cG5n");
   });
 
   it("fetches managed chat images with auth and renders blob previews", async () => {
