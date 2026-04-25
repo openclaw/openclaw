@@ -309,6 +309,15 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("formats Cloudflare challenge error with browser challenge guidance", () => {
+    const msg = makeAssistantError("403 <!DOCTYPE html>\n<html>\n  <head>\n    <title>Just a moment...</title>\n    <script src=\"/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1\"></script>\n  </head>\n  <body>\n    <span id=\"challenge-error-text\">Enable JavaScript and cookies to continue</span>\n    <script id=\"_cf_chl_jschl_tk__\" data-ray=\"12345\" async src=\"/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1\"></script>\n  </body>\n</html>");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Cloudflare returned a browser challenge");
+    expect(result).toContain("browser-compatible proxy");
+    expect(result).not.toContain("TLS fingerprint");
+    expect(result).not.toContain("Cloudflare blocked");
+  });
+
   it("sanitizes invalid streaming event order errors", () => {
     const msg = makeAssistantError(
       'Unexpected event order, got message_start before receiving "message_stop"',
