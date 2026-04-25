@@ -163,3 +163,5 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Connection/provider additions: update all UI surfaces + docs + status/config forms.
 - Provider tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject `anyOf`. Not a repo-wide protocol/schema ban.
 - External messaging: no token-delta channel messages. Follow `docs/concepts/streaming.md`; preview/block streaming uses edits/chunks and preserves final/fallback delivery.
+- Branch model on `Outta-Bounds/openclaw`: `deploy` is protected production mainline; never push or force-push it directly. Land via PR from topic branch into `deploy`. `main` mirrors upstream and is fast-forwarded by scheduled sync.
+- Release/version/publish actions need explicit operator approval. Beta tags must publish matching beta versions, for example `vYYYY.M.D-beta.N` -> `YYYY.M.D-beta.N --tag beta`.

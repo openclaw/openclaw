@@ -22,11 +22,15 @@ if (mode !== "lint" && mode !== "format") {
 
 const lintExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".md", ".mdx"]);
+const lintIgnoredPaths = new Set(["src/canvas-host/a2ui/a2ui.bundle.js"]);
 const formatIgnoredPaths = new Set(["src/canvas-host/a2ui/a2ui.bundle.js"]);
 
 const shouldSelect = (filePath) => {
   const ext = path.extname(filePath).toLowerCase();
   if (mode === "lint") {
+    if (lintIgnoredPaths.has(filePath)) {
+      return false;
+    }
     return lintExts.has(ext);
   }
   if (formatIgnoredPaths.has(filePath)) {

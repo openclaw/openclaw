@@ -1,0 +1,48 @@
+name: monthly upstream sync
+
+on:
+  schedule:
+    - cron: "0 9 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: fast-forward main from upstream/main
+        run: |
+          git config user.name "openclaw-sync[bot]"
+          git config user.email "openclaw-sync[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream main
+          git merge --ff-only upstream/main
+          git push origin main
+
+      - name: open PR main → deploy
+        uses: peter-evans/create-pull-request@v6
+        with:
+          base: deploy
+          branch: chore/upstream-sync-${{ github.run_id }}
+          title: "monthly upstream sync"
+          body: |
+            Automated monthly catch-up from `upstream/main` → `deploy`.
+
+            Review areas where the fork has known divergence:
+            - discord routing (`extensions/discord/src/monitor/`)
+            - openai-codex stream wrappers (`src/agents/pi-embedded-runner/extra-params.ts`)
+            - gateway server methods (`src/gateway/server-methods/`)
+            - models-config providers (`src/agents/models-config.providers*.ts`)
+
+            Conflicts here often mean upstream refactored an area the fork patched. Resolve by re-implementing the fork's intent on top of upstream's new structure rather than reverting either side.
+          delete-branch: true
