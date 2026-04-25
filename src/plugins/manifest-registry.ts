@@ -474,6 +474,40 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
   });
 }
 
+function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  if (params.record.origin === "bundled" || params.record.format === "bundle") {
+    return;
+  }
+  const declaredChannels = params.record.channels
+    .map((channelId) => channelId.trim())
+    .filter((channelId) => channelId.length > 0);
+  if (declaredChannels.length === 0) {
+    return;
+  }
+  const channelConfigs = params.record.channelConfigs ?? {};
+  const missingChannels = declaredChannels.filter((channelId) => !channelConfigs[channelId]);
+  if (missingChannels.length === 0) {
+    return;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: params.record.id,
+    source: params.record.manifestPath,
+    message: `channel plugin manifest declares ${missingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads`,
+  });
+}
+
+function pushManifestCompatibilityDiagnostics(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  pushProviderAuthEnvVarsCompatDiagnostic(params);
+  pushNonBundledChannelConfigDescriptorDiagnostic(params);
+}
+
 function matchesInstalledPluginRecord(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -666,7 +700,7 @@ export function loadPluginManifestRegistry(
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-          pushProviderAuthEnvVarsCompatDiagnostic({ record, diagnostics });
+          pushManifestCompatibilityDiagnostics({ record, diagnostics });
         }
         continue;
       }
@@ -689,7 +723,7 @@ export function loadPluginManifestRegistry(
       if (candidateWins) {
         records[existing.recordIndex] = record;
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-        pushProviderAuthEnvVarsCompatDiagnostic({ record, diagnostics });
+        pushManifestCompatibilityDiagnostics({ record, diagnostics });
       }
       diagnostics.push({
         level: "warn",
@@ -702,7 +736,7 @@ export function loadPluginManifestRegistry(
 
     seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     records.push(record);
-    pushProviderAuthEnvVarsCompatDiagnostic({ record, diagnostics });
+    pushManifestCompatibilityDiagnostics({ record, diagnostics });
   }
 
   const registry = { plugins: records, diagnostics };
