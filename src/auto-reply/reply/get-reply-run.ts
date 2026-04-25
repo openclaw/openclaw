@@ -182,7 +182,6 @@ type RunPreparedReplyParams = {
   sessionCfg: OpenClawConfig["session"];
   commandAuthorized: boolean;
   command: ReturnType<typeof buildCommandContext>;
-  commandSource?: string;
   allowTextCommands: boolean;
   directives: InlineDirectives;
   defaultActivation: Parameters<typeof buildGroupIntro>[0]["defaultActivation"];
@@ -212,7 +211,6 @@ type RunPreparedReplyParams = {
   };
   typing: TypingController;
   opts?: GetReplyOptions;
-  defaultProvider: string;
   defaultModel: string;
   timeoutMs: number;
   isNewSession: boolean;
@@ -347,6 +345,12 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = normalizeOptionalString(sessionCtx.GroupSystemPrompt) ?? "";
+  const execOverridePromptHint = buildExecOverridePromptHint({
+    execOverrides,
+    elevatedLevel: resolvedElevatedLevel,
+    fullAccessAvailable: fullAccessState.available,
+    fullAccessBlockedReason: fullAccessState.blockedReason,
+  });
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
@@ -357,12 +361,7 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
+    execOverridePromptHint,
   ].filter(Boolean);
   // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
   const extraSystemPromptStaticParts = [
@@ -370,12 +369,7 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
+    execOverridePromptHint,
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).

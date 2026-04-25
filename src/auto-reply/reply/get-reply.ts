@@ -386,7 +386,6 @@ export async function getReplyFromConfig(
       sessionCfg,
       commandAuthorized,
       command: fastCommand,
-      commandSource: finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
       allowTextCommands: shouldHandleFastReplyTextCommands({
         cfg,
         commandSource: finalized.CommandSource,
@@ -416,7 +415,6 @@ export async function getReplyFromConfig(
       perMessageQueueOptions: undefined,
       typing,
       opts: resolvedOpts,
-      defaultProvider,
       defaultModel,
       timeoutMs,
       isNewSession,
@@ -464,7 +462,6 @@ export async function getReplyFromConfig(
   }
 
   let {
-    commandSource,
     command,
     allowTextCommands,
     skillCommands,
@@ -613,7 +610,6 @@ export async function getReplyFromConfig(
     sessionCfg,
     commandAuthorized,
     command,
-    commandSource,
     allowTextCommands,
     directives,
     defaultActivation,
@@ -634,7 +630,6 @@ export async function getReplyFromConfig(
     perMessageQueueOptions,
     typing,
     opts: resolvedOpts,
-    defaultProvider,
     defaultModel,
     timeoutMs,
     isNewSession,

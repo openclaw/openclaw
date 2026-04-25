@@ -170,7 +170,6 @@ function baseParams(
       rawBodyNormalized: "",
       commandBodyNormalized: "",
     } as never,
-    commandSource: "",
     allowTextCommands: true,
     directives: {
       hasThinkDirective: false,
@@ -194,7 +193,6 @@ function baseParams(
       onReplyStart: vi.fn().mockResolvedValue(undefined),
       cleanup: vi.fn(),
     } as never,
-    defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-1",
     timeoutMs: 30_000,
     isNewSession: true,

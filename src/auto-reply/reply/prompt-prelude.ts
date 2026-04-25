@@ -14,8 +14,6 @@ export function buildReplyPromptBodies(params: {
   threadContextNote?: string;
   systemEventBlocks?: string[];
 }): {
-  mediaNote?: string;
-  mediaReplyHint?: string;
   prefixedCommandBody: string;
   queuedBody: string;
   transcriptCommandBody: string;
@@ -45,8 +43,6 @@ export function buildReplyPromptBodies(params: {
     ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
     : transcriptBody;
   return {
-    mediaNote,
-    mediaReplyHint,
     prefixedCommandBody,
     queuedBody,
     transcriptCommandBody,
