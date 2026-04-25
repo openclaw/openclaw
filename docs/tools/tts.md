@@ -231,6 +231,32 @@ Resolution order is `messages.tts.providers.xai.apiKey` -> `XAI_API_KEY`.
 Current live voices are `ara`, `eve`, `leo`, `rex`, `sal`, and `una`; `eve` is
 the default. `language` accepts a BCP-47 tag or `auto`.
 
+### OpenRouter primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "openrouter",
+      providers: {
+        openrouter: {
+          apiKey: "openrouter_api_key",
+          model: "hexgrad/kokoro-82m",
+          voice: "af_alloy",
+          responseFormat: "mp3",
+        },
+      },
+    },
+  },
+}
+```
+
+OpenRouter TTS uses the same `OPENROUTER_API_KEY` path as the bundled
+OpenRouter model provider. Resolution order is
+`messages.tts.providers.openrouter.apiKey` ->
+`models.providers.openrouter.apiKey` -> `OPENROUTER_API_KEY`.
+
 ### Gradium primary
 
 ```json5
@@ -361,6 +387,12 @@ Then run:
 - `providers.xai.language`: BCP-47 language code or `auto` (default `en`).
 - `providers.xai.responseFormat`: `mp3`, `wav`, `pcm`, `mulaw`, or `alaw` (default `mp3`).
 - `providers.xai.speed`: provider-native speed override.
+- `providers.openrouter.apiKey`: OpenRouter API key (env: `OPENROUTER_API_KEY`; can reuse `models.providers.openrouter.apiKey`).
+- `providers.openrouter.baseUrl`: override the OpenRouter TTS base URL (default `https://openrouter.ai/api/v1`; legacy `https://openrouter.ai/v1` is normalized).
+- `providers.openrouter.model`: OpenRouter TTS model id (default `hexgrad/kokoro-82m`; `modelId` is also accepted).
+- `providers.openrouter.voice`: provider-specific voice id (default `af_alloy`; `voiceId` is also accepted).
+- `providers.openrouter.responseFormat`: `mp3` or `pcm` (default `mp3`).
+- `providers.openrouter.speed`: provider-native speed override.
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).
