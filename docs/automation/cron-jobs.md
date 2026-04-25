@@ -94,6 +94,11 @@ When isolated cron runs orchestrate subagents, delivery also prefers the final
 descendant output over stale parent interim text. If descendants are still
 running, OpenClaw suppresses that partial parent update instead of announcing it.
 
+For text-only Discord announce targets, OpenClaw sends the canonical final
+assistant text once instead of replaying both streamed/intermediate text payloads
+and the final answer. Media and structured Discord payloads are still delivered
+as separate payloads so attachments and components are not dropped.
+
 ### Payload options for isolated jobs
 
 - `--message`: prompt text (required for isolated)

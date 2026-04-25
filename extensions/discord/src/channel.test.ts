@@ -115,6 +115,10 @@ describe("discordPlugin outbound", () => {
     expect(source).not.toContain('require("./channel-actions.js")');
   });
 
+  it("prefers final assistant text for text-only cron announce delivery", () => {
+    expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
+  });
+
   it("honors per-account replyToMode overrides", () => {
     const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
     if (!resolveReplyToMode) {
