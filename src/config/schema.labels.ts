@@ -157,6 +157,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.profiles.*.mcpCommand": "Browser Profile Chrome MCP Command",
   "browser.profiles.*.mcpArgs": "Browser Profile Chrome MCP Args",
   "browser.profiles.*.driver": "Browser Profile Driver",
+  "browser.profiles.*.executablePath": "Browser Profile Executable Path",
   "browser.profiles.*.headless": "Browser Profile Headless Mode",
   "browser.profiles.*.attachOnly": "Browser Profile Attach-only Mode",
   "browser.profiles.*.color": "Browser Profile Accent Color",

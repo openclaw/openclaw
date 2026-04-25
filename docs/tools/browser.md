@@ -236,12 +236,12 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
   starts and returns an actionable error on Linux hosts without a display server;
   an explicit `start --headless` request still wins for that one launch.
-- `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers.
+- `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
-- Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.).
+- Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
 
 </Accordion>
 
@@ -251,7 +251,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
 OpenClaw uses it automatically. Set `browser.executablePath` to override
-auto-detection. `~` expands to your OS home directory:
+auto-detection. Top-level and per-profile `executablePath` values accept `~`
+for your OS home directory:
 
 ```bash
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
@@ -533,7 +534,8 @@ Default behavior:
 - The built-in `user` profile uses Chrome MCP auto-connect, which targets the
   default local Google Chrome profile.
 
-Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile:
+Use `userDataDir` for Brave, Edge, Chromium, or a non-default Chrome profile.
+`~` expands to your OS home directory:
 
 ```json5
 {
