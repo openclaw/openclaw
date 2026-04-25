@@ -128,6 +128,7 @@ export const ACP_SPAWN_ERROR_CODES = [
   "subagent_policy",
   "thread_required",
   "target_agent_required",
+  "runtime_agent_mismatch",
   "agent_forbidden",
   "cwd_resolution_failed",
   "thread_binding_invalid",
@@ -395,6 +396,24 @@ function resolveTargetAcpAgentId(params: {
 }): { ok: true; agentId: string } | { ok: false; error: string } {
   const requested = normalizeOptionalAgentId(params.requestedAgentId);
   if (requested) {
+    const configuredAgent = params.cfg.agents?.list?.find(
+      (agent) => normalizeOptionalAgentId(agent.id) === requested,
+    );
+    if (configuredAgent?.runtime?.type === "acp") {
+      return {
+        ok: true,
+        agentId: normalizeOptionalAgentId(configuredAgent.runtime.acp?.agent) ?? requested,
+      };
+    }
+    if (configuredAgent && !isExplicitlyAllowedAcpAgent(params.cfg, requested)) {
+      return {
+        ok: false,
+        error:
+          `agentId "${requested}" is an OpenClaw config agent, not an ACP harness. ` +
+          'Use runtime="subagent" or omit runtime for OpenClaw config agents. ' +
+          'Use runtime="acp" only with external ACP harness ids such as codex, claude, gemini, or opencode, or configure agents.list[].runtime.type="acp" with runtime.acp.agent.',
+      };
+    }
     return { ok: true, agentId: requested };
   }
 
@@ -408,6 +427,13 @@ function resolveTargetAcpAgentId(params: {
     error:
       "ACP target agent is not configured. Pass `agentId` in `sessions_spawn` or set `acp.defaultAgent` in config.",
   };
+}
+
+function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
+  return (cfg.acp?.allowedAgents ?? []).some((entry) => {
+    const normalized = normalizeOptionalAgentId(entry);
+    return normalized === "*" || normalized === agentId;
+  });
 }
 
 function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
@@ -1091,7 +1117,10 @@ export async function spawnAcpDirect(
   if (!targetAgentResult.ok) {
     return createAcpSpawnFailure({
       status: "error",
-      errorCode: "target_agent_required",
+      errorCode:
+        params.agentId && normalizeOptionalAgentId(params.agentId)
+          ? "runtime_agent_mismatch"
+          : "target_agent_required",
       error: targetAgentResult.error,
     });
   }

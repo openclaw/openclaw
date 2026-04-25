@@ -67,6 +67,9 @@ Docs: https://docs.openclaw.ai
 - Plugins/doctor: keep bundled plugin runtime-dependency repairs inside the
   managed OpenClaw stage even when user npm prefix/global config points npm at
   `$HOME/node_modules`. Fixes #71730.
+- ACP/sessions_spawn: reject normal OpenClaw config agent ids when callers
+  explicitly request `runtime="acp"`, while allowing agents configured with
+  `runtime.type="acp"` to resolve to their ACP harness id. Fixes #63914.
 - Plugins/Voice Call: treat missing provider credentials as setup-incomplete
   during Gateway startup and log the missing keys as a warning instead of a
   runtime startup error, while keeping explicit command/tool errors when used. Thanks

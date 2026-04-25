@@ -78,6 +78,13 @@ Natural-language triggers that should route to the ACP runtime:
 
 OpenClaw picks `runtime: "acp"`, resolves the harness `agentId`, binds to the current conversation or thread when supported, and routes follow-ups to that session until close/expiry. Codex only follows this path when ACP is explicit or the requested background runtime still needs ACP.
 
+For `sessions_spawn`, `runtime: "acp"` targets ACP harness ids such as `codex`,
+`claude`, `gemini`, or `opencode`. Do not pass a normal OpenClaw config agent
+id from `agents_list` unless that entry is explicitly configured with
+`agents.list[].runtime.type="acp"`; otherwise use the default sub-agent runtime.
+When an OpenClaw agent is configured with `runtime.type="acp"`, OpenClaw uses
+`runtime.acp.agent` as the underlying harness id.
+
 ## ACP versus sub-agents
 
 Use ACP when you want an external harness runtime. Use native Codex app-server for Codex conversation binding/control. Use sub-agents when you want OpenClaw-native delegated runs.

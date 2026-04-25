@@ -742,6 +742,89 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("rejects OpenClaw config agent ids when runtime=acp targets a native agent", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["codex"],
+      },
+      agents: {
+        list: [{ id: "pleres" }],
+        defaults: {
+          subagents: {
+            allowAgents: ["*"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "pleres",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      errorCode: "runtime_agent_mismatch",
+    });
+    expect(result).toHaveProperty("error", expect.stringContaining("OpenClaw config agent"));
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "agent" }),
+    );
+  });
+
+  it("maps OpenClaw ACP runtime agent aliases to their configured harness id", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            runtime: {
+              type: "acp",
+              acp: {
+                agent: "codex",
+              },
+            },
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "reviewer",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "codex",
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+      }),
+    );
+  });
+
   it("inherits subagent envelope fields onto ACP children", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
