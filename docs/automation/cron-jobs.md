@@ -35,6 +35,9 @@ openclaw cron runs --id <job-id>
 - Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
 - Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
 - After the split, older OpenClaw versions can read `jobs.json` but may treat jobs as fresh because runtime fields now live in `jobs-state.json`.
+- When `jobs.json` is edited while the Gateway is running, the scheduler reloads
+  changed scheduling inputs and recomputes stale `nextRunAtMs` values. Pure
+  formatting or key-order-only rewrites preserve the pending runtime state.
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
@@ -382,6 +385,11 @@ Model override note:
 The runtime state sidecar is derived from `cron.store`: a `.json` store such as
 `~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path
 without a `.json` suffix appends `-state.json`.
+
+If you hand-edit `jobs.json`, leave `jobs-state.json` out of source control.
+OpenClaw uses that sidecar for pending slots, active markers, and last-run
+metadata, and invalidates pending slots only when schedule fields or enabled
+state actually change.
 
 Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 

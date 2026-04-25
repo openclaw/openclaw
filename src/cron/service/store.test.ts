@@ -327,4 +327,62 @@ describe("cron service store seam coverage", () => {
 
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBeUndefined();
   });
+
+  it("clears stale nextRunAtMs after force reload when every schedule anchor changes", async () => {
+    const { storePath } = await makeStorePath();
+    const jobId = "reload-every-anchor-job";
+    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
+
+    await writeSingleJobStore(storePath, {
+      ...createReloadCronJob({
+        id: jobId,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: STORE_TEST_NOW - 60_000 },
+        state: { nextRunAtMs: staleNextRunAtMs },
+      }),
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    await writeSingleJobStore(storePath, {
+      ...createReloadCronJob({
+        id: jobId,
+        updatedAtMs: STORE_TEST_NOW,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: STORE_TEST_NOW },
+        state: { nextRunAtMs: staleNextRunAtMs },
+      }),
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBeUndefined();
+  });
+
+  it("clears stale nextRunAtMs after force reload when at schedule target changes", async () => {
+    const { storePath } = await makeStorePath();
+    const jobId = "reload-at-target-job";
+    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
+
+    await writeSingleJobStore(storePath, {
+      ...createReloadCronJob({
+        id: jobId,
+        schedule: { kind: "at", at: "2026-03-23T13:00:00.000Z" },
+        state: { nextRunAtMs: staleNextRunAtMs },
+      }),
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    await writeSingleJobStore(storePath, {
+      ...createReloadCronJob({
+        id: jobId,
+        updatedAtMs: STORE_TEST_NOW,
+        schedule: { kind: "at", at: "2026-03-23T14:00:00.000Z" },
+        state: { nextRunAtMs: staleNextRunAtMs },
+      }),
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBeUndefined();
+  });
 });

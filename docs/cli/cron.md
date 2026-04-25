@@ -85,6 +85,11 @@ Note: retention/pruning is controlled in config:
 - `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
 - `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl`.
 
+Note: cron job definitions live in `jobs.json`, while pending runtime state
+lives in `jobs-state.json`. If `jobs.json` is edited externally, the Gateway
+reloads changed schedules without requiring a restart; formatting-only rewrites
+do not clear the pending slot.
+
 Upgrade note: if you have older cron jobs from before the current delivery/store format, run
 `openclaw doctor --fix`. Doctor now normalizes legacy cron fields (`jobId`, `schedule.cron`,
 top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates simple

@@ -61,6 +61,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron: recompute pending runtime slots after live `jobs.json` schedule edits
+  without clearing due slots for formatting-only rewrites. Fixes #71607. Thanks
+  @xialonglee.
 - Gateway/subagents: keep direct-loopback backend RPCs authenticated with the
   shared gateway token/password off stale CLI paired-device scope baselines, so
   internal calls no longer hit `scope-upgrade` pairing prompts while remote,
