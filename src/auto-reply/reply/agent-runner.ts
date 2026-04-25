@@ -1393,6 +1393,85 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
+    // Emit model.usage before the replyPayloads early return so streamed runs
+    // (where buildReplyPayloads suppresses the final array) still get usage events.
+    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
+      const input = usage.input;
+      const output = usage.output;
+      const cacheRead = usage.cacheRead;
+      const cacheWrite = usage.cacheWrite;
+      // Only synthesize promptTokens when at least one component is known.
+      const hasSplitComponents = input != null || cacheRead != null || cacheWrite != null;
+      const promptTokens = hasSplitComponents
+        ? (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0)
+        : undefined;
+      const totalTokens = usage.total ?? (promptTokens ?? 0) + (output ?? 0);
+      const costConfig = resolveModelCostConfig({
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+      });
+      const costUsd = estimateUsageCost({ usage, cost: costConfig });
+      const usageEvent: Parameters<typeof emitDiagnosticEvent>[0] & { type: "model.usage" } = {
+        type: "model.usage",
+        ...(runResult.diagnosticTrace
+          ? { trace: freezeDiagnosticTraceContext(runResult.diagnosticTrace) }
+          : {}),
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        channel: replyToChannel,
+        provider: providerUsed,
+        model: modelUsed,
+        usage: {
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          promptTokens,
+          total: totalTokens,
+        },
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        context: {
+          limit: contextTokensUsed,
+          used: totalTokens,
+        },
+        costUsd,
+        durationMs: Date.now() - runStartedAt,
+      };
+      // Include model-originated content when explicitly opted in via captureContent config.
+      // Prefer replyPayloads (sanitized by buildReplyPayloads: control tokens,
+      // heartbeat markers, messaging-tool duplicates, and reply directives are
+      // stripped). Fall back to payloadArray (raw, pre-sanitization) when
+      // replyPayloads is empty — this happens for streamed runs (block pipeline
+      // already delivered text) and messaging-tool-suppressed replies (text was
+      // sent via the tool path, not the final reply). The fallback captures
+      // model-originated content for observability even when the reply layer
+      // suppresses final delivery.
+      // Excludes isError and isReasoning payloads in both paths.
+      // Note: followupRun.prompt is the queue body, which may diverge from the
+      // effective prompt the model actually sees (attempt.ts adds bootstrap
+      // warnings, hook context, thread-history notes, etc.). Capturing the true
+      // effectivePrompt requires instrumentation at the model call boundary
+      // (attempt.ts), which is not yet implemented.
+      const cc = cfg.diagnostics?.otel?.captureContent;
+      if (cc === true || (typeof cc === "object" && cc && "enabled" in cc && cc.enabled)) {
+        if (typeof followupRun.prompt === "string") {
+          usageEvent.inputText = followupRun.prompt;
+        }
+        const contentSource = replyPayloads.length > 0 ? replyPayloads : payloadArray;
+        const outputTexts = contentSource
+          .filter(
+            (p): p is typeof p & { text: string } =>
+              typeof p.text === "string" && !p.isError && p.isReasoning !== true,
+          )
+          .map((p) => p.text);
+        if (outputTexts.length > 0) {
+          usageEvent.outputText = outputTexts.join("\n");
+        }
+      }
+      emitDiagnosticEvent(usageEvent);
+    }
+
     if (replyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
@@ -1419,47 +1498,6 @@ export async function runReplyAgent(params: {
         : replyPayloads;
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
-
-    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const cacheRead = usage.cacheRead ?? 0;
-      const cacheWrite = usage.cacheWrite ?? 0;
-      const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
-      const costConfig = resolveModelCostConfig({
-        provider: providerUsed,
-        model: modelUsed,
-        config: cfg,
-      });
-      const costUsd = estimateUsageCost({ usage, cost: costConfig });
-      emitDiagnosticEvent({
-        type: "model.usage",
-        ...(runResult.diagnosticTrace
-          ? { trace: freezeDiagnosticTraceContext(runResult.diagnosticTrace) }
-          : {}),
-        sessionKey,
-        sessionId: followupRun.run.sessionId,
-        channel: replyToChannel,
-        provider: providerUsed,
-        model: modelUsed,
-        usage: {
-          input,
-          output,
-          cacheRead,
-          cacheWrite,
-          promptTokens,
-          total: totalTokens,
-        },
-        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-        context: {
-          limit: contextTokensUsed,
-          used: totalTokens,
-        },
-        costUsd,
-        durationMs: Date.now() - runStartedAt,
-      });
-    }
 
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??

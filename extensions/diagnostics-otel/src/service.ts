@@ -106,6 +106,28 @@ function formatError(err: unknown): string {
   }
 }
 
+const TRUNCATION_MARKER = "…[truncated]";
+const TRUNCATION_MARKER_BYTES = Buffer.byteLength(TRUNCATION_MARKER, "utf8");
+
+/** Truncate a string to at most `maxBytes` UTF-8 bytes (including the marker), avoiding mid-codepoint cuts. */
+function truncateToBytes(text: string, maxBytes: number): string {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= maxBytes) {
+    return text;
+  }
+  // Reserve space for the marker so the total stays within maxBytes.
+  const cutoff = Math.max(0, maxBytes - TRUNCATION_MARKER_BYTES);
+  // Decode back to avoid splitting a multi-byte character.
+  return (
+    buf
+      .subarray(0, cutoff)
+      .toString("utf8")
+      .replace(/\uFFFD$/, "") + TRUNCATION_MARKER
+  );
+}
+
+const MAX_CONTENT_ATTR_BYTES = 32 * 1024; // 32 KB per content attribute
+
 function redactOtelAttributes(attributes: Record<string, string | number | boolean>) {
   const redactedAttributes: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(attributes)) {
@@ -742,7 +764,56 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
+          // OpenTelemetry GenAI semantic conventions (primary)
+          "gen_ai.request.model": evt.model ?? "unknown",
+          "gen_ai.system": evt.provider ?? "unknown",
+          // Current GenAI registry attributes (gen_ai.system is deprecated)
+          "gen_ai.provider.name": evt.provider ?? "unknown",
+          "gen_ai.operation.name": "chat",
+          // Only emit GenAI split token counts when the components are actually
+          // known. Total-only payloads (e.g. CLI runner) would otherwise report
+          // misleading zeros that skew dashboards.
+          ...(usage.promptTokens != null ||
+          usage.input != null ||
+          usage.cacheRead != null ||
+          usage.cacheWrite != null
+            ? {
+                "gen_ai.usage.input_tokens":
+                  usage.promptTokens ??
+                  (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0),
+              }
+            : {}),
+          ...(usage.output != null ? { "gen_ai.usage.output_tokens": usage.output } : {}),
         };
+        if (evt.sessionKey) {
+          spanAttrs["langfuse.session.id"] = evt.sessionKey;
+        }
+        if (evt.costUsd) {
+          spanAttrs["gen_ai.usage.cost"] = evt.costUsd;
+        }
+        // Content capture: standard gen_ai.* attrs (primary), Langfuse compat (secondary).
+        // All content is redacted then truncated to MAX_CONTENT_ATTR_BYTES before export
+        // to avoid silent drops or rejections by OTEL backends with attribute size limits.
+        // Guard on captureContent policy here as a defense-in-depth check — the event
+        // emitter in agent-runner.ts gates content at the source, but the diagnostic
+        // event bus is shared across all plugin listeners, so we also enforce the
+        // opt-in at the exporter to prevent accidental content export.
+        if (contentCapturePolicy.inputMessages && evt.inputText) {
+          const redactedInput = truncateToBytes(
+            redactSensitiveText(evt.inputText),
+            MAX_CONTENT_ATTR_BYTES,
+          );
+          spanAttrs["gen_ai.prompt"] = redactedInput;
+          spanAttrs["langfuse.observation.input"] = redactedInput;
+        }
+        if (contentCapturePolicy.outputMessages && evt.outputText) {
+          const redactedOutput = truncateToBytes(
+            redactSensitiveText(evt.outputText),
+            MAX_CONTENT_ATTR_BYTES,
+          );
+          spanAttrs["gen_ai.completion"] = redactedOutput;
+          spanAttrs["langfuse.observation.output"] = redactedOutput;
+        }
 
         const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
         span.end();
