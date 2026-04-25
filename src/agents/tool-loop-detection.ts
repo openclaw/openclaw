@@ -495,8 +495,28 @@ export function detectToolCallLoop(
 }
 
 /**
+ * Idle gap, in ms, after which we treat a new tool call as the start of a fresh
+ * agent run/burst and clear the prior history. This keeps loop detection scoped
+ * to within a single run instead of accumulating across runs that share a
+ * persistent sessionKey.
+ *
+ * Concretely: cron jobs share a persistent sessionKey of the form
+ * `agent:main:cron:<jobId>` even when each invocation runs in an isolated
+ * session. Without this gap-based reset, identical exec calls from successive
+ * cron invocations pile up in `toolCallHistory` and cross the warning /
+ * critical thresholds even though every run is independent.
+ */
+const RUN_IDLE_GAP_MS = 60_000;
+
+/**
  * Record a tool call in the session's history for loop detection.
  * Maintains sliding window of last N calls.
+ *
+ * If the most recent recorded call is older than {@link RUN_IDLE_GAP_MS},
+ * `state.toolCallHistory` is cleared first so loop detection only fires on
+ * within-run repetition. Genuine runaway loops happen on the order of
+ * milliseconds-to-seconds, so a 60s gap is safely larger than any legitimate
+ * tight loop while still smaller than typical cron intervals (10-15 min).
  */
 export function recordToolCall(
   state: SessionState,
@@ -510,11 +530,17 @@ export function recordToolCall(
     state.toolCallHistory = [];
   }
 
+  const now = Date.now();
+  const last = state.toolCallHistory[state.toolCallHistory.length - 1];
+  if (last && now - (last.timestamp ?? 0) > RUN_IDLE_GAP_MS) {
+    state.toolCallHistory.length = 0;
+  }
+
   state.toolCallHistory.push({
     toolName,
     argsHash: hashToolCall(toolName, params),
     toolCallId,
-    timestamp: Date.now(),
+    timestamp: now,
   });
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {

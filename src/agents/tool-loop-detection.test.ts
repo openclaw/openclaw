@@ -174,6 +174,40 @@ describe("tool-loop-detection", () => {
       expect(state.toolCallHistory).toHaveLength(4);
       expect(state.toolCallHistory?.[0]?.argsHash).toBe(hashToolCall("tool", { iteration: 6 }));
     });
+
+    it("clears stale history when the previous call is older than the run-idle gap", () => {
+      // Repro: cron jobs share a persistent sessionKey across runs. Without the
+      // idle-gap reset, identical exec calls from successive cron invocations
+      // accumulate in toolCallHistory and falsely trip generic-repeat warnings.
+      const state = createState();
+
+      // Simulate 5 prior cron runs that each issued the same tool call.
+      for (let i = 0; i < 5; i += 1) {
+        recordToolCall(state, "exec", { command: "bash run.sh" }, `prev-${i}`);
+      }
+      expect(state.toolCallHistory).toHaveLength(5);
+
+      // Backdate every entry to simulate ~10 minutes between cron runs.
+      const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+      for (const entry of state.toolCallHistory ?? []) {
+        entry.timestamp = tenMinutesAgo;
+      }
+
+      // The next run should reset history before recording its own call.
+      recordToolCall(state, "exec", { command: "bash run.sh" }, "new-run");
+      expect(state.toolCallHistory).toHaveLength(1);
+      expect(state.toolCallHistory?.[0]?.toolCallId).toBe("new-run");
+    });
+
+    it("keeps history when calls are within the run-idle gap", () => {
+      // Within-run loops still need to be detectable. A few rapid identical
+      // calls must accumulate so detectToolCallLoop can fire.
+      const state = createState();
+      for (let i = 0; i < 6; i += 1) {
+        recordToolCall(state, "exec", { command: "loop" }, `tight-${i}`);
+      }
+      expect(state.toolCallHistory).toHaveLength(6);
+    });
   });
 
   describe("detectToolCallLoop", () => {
