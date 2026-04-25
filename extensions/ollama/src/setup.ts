@@ -27,6 +27,7 @@ import {
 } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
+  buildOllamaProvider,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
@@ -34,9 +35,12 @@ import {
   type OllamaModelWithContext,
 } from "./provider-models.js";
 
+export { buildOllamaProvider };
+
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
 const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
+const OLLAMA_CLOUD_MAX_DISCOVERED_MODELS = 500;
 
 type OllamaSetupOptions = {
   customBaseUrl?: string;
@@ -47,12 +51,6 @@ type OllamaSetupResult = {
   config: OpenClawConfig;
   credential: SecretInput;
   credentialMode?: SecretInputMode;
-};
-
-type ProviderConfig = {
-  baseUrl: string;
-  api: "ollama";
-  models: ReturnType<typeof buildOllamaModelDefinition>[];
 };
 
 type OllamaInteractiveMode = "cloud-local" | "cloud-only" | "local-only";
@@ -473,28 +471,6 @@ async function promptAndConfigureHostBackedOllama(params: {
   };
 }
 
-export async function buildOllamaProvider(
-  configuredBaseUrl?: string,
-  opts?: { quiet?: boolean },
-): Promise<ProviderConfig> {
-  const apiBase = resolveOllamaApiBase(configuredBaseUrl);
-  const { reachable, models } = await fetchOllamaModels(apiBase);
-  if (!reachable && !opts?.quiet) {
-    console.warn(`Ollama could not be reached at ${apiBase}.`);
-  }
-  const discovered = await enrichOllamaModelsWithContext(
-    apiBase,
-    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
-  );
-  return {
-    baseUrl: apiBase,
-    api: "ollama",
-    models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
-    ),
-  };
-}
-
 export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -524,14 +500,30 @@ export async function promptAndConfigureOllama(params: {
       secretInputMode: params.secretInputMode,
       allowSecretRefPrompt: params.allowSecretRefPrompt,
     });
+    const { reachable, models: rawDiscoveredModels } =
+      await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL);
+    const discoveredModels = rawDiscoveredModels.slice(0, OLLAMA_CLOUD_MAX_DISCOVERED_MODELS);
+    const enrichedModels =
+      reachable && discoveredModels.length > 0
+        ? await enrichOllamaModelsWithContext(
+            OLLAMA_CLOUD_BASE_URL,
+            discoveredModels.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
+          )
+        : [];
+    const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
+    const discoveredModelNames = discoveredModels.map((model) => model.name);
+    const modelNames =
+      discoveredModelNames.length > 0
+        ? mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_CLOUD, discoveredModelNames)
+        : OLLAMA_SUGGESTED_MODELS_CLOUD;
     return {
       credential,
       credentialMode,
       config: applyOllamaProviderConfig(
         params.cfg,
         OLLAMA_CLOUD_BASE_URL,
-        OLLAMA_SUGGESTED_MODELS_CLOUD,
-        undefined,
+        modelNames,
+        discoveredModelsByName,
         credential,
       ),
     };

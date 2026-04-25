@@ -512,6 +512,77 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
+  it("blocks room control commands from configured DM-only senders", async () => {
+    const hasControlCommand = vi.fn((text?: string) => text === "/new");
+    const { handler, finalizeInboundContext, recordInboundSession } =
+      createMatrixHandlerTestHarness({
+        isDirectMessage: false,
+        roomsConfig: {
+          "!room:example.org": { requireMention: false },
+        },
+        shouldHandleTextCommands: () => true,
+        hasControlCommand,
+        cfg: {
+          commands: {
+            useAccessGroups: true,
+          },
+          channels: {
+            matrix: {
+              dm: { allowFrom: ["@observer:example.org"] },
+              groupAllowFrom: ["@driver:example.org"],
+            },
+          },
+        },
+        groupPolicy: "open",
+        getMemberDisplayName: async () => "observer",
+      });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dm-configured-room-command",
+        sender: "@observer:example.org",
+        body: "@bot:example.org /new",
+      }),
+    );
+
+    expect(hasControlCommand).toHaveBeenCalledWith("/new", expect.anything());
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+  });
+
+  it("strips the Matrix self user id before room slash command detection", async () => {
+    const hasControlCommand = vi.fn((text?: string) => text === "/new");
+    const { handler, finalizeInboundContext, recordInboundSession } =
+      createMatrixHandlerTestHarness({
+        cfg: { commands: { useAccessGroups: false } },
+        isDirectMessage: false,
+        mentionRegexes: [],
+        shouldHandleTextCommands: () => true,
+        hasControlCommand,
+        getMemberDisplayName: async () => "sender",
+      });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$mxid-command",
+        body: "@bot:example.org /new",
+      }),
+    );
+
+    expect(hasControlCommand).toHaveBeenCalledWith("/new", expect.anything());
+    expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        RawBody: "@bot:example.org /new",
+        CommandBody: "/new",
+        BodyForAgent: "@bot:example.org /new",
+        BodyForCommands: "/new",
+      }),
+    );
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({
@@ -1741,6 +1812,309 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 });
 
+describe("matrix monitor handler live allowlist reload", () => {
+  type MatrixHandler = ReturnType<typeof createMatrixHandlerTestHarness>["handler"];
+
+  const createDispatchReplyFromConfig = () =>
+    vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+
+  const sendLiveAllowlistMessage = async (
+    handler: MatrixHandler,
+    params: {
+      eventId: string;
+      sender: string;
+      body: string;
+      roomId?: string;
+      mentions?: MatrixRawEvent["content"]["m.mentions"];
+    },
+  ) => {
+    await handler(
+      params.roomId ?? "!dm:example.org",
+      createMatrixTextMessageEvent({
+        eventId: params.eventId,
+        sender: params.sender,
+        body: params.body,
+        ...(params.mentions ? { mentions: params.mentions } : {}),
+      }),
+    );
+  };
+
+  it("accepts a DM sender added to live dm.allowFrom", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: [] as string[] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: [],
+      allowFromResolvedEntries: [],
+      dispatchReplyFromConfig,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-add-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    cfg.channels.matrix.dm.allowFrom = ["@alice:example.org"];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-add-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a DM sender removed from live dm.allowFrom", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["@alice:example.org"] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: ["@alice:example.org"],
+      allowFromResolvedEntries: [{ input: "@alice:example.org", id: "@alice:example.org" }],
+      dispatchReplyFromConfig,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-remove-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.dm.allowFrom = [];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-remove-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a DM sender after live wildcard removal", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["*"] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: ["*"],
+      allowFromResolvedEntries: [],
+      dispatchReplyFromConfig,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-wildcard-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.dm.allowFrom = [];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-wildcard-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses account-scoped live dm.allowFrom overrides", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["@base:example.org"] },
+          accounts: {
+            ops: {
+              dm: { allowFrom: ["@alice:example.org"] },
+            },
+          },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      accountId: "ops",
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: ["@alice:example.org"],
+      allowFromResolvedEntries: [{ input: "@alice:example.org", id: "@alice:example.org" }],
+      dispatchReplyFromConfig,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-account-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.accounts.ops.dm.allowFrom = [];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-account-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps startup-resolved display names only while the raw input remains configured", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: ["Alice"] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: ["@alice:example.org"],
+      allowFromResolvedEntries: [{ input: "Alice", id: "@alice:example.org" }],
+      dispatchReplyFromConfig,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-name-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.dm.allowFrom = [];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-name-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a DM sender added as a live-resolved display name", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const resolveLiveUserAllowlist = vi.fn(
+      async (params: { entries?: ReadonlyArray<string | number> }) => {
+        const entries = (params.entries ?? []).map(String);
+        return entries.includes("Alice") ? ["@alice:example.org"] : [];
+      },
+    );
+    const cfg = {
+      channels: {
+        matrix: {
+          dm: { allowFrom: [] as string[] },
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      dmPolicy: "allowlist",
+      isDirectMessage: true,
+      allowFrom: [],
+      allowFromResolvedEntries: [],
+      dispatchReplyFromConfig,
+      resolveLiveUserAllowlist,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-live-name-before",
+      sender: "@alice:example.org",
+      body: "hello",
+    });
+    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    cfg.channels.matrix.dm.allowFrom = ["Alice"];
+    await sendLiveAllowlistMessage(handler, {
+      eventId: "$dm-live-name-after",
+      sender: "@alice:example.org",
+      body: "hello again",
+    });
+
+    expect(resolveLiveUserAllowlist).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountId: "ops",
+        entries: ["Alice"],
+      }),
+    );
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a room sender removed from live groupAllowFrom while the group list remains configured", async () => {
+    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const cfg = {
+      channels: {
+        matrix: {
+          groupAllowFrom: ["@alice:example.org", "@bob:example.org"],
+        },
+      },
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg,
+      isDirectMessage: false,
+      groupPolicy: "allowlist",
+      roomsConfig: { "*": {} },
+      groupAllowFrom: ["@alice:example.org", "@bob:example.org"],
+      groupAllowFromResolvedEntries: [
+        { input: "@alice:example.org", id: "@alice:example.org" },
+        { input: "@bob:example.org", id: "@bob:example.org" },
+      ],
+      dispatchReplyFromConfig,
+    });
+
+    await sendLiveAllowlistMessage(handler, {
+      roomId: "!room:example.org",
+      eventId: "$group-remove-before",
+      sender: "@alice:example.org",
+      body: "@room hello",
+      mentions: { room: true },
+    });
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+
+    cfg.channels.matrix.groupAllowFrom = ["@bob:example.org"];
+    await sendLiveAllowlistMessage(handler, {
+      roomId: "!room:example.org",
+      eventId: "$group-remove-after",
+      sender: "@alice:example.org",
+      body: "@room hello again",
+      mentions: { room: true },
+    });
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("matrix monitor handler durable inbound dedupe", () => {
   it("skips replayed inbound events before session recording", async () => {
     const inboundDeduper = {
@@ -2399,19 +2773,25 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
 
     opts.onPartialReply?.({ text: "AlphaBeta" });
-    await vi.waitFor(() => {
-      expect(editMessageMatrixMock).toHaveBeenCalledWith(
-        "!room:example.org",
-        "$draft1",
-        "AlphaBeta",
-        expect.anything(),
-      );
-    });
+    await vi.waitFor(
+      () => {
+        expect(editMessageMatrixMock).toHaveBeenCalledWith(
+          "!room:example.org",
+          "$draft1",
+          "AlphaBeta",
+          expect.anything(),
+        );
+      },
+      { interval: 1 },
+    );
 
     await opts.onBlockReplyQueued?.({ text: "Alpha" });
 
@@ -2423,9 +2803,12 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await deliver({ text: "Alpha" }, { kind: "block" });
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
     expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Beta");
     expect(editMessageMatrixMock).toHaveBeenCalledWith(
       "!room:example.org",
@@ -2880,6 +3263,50 @@ describe("matrix monitor handler draft streaming", () => {
 
     deliverMatrixRepliesMock.mockClear();
     await deliver({ mediaUrl: "https://example.com/image.png" }, { kind: "final" });
+
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("does not create a throwaway draft for fast media-only finals", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness();
+    const { deliver, finish } = await dispatch();
+
+    await deliver({ mediaUrl: "https://example.com/image.png" }, { kind: "final" });
+
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("does not create a throwaway draft for fast error finals", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness();
+    const { deliver, finish } = await dispatch();
+
+    await deliver({ text: "Something failed", isError: true } as never, { kind: "final" });
+
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("redacts existing drafts for text error finals and uses normal delivery", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness();
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Partial reply" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockClear();
+    await deliver({ text: "Something failed", isError: true } as never, { kind: "final" });
 
     expect(editMessageMatrixMock).not.toHaveBeenCalled();
     expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");

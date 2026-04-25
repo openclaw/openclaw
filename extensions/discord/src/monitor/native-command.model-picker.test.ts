@@ -6,6 +6,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
+import { resolveDiscordChannelContext } from "./agent-components-helpers.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
@@ -75,6 +77,7 @@ function createModelPickerContext(): ModelPickerContext {
     accountId: "default",
     sessionPrefix: "discord:slash",
     threadBindings: createNoopThreadBindingManager("default"),
+    postApplySettleMs: 0,
   };
 }
 
@@ -218,9 +221,14 @@ async function runModelSelect(params: {
 function expectDispatchedModelSelection(params: {
   dispatchSpy: ReturnType<typeof createDispatchSpy>;
   model: string;
+  runtime?: string;
 }) {
   const dispatchCall = params.dispatchSpy.mock.calls[0]?.[0];
-  expect(dispatchCall?.prompt).toBe(`/model ${params.model}`);
+  expect(dispatchCall?.prompt).toBe(
+    params.runtime
+      ? `/model ${params.model} --runtime ${params.runtime}`
+      : `/model ${params.model}`,
+  );
   expect(dispatchCall?.commandArgs?.values?.model).toBe(params.model);
 }
 
@@ -330,6 +338,136 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "openai/gpt-4o",
     });
+  });
+
+  it("applies the selected model even when component channel.name throws on a partial channel", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    const submitInteraction = createInteraction({ userId: "owner" });
+    defineThrowingDiscordChannelGetter(submitInteraction.channel, "name");
+
+    const button = createModelPickerFallbackButton(context, dispatchSpy);
+    await button.run(
+      submitInteraction as unknown as PickerButtonInteraction,
+      createModelsViewSubmitData(),
+    );
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "openai/gpt-4o",
+    });
+  });
+
+  it("applies the selected model even when component thread parent.name throws on a partial channel", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    const submitInteraction = createInteraction({ userId: "owner" });
+    submitInteraction.guild = { id: "guild-1" };
+    const threadChannel = {
+      type: ChannelType.PublicThread,
+      id: "thread-1",
+      parentId: "parent-1",
+      parent: { id: "parent-1", name: "parent-name" },
+    } as {
+      type: ChannelType;
+      id: string;
+      parentId: string;
+      parent?: { id?: string; name?: string };
+    };
+    submitInteraction.channel = threadChannel as MockInteraction["channel"];
+    defineThrowingDiscordChannelGetter(
+      threadChannel.parent as { id?: string; name?: string },
+      "name",
+    );
+
+    const button = createModelPickerFallbackButton(context, dispatchSpy);
+    await button.run(
+      submitInteraction as unknown as PickerButtonInteraction,
+      createModelsViewSubmitData(),
+    );
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "openai/gpt-4o",
+    });
+  });
+
+  it("routes selected runtime through the /model pipeline", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          {
+            id: "pi",
+            label: "OpenClaw Pi Default",
+            description: "Use the built-in OpenClaw Pi runtime.",
+          },
+          {
+            id: "codex",
+            label: "codex",
+            description: "Run openai models through the codex harness.",
+          },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    await runSubmitButton({
+      context,
+      data: {
+        ...createModelsViewSubmitData(),
+        r: "codex",
+      },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "openai/gpt-4o",
+      runtime: "codex",
+    });
+  });
+
+  it("ignores category parent metadata for non-thread component channels", () => {
+    const interaction = createInteraction({ userId: "owner" });
+    interaction.guild = { id: "guild-1" };
+    interaction.channel = {
+      type: ChannelType.GuildText,
+      id: "channel-1",
+      name: "general",
+      parentId: "category-1",
+      parent: { id: "category-1", name: "category-name" },
+    } as MockInteraction["channel"] & { parent?: { id?: string; name?: string } };
+
+    const channelCtx = resolveDiscordChannelContext(
+      interaction as unknown as Parameters<typeof resolveDiscordChannelContext>[0],
+    );
+
+    expect(channelCtx.isThread).toBe(false);
+    expect(channelCtx.parentId).toBeUndefined();
+    expect(channelCtx.parentName).toBeUndefined();
+    expect(channelCtx.parentSlug).toBe("");
   });
 
   it("shows timeout status and skips recents write when apply is still processing", async () => {

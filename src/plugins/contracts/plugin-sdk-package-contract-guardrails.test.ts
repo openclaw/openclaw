@@ -1,7 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
 
@@ -77,10 +76,6 @@ function collectRuntimeDependencySpecs(packageJson: {
   ]);
 }
 
-function createRootPackageRequire() {
-  return createRequire(pathToFileURL(resolve(REPO_ROOT, "package.json")).href);
-}
-
 function collectExtensionFiles(dir: string): string[] {
   const entries = readdirSync(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -109,6 +104,7 @@ function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: str
     if (
       /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
       /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+      /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
       /\.test\.[cm]?tsx?$/.test(repoRelativePath)
     ) {
       continue;
@@ -163,7 +159,7 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(failures).toEqual([]);
   });
 
-  it("mirrors package runtime deps needed by bundled host graphs", () => {
+  it("keeps Matrix runtime deps local to the Matrix plugin", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
@@ -174,19 +170,10 @@ describe("plugin-sdk package contract guardrails", () => {
       "fake-indexeddb",
       "matrix-js-sdk",
     ]) {
-      expect(rootRuntimeDeps.get(dep)).toBe(matrixRuntimeDeps.get(dep));
+      expect(matrixRuntimeDeps.get(dep)).toBeDefined();
+      expect(rootRuntimeDeps.has(dep)).toBe(false);
     }
     expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);
-  });
-
-  it("resolves matrix crypto WASM from the root runtime surface", () => {
-    const rootRequire = createRootPackageRequire();
-    // Normalize filesystem separators so the package assertion stays portable.
-    const resolvedPath = rootRequire
-      .resolve("@matrix-org/matrix-sdk-crypto-wasm")
-      .replaceAll("\\", "/");
-
-    expect(resolvedPath).toContain("@matrix-org/matrix-sdk-crypto-wasm");
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {

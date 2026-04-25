@@ -12,6 +12,7 @@ import {
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
+import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
@@ -44,11 +45,9 @@ type ChatRefreshHost = AppViewState & {
 };
 
 export function resolveAssistantAttachmentAuthToken(
-  state: Pick<AppViewState, "settings" | "password">,
+  state: Pick<AppViewState, "hello" | "settings" | "password">,
 ) {
-  return (
-    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
-  );
+  return resolveControlUiAuthToken(state);
 }
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
@@ -185,6 +184,19 @@ export function renderChatControls(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const refreshLabel = t("chat.refreshTitle");
+  const thinkingLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.thinkingToggle");
+  const toolCallsLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.toolCallsToggle");
+  const focusLabel = disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle");
+  const cronLabel = hideCron
+    ? hiddenCronCount > 0
+      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+      : t("chat.showCronSessions")
+    : t("chat.hideCronSessions");
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -257,7 +269,9 @@ export function renderChatControls(state: AppViewState) {
             });
           }
         }}
-        title=${t("chat.refreshTitle")}
+        title=${refreshLabel}
+        aria-label=${refreshLabel}
+        data-tooltip=${refreshLabel}
       >
         ${refreshIcon}
       </button>
@@ -275,7 +289,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
+        title=${thinkingLabel}
+        aria-label=${thinkingLabel}
+        data-tooltip=${thinkingLabel}
       >
         ${icons.brain}
       </button>
@@ -292,7 +308,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showToolCalls}
-        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.toolCallsToggle")}
+        title=${toolCallsLabel}
+        aria-label=${toolCallsLabel}
+        data-tooltip=${toolCallsLabel}
       >
         ${toolCallsIcon}
       </button>
@@ -309,7 +327,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        title=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
+        title=${focusLabel}
+        aria-label=${focusLabel}
+        data-tooltip=${focusLabel}
       >
         ${focusIcon}
       </button>
@@ -319,11 +339,9 @@ export function renderChatControls(state: AppViewState) {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        title=${hideCron
-          ? hiddenCronCount > 0
-            ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-            : t("chat.showCronSessions")
-          : t("chat.hideCronSessions")}
+        title=${cronLabel}
+        aria-label=${cronLabel}
+        data-tooltip=${cronLabel}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>

@@ -57,6 +57,10 @@ const mocks = vi.hoisted(() => ({
     provider: "openai",
     model: "gpt-4.1-mini",
   })),
+  describeImageFileWithModel: vi.fn(async () => ({
+    text: "friendly lobster",
+    model: "gpt-4.1-mini",
+  })),
   generateImage: vi.fn(),
   generateVideo: vi.fn(),
   transcribeAudioFile: vi.fn(async () => ({ text: "meeting notes" })),
@@ -179,6 +183,8 @@ vi.mock("../gateway/connection-details.js", () => ({
 vi.mock("../media-understanding/runtime.js", () => ({
   describeImageFile:
     mocks.describeImageFile as typeof import("../media-understanding/runtime.js").describeImageFile,
+  describeImageFileWithModel:
+    mocks.describeImageFileWithModel as typeof import("../media-understanding/runtime.js").describeImageFileWithModel,
   describeVideoFile: vi.fn(),
   transcribeAudioFile:
     mocks.transcribeAudioFile as typeof import("../media-understanding/runtime.js").transcribeAudioFile,
@@ -289,6 +295,7 @@ describe("capability cli", () => {
       return {};
     }) as never);
     mocks.describeImageFile.mockClear();
+    mocks.describeImageFileWithModel.mockClear();
     mocks.generateImage.mockReset();
     mocks.generateVideo.mockReset();
     mocks.transcribeAudioFile.mockClear();
@@ -353,6 +360,37 @@ describe("capability cli", () => {
     );
   });
 
+  it("cleans up bundled MCP runtimes for local model runs", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    expect(mocks.agentCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanupBundleMcpOnRunEnd: true,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("requests bundled MCP runtime cleanup for gateway model runs", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          cleanupBundleMcpOnRunEnd: true,
+        }),
+      }),
+    );
+  });
+
   it("defaults tts status to gateway transport", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -380,6 +418,37 @@ describe("capability cli", () => {
       expect.objectContaining({
         capability: "image.describe",
         outputs: [expect.objectContaining({ kind: "image.description" })],
+      }),
+    );
+  });
+
+  it("uses the explicit media-understanding provider for image describe model overrides", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "photo.jpg",
+        "--model",
+        "ollama/qwen2.5vl:7b",
+        "--json",
+      ],
+    });
+
+    expect(mocks.describeImageFileWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: expect.stringMatching(/photo\.jpg$/),
+        provider: "ollama",
+        model: "qwen2.5vl:7b",
+      }),
+    );
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        model: "gpt-4.1-mini",
       }),
     );
   });

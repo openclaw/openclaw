@@ -4,6 +4,7 @@ import {
   buildAgentContext,
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
+  resolveChatAvatarRenderUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";
@@ -127,9 +128,51 @@ describe("resolveAgentAvatarUrl", () => {
     ).toBe("/avatar/main");
   });
 
+  it("ignores remote http avatars so the control UI falls back to a local badge", () => {
+    expect(
+      resolveAgentAvatarUrl({
+        identity: { avatarUrl: "https://example.com/avatar.png" },
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores protocol-relative avatars so the control UI cannot be tricked into a cross-origin fetch", () => {
+    expect(
+      resolveAgentAvatarUrl({
+        identity: { avatarUrl: "//evil.example/avatar.png" },
+      }),
+    ).toBeNull();
+  });
+
   it("returns null for initials or emoji avatar values without a URL", () => {
     expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
     expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
+  });
+});
+
+describe("resolveChatAvatarRenderUrl", () => {
+  it("accepts a blob: URL produced by an authenticated avatar fetch", () => {
+    expect(
+      resolveChatAvatarRenderUrl("blob:http://localhost/uuid-123", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("blob:http://localhost/uuid-123");
+  });
+
+  it("falls back to the config-sanitized avatar when no blob candidate is present", () => {
+    expect(
+      resolveChatAvatarRenderUrl(null, {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
+  });
+
+  it("rejects remote URLs passed as the render candidate", () => {
+    expect(
+      resolveChatAvatarRenderUrl("https://example.com/avatar.png", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
   });
 });
 
@@ -140,7 +183,7 @@ describe("buildAgentContext", () => {
         id: "main",
         workspace: "/tmp/agent-workspace",
         model: {
-          primary: "openai/gpt-5.4",
+          primary: "openai/gpt-5.5",
           fallbacks: ["openai-codex/gpt-5.2-codex"],
         },
       },
@@ -151,7 +194,7 @@ describe("buildAgentContext", () => {
     );
 
     expect(context.workspace).toBe("/tmp/agent-workspace");
-    expect(context.model).toBe("openai/gpt-5.4 (+1 fallback)");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
     expect(context.isDefault).toBe(true);
   });
 
@@ -163,7 +206,7 @@ describe("buildAgentContext", () => {
           defaults: {
             workspace: "/tmp/default-workspace",
             model: {
-              primary: "openai/gpt-5.4",
+              primary: "openai/gpt-5.5",
               fallbacks: ["openai-codex/gpt-5.2-codex"],
             },
           },
@@ -176,6 +219,6 @@ describe("buildAgentContext", () => {
     );
 
     expect(context.workspace).toBe("/tmp/default-workspace");
-    expect(context.model).toBe("openai/gpt-5.4 (+1 fallback)");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
   });
 });

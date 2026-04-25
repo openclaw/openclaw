@@ -92,14 +92,14 @@ export const baseStatusSummary = {
   sessions: {
     count: 2,
     paths: ["store.json"],
-    defaults: { model: "gpt-5.4", contextTokens: 12_000 },
+    defaults: { model: "gpt-5.5", contextTokens: 12_000 },
     recent: [
       {
         key: "session-key",
         kind: "direct",
         updatedAt: 1,
         age: 5_000,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         totalTokens: 12_000,
         totalTokensFresh: true,
         remainingTokens: 4_000,
@@ -141,7 +141,7 @@ export function createStatusLastHeartbeat(): HeartbeatEventPayload {
   return {
     ts: Date.now() - 30_000,
     status: "ok-token",
-    channel: "discord",
+    channel: "quietchat",
     accountId: "acct",
   };
 }
@@ -179,7 +179,7 @@ export const statusTestFormatting = {
   formatKTokens: (value: number) => `${Math.round(value / 1000)}k`,
   formatTokensCompact: () => "12k",
   formatPromptCacheCompact: () => "cache ok",
-  formatHealthChannelLines: () => ["Discord: OK · ready"],
+  formatHealthChannelLines: () => ["QuietChat: OK · ready"],
   formatPluginCompatibilityNotice: (notice: { message?: unknown }) => String(notice.message),
   formatUpdateAvailableHint: () => "update available",
 };
@@ -244,13 +244,13 @@ export function createStatusCommandReportDataParams(
     lastHeartbeat: createStatusLastHeartbeat(),
     agentStatus: baseStatusAgentStatus,
     channels: {
-      rows: [{ id: "discord", label: "Discord", enabled: true, state: "ok", detail: "ready" }],
+      rows: [{ id: "quietchat", label: "QuietChat", enabled: true, state: "ok", detail: "ready" }],
     },
-    channelIssues: [{ channel: "discord", message: "warn msg" }],
+    channelIssues: [{ channel: "quietchat", message: "warn msg" }],
     memory: baseStatusMemory,
     memoryPlugin: baseStatusMemoryPlugin,
     pluginCompatibility: baseStatusPluginCompatibility,
-    pairingRecovery: { requestId: "req-1" },
+    pairingRecovery: { requestId: "req-1", reason: null, remediationHint: null },
     tableWidth: 120,
     ...statusTestDecorators,
     ...statusTestFormatting,

@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
+import { visitObjectContentBlocks } from "../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
@@ -64,34 +65,25 @@ export function decodeHtmlEntitiesInObject(value: unknown): unknown {
 }
 
 function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
+  visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; arguments?: unknown };
     if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
-      continue;
+      return;
     }
     if (typeof typedBlock.arguments === "object") {
       typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
     }
-  }
+  });
 }
 
-function wrapStreamDecodeToolCallArgumentHtmlEntities(
+export function wrapStreamMessageObjects(
   stream: ReturnType<typeof streamSimple>,
+  transformMessage: (message: unknown) => void,
 ): ReturnType<typeof streamSimple> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    decodeToolCallArgumentsHtmlEntitiesInMessage(message);
+    transformMessage(message);
     return message;
   };
 
@@ -104,8 +96,8 @@ function wrapStreamDecodeToolCallArgumentHtmlEntities(
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
             const event = result.value as { partial?: unknown; message?: unknown };
-            decodeToolCallArgumentsHtmlEntitiesInMessage(event.partial);
-            decodeToolCallArgumentsHtmlEntitiesInMessage(event.message);
+            transformMessage(event.partial);
+            transformMessage(event.message);
           }
           return result;
         },
@@ -128,10 +120,10 @@ export function createHtmlEntityToolCallArgumentDecodingWrapper(
     const maybeStream = underlying(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamDecodeToolCallArgumentHtmlEntities(stream),
+        wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
       );
     }
-    return wrapStreamDecodeToolCallArgumentHtmlEntities(maybeStream);
+    return wrapStreamMessageObjects(maybeStream, decodeToolCallArgumentsHtmlEntitiesInMessage);
   };
 }
 
@@ -157,12 +149,17 @@ export type GoogleThinkingInputLevel =
   | "medium"
   | "adaptive"
   | "high"
+  | "max"
   | "xhigh";
 
 // Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
 // "Budget 0 is invalid. This model only works in thinking mode."
 export function isGoogleThinkingRequiredModel(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-2.5-pro");
+}
+
+export function isGoogleGemini25ThinkingBudgetModel(modelId: string): boolean {
+  return /(?:^|\/)gemini-2\.5-/.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
 export function isGoogleGemini3ProModel(modelId: string): boolean {
@@ -194,12 +191,19 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
       case "low":
         return "LOW";
       case "medium":
-      case "adaptive":
       case "high":
+      case "max":
       case "xhigh":
         return "HIGH";
+      case "adaptive":
+        return undefined;
+      case undefined:
+        break;
     }
     if (typeof params.thinkingBudget === "number") {
+      if (params.thinkingBudget < 0) {
+        return undefined;
+      }
       return params.thinkingBudget <= 2048 ? "LOW" : "HIGH";
     }
     return undefined;
@@ -214,13 +218,20 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case "low":
       return "LOW";
     case "medium":
-    case "adaptive":
       return "MEDIUM";
     case "high":
+    case "max":
     case "xhigh":
       return "HIGH";
+    case "adaptive":
+      return undefined;
+    case undefined:
+      break;
   }
   if (typeof params.thinkingBudget !== "number") {
+    return undefined;
+  }
+  if (params.thinkingBudget < 0) {
     return undefined;
   }
   if (params.thinkingBudget <= 0) {
@@ -266,6 +277,7 @@ function mapThinkLevelToGemma4ThinkingLevel(
     case "medium":
     case "adaptive":
     case "high":
+    case "max":
     case "xhigh":
       return "HIGH";
     default:
@@ -354,6 +366,29 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   }
 
   const thinkingBudget = thinkingConfigObj.thinkingBudget;
+
+  if (
+    params.thinkingLevel === "adaptive" &&
+    typeof params.modelId === "string" &&
+    isGoogleGemini25ThinkingBudgetModel(params.modelId)
+  ) {
+    delete thinkingConfigObj.thinkingLevel;
+    thinkingConfigObj.thinkingBudget = -1;
+    return;
+  }
+
+  if (
+    params.thinkingLevel === "adaptive" &&
+    typeof params.modelId === "string" &&
+    isGoogleGemini3ThinkingLevelModel(params.modelId)
+  ) {
+    delete thinkingConfigObj.thinkingBudget;
+    delete thinkingConfigObj.thinkingLevel;
+    if (Object.keys(thinkingConfigObj).length === 0) {
+      delete configObj.thinkingConfig;
+    }
+    return;
+  }
 
   if (typeof params.modelId === "string" && isGoogleGemini3ThinkingLevelModel(params.modelId)) {
     const mappedLevel = resolveGoogleGemini3ThinkingLevel({

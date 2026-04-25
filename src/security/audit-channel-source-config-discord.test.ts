@@ -1,63 +1,40 @@
-import { describe, expect, it, vi } from "vitest";
-import { collectDiscordSecurityAuditFindings } from "../../test/helpers/channels/security-audit-contract.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { stubAuditChannelPlugin } from "./audit-channel-test-helpers.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
-
-const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
-  readChannelAllowFromStoreMock: vi.fn(async () => [] as string[]),
-}));
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  readChannelAllowFromStore: readChannelAllowFromStoreMock,
-}));
 
 function stubDiscordPlugin(params: {
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   isConfigured?: (account: unknown, cfg: OpenClawConfig) => boolean;
-}): ChannelPlugin {
-  return {
+}) {
+  return stubAuditChannelPlugin({
     id: "discord",
-    meta: {
-      id: "discord",
-      label: "Discord",
-      selectionLabel: "Discord",
-      docsPath: "/docs/testing",
-      blurb: "test stub",
-    },
-    capabilities: {
-      chatTypes: ["direct", "group"],
-    },
+    label: "Discord",
     commands: {
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: true,
     },
-    security: {
-      collectAuditFindings: collectDiscordSecurityAuditFindings,
+    collectAuditFindings: ({ account }) => {
+      const config = (account as { config?: { guilds?: unknown } }).config ?? {};
+      const guilds =
+        config.guilds && typeof config.guilds === "object" && !Array.isArray(config.guilds)
+          ? config.guilds
+          : {};
+      if (Object.keys(guilds).length === 0) {
+        return [];
+      }
+      return [
+        {
+          checkId: "channels.discord.commands.native.no_allowlists",
+          severity: "warn" as const,
+          title: "Discord slash commands have no allowlists",
+          detail: "test stub",
+        },
+      ];
     },
-    config: {
-      listAccountIds: () => ["default"],
-      inspectAccount:
-        params.inspectAccount ??
-        ((cfg, accountId) => {
-          const resolvedAccountId =
-            typeof accountId === "string" && accountId ? accountId : "default";
-          const account = params.resolveAccount(cfg, resolvedAccountId) as
-            | { config?: Record<string, unknown> }
-            | undefined;
-          return {
-            accountId: resolvedAccountId,
-            enabled: true,
-            configured: true,
-            config: account?.config ?? {},
-          };
-        }),
-      resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
-      isEnabled: () => true,
-      isConfigured: (account, cfg) => params.isConfigured?.(account, cfg) ?? true,
-    },
-  };
+    ...params,
+  });
 }
 
 describe("security audit channel source-config fallback discord", () => {
@@ -96,7 +73,6 @@ describe("security audit channel source-config fallback discord", () => {
       },
     };
 
-    readChannelAllowFromStoreMock.mockResolvedValue([]);
     const findings = await collectChannelSecurityFindings({
       cfg: resolvedConfig,
       sourceConfig,

@@ -7,6 +7,7 @@ import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
   collectInstalledContextEngineRuntimeErrors,
+  collectInstalledRootDependencyManifestErrors,
   collectInstalledMirroredRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
@@ -17,12 +18,8 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-pa
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
-const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-] as const;
 const REQUIRED_INSTALLED_RUNTIME_SIDECAR_PATHS = [
   ...PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS,
-  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
 ] as const;
 
 describe("buildPublishedInstallScenarios", () => {
@@ -170,7 +167,77 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
-  it("flags missing root mirrors for bundled plugin deps imported by root dist", () => {
+  function writeSlackWebApiProbePackage(params: {
+    root: string;
+    importerSource?: string;
+    importerPath?: string;
+    rootDependencies?: Record<string, string>;
+    rootOptionalDependencies?: Record<string, string>;
+  }): void {
+    writePackageFile(params.root, "package.json", {
+      version: "2026.4.10",
+      dependencies: params.rootDependencies,
+      optionalDependencies: params.rootOptionalDependencies,
+    });
+    writePackageFile(params.root, "dist/extensions/slack/package.json", {
+      dependencies: {
+        "@slack/web-api": "^7.15.0",
+      },
+    });
+    const importerPath = params.importerPath ?? "dist/probe-Cz2PiFtC.js";
+    mkdirSync(join(params.root, "dist"), { recursive: true });
+    writeFileSync(
+      join(params.root, importerPath),
+      params.importerSource ?? 'import("@slack/web-api");\n',
+      "utf8",
+    );
+  }
+
+  it("flags bundled plugin deps imported by root dist when root mirrors are missing", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeSlackWebApiProbePackage({ root: packageRoot });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing mirrored bundled runtime dependency '@slack/web-api' for dist importers: probe-Cz2PiFtC.js. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/slack/.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows bundled plugin deps imported from their own extension dist without root mirrors", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeSlackWebApiProbePackage({
+        root: packageRoot,
+        importerPath: "dist/extensions/slack/client-Cz2PiFtC.js",
+      });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows bundled plugin deps imported from root chunks sourced from their extension", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeSlackWebApiProbePackage({
+        root: packageRoot,
+        importerSource: '//#region extensions/slack/client.ts\nimport("@slack/web-api");\n',
+      });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not require root mirrors for extension-only Matrix crypto deps", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -178,21 +245,19 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         version: "2026.4.10",
         dependencies: {},
       });
-      writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
+      writePackageFile(packageRoot, "dist/extensions/matrix/package.json", {
         dependencies: {
-          "@slack/web-api": "^7.15.0",
+          "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+          "@matrix-org/matrix-sdk-crypto-wasm": "18.1.0",
         },
       });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
-        'import("@slack/web-api");\n',
+        join(packageRoot, "dist/extensions/matrix/crypto-node.runtime.js"),
+        'require("@matrix-org/matrix-sdk-crypto-nodejs");\n',
         "utf8",
       );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; mirror '@slack/web-api: ^7.15.0' in root package.json (declared by slack).",
-      ]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -226,31 +291,18 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("flags root mirror dependency version mismatches", () => {
+  it("does not compare root mirror dependency versions", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
-      writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.10",
-        dependencies: {
+      writeSlackWebApiProbePackage({
+        root: packageRoot,
+        rootDependencies: {
           "@slack/web-api": "^7.16.0",
         },
       });
-      writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
-        dependencies: {
-          "@slack/web-api": "^7.15.0",
-        },
-      });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
-        'import("@slack/web-api");\n',
-        "utf8",
-      );
 
-      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; root package.json has '^7.16.0' but plugin manifest declares '^7.15.0' (slack).",
-      ]);
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -365,6 +417,182 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
       rmSync(outsideManifestRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectInstalledRootDependencyManifestErrors", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-root-deps-"));
+  }
+
+  function writePackageFile(root: string, relativePath: string, value: unknown): void {
+    const fullPath = join(root, relativePath);
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  }
+
+  it("flags root dist imports whose declared runtime package name is missing", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'typebox' for dist importers: typebox-CXXonh2u.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts root dist imports when the runtime package name is declared", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {
+          typebox: "1.1.28",
+        },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("flags undeclared imports from mjs and cjs root dist files", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "esm-entry.mjs"),
+        'export { value } from "mjs-only";\n',
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "cjs-entry.cjs"),
+        'const cjsOnly = require("cjs-only");\nmodule.exports = cjsOnly;\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like text inside comments", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "comment-only.js"),
+        [
+          '// import "fake-package";',
+          '/* require("fake-package-two"); */',
+          "export const ok = true;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like text inside string literals", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "string-only.js"),
+        [
+          'export const help = "run import(\'fake-package\') after setup";',
+          'export const note = "from \\"fake-package-two\\"";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a structured error when installed package.json is invalid", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), "{not-json\n", "utf8");
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        expect.stringMatching(/^installed package\.json could not be parsed:/u),
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses oversized root dist files", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "oversized.js"),
+        "x".repeat(2 * 1024 * 1024 + 1),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root dist file 'oversized.js' is invalid or exceeds 2097152 bytes.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 });

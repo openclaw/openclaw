@@ -45,6 +45,44 @@ function collectActionValues(schema: unknown, values: Set<string>): void {
   }
 }
 
+async function writeSessionStore(
+  storeTemplate: string,
+  agentId: string,
+  entries: Record<string, unknown>,
+) {
+  await fs.writeFile(
+    storeTemplate.replaceAll("{agentId}", agentId),
+    JSON.stringify(entries, null, 2),
+    "utf-8",
+  );
+}
+
+function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
+  return createOpenClawCodingTools({
+    sessionKey,
+    config: {
+      session: {
+        store: storeTemplate,
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    },
+  });
+}
+
+function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCodingTools>) {
+  const names = new Set(tools.map((tool) => tool.name));
+  expect(names.has("sessions_spawn")).toBe(false);
+  expect(names.has("sessions_list")).toBe(false);
+  expect(names.has("sessions_history")).toBe(false);
+  expect(names.has("subagents")).toBe(false);
+}
+
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
@@ -196,43 +234,92 @@ describe("createOpenClawCodingTools", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-depth-policy-"));
     try {
       const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
-      const storePath = storeTemplate.replaceAll("{agentId}", "main");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            "agent:main:subagent:flat": {
-              sessionId: "session-flat-depth-2",
-              updatedAt: Date.now(),
-              spawnDepth: 2,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const tools = createOpenClawCodingTools({
-        sessionKey: "agent:main:subagent:flat",
-        config: {
-          session: {
-            store: storeTemplate,
-          },
-          agents: {
-            defaults: {
-              subagents: {
-                maxSpawnDepth: 2,
-              },
-            },
-          },
+      await writeSessionStore(storeTemplate, "main", {
+        "agent:main:subagent:flat": {
+          sessionId: "session-flat-depth-2",
+          updatedAt: Date.now(),
+          spawnDepth: 2,
         },
       });
-      const names = new Set(tools.map((tool) => tool.name));
-      expect(names.has("sessions_spawn")).toBe(false);
-      expect(names.has("sessions_list")).toBe(false);
-      expect(names.has("sessions_history")).toBe(false);
-      expect(names.has("subagents")).toBe(false);
+
+      const tools = createToolsForStoredSession(storeTemplate, "agent:main:subagent:flat");
+      expectNoSubagentControlTools(tools);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies subagent tool policy to ACP children spawned under a subagent envelope", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-subagent-policy-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      await writeSessionStore(storeTemplate, "main", {
+        "agent:main:acp:child": {
+          sessionId: "session-acp-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:subagent:parent",
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+        "agent:main:acp:plain": {
+          sessionId: "session-acp-plain",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:acp:parent": {
+          sessionId: "session-acp-parent",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:subagent:parent",
+        },
+      });
+      await writeSessionStore(storeTemplate, "writer", {
+        "agent:writer:acp:child": {
+          sessionId: "session-acp-cross-agent-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:acp:parent",
+        },
+      });
+
+      const persistedEnvelopeTools = createToolsForStoredSession(
+        storeTemplate,
+        "agent:main:acp:child",
+      );
+      expectNoSubagentControlTools(persistedEnvelopeTools);
+
+      const restrictedTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:plain");
+      const restrictedNames = new Set(restrictedTools.map((tool) => tool.name));
+      expect(restrictedNames.has("sessions_spawn")).toBe(true);
+      expect(restrictedNames.has("subagents")).toBe(true);
+
+      const ancestryTools = createToolsForStoredSession(storeTemplate, "agent:writer:acp:child");
+      expectNoSubagentControlTools(ancestryTools);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies leaf tool policy for cross-agent subagent sessions when spawnDepth is missing", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cross-agent-subagent-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      await writeSessionStore(storeTemplate, "main", {
+        "agent:main:subagent:parent": {
+          sessionId: "session-main-parent",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+        },
+      });
+      await writeSessionStore(storeTemplate, "writer", {
+        "agent:writer:subagent:child": {
+          sessionId: "session-writer-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:subagent:parent",
+        },
+      });
+
+      const tools = createToolsForStoredSession(storeTemplate, "agent:writer:subagent:child");
+      expectNoSubagentControlTools(tools);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -264,6 +351,36 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("sessions_spawn")).toBe(false);
     expect(names.has("exec")).toBe(false);
     expect(names.has("browser")).toBe(false);
+  });
+
+  it("can keep message available when a cron route needs it under the coding profile", () => {
+    const codingTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+    });
+    expect(codingTools.some((tool) => tool.name === "message")).toBe(false);
+
+    const cronTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+      forceMessageTool: true,
+    });
+    expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
+  });
+
+  it("can keep message available when a cron route needs it under a provider coding profile", () => {
+    const providerProfileTools = createOpenClawCodingTools({
+      config: { tools: { byProvider: { openai: { profile: "coding" } } } },
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
+    expect(providerProfileTools.some((tool) => tool.name === "message")).toBe(false);
+
+    const cronTools = createOpenClawCodingTools({
+      config: { tools: { byProvider: { openai: { profile: "coding" } } } },
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      forceMessageTool: true,
+    });
+    expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
   });
 
   it("expands group shorthands in global tool policy", () => {

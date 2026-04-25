@@ -1,20 +1,21 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanupBundleMcpHarness,
-  makeTempDir,
-  waitForFileText,
-  writeBundleProbeMcpServer,
-  writeClaudeBundle,
-} from "./pi-bundle-mcp-test-harness.js";
+import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
+import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
 import {
   __testing,
-  disposeSessionMcpRuntime,
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
+  retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
 } from "./pi-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+
+vi.mock("./embedded-pi-mcp.js", () => ({
+  loadEmbeddedPiMcpConfig: (params: { cfg?: { mcp?: { servers?: Record<string, unknown> } } }) => ({
+    diagnostics: [],
+    mcpServers: params.cfg?.mcp?.servers ?? {},
+  }),
+}));
 
 type RuntimeFactoryOptions = NonNullable<
   Parameters<typeof __testing.createSessionMcpRuntimeManager>[0]
@@ -25,13 +26,19 @@ function makeRuntime(
   tools: Array<{ toolName: string; description: string }>,
   serverName = "bundleProbe",
 ): SessionMcpRuntime {
+  const createdAt = Date.now();
+  let lastUsedAt = createdAt;
   return {
     sessionId: "session-colliding-tools",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
-    createdAt: 0,
-    lastUsedAt: 0,
-    markUsed: () => {},
+    createdAt,
+    get lastUsedAt() {
+      return lastUsedAt;
+    },
+    markUsed: () => {
+      lastUsedAt = Date.now();
+    },
     getCatalog: async () => ({
       version: 1,
       generatedAt: 0,
@@ -69,6 +76,25 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator<{ url: string }>({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        url: { type: "string" },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    });
+
+    expect(validator({ url: "https://example.com" })).toEqual({
+      valid: true,
+      data: { url: "https://example.com" },
+      errorMessage: undefined,
+    });
+    expect(validator({ url: 42 }).valid).toBe(false);
+  });
+
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
     const catalogA = [
       { toolName: "alpha?", description: "question" },
@@ -115,8 +141,49 @@ describe("session MCP runtime", () => {
     ]);
   });
 
+  it("holds a runtime lease until the materialized tool runtime is disposed", async () => {
+    let activeLeases = 0;
+    const runtime = {
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      acquireLease: () => {
+        activeLeases += 1;
+        return () => {
+          activeLeases -= 1;
+        };
+      },
+    };
+
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    expect(activeLeases).toBe(1);
+
+    await materialized.dispose();
+    await materialized.dispose();
+
+    expect(activeLeases).toBe(0);
+  });
+
+  it("releases a runtime lease when catalog materialization fails", async () => {
+    let activeLeases = 0;
+    const runtime = {
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      acquireLease: () => {
+        activeLeases += 1;
+        return () => {
+          activeLeases -= 1;
+        };
+      },
+      getCatalog: async () => {
+        throw new Error("catalog failed");
+      },
+    };
+
+    await expect(materializeBundleMcpToolsForRun({ runtime })).rejects.toThrow("catalog failed");
+    expect(activeLeases).toBe(0);
+  });
+
   it("reuses repeated materialization and recreates after explicit disposal", async () => {
     const created: SessionMcpRuntime[] = [];
+    const disposed: string[] = [];
     const createRuntime: RuntimeFactory = (params) => {
       const runtime = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
       created.push(runtime);
@@ -126,6 +193,9 @@ describe("session MCP runtime", () => {
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
         configFingerprint: params.configFingerprint ?? "fingerprint",
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
       };
     };
     const manager = __testing.createSessionMcpRuntimeManager({ createRuntime });
@@ -154,6 +224,7 @@ describe("session MCP runtime", () => {
     expect(manager.listSessionIds()).toEqual(["session-a"]);
 
     await manager.disposeSession("session-a");
+    expect(disposed).toEqual(["session-a"]);
 
     const runtimeC = await manager.getOrCreate({
       sessionId: "session-a",
@@ -164,6 +235,19 @@ describe("session MCP runtime", () => {
 
     expect(runtimeC).not.toBe(runtimeA);
     expect(created).toHaveLength(2);
+
+    const materializedC = await materializeBundleMcpToolsForRun({
+      runtime: runtimeC,
+      disposeRuntime: async () => {
+        await manager.disposeSession("session-a");
+      },
+    });
+    expect(materializedC.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+
+    await materializedC.dispose();
+
+    expect(disposed).toEqual(["session-a", "session-a"]);
+    expect(manager.listSessionIds()).not.toContain("session-a");
   });
 
   it("recreates the session runtime when MCP config changes", async () => {
@@ -242,41 +326,41 @@ describe("session MCP runtime", () => {
     expect(resultB.content[0]).toMatchObject({ type: "text", text: "FROM-CONFIG-B" });
   });
 
-  it("disposes startup-in-flight runtimes without leaking MCP processes", async () => {
-    vi.useRealTimers();
-    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
-    const startupCounterPath = path.join(workspaceDir, "bundle-starts.txt");
-    const pidPath = path.join(workspaceDir, "bundle.pid");
-    const exitMarkerPath = path.join(workspaceDir, "bundle.exit");
-    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "bundle-probe");
-    const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
-    await writeBundleProbeMcpServer(serverScriptPath, {
-      startupCounterPath,
-      startupDelayMs: 10,
-      pidPath,
-      exitMarkerPath,
+  it("disposes catalog startup in-flight without leaving cached runtimes", async () => {
+    let notifyCatalogStarted!: () => void;
+    const catalogStarted = new Promise<void>((resolve) => {
+      notifyCatalogStarted = resolve;
     });
-    await writeClaudeBundle({ pluginRoot, serverScriptPath });
-
-    const runtime = await getOrCreateSessionMcpRuntime({
+    let rejectCatalog: ((error: Error) => void) | undefined;
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      getCatalog: async () => {
+        notifyCatalogStarted();
+        return await new Promise((_, reject) => {
+          rejectCatalog = reject;
+        });
+      },
+      dispose: async () => {
+        rejectCatalog?.(new Error(`bundle-mcp runtime disposed for session ${params.sessionId}`));
+      },
+    });
+    const manager = __testing.createSessionMcpRuntimeManager({ createRuntime });
+    const runtime = await manager.getOrCreate({
       sessionId: "session-d",
       sessionKey: "agent:test:session-d",
-      workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
-          },
-        },
-      },
+      workspaceDir: "/workspace",
     });
 
     const materializeResult = materializeBundleMcpToolsForRun({ runtime }).then(
       () => ({ status: "resolved" as const }),
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
-    await waitForFileText(pidPath);
-    await disposeSessionMcpRuntime("session-d");
+    await catalogStarted;
+    await manager.disposeSession("session-d");
 
     const result = await materializeResult;
     if (result.status !== "rejected") {
@@ -284,16 +368,111 @@ describe("session MCP runtime", () => {
     }
     expect(result.error).toBeInstanceOf(Error);
     expect((result.error as Error).message).toMatch(/disposed/);
-    expect(await waitForFileText(exitMarkerPath)).toBe("exited");
-    expect(await fs.readFile(startupCounterPath, "utf8")).toBe("1");
-    expect(__testing.getCachedSessionIds()).not.toContain("session-d");
+    expect(manager.listSessionIds()).not.toContain("session-d");
   });
 
-  it("materialized disposal can retire a manager-owned runtime", async () => {
+  it("retires global session runtimes and ignores missing ids", async () => {
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session-retire",
+      sessionKey: "agent:test:session-retire",
+      workspaceDir: "/workspace",
+    });
+    expect(__testing.getCachedSessionIds()).toContain("session-retire");
+
+    await expect(
+      retireSessionMcpRuntime({ sessionId: " session-retire ", reason: "test" }),
+    ).resolves.toBe(true);
+    expect(__testing.getCachedSessionIds()).not.toContain("session-retire");
+
+    await expect(retireSessionMcpRuntime({ sessionId: " ", reason: "test" })).resolves.toBe(false);
+  });
+
+  it("retires global session runtimes by session key", async () => {
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session-retire-key",
+      sessionKey: "agent:test:session-retire-key",
+      workspaceDir: "/workspace",
+    });
+    expect(__testing.getCachedSessionIds()).toContain("session-retire-key");
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({
+        sessionKey: " agent:test:session-retire-key ",
+        reason: "test",
+      }),
+    ).resolves.toBe(true);
+    expect(__testing.getCachedSessionIds()).not.toContain("session-retire-key");
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({ sessionKey: "agent:test:missing", reason: "test" }),
+    ).resolves.toBe(false);
+  });
+
+  it("evicts idle runtimes after the configured TTL but skips active leases", async () => {
+    let now = 1_000;
     const disposed: string[] = [];
-    const created: SessionMcpRuntime[] = [];
     const createRuntime: RuntimeFactory = (params) => {
-      const runtime = {
+      let lastUsedAt = now;
+      let activeLeases = 0;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        get activeLeases() {
+          return activeLeases;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        acquireLease: () => {
+          activeLeases += 1;
+          return () => {
+            activeLeases -= 1;
+            lastUsedAt = now;
+          };
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = __testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-idle",
+      sessionKey: "agent:test:session-idle",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 50 } },
+    });
+    const releaseLease = runtime.acquireLease?.();
+
+    now += 60;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
+    expect(manager.listSessionIds()).toEqual(["session-idle"]);
+
+    releaseLease?.();
+    now += 60;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
+
+    expect(disposed).toEqual(["session-idle"]);
+    expect(manager.listSessionIds()).toEqual([]);
+    expect(manager.resolveSessionId("agent:test:session-idle")).toBeUndefined();
+  });
+
+  it("keeps idle runtime eviction disabled when the TTL is zero", async () => {
+    let now = 1_000;
+    const disposed: string[] = [];
+    const manager = __testing.createSessionMcpRuntimeManager({
+      createRuntime: (params) => ({
         ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
@@ -302,39 +481,20 @@ describe("session MCP runtime", () => {
         dispose: async () => {
           disposed.push(params.sessionId);
         },
-      };
-      created.push(runtime);
-      return runtime;
-    };
-    const manager = __testing.createSessionMcpRuntimeManager({ createRuntime });
+      }),
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
 
-    const runtimeA = await manager.getOrCreate({
-      sessionId: "session-e",
-      sessionKey: "agent:test:session-e",
+    await manager.getOrCreate({
+      sessionId: "session-no-ttl",
       workspaceDir: "/workspace",
-    });
-    const materialized = await materializeBundleMcpToolsForRun({
-      runtime: runtimeA,
-      disposeRuntime: async () => {
-        await manager.disposeSession("session-e");
-      },
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 0 } },
     });
 
-    expect(materialized.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
-
-    await materialized.dispose();
-
-    expect(disposed).toEqual(["session-e"]);
-    expect(manager.listSessionIds()).not.toContain("session-e");
-
-    const runtimeB = await manager.getOrCreate({
-      sessionId: "session-e",
-      sessionKey: "agent:test:session-e",
-      workspaceDir: "/workspace",
-    });
-
-    expect(runtimeB).not.toBe(runtimeA);
-    await materializeBundleMcpToolsForRun({ runtime: runtimeB });
-    expect(created).toHaveLength(2);
+    now += 60_000_000;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
+    expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
+    expect(disposed).toEqual([]);
   });
 });
