@@ -11,6 +11,7 @@ import {
   logHookPackRestartHint,
   logSlotWarnings,
 } from "./plugins-command-helpers.js";
+import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 
 function addInstalledPluginToAllowlist(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const allow = cfg.plugins?.allow;
@@ -47,6 +48,13 @@ export async function persistPluginInstall(params: {
   await replaceConfigFile({
     nextConfig: next,
     ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+  });
+  await refreshPluginRegistryAfterConfigMutation({
+    config: next,
+    reason: "source-changed",
+    logger: {
+      warn: (message) => defaultRuntime.log(theme.warn(message)),
+    },
   });
   logSlotWarnings(slotResult.warnings);
   if (params.warningMessage) {
