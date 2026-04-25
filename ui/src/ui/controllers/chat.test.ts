@@ -753,6 +753,39 @@ describe("loadChatHistory", () => {
     expect(state.lastError).toBeNull();
   });
 
+  it("filters heartbeat acknowledgements and internal-only user messages", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                "subagent completion payload",
+                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+              ].join("\n"),
+            },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+      ],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+    ]);
+  });
+
   it("shows a targeted message when chat history is unauthorized", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({
