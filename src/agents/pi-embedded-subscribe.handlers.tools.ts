@@ -191,10 +191,18 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
 
 function shouldSuppressStructuredMediaToolOutput(params: {
   toolName: string;
+  rawToolName: string;
   isToolError: boolean;
   hasDeliverableStructuredMedia: boolean;
+  builtinToolNames?: ReadonlySet<string>;
 }): boolean {
-  return params.toolName === "tts" && !params.isToolError && params.hasDeliverableStructuredMedia;
+  return (
+    params.toolName === "tts" &&
+    params.rawToolName.trim() === "tts" &&
+    params.builtinToolNames?.has("tts") === true &&
+    !params.isToolError &&
+    params.hasDeliverableStructuredMedia
+  );
 }
 
 function buildPatchSummaryText(summary: ApplyPatchSummary): string {
@@ -527,8 +535,10 @@ async function emitToolResultOutput(params: {
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
       toolName,
+      rawToolName,
       isToolError,
       hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
+      builtinToolNames: ctx.builtinToolNames,
     }) &&
     (ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText }));
   if (shouldEmitOutput) {
