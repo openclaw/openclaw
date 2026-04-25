@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -245,7 +246,47 @@ const preferredLanInterfaceNamePattern = /^(?:en|eth|wl|wlan|wi-?fi|ethernet)/i;
 const deprioritizedLanInterfaceNamePattern =
   /^(?:docker\d*|br-|veth|cni|podman|virbr|lxc|lxdbr|flannel|cali|weave|cilium)/i;
 
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function readLinuxDefaultRouteInterfaceNames(): string[] {
+  let routeTable: string;
+  try {
+    routeTable = readFileSync("/proc/net/route", "utf8");
+  } catch {
+    return [];
+  }
+
+  const routes: Array<{ name: string; metric: number }> = [];
+  for (const line of routeTable.split(/\r?\n/).slice(1)) {
+    const [name, destination, , flagsRaw, , , metricRaw, mask] = line.trim().split(/\s+/);
+    if (!name || destination !== "00000000" || mask !== "00000000") {
+      continue;
+    }
+    const flags = Number.parseInt(flagsRaw ?? "", 16);
+    if (!Number.isFinite(flags) || (flags & 0x1) === 0) {
+      continue;
+    }
+    const metric = Number.parseInt(metricRaw ?? "0", 10);
+    routes.push({ name, metric: Number.isFinite(metric) ? metric : 0 });
+  }
+
+  routes.sort((a, b) => a.metric - b.metric);
+  return uniqueStrings(routes.map((route) => route.name));
+}
+
 function pickPreferredLanIPv4(candidates: IPv4Candidate[]): string | null {
+  const preferredByRoute = uniqueStrings(readLinuxDefaultRouteInterfaceNames())
+    .map((name) => candidates.find((entry) => entry.name === name))
+    .filter((entry) => entry !== undefined);
+  const nonDeprioritizedRoute = preferredByRoute.find(
+    (entry) => !deprioritizedLanInterfaceNamePattern.test(entry.name),
+  );
+  if (nonDeprioritizedRoute) {
+    return nonDeprioritizedRoute.address;
+  }
+
   for (const name of preferredLanInterfaceNames) {
     const preferred = candidates.find((entry) => entry.name === name);
     if (preferred) {
@@ -258,7 +299,13 @@ function pickPreferredLanIPv4(candidates: IPv4Candidate[]): string | null {
   const preferredByName = nonDeprioritized.find((entry) =>
     preferredLanInterfaceNamePattern.test(entry.name),
   );
-  return preferredByName?.address ?? nonDeprioritized[0]?.address ?? candidates[0]?.address ?? null;
+  return (
+    preferredByName?.address ??
+    nonDeprioritized[0]?.address ??
+    preferredByRoute[0]?.address ??
+    candidates[0]?.address ??
+    null
+  );
 }
 
 function pickLanIPv4(): string | null {

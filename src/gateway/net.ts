@@ -22,6 +22,36 @@ const preferredLanInterfaceNamePattern = /^(?:en|eth|wl|wlan|wi-?fi|ethernet)/i;
 const deprioritizedLanInterfaceNamePattern =
   /^(?:docker\d*|br-|veth|cni|podman|virbr|lxc|lxdbr|flannel|cali|weave|cilium)/i;
 
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function readLinuxDefaultRouteInterfaceNames(): string[] {
+  let routeTable: string;
+  try {
+    routeTable = fs.readFileSync("/proc/net/route", "utf8");
+  } catch {
+    return [];
+  }
+
+  const routes: Array<{ name: string; metric: number }> = [];
+  for (const line of routeTable.split(/\r?\n/).slice(1)) {
+    const [name, destination, , flagsRaw, , , metricRaw, mask] = line.trim().split(/\s+/);
+    if (!name || destination !== "00000000" || mask !== "00000000") {
+      continue;
+    }
+    const flags = Number.parseInt(flagsRaw ?? "", 16);
+    if (!Number.isFinite(flags) || (flags & 0x1) === 0) {
+      continue;
+    }
+    const metric = Number.parseInt(metricRaw ?? "0", 10);
+    routes.push({ name, metric: Number.isFinite(metric) ? metric : 0 });
+  }
+
+  routes.sort((a, b) => a.metric - b.metric);
+  return uniqueStrings(routes.map((route) => route.name));
+}
+
 function isDeprioritizedLanInterfaceName(name: string): boolean {
   return deprioritizedLanInterfaceNamePattern.test(name);
 }
@@ -32,12 +62,24 @@ function isPreferredLanInterfaceName(name: string): boolean {
 
 export function pickPrimaryLanIPv4FromSnapshot(
   snapshot: NetworkInterfacesSnapshot | undefined,
-  params: { matches?: (address: string) => boolean } = {},
+  params: { matches?: (address: string) => boolean; preferredInterfaceNames?: string[] } = {},
 ): string | undefined {
   const matches = params.matches ?? (() => true);
   const addresses = listExternalInterfaceAddresses(snapshot, "IPv4").filter((entry) =>
     matches(entry.address),
   );
+
+  const preferredByRoute = uniqueStrings(
+    params.preferredInterfaceNames ?? readLinuxDefaultRouteInterfaceNames(),
+  )
+    .map((name) => addresses.find((entry) => entry.name === name))
+    .filter((entry) => entry !== undefined);
+  const nonDeprioritizedRoute = preferredByRoute.find(
+    (entry) => !isDeprioritizedLanInterfaceName(entry.name),
+  );
+  if (nonDeprioritizedRoute) {
+    return nonDeprioritizedRoute.address;
+  }
 
   for (const name of preferredLanInterfaceNames) {
     const preferred = addresses.find((entry) => entry.name === name);
@@ -50,7 +92,12 @@ export function pickPrimaryLanIPv4FromSnapshot(
     (entry) => !isDeprioritizedLanInterfaceName(entry.name),
   );
   const preferredByName = nonDeprioritized.find((entry) => isPreferredLanInterfaceName(entry.name));
-  return preferredByName?.address ?? nonDeprioritized[0]?.address ?? addresses[0]?.address;
+  return (
+    preferredByName?.address ??
+    nonDeprioritized[0]?.address ??
+    preferredByRoute[0]?.address ??
+    addresses[0]?.address
+  );
 }
 
 /**

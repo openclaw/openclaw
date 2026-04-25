@@ -12,6 +12,7 @@ import {
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
+  pickPrimaryLanIPv4FromSnapshot,
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
@@ -390,6 +391,32 @@ describe("pickPrimaryLanIPv4", () => {
       expect(pickPrimaryLanIPv4()).toBe(expected);
     },
   );
+
+  it("prefers the default-route interface before physical name heuristics", () => {
+    const interfaces = makeNetworkInterfacesSnapshot({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+      enp14s0: [{ address: "192.168.1.193", family: "IPv4" }],
+      wgdh: [{ address: "192.168.178.209", family: "IPv4" }],
+    });
+
+    expect(pickPrimaryLanIPv4FromSnapshot(interfaces, { preferredInterfaceNames: ["wgdh"] })).toBe(
+      "192.168.178.209",
+    );
+  });
+
+  it("deprioritizes a default-route bridge before physical LAN candidates", () => {
+    const interfaces = makeNetworkInterfacesSnapshot({
+      lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+      "br-c87a82b2afb7": [{ address: "172.18.0.1", family: "IPv4" }],
+      wlp13s0: [{ address: "192.168.1.193", family: "IPv4" }],
+    });
+
+    expect(
+      pickPrimaryLanIPv4FromSnapshot(interfaces, {
+        preferredInterfaceNames: ["br-c87a82b2afb7"],
+      }),
+    ).toBe("192.168.1.193");
+  });
 
   it("throws when interface discovery throws", () => {
     vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
