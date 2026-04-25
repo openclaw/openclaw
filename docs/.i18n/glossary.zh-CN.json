@@ -4,6 +4,18 @@
     "target": "OpenClaw"
   },
   {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "OpenAI provider",
+    "target": "OpenAI provider"
+  },
+  {
+    "source": "Status",
+    "target": "Status"
+  },
+  {
     "source": "Gateway",
     "target": "Gateway 网关"
   },

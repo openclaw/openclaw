@@ -26,7 +26,7 @@ These are in-process OpenClaw hooks, not Codex `hooks.json` command hooks:
 - `before_prompt_build`
 - `before_compaction`, `after_compaction`
 - `llm_input`, `llm_output`
-- `after_tool_call`
+- `before_tool_call`, `after_tool_call`
 - `before_message_write` for mirrored transcript records
 - `agent_end`
 
@@ -35,6 +35,9 @@ OpenClaw dynamic tool results after OpenClaw executes the tool and before the
 result is returned to Codex. This is separate from the public
 `tool_result_persist` plugin hook, which transforms OpenClaw-owned transcript
 tool-result writes.
+
+For the plugin hook semantics themselves, see [Plugin hooks](/plugins/hooks)
+and [Plugin guard behavior](/tools/plugin).
 
 The harness is off by default. New configs should keep OpenAI model refs
 canonical as `openai/gpt-*` and explicitly force
@@ -369,9 +372,19 @@ To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
 }
 ```
 
-Guardian is a native Codex approval reviewer. When Codex asks to leave the sandbox, write outside the workspace, or add permissions like network access, Codex routes that approval request to a reviewer subagent instead of a human prompt. The reviewer applies Codex's risk framework and approves or denies the specific request. Use Guardian when you want more guardrails than YOLO mode but still need unattended agents to make progress.
+Guardian mode uses Codex's native auto-review approval path. When Codex asks to
+leave the sandbox, write outside the workspace, or add permissions like network
+access, Codex routes that approval request to the native reviewer instead of a
+human prompt. The reviewer applies Codex's risk framework and approves or denies
+the specific request. Use Guardian when you want more guardrails than YOLO mode
+but still need unattended agents to make progress.
 
-The `guardian` preset expands to `approvalPolicy: "on-request"`, `approvalsReviewer: "guardian_subagent"`, and `sandbox: "workspace-write"`. Individual policy fields still override `mode`, so advanced deployments can mix the preset with explicit choices.
+The `guardian` preset expands to `approvalPolicy: "on-request"`,
+`approvalsReviewer: "auto_review"`, and `sandbox: "workspace-write"`.
+Individual policy fields still override `mode`, so advanced deployments can mix
+the preset with explicit choices. The older `guardian_subagent` reviewer value is
+still accepted as a compatibility alias, but new configs should use
+`auto_review`.
 
 For an already-running app-server, use WebSocket transport:
 
@@ -397,20 +410,20 @@ For an already-running app-server, use WebSocket transport:
 
 Supported `appServer` fields:
 
-| Field               | Default                                  | Meaning                                                                                                   |
-| ------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                  |
-| `command`           | `"codex"`                                | Executable for stdio transport.                                                                           |
-| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                            |
-| `url`               | unset                                    | WebSocket app-server URL.                                                                                 |
-| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                     |
-| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                  |
-| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                               |
-| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                           |
-| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                            |
-| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                    |
-| `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex Guardian review prompts.                                           |
-| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored. |
+| Field               | Default                                  | Meaning                                                                                                      |
+| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                     |
+| `command`           | `"codex"`                                | Executable for stdio transport.                                                                              |
+| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                               |
+| `url`               | unset                                    | WebSocket app-server URL.                                                                                    |
+| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                        |
+| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                     |
+| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                                  |
+| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                              |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                               |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                       |
+| `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias. |
+| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.    |
 
 The older environment variables still work as fallbacks for local testing when
 the matching config field is unset:
@@ -477,7 +490,7 @@ Guardian-reviewed Codex approvals:
           appServer: {
             mode: "guardian",
             approvalPolicy: "on-request",
-            approvalsReviewer: "guardian_subagent",
+            approvalsReviewer: "auto_review",
             sandbox: "workspace-write",
           },
         },
@@ -553,9 +566,11 @@ The Codex harness has three hook layers:
 | Codex native hooks                    | Codex                    | Low-level Codex lifecycle and native tool policy from Codex config. |
 
 OpenClaw does not use project or global Codex `hooks.json` files to route
-OpenClaw plugin behavior. Codex native hooks are useful for Codex-owned
-operations such as shell policy, native tool result review, stop handling, and
-native compaction/model lifecycle, but they are not the OpenClaw plugin API.
+OpenClaw plugin behavior. For the supported native tool and permission bridge,
+OpenClaw injects per-thread Codex config for `PreToolUse`, `PostToolUse`, and
+`PermissionRequest`. Other Codex hooks such as `SessionStart`,
+`UserPromptSubmit`, and `Stop` remain Codex-level controls; they are not exposed
+as OpenClaw plugin hooks in the v1 contract.
 
 For OpenClaw dynamic tools, OpenClaw executes the tool after Codex asks for the
 call, so OpenClaw fires the plugin and middleware behavior it owns in the
@@ -564,10 +579,9 @@ OpenClaw can mirror selected events, but it cannot rewrite the native Codex
 thread unless Codex exposes that operation through app-server or native hook
 callbacks.
 
-When newer Codex app-server builds expose native compaction and model lifecycle
-hook events, OpenClaw should version-gate that protocol support and map the
-events into the existing OpenClaw hook contract where the semantics are honest.
-Until then, OpenClaw's `before_compaction`, `after_compaction`, `llm_input`, and
+Compaction and LLM lifecycle projections come from Codex app-server
+notifications and OpenClaw adapter state, not native Codex hook commands.
+OpenClaw's `before_compaction`, `after_compaction`, `llm_input`, and
 `llm_output` events are adapter-level observations, not byte-for-byte captures
 of Codex's internal request or compaction payloads.
 
@@ -583,31 +597,31 @@ around that boundary.
 
 Supported in Codex runtime v1:
 
-| Surface                                 | Support                                 | Why                                                                                                                                  |
-| --------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| OpenAI model loop through Codex         | Supported                               | Codex app-server owns the OpenAI turn, native thread resume, and native tool continuation.                                           |
-| OpenClaw channel routing and delivery   | Supported                               | Telegram, Discord, Slack, WhatsApp, iMessage, and other channels stay outside the model runtime.                                     |
-| OpenClaw dynamic tools                  | Supported                               | Codex asks OpenClaw to execute these tools, so OpenClaw stays in the execution path.                                                 |
-| Prompt and context plugins              | Supported                               | OpenClaw builds prompt overlays and projects context into the Codex turn before starting or resuming the thread.                     |
-| Context engine lifecycle                | Supported                               | Assemble, ingest or after-turn maintenance, and context-engine compaction coordination run for Codex turns.                          |
-| Dynamic tool hooks                      | Supported                               | `before_tool_call`, `after_tool_call`, and tool-result middleware run around OpenClaw-owned dynamic tools.                           |
-| Lifecycle hooks                         | Supported as adapter observations       | `llm_input`, `llm_output`, `agent_end`, `before_compaction`, and `after_compaction` fire with honest Codex-mode payloads.            |
-| Native shell and patch block or observe | Supported through the native hook relay | Codex `PreToolUse` and `PostToolUse` are relayed for supported Codex-native tools. Blocking is supported; argument rewriting is not. |
-| Native permission policy                | Supported through the native hook relay | Codex `PermissionRequest` can be routed through OpenClaw policy where the runtime exposes it.                                        |
-| App-server trajectory capture           | Supported                               | OpenClaw records the request it sent to app-server and the app-server notifications it receives.                                     |
+| Surface                                 | Support                                 | Why                                                                                                                                        |
+| --------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| OpenAI model loop through Codex         | Supported                               | Codex app-server owns the OpenAI turn, native thread resume, and native tool continuation.                                                 |
+| OpenClaw channel routing and delivery   | Supported                               | Telegram, Discord, Slack, WhatsApp, iMessage, and other channels stay outside the model runtime.                                           |
+| OpenClaw dynamic tools                  | Supported                               | Codex asks OpenClaw to execute these tools, so OpenClaw stays in the execution path.                                                       |
+| Prompt and context plugins              | Supported                               | OpenClaw builds prompt overlays and projects context into the Codex turn before starting or resuming the thread.                           |
+| Context engine lifecycle                | Supported                               | Assemble, ingest or after-turn maintenance, and context-engine compaction coordination run for Codex turns.                                |
+| Dynamic tool hooks                      | Supported                               | `before_tool_call`, `after_tool_call`, and tool-result middleware run around OpenClaw-owned dynamic tools.                                 |
+| Lifecycle hooks                         | Supported as adapter observations       | `llm_input`, `llm_output`, `agent_end`, `before_compaction`, and `after_compaction` fire with honest Codex-mode payloads.                  |
+| Native shell and patch block or observe | Supported through the native hook relay | Codex `PreToolUse` and `PostToolUse` are relayed for the committed native tool surfaces. Blocking is supported; argument rewriting is not. |
+| Native permission policy                | Supported through the native hook relay | Codex `PermissionRequest` can be routed through OpenClaw policy where the runtime exposes it.                                              |
+| App-server trajectory capture           | Supported                               | OpenClaw records the request it sent to app-server and the app-server notifications it receives.                                           |
 
 Not supported in Codex runtime v1:
 
-| Surface                                             | V1 Boundary                                                                                                                                     | Future Path                                                                               |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Native tool argument mutation                       | Codex native pre-tool hooks can block, but OpenClaw does not rewrite Codex-native tool arguments.                                               | Requires Codex hook/schema support for replacement tool input.                            |
-| Editable Codex-native transcript history            | Codex owns canonical native thread history. OpenClaw owns a mirror and can project future context, but should not mutate unsupported internals. | Add explicit Codex app-server APIs if native thread surgery is needed.                    |
-| `tool_result_persist` for Codex-native tool records | That hook transforms OpenClaw-owned transcript writes, not Codex-native tool records.                                                           | Could mirror transformed records, but canonical rewrite needs Codex support.              |
-| Rich native compaction metadata                     | OpenClaw observes compaction start and completion, but does not receive a stable kept/dropped list, token delta, or summary payload.            | Needs richer Codex compaction events.                                                     |
-| Compaction intervention                             | Current OpenClaw compaction hooks are notification-level in Codex mode.                                                                         | Add Codex pre/post compaction hooks if plugins need to veto or rewrite native compaction. |
-| Stop or final-answer gating                         | Codex has native stop hooks, but OpenClaw does not expose final-answer gating as a v1 plugin contract.                                          | Future opt-in primitive with loop and timeout safeguards.                                 |
-| Native MCP hook parity                              | Codex owns MCP execution, and full pre/post hook payload parity depends on Codex MCP handler support.                                           | Add Codex MCP hook payloads, then relay them through the same native hook path.           |
-| Byte-for-byte model API request capture             | OpenClaw can capture app-server requests and notifications, but Codex core builds the final OpenAI API request internally.                      | Needs a Codex model-request tracing event or debug API.                                   |
+| Surface                                             | V1 Boundary                                                                                                                                     | Future Path                                                                                               |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Native tool argument mutation                       | Codex native pre-tool hooks can block, but OpenClaw does not rewrite Codex-native tool arguments.                                               | Requires Codex hook/schema support for replacement tool input.                                            |
+| Editable Codex-native transcript history            | Codex owns canonical native thread history. OpenClaw owns a mirror and can project future context, but should not mutate unsupported internals. | Add explicit Codex app-server APIs if native thread surgery is needed.                                    |
+| `tool_result_persist` for Codex-native tool records | That hook transforms OpenClaw-owned transcript writes, not Codex-native tool records.                                                           | Could mirror transformed records, but canonical rewrite needs Codex support.                              |
+| Rich native compaction metadata                     | OpenClaw observes compaction start and completion, but does not receive a stable kept/dropped list, token delta, or summary payload.            | Needs richer Codex compaction events.                                                                     |
+| Compaction intervention                             | Current OpenClaw compaction hooks are notification-level in Codex mode.                                                                         | Add Codex pre/post compaction hooks if plugins need to veto or rewrite native compaction.                 |
+| Stop or final-answer gating                         | Codex has native stop hooks, but OpenClaw does not expose final-answer gating as a v1 plugin contract.                                          | Future opt-in primitive with loop and timeout safeguards.                                                 |
+| Native MCP hook parity as a committed v1 surface    | The relay is generic, but OpenClaw has not version-gated and tested native MCP pre/post hook behavior end to end.                               | Add OpenClaw MCP relay tests and docs once the supported app-server protocol floor covers those payloads. |
+| Byte-for-byte model API request capture             | OpenClaw can capture app-server requests and notifications, but Codex core builds the final OpenAI API request internally.                      | Needs a Codex model-request tracing event or debug API.                                                   |
 
 ## Tools, media, and compaction
 
@@ -616,6 +630,11 @@ The Codex harness changes the low-level embedded agent executor only.
 OpenClaw still builds the tool list and receives dynamic tool results from the
 harness. Text, images, video, music, TTS, approvals, and messaging-tool output
 continue through the normal OpenClaw delivery path.
+
+The native hook relay is intentionally generic, but the v1 support contract is
+limited to the Codex-native tool and permission paths that OpenClaw tests. Do not
+assume every future Codex hook event is an OpenClaw plugin surface until the
+runtime contract names it.
 
 Codex MCP tool approval elicitations are routed through OpenClaw's plugin
 approval flow when Codex marks `_meta.codex_approval_kind` as
@@ -644,9 +663,11 @@ understanding continue to use the matching provider/model settings such as
 
 ## Troubleshooting
 
-**Codex does not appear in `/model`:** enable `plugins.entries.codex.enabled`,
-select an `openai/gpt-*` model with `embeddedHarness.runtime: "codex"` (or a
-legacy `codex/*` ref), and check whether `plugins.allow` excludes `codex`.
+**Codex does not appear as a normal `/model` provider:** that is expected for
+new configs. Select an `openai/gpt-*` model with
+`embeddedHarness.runtime: "codex"` (or a legacy `codex/*` ref), enable
+`plugins.entries.codex.enabled`, and check whether `plugins.allow` excludes
+`codex`.
 
 **OpenClaw uses PI instead of Codex:** `runtime: "auto"` can still use PI as the
 compatibility backend when no Codex harness claims the run. Set
@@ -675,5 +696,8 @@ turn for that agent must be a Codex-supported OpenAI model.
 - [Agent Harness Plugins](/plugins/sdk-agent-harness)
 - [Agent runtimes](/concepts/agent-runtimes)
 - [Model Providers](/concepts/model-providers)
+- [OpenAI provider](/providers/openai)
+- [Status](/cli/status)
+- [Plugin hooks](/plugins/hooks)
 - [Configuration Reference](/gateway/configuration-reference)
 - [Testing](/help/testing-live#live-codex-app-server-harness-smoke)
