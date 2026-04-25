@@ -234,6 +234,8 @@ export async function startCommandRealtimeAudioBridge(params: {
     getHealth: () => ({
       providerConnected: bridge?.bridge.isConnected() ?? false,
       realtimeReady,
+      audioInputActive: lastInputBytes > 0,
+      audioOutputActive: lastOutputBytes > 0,
       lastInputAt,
       lastOutputAt,
       lastInputBytes,

@@ -766,6 +766,128 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it("reuses active Meet sessions across URL query differences", async () => {
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        defaultMode: "transcribe",
+      },
+      {
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+            browser: { inCall: true, micMuted: false },
+          },
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.join") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const first = vi.fn();
+    const second = vi.fn();
+
+    await handler?.({
+      params: { url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com" },
+      respond: first,
+    });
+    await handler?.({
+      params: { url: "https://meet.google.com/abc-defg-hij" },
+      respond: second,
+    });
+
+    expect(
+      nodesInvoke.mock.calls.filter(([call]) => call.command === "googlemeet.chrome"),
+    ).toHaveLength(1);
+    expect(second.mock.calls[0]?.[1]).toMatchObject({
+      session: {
+        notes: expect.arrayContaining(["Reused existing active Meet session."]),
+      },
+    });
+  });
+
+  it("reuses existing Meet browser tabs across URL query differences", async () => {
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        defaultMode: "transcribe",
+      },
+      {
+        nodesInvokeHandler: async (params) => {
+          if (params.command !== "browser.proxy") {
+            return { payload: { launched: true } };
+          }
+          const proxy = params.params as {
+            path?: string;
+            body?: { targetId?: string; url?: string };
+          };
+          if (proxy.path === "/tabs") {
+            return {
+              payload: {
+                result: {
+                  running: true,
+                  tabs: [
+                    {
+                      targetId: "existing-meet-tab",
+                      title: "Meet",
+                      url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+                    },
+                  ],
+                },
+              },
+            };
+          }
+          if (proxy.path === "/tabs/focus") {
+            return { payload: { result: { ok: true } } };
+          }
+          if (proxy.path === "/act") {
+            return {
+              payload: {
+                result: {
+                  result: JSON.stringify({
+                    inCall: true,
+                    title: "Meet",
+                    url: "https://meet.google.com/abc-defg-hij?authuser=me@example.com",
+                  }),
+                },
+              },
+            };
+          }
+          throw new Error(`unexpected browser proxy path ${proxy.path}`);
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.join") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({
+      params: { url: "https://meet.google.com/abc-defg-hij" },
+      respond,
+    });
+
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          path: "/tabs/focus",
+          body: { targetId: "existing-meet-tab" },
+        }),
+      }),
+    );
+    expect(nodesInvoke).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ path: "/tabs/open" }),
+      }),
+    );
+  });
+
   it("exposes a test-speech action that joins the requested meeting", async () => {
     const { tools, nodesInvoke } = setup(
       {
@@ -1072,6 +1194,14 @@ describe("google-meet plugin", () => {
     expect(bridge.triggerGreeting).not.toHaveBeenCalled();
     handle.speak("Say exactly: hello from the meeting.");
     expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the meeting.");
+    expect(handle.getHealth()).toMatchObject({
+      providerConnected: true,
+      realtimeReady: true,
+      audioInputActive: true,
+      audioOutputActive: true,
+      lastInputBytes: 3,
+      lastOutputBytes: 2,
+    });
     expect(callbacks).toMatchObject({
       tools: [
         expect.objectContaining({
@@ -1225,6 +1355,14 @@ describe("google-meet plugin", () => {
       providerId: "openai",
       nodeId: "node-1",
       bridgeId: "bridge-1",
+    });
+    expect(handle.getHealth()).toMatchObject({
+      providerConnected: true,
+      realtimeReady: true,
+      audioInputActive: true,
+      audioOutputActive: true,
+      lastInputBytes: 3,
+      lastOutputBytes: 3,
     });
 
     await handle.stop();

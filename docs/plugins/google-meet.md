@@ -119,6 +119,10 @@ openclaw googlemeet create --no-join
   the OpenClaw Chrome profile on the node to already be signed in to Google.
   Browser automation handles Meet's own first-run microphone prompt; that prompt
   is not treated as a Google login failure.
+  Join and create flows also try to reuse an existing Meet tab before opening a
+  new one. Matching ignores harmless URL query strings such as `authuser`, so an
+  agent retry should focus the already-open meeting instead of creating a second
+  Chrome tab.
 
 The command/tool output includes a `source` field (`api` or `browser`) so agents
 can explain which path was used. `create` joins the new meeting by default and
@@ -140,6 +144,14 @@ then share the returned `meetingUri`.
 For an observe-only/browser-control join, set `"mode": "transcribe"`. That does
 not start the duplex realtime model bridge, so it will not talk back into the
 meeting.
+
+During realtime sessions, `google_meet` status includes browser and audio bridge
+health such as `inCall`, `manualActionRequired`, `providerConnected`,
+`realtimeReady`, `audioInputActive`, `audioOutputActive`, last input/output
+timestamps, byte counters, and bridge closed state. If a safe Meet page prompt
+appears, browser automation handles it when it can. Login, host admission, and
+browser/OS permission prompts are reported as manual action with a reason and
+message for the agent to relay.
 
 Chrome joins as the signed-in Chrome profile. In Meet, pick `BlackHole 2ch` for
 the microphone/speaker path used by OpenClaw. For clean duplex audio, use

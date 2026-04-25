@@ -27,6 +27,8 @@ export type GoogleMeetChromeHealth = {
   manualActionMessage?: string;
   providerConnected?: boolean;
   realtimeReady?: boolean;
+  audioInputActive?: boolean;
+  audioOutputActive?: boolean;
   lastInputAt?: string;
   lastOutputAt?: string;
   lastInputBytes?: number;
