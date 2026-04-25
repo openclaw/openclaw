@@ -39,6 +39,20 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "lightContext",
   "allowUnsafeExternalContent",
 ] as const;
+const CRON_FLAT_SCHEDULE_KEYS = [
+  "kind",
+  "at",
+  "atMs",
+  "every",
+  "everyMs",
+  "anchorMs",
+  "cron",
+  "expr",
+  "tz",
+  "stagger",
+  "staggerMs",
+  "exact",
+] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
   "schedule",
@@ -53,6 +67,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "sessionKey",
   "failureAlert",
   ...CRON_FLAT_PAYLOAD_KEYS,
+  ...CRON_FLAT_SCHEDULE_KEYS,
 ]);
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
@@ -76,12 +91,29 @@ function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
       found = true;
     }
   }
+  if (value.everyMs === undefined && value.every !== undefined) {
+    value.everyMs = value.every;
+  }
+  if (value.staggerMs === undefined && value.stagger !== undefined) {
+    value.staggerMs = value.stagger;
+  }
+  if (value.exact === true && value.staggerMs === undefined) {
+    value.staggerMs = 0;
+  }
+  delete value.every;
+  delete value.stagger;
+  delete value.exact;
   return { found, value };
 }
 
 function hasCronCreateSignal(value: Record<string, unknown>): boolean {
   return (
     value.schedule !== undefined ||
+    value.at !== undefined ||
+    value.atMs !== undefined ||
+    value.everyMs !== undefined ||
+    value.cron !== undefined ||
+    value.expr !== undefined ||
     value.payload !== undefined ||
     value.message !== undefined ||
     value.text !== undefined
