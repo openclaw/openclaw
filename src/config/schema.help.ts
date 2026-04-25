@@ -1170,31 +1170,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-plugin environment variable map injected for that plugin runtime context only. Use this to scope provider credentials to one plugin instead of sharing global process environment.",
   "plugins.entries.*.config":
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
-  "plugins.installs":
-    "Deprecated compatibility fallback for legacy CLI-managed install metadata. New plugin installs use the state-managed `plugins/installs.json` ledger.",
-  "plugins.installs.*.source": 'Install source ("npm", "archive", or "path").',
-  "plugins.installs.*.spec": "Original npm spec used for install (if source is npm).",
-  "plugins.installs.*.sourcePath": "Original archive/path used for install (if any).",
-  "plugins.installs.*.installPath": "Resolved install directory for the installed plugin bundle.",
-  "plugins.installs.*.version": "Version recorded at install time (if available).",
-  "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
-  "plugins.installs.*.resolvedVersion":
-    "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
-  "plugins.installs.*.resolvedSpec":
-    "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
-  "plugins.installs.*.integrity":
-    "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
-  "plugins.installs.*.shasum":
-    "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
-  "plugins.installs.*.resolvedAt":
-    "ISO timestamp when npm package metadata was last resolved for this install record.",
-  "plugins.installs.*.installedAt": "ISO timestamp of last install/update.",
-  "plugins.installs.*.marketplaceName":
-    "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
-  "plugins.installs.*.marketplaceSource":
-    "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
-  "plugins.installs.*.marketplacePlugin":
-    "Plugin entry name inside the source marketplace, used for later updates.",
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.defaults.model.primary": "Primary model (provider/model).",

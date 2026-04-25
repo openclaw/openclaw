@@ -72,7 +72,7 @@ function createCurrentIndex(): InstalledPluginIndex {
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 2,
+    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
     plugins: [],
@@ -83,7 +83,7 @@ function createCurrentIndex(): InstalledPluginIndex {
 describe("plugin registry install migration", () => {
   it("short-circuits when a current registry file already exists", async () => {
     const stateDir = makeTempDir();
-    const filePath = path.join(stateDir, "plugins", "installed-index.json");
+    const filePath = path.join(stateDir, "plugins", "installs.json");
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
     const readConfig = vi.fn(async () => ({}));
 
@@ -106,11 +106,11 @@ describe("plugin registry install migration", () => {
 
   it("migrates when an existing registry file is not current", async () => {
     const stateDir = makeTempDir();
-    const filePath = path.join(stateDir, "plugins", "installed-index.json");
+    const filePath = path.join(stateDir, "plugins", "installs.json");
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ version: 1, migrationVersion: 1 }), "utf8");
+    fs.writeFileSync(filePath, JSON.stringify({ version: 1, migrationVersion: 0 }), "utf8");
 
     await expect(
       migratePluginRegistryForInstall({
@@ -127,7 +127,7 @@ describe("plugin registry install migration", () => {
     });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
-      migrationVersion: 2,
+      migrationVersion: 1,
       plugins: [expect.objectContaining({ pluginId: "demo" })],
     });
   });
@@ -202,10 +202,10 @@ describe("plugin registry install migration", () => {
       },
     });
     expect(readConfig).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(stateDir, "plugins", "installed-index.json"))).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "plugins", "installs.json"))).toBe(false);
   });
 
-  it("migrates missing registry state from legacy discovery and config inputs", async () => {
+  it("builds missing registry state from discovered plugin manifests", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -215,17 +215,7 @@ describe("plugin registry install migration", () => {
       migratePluginRegistryForInstall({
         stateDir,
         candidates: [candidate],
-        readConfig: async () => ({
-          plugins: {
-            installs: {
-              demo: {
-                source: "npm",
-                resolvedName: "@vendor/demo",
-                resolvedVersion: "1.0.0",
-              },
-            },
-          },
-        }),
+        readConfig: async () => ({}),
         env: hermeticEnv(),
       }),
     ).resolves.toMatchObject({
@@ -233,15 +223,10 @@ describe("plugin registry install migration", () => {
       migrated: true,
       current: {
         refreshReason: "migration",
-        migrationVersion: 2,
+        migrationVersion: 1,
         plugins: [
           expect.objectContaining({
             pluginId: "demo",
-            installRecord: expect.objectContaining({
-              source: "npm",
-              resolvedName: "@vendor/demo",
-              resolvedVersion: "1.0.0",
-            }),
           }),
         ],
       },

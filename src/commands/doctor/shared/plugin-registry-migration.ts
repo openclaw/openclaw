@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  loadPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../../../plugins/install-ledger-store.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -256,10 +253,11 @@ export async function migratePluginRegistryForInstall(
   }
 
   const config = await readMigrationConfig(params);
-  const installRecords = await loadPluginInstallRecords({ ...params, config });
+  const installRecords = await loadInstalledPluginIndexInstallRecords(params);
   const migrationParams = {
     ...params,
     config,
+    installRecords,
   };
   const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
   const candidateIndex = loadInstalledPluginIndex({
@@ -275,9 +273,6 @@ export async function migratePluginRegistryForInstall(
       installRecords,
     }),
   };
-  if (Object.keys(installRecords).length > 0) {
-    await writePersistedPluginInstallLedger(installRecords, params);
-  }
   await writePersistedInstalledPluginIndex(current, params);
   return {
     status: "migrated",

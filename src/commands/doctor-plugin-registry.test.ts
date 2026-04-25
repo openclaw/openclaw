@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "../plugins/discovery.js";
-import { readPersistedPluginInstallLedger } from "../plugins/install-ledger-store.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -68,7 +67,7 @@ function createCurrentIndex(): InstalledPluginIndex {
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 2,
+    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
     plugins: [],
@@ -77,30 +76,7 @@ function createCurrentIndex(): InstalledPluginIndex {
 }
 
 describe("maybeRepairPluginRegistryState", () => {
-  it("reports legacy config install records without mutating state outside repair mode", async () => {
-    const stateDir = makeTempDir();
-    const nextConfig = await maybeRepairPluginRegistryState({
-      stateDir,
-      env: hermeticEnv(),
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              resolvedName: "@vendor/demo",
-            },
-          },
-        },
-      },
-      prompter: { shouldRepair: false },
-    });
-
-    expect(nextConfig.plugins?.installs?.demo?.resolvedName).toBe("@vendor/demo");
-    await expect(readPersistedPluginInstallLedger({ stateDir })).resolves.toBeNull();
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain("plugins.installs");
-  });
-
-  it("moves legacy config install records into the ledger and refreshes an existing registry", async () => {
+  it("refreshes an existing registry during repair", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -110,45 +86,22 @@ describe("maybeRepairPluginRegistryState", () => {
       stateDir,
       candidates: [createCandidate(pluginDir)],
       env: hermeticEnv(),
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              resolvedName: "@vendor/demo",
-              resolvedVersion: "1.0.0",
-            },
-          },
-        },
-      },
+      config: {},
       prompter: { shouldRepair: true },
     });
 
-    expect(nextConfig.plugins?.installs).toBeUndefined();
-    await expect(readPersistedPluginInstallLedger({ stateDir })).resolves.toMatchObject({
-      records: {
-        demo: {
-          source: "npm",
-          resolvedName: "@vendor/demo",
-          resolvedVersion: "1.0.0",
-        },
-      },
-    });
+    expect(nextConfig).toEqual({});
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
       refreshReason: "migration",
       plugins: [
         expect.objectContaining({
           pluginId: "demo",
-          installRecord: expect.objectContaining({
-            source: "npm",
-            resolvedName: "@vendor/demo",
-          }),
         }),
       ],
     });
   });
 
-  it("does not mutate legacy install records when registry migration is disabled", async () => {
+  it("does not repair when registry migration is disabled", async () => {
     const stateDir = makeTempDir();
 
     const nextConfig = await maybeRepairPluginRegistryState({
@@ -156,21 +109,11 @@ describe("maybeRepairPluginRegistryState", () => {
       env: hermeticEnv({
         [DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]: "1",
       }),
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              resolvedName: "@vendor/demo",
-            },
-          },
-        },
-      },
+      config: {},
       prompter: { shouldRepair: true },
     });
 
-    expect(nextConfig.plugins?.installs?.demo?.resolvedName).toBe("@vendor/demo");
-    await expect(readPersistedPluginInstallLedger({ stateDir })).resolves.toBeNull();
+    expect(nextConfig).toEqual({});
     expect(vi.mocked(note).mock.calls.join("\n")).toContain(DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV);
   });
 });

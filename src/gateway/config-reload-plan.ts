@@ -203,7 +203,7 @@ function matchRule(path: string): ReloadRule | null {
 
 function isPluginInstallTimestampPath(path: string): boolean {
   // Legacy compatibility only: new plugin install metadata lives in the
-  // managed install ledger, but old config writes may still touch this path.
+  // managed plugin index, but old config writes may still touch this path.
   return /^plugins\.installs\..+\.(installedAt|resolvedAt)$/.test(path);
 }
 
@@ -216,7 +216,7 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
     return {};
   }
   // Keep legacy config install records out of gateway restart decisions while
-  // migration/doctor moves them into the managed plugin install ledger.
+  // migration/doctor moves them into the managed plugin index install records.
   const installs = plugins.installs;
   return isPlainObject(installs) ? installs : {};
 }

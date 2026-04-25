@@ -1,13 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
-import {
-  readPersistedPluginInstallLedger,
-  resolvePluginInstallLedgerStorePath,
-  withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-  type PluginInstallLedgerStoreOptions,
-} from "../plugins/install-ledger-store.js";
+import type { InstalledPluginIndexRecordStoreOptions } from "../plugins/installed-plugin-index-records.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -20,73 +13,10 @@ import {
 } from "./doctor/shared/plugin-registry-migration.js";
 
 type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParams, "config"> &
-  PluginInstallLedgerStoreOptions & {
+  InstalledPluginIndexRecordStoreOptions & {
     config: OpenClawConfig;
     prompter: Pick<DoctorPrompter, "shouldRepair">;
   };
-
-type LegacyInstallLedgerMigrationResult = {
-  config: OpenClawConfig;
-  migrated: boolean;
-};
-
-function countRecords(records: Record<string, unknown> | undefined): number {
-  return Object.keys(records ?? {}).length;
-}
-
-function mergeInstallRecords(
-  legacyRecords: Record<string, PluginInstallRecord>,
-  ledgerRecords: Record<string, PluginInstallRecord> | undefined,
-): Record<string, PluginInstallRecord> {
-  return {
-    ...legacyRecords,
-    ...ledgerRecords,
-  };
-}
-
-async function maybeMigrateLegacyInstallLedger(
-  params: PluginRegistryDoctorRepairParams,
-): Promise<LegacyInstallLedgerMigrationResult> {
-  const legacyRecords = params.config.plugins?.installs;
-  const legacyCount = countRecords(legacyRecords);
-  if (!legacyRecords || legacyCount === 0) {
-    return {
-      config: params.config,
-      migrated: false,
-    };
-  }
-
-  const ledgerPath = resolvePluginInstallLedgerStorePath(params);
-  if (!params.prompter.shouldRepair) {
-    note(
-      [
-        `Legacy plugin install records still live in config at \`plugins.installs\`.`,
-        `Repair with ${formatCliCommand("openclaw doctor --fix")} to move them to ${shortenHomePath(ledgerPath)} and remove the config copy.`,
-      ].join("\n"),
-      "Plugin registry",
-    );
-    return {
-      config: params.config,
-      migrated: false,
-    };
-  }
-
-  const existingLedger = await readPersistedPluginInstallLedger(params);
-  const nextRecords = mergeInstallRecords(legacyRecords, existingLedger?.records);
-  await writePersistedPluginInstallLedger(nextRecords, params);
-  const nextConfig = withoutPluginInstallRecords(params.config);
-  note(
-    [
-      `Moved ${legacyCount} legacy plugin install record${legacyCount === 1 ? "" : "s"} from config to ${shortenHomePath(ledgerPath)}.`,
-      "Removed the legacy `plugins.installs` config copy.",
-    ].join("\n"),
-    "Plugin registry",
-  );
-  return {
-    config: nextConfig,
-    migrated: true,
-  };
-}
 
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
@@ -103,13 +33,9 @@ export async function maybeRepairPluginRegistryState(
     return params.config;
   }
 
-  let nextConfig = params.config;
-  const ledgerMigration = await maybeMigrateLegacyInstallLedger(params);
-  nextConfig = ledgerMigration.config;
-
   const migrationParams = {
     ...params,
-    config: nextConfig,
+    config: params.config,
   };
   if (!params.prompter.shouldRepair) {
     if (preflight.action === "migrate") {
@@ -121,7 +47,7 @@ export async function maybeRepairPluginRegistryState(
         "Plugin registry",
       );
     }
-    return nextConfig;
+    return params.config;
   }
 
   if (preflight.action === "migrate") {
@@ -134,10 +60,10 @@ export async function maybeRepairPluginRegistryState(
         "Plugin registry",
       );
     }
-    return nextConfig;
+    return params.config;
   }
 
-  if (ledgerMigration.migrated) {
+  if (preflight.action === "skip-existing") {
     const index = await refreshPluginRegistry({
       ...migrationParams,
       reason: "migration",
@@ -150,5 +76,5 @@ export async function maybeRepairPluginRegistryState(
     );
   }
 
-  return nextConfig;
+  return params.config;
 }
