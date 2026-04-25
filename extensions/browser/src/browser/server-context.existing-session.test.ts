@@ -85,6 +85,24 @@ afterEach(() => {
 });
 
 describe("browser server-context existing-session profile", () => {
+  it("reports attach-only profiles as running when the MCP session is available but no page is selected", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+
+    vi.mocked(chromeMcp.ensureChromeMcpAvailable).mockResolvedValueOnce();
+    vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
+
+    await expect(ctx.listProfiles()).resolves.toEqual([
+      expect.objectContaining({
+        name: "chrome-live",
+        transport: "chrome-mcp",
+        running: true,
+        tabCount: 0,
+      }),
+    ]);
+  });
+
   it("routes tab operations through the Chrome MCP backend", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
