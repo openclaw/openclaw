@@ -523,6 +523,10 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     refreshChatModels(host),
     refreshChatCommands(host),
   ]);
+  // Sync ChatHost.chatAvatarUrl (set by refreshChatAvatar) to
+  // AppViewState.chatAvatarUrl (the Lit @state() reactive field).
+  const result = await refreshChatAvatar(host);
+  (host as unknown as { chatAvatarUrl: string | null }).chatAvatarUrl = result ?? host.chatAvatarUrl;
   if (opts?.scheduleScroll !== false) {
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   }
@@ -653,10 +657,10 @@ function isLocalControlUiAvatarUrl(avatarUrl: string): boolean {
   return avatarUrl.startsWith("/");
 }
 
-export async function refreshChatAvatar(host: ChatHost) {
+export async function refreshChatAvatar(host: ChatHost): Promise<string | null> {
   if (!host.connected) {
     clearChatAvatarState(host);
-    return;
+    return null;
   }
   const sessionKey = host.sessionKey;
   const requestVersion = beginChatAvatarRequest(host);
@@ -665,7 +669,7 @@ export async function refreshChatAvatar(host: ChatHost) {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
       clearChatAvatarState(host);
     }
-    return;
+    return null;
   }
   clearChatAvatarState(host);
   const authHeader = resolveControlUiAuthHeader(host);
@@ -674,11 +678,11 @@ export async function refreshChatAvatar(host: ChatHost) {
   try {
     const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
-      return;
+      return null;
     }
     if (!res.ok) {
       clearChatAvatarState(host);
-      return;
+      return null;
     }
     const data = (await res.json()) as {
       avatarUrl?: unknown;
@@ -687,17 +691,17 @@ export async function refreshChatAvatar(host: ChatHost) {
       avatarReason?: unknown;
     };
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
-      return;
+      return null;
     }
     setChatAvatarMeta(host, data);
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
       clearChatAvatarUrl(host);
-      return;
+      return null;
     }
     if (!isLocalControlUiAvatarUrl(avatarUrl)) {
       setChatAvatarUrl(host, avatarUrl);
-      return;
+      return avatarUrl;
     }
     const avatarRes = await fetch(avatarUrl, {
       method: "GET",
@@ -707,17 +711,19 @@ export async function refreshChatAvatar(host: ChatHost) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
         clearChatAvatarUrl(host);
       }
-      return;
+      return null;
     }
     const blobUrl = URL.createObjectURL(await avatarRes.blob());
     if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
       URL.revokeObjectURL(blobUrl);
-      return;
+      return null;
     }
     setChatAvatarUrl(host, blobUrl);
+    return blobUrl;
   } catch {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
       clearChatAvatarState(host);
     }
+    return null;
   }
 }
