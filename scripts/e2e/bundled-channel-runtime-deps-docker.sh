@@ -39,9 +39,9 @@ prepare_package_tgz() {
   local pack_dir
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bundled-channel-pack.XXXXXX")"
   run_logged bundled-channel-deps-pack npm pack --ignore-scripts --pack-destination "$pack_dir"
-  PACKAGE_TGZ="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
+  PACKAGE_TGZ="$(find "$pack_dir" -maxdepth 1 \( -name 'openclaw-*.tgz' -o -name 'gemmaclaw-*.tgz' \) -print -quit)"
   if [ -z "$PACKAGE_TGZ" ]; then
-    echo "missing packed OpenClaw tarball" >&2
+    echo "missing packed tarball (expected openclaw-*.tgz or gemmaclaw-*.tgz)" >&2
     exit 1
   fi
   PACKAGE_TGZ="$(cd "$(dirname "$PACKAGE_TGZ")" && pwd)/$(basename "$PACKAGE_TGZ")"
@@ -90,8 +90,20 @@ echo "Installing mounted OpenClaw package..."
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
 
-command -v openclaw >/dev/null
-package_root="$(npm root -g)/openclaw"
+# Detect CLI binary name (gemmaclaw or openclaw depending on package.json name)
+if command -v gemmaclaw >/dev/null 2>&1; then
+  CLI_BIN=gemmaclaw
+elif command -v openclaw >/dev/null 2>&1; then
+  CLI_BIN=openclaw
+else
+  echo "ERROR: neither gemmaclaw nor openclaw found on PATH" >&2; exit 1
+fi
+# Detect package root (npm global install directory)
+if [ -d "$(npm root -g)/gemmaclaw" ]; then
+  package_root="$(npm root -g)/gemmaclaw"
+else
+  package_root="$(npm root -g)/openclaw"
+fi
 test -d "$package_root/dist/extensions/telegram"
 test -d "$package_root/dist/extensions/discord"
 test -d "$package_root/dist/extensions/slack"
@@ -226,7 +238,7 @@ NODE
 start_gateway() {
   local log_file="$1"
   : >"$log_file"
-  openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  $CLI_BIN gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
   gateway_pid="$!"
 
   for _ in $(seq 1 240); do
@@ -256,7 +268,7 @@ stop_gateway() {
 
 wait_for_gateway_health() {
   for _ in $(seq 1 120); do
-    if openclaw gateway health --url "ws://127.0.0.1:$PORT" --token "$TOKEN" --json >/dev/null 2>&1; then
+    if $CLI_BIN gateway health --url "ws://127.0.0.1:$PORT" --token "$TOKEN" --json >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.25
@@ -272,7 +284,7 @@ assert_channel_status() {
     return 0
   fi
   local out="/tmp/openclaw-channel-status-$channel.json"
-  openclaw gateway call channels.status \
+  $CLI_BIN gateway call channels.status \
     --url "ws://127.0.0.1:$PORT" \
     --token "$TOKEN" \
     --timeout 30000 \
@@ -407,7 +419,7 @@ DEP_SENTINEL="@slack/web-api"
 gateway_pid=""
 
 package_root() {
-  printf "%s/openclaw" "$(npm root -g)"
+  if [ -d "$(npm root -g)/gemmaclaw" ]; then printf "%s/gemmaclaw" "$(npm root -g)"; else printf "%s/openclaw" "$(npm root -g)"; fi
 }
 
 cleanup() {
@@ -484,7 +496,7 @@ start_gateway() {
     OPENCLAW_NO_ONBOARD=1 \
     OPENCLAW_PLUGIN_STAGE_DIR="$OPENCLAW_PLUGIN_STAGE_DIR" \
     npm_config_cache=/tmp/openclaw-root-owned-npm-cache \
-    openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+    $CLI_BIN gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
   gateway_pid="$!"
 
   for _ in $(seq 1 240); do
@@ -589,7 +601,7 @@ CHANNEL="feishu"
 DEP_SENTINEL="@larksuiteoapi/node-sdk"
 
 package_root() {
-  printf "%s/openclaw" "$(npm root -g)"
+  if [ -d "$(npm root -g)/gemmaclaw" ]; then printf "%s/gemmaclaw" "$(npm root -g)"; else printf "%s/openclaw" "$(npm root -g)"; fi
 }
 
 echo "Installing mounted OpenClaw package..."
@@ -674,7 +686,15 @@ config.channels = {
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 NODE
 
-openclaw doctor --non-interactive >/tmp/openclaw-setup-entry-doctor.log 2>&1
+CLI_BIN=$(command -v gemmaclaw 2>/dev/null || command -v openclaw 2>/dev/null || echo openclaw)
+set +e
+$CLI_BIN doctor --non-interactive >/tmp/openclaw-setup-entry-doctor.log 2>&1
+doctor_status=$?
+set -e
+if [ "$doctor_status" -ne 0 ]; then
+  echo "doctor exited with status $doctor_status (may be expected for dep repair)" >&2
+  cat /tmp/openclaw-setup-entry-doctor.log >&2 || true
+fi
 
 if [ -e "$root/dist/extensions/$CHANNEL/node_modules/$DEP_SENTINEL/package.json" ]; then
   echo "expected configured Feishu deps to be installed externally, not into bundled plugin tree" >&2
@@ -721,8 +741,17 @@ export OPENCLAW_UPDATE_PACKAGE_SPEC=""
 TOKEN="bundled-channel-update-token"
 PORT="18790"
 
+# Detect CLI binary name (gemmaclaw or openclaw depending on package.json name)
+if command -v gemmaclaw >/dev/null 2>&1; then
+  CLI_BIN=gemmaclaw
+elif command -v openclaw >/dev/null 2>&1; then
+  CLI_BIN=openclaw
+else
+  echo "ERROR: neither gemmaclaw nor openclaw found on PATH" >&2; exit 1
+fi
+
 package_root() {
-  printf "%s/openclaw" "$(npm root -g)"
+  if [ -d "$(npm root -g)/gemmaclaw" ]; then printf "%s/gemmaclaw" "$(npm root -g)"; else printf "%s/openclaw" "$(npm root -g)"; fi
 }
 
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
@@ -944,11 +973,11 @@ run_update_and_capture() {
   local label="$1"
   local out_file="$2"
   set +e
-  openclaw update --tag "$update_target" --yes --json >"$out_file" 2>"/tmp/openclaw-$label-update.stderr"
+  $CLI_BIN update --tag "$update_target" --yes --json >"$out_file" 2>"/tmp/openclaw-$label-update.stderr"
   local status=$?
   set -e
   if [ "$status" -ne 0 ]; then
-    echo "openclaw update failed for $label with exit code $status" >&2
+    echo "$CLI_BIN update failed for $label with exit code $status" >&2
     cat "$out_file" >&2 || true
     cat "/tmp/openclaw-$label-update.stderr" >&2 || true
     exit "$status"
@@ -957,7 +986,7 @@ run_update_and_capture() {
 
 echo "Installing current candidate as update baseline..."
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-update-baseline-install.log 2>&1
-command -v openclaw >/dev/null
+command -v $CLI_BIN >/dev/null
 baseline_root="$(package_root)"
 test -d "$baseline_root/dist/extensions/telegram"
 test -d "$baseline_root/dist/extensions/feishu"
@@ -966,7 +995,7 @@ echo "Replicating configured Telegram missing-runtime state..."
 write_config telegram
 assert_no_dep_available telegram grammy
 set +e
-openclaw doctor --non-interactive >/tmp/openclaw-baseline-doctor.log 2>&1
+$CLI_BIN doctor --non-interactive >/tmp/openclaw-baseline-doctor.log 2>&1
 baseline_doctor_status=$?
 set -e
 echo "baseline doctor exited with $baseline_doctor_status"
@@ -982,7 +1011,7 @@ assert_dep_available telegram grammy
 echo "Mutating installed package: remove Telegram deps, then update-mode doctor repairs them..."
 remove_runtime_dep telegram grammy
 assert_no_dep_available telegram grammy
-if ! OPENCLAW_UPDATE_IN_PROGRESS=1 openclaw doctor --non-interactive >/tmp/openclaw-update-mode-doctor.log 2>&1; then
+if ! OPENCLAW_UPDATE_IN_PROGRESS=1 $CLI_BIN doctor --non-interactive >/tmp/openclaw-update-mode-doctor.log 2>&1; then
   echo "update-mode doctor failed while repairing Telegram deps" >&2
   cat /tmp/openclaw-update-mode-doctor.log >&2
   exit 1
@@ -1054,7 +1083,7 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NO_ONBOARD=1
 
 package_root() {
-  printf "%s/openclaw" "$(npm root -g)"
+  if [ -d "$(npm root -g)/gemmaclaw" ]; then printf "%s/gemmaclaw" "$(npm root -g)"; else printf "%s/openclaw" "$(npm root -g)"; fi
 }
 
 echo "Installing mounted OpenClaw package..."

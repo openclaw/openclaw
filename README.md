@@ -190,6 +190,57 @@ docker run --rm -e HF_TOKEN=hf_... gemmaclaw-provision-e2e gemma-cpp
 docker run --rm -e HF_TOKEN=hf_... gemmaclaw-provision-e2e all
 ```
 
+### Benchmarking
+
+Gemmaclaw includes a built-in benchmark suite that tests model quality across instruction following, reasoning, data extraction, safety, and coding tasks. The benchmark is hardware-aware: it detects your GPU, CPU, and RAM, then reports throughput alongside quality scores so you can compare configurations.
+
+```bash
+# Run full benchmark with LLM judge scoring
+gemmaclaw benchmark
+
+# Run deterministic scoring only (fast, no judge needed)
+gemmaclaw benchmark --mock
+
+# Benchmark a specific model
+gemmaclaw benchmark --model gemma3:4b
+
+# Run only coding tasks
+gemmaclaw benchmark --filter coding
+
+# Tune hardware parameters
+gemmaclaw benchmark --context-length 8192 --gpu-layers 35 --batch-size 512
+```
+
+Results are written to `results/<model>__<timestamp>/` with three formats:
+
+- `results.json`: machine-readable scores, timing, and hardware info
+- `RESULTS.md`: markdown summary table
+- `index.html`: GitHub Pages compatible dashboard
+
+## Commands
+
+| Command                      | Description                                                |
+| ---------------------------- | ---------------------------------------------------------- |
+| `gemmaclaw setup`            | Auto-detect hardware and provision the best Gemma backend  |
+| `gemmaclaw setup --advanced` | Interactive wizard for manual backend/model/port selection |
+| `gemmaclaw chat`             | Open terminal chat with your Gemma assistant               |
+| `gemmaclaw benchmark`        | Run the benchmark suite (full LLM judge mode)              |
+| `gemmaclaw benchmark --mock` | Run benchmark with deterministic scoring (fast CI mode)    |
+| `gemmaclaw provision`        | Low-level: manually provision a specific backend           |
+| `gemmaclaw doctor`           | Health checks and quick fixes                              |
+| `gemmaclaw config`           | View and edit configuration                                |
+
+### npm scripts (development)
+
+| Script                    | Description                                                        |
+| ------------------------- | ------------------------------------------------------------------ |
+| `pnpm benchmark`          | Run benchmark locally (full mode)                                  |
+| `pnpm benchmark:mock`     | Run benchmark locally (deterministic only)                         |
+| `pnpm test:e2e:benchmark` | Docker e2e: build image, install Ollama, pull model, run benchmark |
+| `pnpm test:e2e:install`   | Docker e2e: verify clean install works                             |
+| `pnpm build`              | Build the project                                                  |
+| `pnpm test`               | Run unit tests                                                     |
+
 ## Contributing
 
 Issues and pull requests are welcome. Keep contributions small, reproducible, and backed by data where possible. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.

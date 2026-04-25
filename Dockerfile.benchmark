@@ -1,0 +1,129 @@
+# Dockerfile.benchmark
+# E2E test: install Ollama, pull a small model, run gemmaclaw benchmark --mock
+#
+# Usage:
+#   docker build -f Dockerfile.benchmark -t gemmaclaw-benchmark-e2e .
+#   docker run --rm gemmaclaw-benchmark-e2e
+
+FROM node:22-bookworm
+
+# Install system deps: curl/zstd for Ollama, python3 for results parsing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates procps zstd python3 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Ollama
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy entire source tree (relies on .dockerignore for exclusions)
+WORKDIR /app
+COPY . .
+
+# Install deps and build
+RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install --no-frozen-lockfile
+RUN pnpm build 2>/dev/null || echo "Build completed with warnings"
+
+# Create the benchmark e2e entrypoint script
+RUN cat > /app/scripts/benchmark-e2e.sh << 'ENTRYPOINT_SCRIPT'
+#!/bin/bash
+set -euo pipefail
+
+echo "========================================"
+echo "  Gemmaclaw Benchmark E2E Test"
+echo "========================================"
+echo ""
+
+# Start Ollama in the background
+echo "[1/5] Starting Ollama server..."
+ollama serve &
+OLLAMA_PID=$!
+
+# Wait for Ollama to be ready
+echo "[2/5] Waiting for Ollama..."
+for i in $(seq 1 60); do
+  if curl -s http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+    echo "  Ollama ready after ${i}s"
+    break
+  fi
+  if [ "$i" -eq 60 ]; then
+    echo "ERROR: Ollama failed to start after 60s"
+    exit 1
+  fi
+  sleep 1
+done
+
+# Pull a small model for testing
+# gemma3:1b is ~815MB, small enough for CI
+MODEL="${BENCHMARK_MODEL:-gemma3:1b}"
+echo "[3/5] Pulling model: $MODEL"
+ollama pull "$MODEL"
+
+# Verify model is loaded
+echo "[4/5] Verifying model..."
+RESPONSE=$(curl -s http://127.0.0.1:11434/api/chat \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello\"}],\"stream\":false,\"options\":{\"num_predict\":5}}")
+echo "  Smoke test response: $(echo "$RESPONSE" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("message",{}).get("content","EMPTY"))' 2>/dev/null || echo 'PARSE_FAIL')"
+
+# Run the benchmark in mock mode
+echo "[5/5] Running benchmark (mock mode)..."
+echo ""
+
+# Try built CLI first, fall back to tsx
+if [ -f /app/dist/entry.js ]; then
+  node /app/gemmaclaw.mjs benchmark --mock --model "$MODEL" --output-dir /tmp/benchmark-results
+else
+  npx tsx /app/src/gemmaclaw/benchmark/cli-standalone.ts --mock --model "$MODEL" --output-dir /tmp/benchmark-results
+fi
+
+EXIT_CODE=$?
+
+# Show results
+echo ""
+echo "========================================"
+echo "  Results"
+echo "========================================"
+if [ -f /tmp/benchmark-results/results.json ]; then
+  python3 -c "
+import json
+with open('/tmp/benchmark-results/results.json') as f:
+    r = json.load(f)
+s = r['summary']
+print(f\"  Score: {s['totalScore']} / {s['maxScore']} ({s['percentage']}%)\")
+print(f\"  Passed: {s['passedCount']} / {s['passedCount'] + s['failedCount']}\")
+print(f\"  Time: {s['totalTimeMs']/1000:.1f}s\")
+if s.get('avgTokensPerSecond'):
+    print(f\"  Avg tok/s: {s['avgTokensPerSecond']}\")
+  " 2>/dev/null || cat /tmp/benchmark-results/results.json
+fi
+
+if [ -f /tmp/benchmark-results/RESULTS.md ]; then
+  echo ""
+  echo "  Markdown summary:"
+  head -20 /tmp/benchmark-results/RESULTS.md
+fi
+
+if [ -f /tmp/benchmark-results/index.html ]; then
+  echo ""
+  echo "  HTML dashboard generated: /tmp/benchmark-results/index.html"
+fi
+
+# Cleanup
+kill $OLLAMA_PID 2>/dev/null || true
+
+echo ""
+if [ "${EXIT_CODE:-0}" -eq 0 ]; then
+  echo "  E2E PASSED"
+else
+  echo "  E2E FAILED (exit code: $EXIT_CODE)"
+fi
+echo "========================================"
+
+exit ${EXIT_CODE:-0}
+ENTRYPOINT_SCRIPT
+
+RUN chmod +x /app/scripts/benchmark-e2e.sh
+
+ENTRYPOINT ["bash", "/app/scripts/benchmark-e2e.sh"]

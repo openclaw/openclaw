@@ -82,7 +82,8 @@ else
 fi
 
 echo "==> Verify installed version"
-INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r')"
+CLI_BIN="$(command -v gemmaclaw 2>/dev/null || command -v openclaw 2>/dev/null || echo openclaw)"
+INSTALLED_VERSION="$($CLI_BIN --version 2>/dev/null | head -n 1 | tr -d '\r')"
 INSTALLED_VERSION="$(extract_openclaw_semver "$INSTALLED_VERSION")"
 echo "installed=$INSTALLED_VERSION expected=$EXPECTED_VERSION"
 if [[ "$INSTALLED_VERSION" != "$EXPECTED_VERSION" ]]; then
@@ -95,7 +96,7 @@ set_image_model() {
   shift
   local candidate
   for candidate in "$@"; do
-    if openclaw --profile "$profile" models set-image "$candidate" >/dev/null 2>&1; then
+    if $CLI_BIN --profile "$profile" models set-image "$candidate" >/dev/null 2>&1; then
       echo "$candidate"
       return 0
     fi
@@ -109,7 +110,7 @@ set_agent_model() {
   local candidate
   shift
   for candidate in "$@"; do
-    if openclaw --profile "$profile" models set "$candidate" >/dev/null 2>&1; then
+    if $CLI_BIN --profile "$profile" models set "$candidate" >/dev/null 2>&1; then
       echo "$candidate"
       return 0
     fi
@@ -197,7 +198,7 @@ run_agent_turn() {
   # in the isolated container and already covered by gateway-specific lanes.
   set +e
   timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s" \
-    openclaw --profile "$profile" agent \
+    $CLI_BIN --profile "$profile" agent \
     --local \
     --session-id "$session_id" \
     --message "$prompt" \
@@ -439,7 +440,7 @@ run_profile() {
 
 	  echo "==> Onboard ($profile)"
 	  if [[ "$agent_model_provider" == "openai" ]]; then
-	    openclaw --profile "$profile" onboard \
+	    $CLI_BIN --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -451,7 +452,7 @@ run_profile() {
       --workspace "$workspace" \
       --skip-health
 	  elif [[ -n "$ANTHROPIC_API_KEY" ]]; then
-	    openclaw --profile "$profile" onboard \
+	    $CLI_BIN --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -463,7 +464,7 @@ run_profile() {
       --workspace "$workspace" \
       --skip-health
 	  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
-	    openclaw --profile "$profile" onboard \
+	    $CLI_BIN --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -476,7 +477,7 @@ run_profile() {
       --workspace "$workspace" \
       --skip-health
 	  else
-	    openclaw --profile "$profile" onboard \
+	    $CLI_BIN --profile "$profile" onboard \
 	      --non-interactive \
 	      --accept-risk \
 	      --flow quickstart \
@@ -534,7 +535,7 @@ run_profile() {
 
   echo "==> Start gateway ($profile)"
   GATEWAY_LOG="$workspace/gateway.log"
-  openclaw --profile "$profile" gateway --port "$port" --bind loopback >"$GATEWAY_LOG" 2>&1 &
+  $CLI_BIN --profile "$profile" gateway --port "$port" --bind loopback >"$GATEWAY_LOG" 2>&1 &
   GATEWAY_PID="$!"
   cleanup_profile() {
     if kill -0 "$GATEWAY_PID" 2>/dev/null; then
@@ -546,12 +547,12 @@ run_profile() {
 
   echo "==> Wait for health ($profile)"
   for _ in $(seq 1 240); do
-    if openclaw --profile "$profile" health --timeout 5000 --json >/dev/null 2>&1; then
+    if $CLI_BIN --profile "$profile" health --timeout 5000 --json >/dev/null 2>&1; then
       break
     fi
     sleep 0.25
   done
-  openclaw --profile "$profile" health --timeout 60000 --json >/dev/null
+  $CLI_BIN --profile "$profile" health --timeout 60000 --json >/dev/null
 
   echo "==> Agent turns ($profile)"
   TURN1_JSON="/tmp/agent-${profile}-1.json"

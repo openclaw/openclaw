@@ -120,6 +120,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("./register.provision.js"),
         exportName: "registerProvisionCommand",
       },
+      {
+        commandNames: ["benchmark"],
+        loadModule: () => import("./register.benchmark.js"),
+        exportName: "registerBenchmarkCommand",
+      },
     ]),
   ),
 ];

@@ -95,6 +95,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Install and start a local Gemma backend (Ollama, llama.cpp, or gemma.cpp)",
     hasSubcommands: false,
   },
+  {
+    name: "benchmark",
+    description: "Run the benchmark suite against your local Gemma model",
+    hasSubcommands: false,
+  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
 
 export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;

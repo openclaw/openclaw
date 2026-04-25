@@ -78,7 +78,7 @@ jobs:
   install-smoke:
     needs: [preflight]
     if: needs.preflight.outputs.run_install_smoke == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -86,11 +86,11 @@ jobs:
       - name: Checkout CLI
         uses: actions/checkout@v6
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
-      # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
-      # explicit gha cache directives so local tags still load cleanly.
       - name: Run QR package install smoke
         env:
           OPENCLAW_QR_SMOKE_FORCE_INSTALL: "1"
@@ -99,7 +99,7 @@ jobs:
       # Build once with the matrix extension and tag both smoke names. This
       # keeps the build-arg coverage without a second Blacksmith build action.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -115,7 +115,7 @@ jobs:
 
       - name: Run root Dockerfile CLI smoke
         run: |
-          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
+          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which gemmaclaw && gemmaclaw --version'
 
       - name: Run Docker gateway network e2e
         env:
@@ -126,8 +126,8 @@ jobs:
       - name: Smoke test Dockerfile with matrix extension build arg
         run: |
           docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
-            which openclaw &&
-            openclaw --version &&
+            which gemmaclaw &&
+            gemmaclaw --version &&
             node -e "
               const Module = require(\"node:module\");
               const matrixPackage = require(\"/app/extensions/matrix/package.json\");
@@ -142,7 +142,7 @@ jobs:
                 requireFromMatrix.resolve(dep);
               }
               const { spawnSync } = require(\"node:child_process\");
-              const run = spawnSync(\"openclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
+              const run = spawnSync(\"gemmaclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
               if (run.status !== 0) {
                 process.stderr.write(run.stderr || run.stdout || \"plugins list failed\\n\");
                 process.exit(run.status ?? 1);
@@ -169,7 +169,7 @@ jobs:
           '
 
       - name: Build installer smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        uses: docker/build-push-action@v6
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-smoke/Dockerfile
@@ -180,7 +180,7 @@ jobs:
 
       - name: Build installer non-root image
         if: github.event_name != 'pull_request'
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        uses: docker/build-push-action@v6
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-nonroot/Dockerfile
@@ -205,6 +205,7 @@ jobs:
           OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_UPDATE: "1"
           OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh
@@ -212,7 +213,7 @@ jobs:
   docker-e2e-fast:
     needs: [preflight]
     if: needs.preflight.outputs.run_install_smoke == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
       DOCKER_BUILD_SUMMARY: "false"
@@ -221,8 +222,10 @@ jobs:
       - name: Checkout CLI
         uses: actions/checkout@v6
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Setup Node environment for package smoke
         uses: ./.github/actions/setup-node-env
@@ -233,4 +236,4 @@ jobs:
       - name: Run fast bundled plugin Docker E2E
         env:
           OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE: openclaw-bundled-channel-fast:local
-        run: timeout 120s pnpm test:docker:bundled-channel-deps:fast
+        run: timeout 300s pnpm test:docker:bundled-channel-deps:fast

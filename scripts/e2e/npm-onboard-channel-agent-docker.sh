@@ -42,9 +42,9 @@ prepare_package_tgz() {
   local pack_dir
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-pack.XXXXXX")"
   run_logged npm-onboard-channel-agent-pack npm pack --ignore-scripts --pack-destination "$pack_dir"
-  PACKAGE_TGZ="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
+  PACKAGE_TGZ="$(find "$pack_dir" -maxdepth 1 \( -name 'openclaw-*.tgz' -o -name 'gemmaclaw-*.tgz' \) -print -quit)"
   if [ -z "$PACKAGE_TGZ" ]; then
-    echo "missing packed OpenClaw tarball" >&2
+    echo "missing packed tarball (expected openclaw-*.tgz or gemmaclaw-*.tgz)" >&2
     exit 1
   fi
   PACKAGE_TGZ="$(cd "$(dirname "$PACKAGE_TGZ")" && pwd)/$(basename "$PACKAGE_TGZ")"
@@ -125,8 +125,20 @@ echo "Installing mounted OpenClaw package..."
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
 
-command -v openclaw >/dev/null
-package_root="$(npm root -g)/openclaw"
+# Detect CLI binary name (gemmaclaw or openclaw depending on package.json name)
+if command -v gemmaclaw >/dev/null 2>&1; then
+  CLI_BIN=gemmaclaw
+elif command -v openclaw >/dev/null 2>&1; then
+  CLI_BIN=openclaw
+else
+  echo "ERROR: neither gemmaclaw nor openclaw found on PATH" >&2; exit 1
+fi
+# Detect package root (npm global install directory)
+if [ -d "$(npm root -g)/gemmaclaw" ]; then
+  package_root="$(npm root -g)/gemmaclaw"
+else
+  package_root="$(npm root -g)/openclaw"
+fi
 test -d "$package_root/dist/extensions/telegram"
 test -d "$package_root/dist/extensions/discord"
 
@@ -317,7 +329,7 @@ done
 node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 echo "Running non-interactive onboarding..."
-openclaw onboard --non-interactive --accept-risk \
+$CLI_BIN onboard --non-interactive --accept-risk \
   --mode local \
   --auth-choice openai-api-key \
   --secret-input-mode ref \
@@ -415,7 +427,7 @@ NODE
 assert_dep_absent "$DEP_SENTINEL"
 
 echo "Configuring $CHANNEL..."
-openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
+$CLI_BIN channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
 node - "$CHANNEL" "$CHANNEL_TOKEN" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
@@ -435,11 +447,11 @@ NODE
 assert_dep_present "$DEP_SENTINEL"
 
 echo "Running doctor after activated plugin dep install..."
-openclaw doctor --non-interactive >/tmp/openclaw-doctor.log 2>&1
+$CLI_BIN doctor --non-interactive >/tmp/openclaw-doctor.log 2>&1
 assert_dep_present "$DEP_SENTINEL"
 
 echo "Running local agent turn against mocked OpenAI..."
-openclaw agent --local \
+$CLI_BIN agent --local \
   --agent main \
   --session-id npm-onboard-channel-agent \
   --message "Return the success marker from the test server." \
