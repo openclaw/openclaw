@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CLAUDE_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   type AuthCredentialReasonCode,
@@ -8,6 +9,7 @@ import {
 import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import { readClaudeCliCredentialsCached } from "./cli-credentials.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type AuthProfileSource = "store";
@@ -101,6 +103,34 @@ function resolveOAuthStatus(
   return { status: "ok", remainingMs };
 }
 
+function resolveClaudeCliStatusCredential(params: {
+  profileId: string;
+  credential: AuthProfileCredential;
+}): AuthProfileCredential {
+  if (params.profileId !== CLAUDE_CLI_PROFILE_ID) {
+    return params.credential;
+  }
+  const cliCredential = readClaudeCliCredentialsCached({ allowKeychainPrompt: false });
+  if (!cliCredential) {
+    return params.credential;
+  }
+  if (cliCredential.type === "oauth") {
+    return {
+      type: "oauth",
+      provider: params.credential.provider,
+      access: cliCredential.access,
+      refresh: cliCredential.refresh,
+      expires: cliCredential.expires,
+    };
+  }
+  return {
+    type: "token",
+    provider: params.credential.provider,
+    token: cliCredential.token,
+    expires: cliCredential.expires,
+  };
+}
+
 function buildProfileHealth(params: {
   profileId: string;
   credential: AuthProfileCredential;
@@ -112,9 +142,10 @@ function buildProfileHealth(params: {
   const { profileId, credential, store, cfg, now, warnAfterMs } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
   const source = resolveAuthProfileSource(profileId);
-  const provider = normalizeProviderId(credential.provider);
+  const healthCredential = resolveClaudeCliStatusCredential({ profileId, credential });
+  const provider = normalizeProviderId(healthCredential.provider);
 
-  if (credential.type === "api_key") {
+  if (healthCredential.type === "api_key") {
     return {
       profileId,
       provider,
@@ -125,9 +156,9 @@ function buildProfileHealth(params: {
     };
   }
 
-  if (credential.type === "token") {
+  if (healthCredential.type === "token") {
     const eligibility = evaluateStoredCredentialEligibility({
-      credential,
+      credential: healthCredential,
       now,
     });
     if (!eligibility.eligible) {
@@ -143,8 +174,8 @@ function buildProfileHealth(params: {
         label,
       };
     }
-    const expiryState = resolveTokenExpiryState(credential.expires, now);
-    const expiresAt = expiryState === "valid" ? credential.expires : undefined;
+    const expiryState = resolveTokenExpiryState(healthCredential.expires, now);
+    const expiresAt = expiryState === "valid" ? healthCredential.expires : undefined;
     if (!expiresAt) {
       return {
         profileId,
@@ -171,7 +202,7 @@ function buildProfileHealth(params: {
 
   const effectiveCredential = resolveEffectiveOAuthCredential({
     profileId,
-    credential,
+    credential: healthCredential,
   });
   const oauthWarnAfterMs = Math.max(warnAfterMs, DEFAULT_OAUTH_REFRESH_MARGIN_MS);
   const { status: rawStatus, remainingMs } = resolveOAuthStatus(

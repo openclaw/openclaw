@@ -49,7 +49,6 @@
     }
   ],
   "contracts": {
-    "externalAuthProviders": ["claude-cli"],
     "mediaUnderstandingProviders": ["anthropic"]
   },
   "mediaUnderstandingProviderMetadata": {
