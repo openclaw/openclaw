@@ -578,8 +578,18 @@ export default definePluginEntry({
           .action(async (opts) => {
             const table = await db.getTable();
             let query = table.query();
+            let sortColAdded = false;
+            let sortColName: string | undefined;
             if (opts.cols) {
               const columns = (opts.cols as string).split(",").map((c: string) => c.trim());
+              if (opts.orderBy) {
+                const [sortCol] = opts.orderBy.split(":");
+                sortColName = sortCol;
+                if (!columns.includes(sortCol)) {
+                  columns.push(sortCol);
+                  sortColAdded = true;
+                }
+              }
               query = query.select(columns);
             } else {
               query = query.select(["id", "text", "importance", "category", "createdAt"]);
@@ -617,6 +627,11 @@ export default definePluginEntry({
                 return 0;
               });
               rows = rows.slice(0, limit);
+              if (sortColAdded && sortColName) {
+                for (const row of rows) {
+                  delete row[sortColName];
+                }
+              }
             }
             console.log(JSON.stringify(rows, null, 2));
           });
