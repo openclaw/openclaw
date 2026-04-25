@@ -557,6 +557,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Tool execution duration",
         },
       );
+      const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
+        unit: "ms",
+        description: "Exec process duration",
+      });
 
       let recordLogRecord:
         | ((evt: Extract<DiagnosticEventPayload, { type: "log.record" }>) => void)
@@ -1087,6 +1091,48 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordExecProcessCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "exec.process.completed" }>,
+      ) => {
+        const attrs: Record<string, string | number> = {
+          "openclaw.exec.target": evt.target,
+          "openclaw.exec.mode": evt.mode,
+          "openclaw.outcome": evt.outcome,
+        };
+        if (evt.failureKind) {
+          attrs["openclaw.failureKind"] = evt.failureKind;
+        }
+        execProcessDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+
+        const spanAttrs: Record<string, string | number | boolean> = {
+          ...attrs,
+          "openclaw.exec.command_length": evt.commandLength,
+        };
+        if (typeof evt.exitCode === "number") {
+          spanAttrs["openclaw.exec.exit_code"] = evt.exitCode;
+        }
+        if (evt.exitSignal) {
+          spanAttrs["openclaw.exec.exit_signal"] = lowCardinalityAttr(evt.exitSignal, "other");
+        }
+        if (evt.timedOut !== undefined) {
+          spanAttrs["openclaw.exec.timed_out"] = evt.timedOut;
+        }
+
+        const span = spanWithDuration("openclaw.exec", spanAttrs, evt.durationMs, {
+          endTimeMs: evt.ts,
+        });
+        if (evt.outcome === "failed") {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            ...(evt.failureKind ? { message: evt.failureKind } : {}),
+          });
+        }
+        span.end(evt.ts);
+      };
+
       const recordHeartbeat = (
         evt: Extract<DiagnosticEventPayload, { type: "diagnostic.heartbeat" }>,
       ) => {
@@ -1146,6 +1192,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "tool.execution.error":
               recordToolExecutionError(evt);
+              return;
+            case "exec.process.completed":
+              recordExecProcessCompleted(evt);
               return;
             case "log.record":
               recordLogRecord?.(evt);

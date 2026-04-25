@@ -817,6 +817,67 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports exec process spans without command text", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "exec.process.completed",
+      target: "host",
+      mode: "child",
+      outcome: "failed",
+      durationMs: 30,
+      commandLength: 42,
+      exitCode: 1,
+      timedOut: false,
+      failureKind: "runtime-error",
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.histograms.get("openclaw.exec.duration_ms")?.record).toHaveBeenCalledWith(
+      30,
+      expect.objectContaining({
+        "openclaw.exec.target": "host",
+        "openclaw.exec.mode": "child",
+        "openclaw.outcome": "failed",
+        "openclaw.failureKind": "runtime-error",
+      }),
+    );
+
+    const execCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.exec",
+    );
+    expect(execCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.exec.target": "host",
+        "openclaw.exec.mode": "child",
+        "openclaw.outcome": "failed",
+        "openclaw.exec.command_length": 42,
+        "openclaw.exec.exit_code": 1,
+        "openclaw.exec.timed_out": false,
+        "openclaw.failureKind": "runtime-error",
+      },
+      startTime: expect.any(Number),
+    });
+    expect(execCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.exec.command": expect.anything(),
+        "openclaw.exec.workdir": expect.anything(),
+        "openclaw.sessionKey": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+
+    const execSpan = telemetryState.spans.find((span) => span.name === "openclaw.exec");
+    expect(execSpan?.setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "runtime-error",
+    });
+    expect(execSpan?.end).toHaveBeenCalledWith(expect.any(Number));
+    await service.stop?.(ctx);
+  });
+
   test("does not export model or tool content unless capture is explicitly enabled", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
