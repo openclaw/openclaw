@@ -5,8 +5,13 @@ import {
   type RequestClient,
 } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  requireRuntimeConfig,
+  type MarkdownTableMode,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
@@ -157,6 +162,10 @@ type DiscordComponentSendOpts = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   filename?: string;
+  textLimit?: number;
+  maxLinesPerMessage?: number;
+  tableMode?: MarkdownTableMode;
+  chunkMode?: ChunkMode;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -260,6 +269,10 @@ export async function sendDiscordComponentMessage(
       mediaAccess: opts.mediaAccess,
       replyTo: opts.replyTo,
       silent: opts.silent,
+      textLimit: opts.textLimit,
+      maxLinesPerMessage: opts.maxLinesPerMessage,
+      tableMode: opts.tableMode,
+      chunkMode: opts.chunkMode,
     });
   }
 

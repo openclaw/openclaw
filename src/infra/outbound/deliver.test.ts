@@ -448,6 +448,213 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((entry) => entry.messageId)).toEqual(["ab", "cd"]);
   });
 
+  it("uses replyToId only on the first low-level send for single-use reply modes", async () => {
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "!room",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              textChunkLimit: 2,
+              chunker: (text, limit) => {
+                const chunks: string[] = [];
+                for (let i = 0; i < text.length; i += limit) {
+                  chunks.push(text.slice(i, i + limit));
+                }
+                return chunks;
+              },
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "abcd" }],
+      replyToId: "777",
+      replyToMode: "first",
+    });
+
+    expect(sendText.mock.calls.map((call) => call[0]?.replyToId)).toEqual(["777", undefined]);
+  });
+
+  it("suppresses fallback replyToId when replyToMode is off but preserves explicit payload replies", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "!room",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "fallback" }, { text: "explicit", replyToId: "payload-reply" }],
+      replyToId: "fallback-reply",
+      replyToMode: "off",
+    });
+
+    expect(sendText.mock.calls.map((call) => call[0]?.replyToId)).toEqual([
+      undefined,
+      "payload-reply",
+    ]);
+    expect(
+      hookMocks.runner.runMessageSending.mock.calls.map(
+        ([event]) => (event as { replyToId?: string }).replyToId,
+      ),
+    ).toEqual([undefined, "payload-reply"]);
+  });
+
+  it("does not let explicit payload replies consume the implicit single-use reply slot", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "!room",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "explicit", replyToId: "payload-reply" }, { text: "fallback" }],
+      replyToId: "fallback-reply",
+      replyToMode: "first",
+    });
+
+    expect(sendText.mock.calls.map((call) => call[0]?.replyToId)).toEqual([
+      "payload-reply",
+      "fallback-reply",
+    ]);
+    expect(
+      hookMocks.runner.runMessageSending.mock.calls.map(
+        ([event]) => (event as { replyToId?: string }).replyToId,
+      ),
+    ).toEqual(["payload-reply", "fallback-reply"]);
+  });
+
+  it("skips text-only payloads blanked by message_sending hooks", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "   " });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "should-not-send",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "redact me" }],
+    });
+
+    expect(results).toEqual([]);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("runs adapter after-delivery hooks with the payload delivery results", async () => {
+    const afterDeliverPayload = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ text }) => ({
+                channel: "matrix" as const,
+                messageId: text,
+              }),
+              afterDeliverPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hello" }],
+    });
+
+    expect(afterDeliverPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({ channel: "matrix", to: "!room" }),
+        payload: expect.objectContaining({ text: "hello" }),
+        results: [{ channel: "matrix", messageId: "hello" }],
+      }),
+    );
+  });
+
   it("uses adapter-provided formatted senders and scoped media roots when available", async () => {
     const sendText = vi.fn(async ({ text }: { text: string }) => ({
       channel: "line" as const,
@@ -679,6 +886,96 @@ describe("deliverOutboundPayloads", () => {
       "Line two",
       expect.objectContaining({ cfg }),
     );
+  });
+
+  it("lets explicit formatting options override configured chunking", async () => {
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "!room",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              chunker: (text, limit) => {
+                const chunks: string[] = [];
+                for (let i = 0; i < text.length; i += limit) {
+                  chunks.push(text.slice(i, i + limit));
+                }
+                return chunks;
+              },
+              textChunkLimit: 4000,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: { textChunkLimit: 4000 } } } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "abcd" }],
+      formatting: { textLimit: 2, chunkMode: "length" },
+    });
+
+    expect(sendText.mock.calls.map((call) => call[0]?.text)).toEqual(["ab", "cd"]);
+  });
+
+  it("passes formatting options to adapter chunkers before consuming single-use replies", async () => {
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "!room",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              chunker: (text, _limit, ctx) =>
+                text.split("\n").reduce<string[]>((chunks, line) => {
+                  const maxLines = ctx?.formatting?.maxLinesPerMessage;
+                  if (maxLines === 1) {
+                    chunks.push(line);
+                    return chunks;
+                  }
+                  chunks[chunks.length - 1] = chunks.length
+                    ? `${chunks[chunks.length - 1]}\n${line}`
+                    : line;
+                  return chunks;
+                }, []),
+              textChunkLimit: 4000,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: { textChunkLimit: 4000 } } } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "line one\nline two" }],
+      replyToId: "reply-1",
+      replyToMode: "first",
+      formatting: { maxLinesPerMessage: 1 },
+    });
+
+    expect(sendText.mock.calls.map((call) => call[0]?.text)).toEqual(["line one", "line two"]);
+    expect(sendText.mock.calls.map((call) => call[0]?.replyToId)).toEqual(["reply-1", undefined]);
   });
 
   it("drops text payloads after adapter sanitization removes all content", async () => {
