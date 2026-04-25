@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-support/browser-security-runtime.mock.js";
 import type { BrowserServerState } from "./server-context.js";
 
-vi.mock("./chrome-mcp.js", () => ({
+const chromeMcpMock = vi.hoisted(() => ({
   closeChromeMcpSession: vi.fn(async () => true),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   focusChromeMcpTab: vi.fn(async () => {}),
@@ -20,8 +20,14 @@ vi.mock("./chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
 }));
 
+vi.mock("./chrome-mcp.js", () => chromeMcpMock);
+
+vi.mock("./chrome-mcp.runtime.js", () => ({
+  getChromeMcpModule: vi.fn(async () => chromeMcpMock),
+}));
+
 const { createBrowserRouteContext } = await import("./server-context.js");
-const chromeMcp = await import("./chrome-mcp.js");
+const chromeMcp = chromeMcpMock;
 
 function makeState(): BrowserServerState {
   return {
@@ -93,7 +99,8 @@ describe("browser server-context existing-session profile", () => {
     vi.mocked(chromeMcp.ensureChromeMcpAvailable).mockResolvedValueOnce();
     vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
 
-    await expect(ctx.listProfiles()).resolves.toEqual([
+    const profiles = await ctx.listProfiles();
+    expect(profiles).toEqual([
       expect.objectContaining({
         name: "chrome-live",
         transport: "chrome-mcp",
