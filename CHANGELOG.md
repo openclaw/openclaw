@@ -59,6 +59,8 @@ Docs: https://docs.openclaw.ai
   during Gateway startup and log the missing keys as a warning instead of a
   runtime startup error, while keeping explicit command/tool errors when used. Thanks
   @steipete.
+- Android/Talk Mode: prevent duplicate TTS playback when fast or repeated final
+  chat events arrive while Talk Mode is waiting for its own response. Fixes #46546.
 - Tooling/check:changed: pass parent heavy-check lock markers to lint lanes so
   `pnpm check:changed` no longer waits on its own `lint:extensions` child.
   Thanks @steipete.
