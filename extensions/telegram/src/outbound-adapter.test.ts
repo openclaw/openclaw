@@ -2,17 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
+const reactMessageTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
+  reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
-import { telegramOutbound } from "./outbound-adapter.js";
+import { sendTelegramPayloadMessages, telegramOutbound } from "./outbound-adapter.js";
 
 describe("telegramOutbound", () => {
   beforeEach(() => {
     pinMessageTelegramMock.mockReset();
+    reactMessageTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
 
@@ -117,5 +120,45 @@ describe("telegramOutbound", () => {
         verbose: false,
       }),
     );
+  });
+});
+
+describe("sendTelegramPayloadMessages", () => {
+  beforeEach(() => {
+    reactMessageTelegramMock.mockReset();
+    sendMessageTelegramMock.mockReset();
+  });
+
+  it("sends telegram reactions from channelData before returning reaction-only payloads", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await sendTelegramPayloadMessages({
+      send: sendMessageTelegramMock,
+      react: reactMessageTelegramMock,
+      to: "telegram:8504602495",
+      payload: {
+        text: "",
+        channelData: {
+          telegram: {
+            reaction: "🔥",
+          },
+        },
+      },
+      baseOpts: {
+        cfg: {} as never,
+        verbose: false,
+        textMode: "html",
+        replyToMessageId: 3026,
+      },
+    });
+
+    expect(reactMessageTelegramMock).toHaveBeenCalledWith("telegram:8504602495", 3026, "🔥", {
+      cfg: {},
+      accountId: undefined,
+      gatewayClientScopes: undefined,
+      verbose: false,
+    });
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ messageId: "3026", chatId: "telegram:8504602495" });
   });
 });

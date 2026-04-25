@@ -39,6 +39,7 @@ import {
   sendTelegramText,
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
+import { reactMessageTelegram } from "../send.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
 import {
   markReplyApplied,
@@ -60,7 +61,41 @@ type DeliveryProgress = ReplyThreadDeliveryProgress & {
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
+  reaction?: string | { emoji?: string };
 };
+
+function resolveTelegramReactionEmoji(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value) && typeof value.emoji === "string") {
+    const trimmed = value.emoji.trim();
+    return trimmed || undefined;
+  }
+  return undefined;
+}
+
+async function maybeSendTelegramReaction(params: {
+  chatId: string;
+  replyToId?: number;
+  telegramData?: TelegramReplyChannelData;
+  cfg: Parameters<typeof reactMessageTelegram>[3]["cfg"];
+  accountId?: string;
+  gatewayClientScopes?: readonly string[];
+}) {
+  const reactionEmoji = resolveTelegramReactionEmoji(params.telegramData?.reaction);
+  if (!reactionEmoji || params.replyToId == null) {
+    return false;
+  }
+  await reactMessageTelegram(params.chatId, params.replyToId, reactionEmoji, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+    gatewayClientScopes: params.gatewayClientScopes,
+    verbose: false,
+  }).catch(() => {});
+  return true;
+}
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
 
@@ -666,13 +701,17 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
+    const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
+    const hasReaction = Boolean(resolveTelegramReactionEmoji(telegramData?.reaction));
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
       }
-      params.runtime.error?.(danger("reply missing text/media"));
-      continue;
+      if (!hasReaction) {
+        params.runtime.error?.(danger("reply missing text/media"));
+        continue;
+      }
     }
 
     const rawContent = reply.text || "";
@@ -709,10 +748,20 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
-      const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
-      if (mediaList.length === 0) {
+      const reactionSent = await maybeSendTelegramReaction({
+        chatId: params.chatId,
+        replyToId,
+        telegramData,
+        cfg: params.cfg,
+        accountId: params.accountId,
+        gatewayClientScopes: params.gatewayClientScopes,
+      });
+      if (reactionSent) {
+        progress.hasDelivered = true;
+      }
+      if (mediaList.length === 0 && reply.text) {
         firstDeliveredMessageId = await deliverTextReply({
           bot: params.bot,
           chatId: params.chatId,
@@ -728,7 +777,7 @@ export async function deliverReplies(params: {
           replyToMode: params.replyToMode,
           progress,
         });
-      } else {
+      } else if (mediaList.length > 0) {
         firstDeliveredMessageId = await deliverMediaReply({
           reply,
           mediaList,

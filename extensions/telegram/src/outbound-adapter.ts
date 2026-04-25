@@ -22,7 +22,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
-import { pinMessageTelegram } from "./send.js";
+import { pinMessageTelegram, reactMessageTelegram } from "./send.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 
@@ -45,6 +45,7 @@ async function resolveTelegramSendContext(params: {
   gatewayClientScopes?: readonly string[];
 }): Promise<{
   send: TelegramSendFn;
+  react: typeof reactMessageTelegram;
   baseOpts: {
     cfg: NonNullable<TelegramSendOpts>["cfg"];
     verbose: false;
@@ -60,6 +61,7 @@ async function resolveTelegramSendContext(params: {
     (await loadTelegramSendModule()).sendMessageTelegram;
   return {
     send,
+    react: reactMessageTelegram,
     baseOpts: {
       verbose: false,
       textMode: "html",
@@ -72,17 +74,31 @@ async function resolveTelegramSendContext(params: {
   };
 }
 
+function resolveTelegramReactionEmoji(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value) && typeof value.emoji === "string") {
+    const trimmed = value.emoji.trim();
+    return trimmed || undefined;
+  }
+  return undefined;
+}
+
 export async function sendTelegramPayloadMessages(params: {
   send: TelegramSendFn;
+  react?: typeof reactMessageTelegram;
   to: string;
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const telegramData = params.payload.channelData?.telegram as
-    | { buttons?: TelegramInlineButtons; quoteText?: string }
+    | { buttons?: TelegramInlineButtons; quoteText?: string; reaction?: string | { emoji?: string } }
     | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+  const reactionEmoji = resolveTelegramReactionEmoji(telegramData?.reaction);
   const text =
     resolveInteractiveTextFallback({
       text: params.payload.text,
@@ -97,6 +113,23 @@ export async function sendTelegramPayloadMessages(params: {
     ...params.baseOpts,
     quoteText,
   };
+
+  if (reactionEmoji && params.react && payloadOpts.replyToMessageId != null) {
+    await params.react(params.to, payloadOpts.replyToMessageId, reactionEmoji, {
+      cfg: payloadOpts.cfg,
+      accountId: payloadOpts.accountId,
+      gatewayClientScopes: payloadOpts.gatewayClientScopes,
+      verbose: payloadOpts.verbose,
+    }).catch(() => {});
+  }
+
+  if (!text && mediaUrls.length === 0) {
+    return {
+      messageId:
+        payloadOpts.replyToMessageId != null ? String(payloadOpts.replyToMessageId) : "reaction-only",
+      chatId: params.to,
+    };
+  }
 
   // Telegram allows reply_markup on media; attach buttons only to the first send.
   return await sendPayloadMediaSequenceOrFallback({
@@ -217,7 +250,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     forceDocument,
     gatewayClientScopes,
   }) => {
-    const { send, baseOpts } = await resolveTelegramSendContext({
+    const { send, react, baseOpts } = await resolveTelegramSendContext({
       cfg,
       deps,
       accountId,
@@ -227,6 +260,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     const result = await sendTelegramPayloadMessages({
       send,
+      react,
       to,
       payload,
       baseOpts: {

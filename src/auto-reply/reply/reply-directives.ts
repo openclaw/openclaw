@@ -9,9 +9,13 @@ export type ReplyDirectiveParseResult = {
   replyToId?: string;
   replyToCurrent?: boolean;
   replyToTag: boolean;
+  reactionEmoji?: string;
+  reactionTag: boolean;
   audioAsVoice?: boolean;
   isSilent: boolean;
 };
+
+const REACTION_TAG_RE = /\[\[\s*react(?:_to_current)?\s*:\s*([^\]\n]+?)\s*\]\]/gi;
 
 export function parseReplyDirectives(
   raw: string,
@@ -19,6 +23,17 @@ export function parseReplyDirectives(
 ): ReplyDirectiveParseResult {
   const split = splitMediaFromOutput(raw);
   let text = split.text ?? "";
+  let reactionEmoji: string | undefined;
+  let reactionTag = false;
+
+  text = text.replace(REACTION_TAG_RE, (_match, emojiRaw: string | undefined) => {
+    reactionTag = true;
+    const trimmed = emojiRaw?.trim();
+    if (trimmed) {
+      reactionEmoji = trimmed;
+    }
+    return " ";
+  });
 
   const replyParsed = parseInlineDirectives(text, {
     currentMessageId: options.currentMessageId,
@@ -43,6 +58,8 @@ export function parseReplyDirectives(
     replyToId: replyParsed.replyToId,
     replyToCurrent: replyParsed.replyToCurrent || undefined,
     replyToTag: replyParsed.hasReplyTag,
+    reactionEmoji,
+    reactionTag,
     audioAsVoice: split.audioAsVoice,
     isSilent,
   };
