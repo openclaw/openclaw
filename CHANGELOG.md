@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Browser/CLI: add `openclaw browser start --headless` as a one-shot local managed browser launch override without rewriting persisted browser config. Thanks @BenediktSchackenberg.
 - CLI/Crestodian: open interactive Crestodian in the full OpenClaw TUI shell instead of a basic readline prompt.
 - CLI/Crestodian: shorten the startup greeting to the active planner/model, config state, Gateway probe result, and next debug action instead of dumping every discovered backend.
+- Plugins: migrate the local plugin registry automatically during package install/update, preserving legacy config and install-ledger state while indexing existing plugin manifests for the new cold registry path. Thanks @vincentkoc.
 - Diagnostics/OTEL: add bounded outbound message delivery lifecycle diagnostics and export them as low-cardinality delivery spans/metrics without message body, recipient, room, or media-path data. (#71471) Thanks @vincentkoc and @jlapenna.
 - Diagnostics/OTEL: emit bounded exec-process diagnostics and export them as `openclaw.exec` spans without exposing command text, working directories, or container identifiers. (#71451) Thanks @vincentkoc and @jlapenna.
 - Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#71450) Thanks @vincentkoc and @jlapenna.
@@ -24,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Browser/CDP: make readiness diagnostics use the same discovery-first fallback as reachability for bare `ws://` Browserless and Browserbase CDP URLs. Fixes #69532.
 - Memory-host SDK: use trusted env-proxy mode for remote embedding and batch HTTP calls only when Undici will proxy that target, preserving SSRF DNS pinning for `ALL_PROXY`-only and `NO_PROXY` bypass cases. Fixes #52162. (#71506) Thanks @DhtIsCoding.
 - Gateway/dashboard: render Control UI and WebSocket links with `https://`/`wss://` when `gateway.tls.enabled=true`, including `openclaw gateway status`. Fixes #71494. (#71499) Thanks @deepkilo.
 - Agents/OpenAI-compatible: default proxy/local completions tool requests to `tool_choice: "auto"` when tools are present, so providers enter native tool-calling mode instead of replying with plain-text tool directives. (#71472) Thanks @Speed-maker.
