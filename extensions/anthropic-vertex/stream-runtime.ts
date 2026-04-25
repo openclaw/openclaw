@@ -138,7 +138,7 @@ export function createAnthropicVertexStreamFn(
       requestedMaxTokens: options?.maxTokens,
     });
     const opts: AnthropicOptions = {
-      client: client as unknown as AnthropicOptions["client"],
+      client: client as AnthropicOptions["client"],
       temperature: options?.temperature,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,

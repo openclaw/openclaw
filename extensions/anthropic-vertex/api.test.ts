@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream, type Model } from "@mariozechner/pi-ai";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
@@ -7,24 +7,19 @@ function createStreamDeps(): {
   streamAnthropicMock: ReturnType<typeof vi.fn>;
   anthropicVertexCtorMock: ReturnType<typeof vi.fn>;
 } {
-  const streamAnthropicMock = vi.fn(() => Symbol("anthropic-vertex-stream"));
+  const streamAnthropicMock = vi.fn(
+    (..._args: Parameters<AnthropicVertexStreamDeps["streamAnthropic"]>) =>
+      createAssistantMessageEventStream(),
+  );
   const anthropicVertexCtorMock = vi.fn();
-
-  class MockAnthropicVertex {
-    constructor(options: unknown) {
-      anthropicVertexCtorMock(options);
-    }
-  }
+  const MockAnthropicVertex = function MockAnthropicVertex(options: unknown) {
+    anthropicVertexCtorMock(options);
+  } as unknown as AnthropicVertexStreamDeps["AnthropicVertex"];
 
   return {
     deps: {
       AnthropicVertex: MockAnthropicVertex,
-      streamAnthropic: ((model: unknown, context: unknown, options: unknown) =>
-        streamAnthropicMock(
-          model,
-          context,
-          options,
-        )) as AnthropicVertexStreamDeps["streamAnthropic"],
+      streamAnthropic: streamAnthropicMock,
     },
     streamAnthropicMock,
     anthropicVertexCtorMock,
