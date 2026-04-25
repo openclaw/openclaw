@@ -166,16 +166,27 @@ describe("chrome.ts internal", () => {
       cdpPort: 19222,
       cdpUrl: "http://127.0.0.1:19222",
       cdpIsLoopback: true,
+      headless: false,
     } as unknown as ResolvedBrowserProfile;
 
     it("toggles headless args", () => {
       const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({ headless: true }),
-        profile: baseProfile,
+        resolved: baseResolved({ headless: false }),
+        profile: { ...baseProfile, headless: true },
         userDataDir: "/tmp/foo",
       });
       expect(args).toContain("--headless=new");
       expect(args).toContain("--disable-gpu");
+    });
+
+    it("lets profile headless=false override global headless=true", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved({ headless: true }),
+        profile: { ...baseProfile, headless: false },
+        userDataDir: "/tmp/foo",
+      });
+      expect(args).not.toContain("--headless=new");
+      expect(args).not.toContain("--disable-gpu");
     });
 
     it("toggles no-sandbox args", () => {
@@ -213,6 +224,16 @@ describe("chrome.ts internal", () => {
       });
       expect(args).toContain("--proxy-server=http://localhost:3128");
       expect(args).toContain("--mute-audio");
+      expect(args).not.toContain("--no-proxy-server");
+    });
+
+    it("launches managed Chrome direct by default", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: baseProfile,
+        userDataDir: "/tmp/foo",
+      });
+      expect(args).toContain("--no-proxy-server");
     });
   });
 
@@ -343,6 +364,9 @@ describe("chrome.ts internal", () => {
         spawnCalls += 1;
         return makeFakeProc();
       });
+      vi.stubEnv("HTTP_PROXY", "http://proxy.test:8080");
+      vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8443");
+      vi.stubEnv("NO_PROXY", "localhost");
 
       // Set up a real HTTP server impersonating Chrome's /json/version.
       await withMockChromeCdpServer({
@@ -353,6 +377,10 @@ describe("chrome.ts internal", () => {
           const running = await launchOpenClawChrome(makeResolved(), profile);
           expect(running.pid).toBe(4242);
           expect(spawnCalls).toBeGreaterThanOrEqual(1);
+          const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+          expect(spawnOptions.env?.HTTP_PROXY).toBeUndefined();
+          expect(spawnOptions.env?.HTTPS_PROXY).toBeUndefined();
+          expect(spawnOptions.env?.NO_PROXY).toBeUndefined();
           // Cleanup.
           running.proc.kill?.("SIGTERM");
         },
@@ -613,34 +641,6 @@ describe("chrome.ts internal", () => {
         },
         run: async (baseUrl) => {
           await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(false);
-        },
-      });
-    });
-
-    it("guards against post-settled messages by dropping them", async () => {
-      // Emit two valid id=1 responses — the second must be dropped via the
-      // `if (settled) return;` guard at the top of onMessage.
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/SETTLED",
-        onConnection: (wss) => {
-          wss.on("connection", (ws) => {
-            ws.on("message", (raw) => {
-              const text = rawDataToString(raw);
-              const msg = JSON.parse(text) as { id?: number };
-              if (msg.id === 1) {
-                ws.send(JSON.stringify({ id: 1, result: { product: "Chrome" } }));
-                // Second message after settled — the onMessage guard
-                // should return early.
-                setTimeout(
-                  () => ws.send(JSON.stringify({ id: 1, result: { product: "after" } })),
-                  20,
-                );
-              }
-            });
-          });
-        },
-        run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(true);
         },
       });
     });

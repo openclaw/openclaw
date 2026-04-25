@@ -7,6 +7,7 @@ import type {
   PluginLogger,
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
+import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import {
   resolveAcpxPluginConfig,
   toAcpMcpServers,
@@ -83,6 +84,21 @@ function formatDoctorFailureMessage(report: { message: string; details?: string[
   return detailText ? `${report.message} (${detailText})` : report.message;
 }
 
+function normalizeProbeAgent(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): string | undefined {
+  for (const agent of ctx.config.acp?.allowedAgents ?? []) {
+    const normalized = normalizeProbeAgent(agent);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -97,9 +113,18 @@ export function createAcpxRuntimeService(
         return;
       }
 
-      const pluginConfig = resolveAcpxPluginConfig({
+      const basePluginConfig = resolveAcpxPluginConfig({
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
+      });
+      const effectiveBasePluginConfig: ResolvedAcpxPluginConfig = {
+        ...basePluginConfig,
+        probeAgent: basePluginConfig.probeAgent ?? resolveAllowedAgentsProbeAgent(ctx),
+      };
+      const pluginConfig = await prepareAcpxCodexAuthConfig({
+        pluginConfig: effectiveBasePluginConfig,
+        stateDir: ctx.stateDir,
+        logger: ctx.logger,
       });
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
       warnOnIgnoredLegacyCompatibilityConfig({

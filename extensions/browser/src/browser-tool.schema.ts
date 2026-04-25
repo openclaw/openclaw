@@ -1,5 +1,5 @@
-import { Type } from "@sinclair/typebox";
 import { optionalStringEnum, stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { Type } from "typebox";
 
 const BROWSER_ACT_KINDS = [
   "click",
@@ -16,6 +16,7 @@ const BROWSER_ACT_KINDS = [
 ] as const;
 
 const BROWSER_TOOL_ACTIONS = [
+  "doctor",
   "status",
   "start",
   "stop",
@@ -93,6 +94,7 @@ export const BrowserToolSchema = Type.Object({
   targetUrl: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
+  label: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Number()),
   maxChars: Type.Optional(Type.Number()),
   mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
@@ -104,6 +106,7 @@ export const BrowserToolSchema = Type.Object({
   selector: Type.Optional(Type.String()),
   frame: Type.Optional(Type.String()),
   labels: Type.Optional(Type.Boolean()),
+  urls: Type.Optional(Type.Boolean()),
   fullPage: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
   element: Type.Optional(Type.String()),

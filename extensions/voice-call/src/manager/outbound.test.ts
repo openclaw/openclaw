@@ -48,7 +48,7 @@ vi.mock("./twiml.js", () => ({
   generateNotifyTwiml: generateNotifyTwimlMock,
 }));
 
-import { endCall, initiateCall, speak } from "./outbound.js";
+import { endCall, initiateCall, sendDtmf, speak } from "./outbound.js";
 
 function createActiveCallContext(params: { hangupCall?: ReturnType<typeof vi.fn> } = {}) {
   const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
@@ -224,6 +224,77 @@ describe("voice-call outbound helpers", () => {
       error: "tts failed",
     });
     expect(transitionStateMock).toHaveBeenLastCalledWith(call, "listening");
+  });
+
+  it("passes configured voice ids through to Telnyx speak", async () => {
+    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const playTts = vi.fn(async () => {});
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map(),
+      provider: { name: "telnyx", playTts },
+      config: {
+        tts: {
+          provider: "telnyx",
+          providers: {
+            telnyx: {
+              voiceId: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
+            },
+          },
+        },
+      },
+      storePath: "/tmp/voice-call.json",
+    };
+
+    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
+
+    expect(playTts).toHaveBeenCalledWith({
+      callId: "call-1",
+      providerCallId: "provider-1",
+      text: "hello",
+      voice: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
+    });
+  });
+
+  it("sends DTMF through connected provider calls", async () => {
+    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const sendDtmfProvider = vi.fn(async () => {});
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", sendDtmf: sendDtmfProvider },
+      config: {},
+      storePath: "/tmp/voice-call.json",
+    };
+
+    await expect(sendDtmf(ctx as never, "call-1", "ww123#")).resolves.toEqual({
+      success: true,
+    });
+    expect(sendDtmfProvider).toHaveBeenCalledWith({
+      callId: "call-1",
+      providerCallId: "provider-1",
+      digits: "ww123#",
+    });
+  });
+
+  it("rejects invalid or unsupported outbound DTMF", async () => {
+    const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map(),
+      provider: { name: "telnyx" },
+      config: {},
+      storePath: "/tmp/voice-call.json",
+    };
+
+    await expect(sendDtmf(ctx as never, "call-1", "abc")).resolves.toEqual({
+      success: false,
+      error: "digits may only contain digits, *, #, comma, w, p",
+    });
+    await expect(sendDtmf(ctx as never, "call-1", "123#")).resolves.toEqual({
+      success: false,
+      error: "telnyx does not support outbound DTMF",
+    });
   });
 
   it("ends connected calls, clears timers, and rejects pending transcripts", async () => {

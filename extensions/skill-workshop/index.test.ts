@@ -51,19 +51,23 @@ function createProposal(
 }
 
 describe("skill-workshop", () => {
-  it("does not register hooks or tools when disabled", () => {
+  it("registers inert hooks and a null tool when disabled", () => {
     const on = vi.fn();
-    const registerTool = vi.fn();
+    let tool: AnyAgentTool | null | undefined;
     const api = createTestPluginApi({
       pluginConfig: { enabled: false },
       on,
-      registerTool,
+      registerTool(registered) {
+        const resolved = typeof registered === "function" ? registered({}) : registered;
+        tool = Array.isArray(resolved) ? resolved[0] : resolved;
+      },
     });
 
     plugin.register(api);
 
-    expect(registerTool).not.toHaveBeenCalled();
-    expect(on).not.toHaveBeenCalled();
+    expect(tool).toBeNull();
+    expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expect(on).toHaveBeenCalledWith("agent_end", expect.any(Function));
   });
 
   it("detects user corrections and creates an animated GIF proposal", async () => {
@@ -371,17 +375,93 @@ describe("skill-workshop", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("skips agent_end hook wiring when auto-capture is disabled", () => {
+  it("uses live runtime config to enable prompt guidance and capture after startup disable", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    let configFile: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              enabled: false,
+              autoCapture: false,
+              reviewMode: "off",
+            },
+          },
+        },
+      },
+    };
     const on = vi.fn();
+    let toolFactory:
+      | ((ctx: { workspaceDir?: string }) => AnyAgentTool | AnyAgentTool[] | null | undefined)
+      | undefined;
     const api = createTestPluginApi({
-      pluginConfig: { autoCapture: false },
+      pluginConfig: { enabled: false, autoCapture: false, reviewMode: "off" },
+      runtime: {
+        agent: {
+          resolveAgentWorkspaceDir: () => workspaceDir,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+        config: {
+          loadConfig: () => configFile,
+        },
+      } as never,
       on,
+      registerTool(registered) {
+        toolFactory = typeof registered === "function" ? registered : undefined;
+      },
     });
 
     plugin.register(api);
 
-    expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
-    expect(on).not.toHaveBeenCalledWith("agent_end", expect.any(Function));
+    const beforePromptBuild = on.mock.calls.find((call) => call[0] === "before_prompt_build")?.[1];
+    const agentEnd = on.mock.calls.find((call) => call[0] === "agent_end")?.[1];
+    expect(beforePromptBuild).toBeTypeOf("function");
+    expect(agentEnd).toBeTypeOf("function");
+    expect(toolFactory?.({ workspaceDir }) ?? null).toBeNull();
+    await expect(beforePromptBuild?.({}, {})).resolves.toBeUndefined();
+
+    configFile = {
+      plugins: {
+        entries: {
+          "skill-workshop": {
+            config: {
+              enabled: true,
+              autoCapture: true,
+              approvalPolicy: "auto",
+              reviewMode: "heuristic",
+            },
+          },
+        },
+      },
+    };
+
+    const refreshedTool = toolFactory?.({ workspaceDir });
+    const tool = Array.isArray(refreshedTool) ? refreshedTool[0] : refreshedTool;
+    expect(tool?.name).toBe("skill_workshop");
+    await expect(beforePromptBuild?.({}, {})).resolves.toEqual({
+      prependSystemContext: expect.stringContaining("<skill_workshop>"),
+    });
+
+    await agentEnd?.(
+      {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on when asked for animated GIFs, verify the file is actually animated.",
+          },
+        ],
+      },
+      { workspaceDir },
+    );
+
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "animated-gif-workflow", "SKILL.md")),
+    ).resolves.toBeUndefined();
   });
 
   it("uses live runtime config to skip capture when review mode turns off", async () => {
@@ -455,7 +535,29 @@ describe("skill-workshop", () => {
     expect(logger.info).not.toHaveBeenCalledWith("skill-workshop: applied animated-gif-workflow");
   });
 
-  it("skips agent_end hook wiring when review mode is off", () => {
+  it("keeps agent_end registered but inert when auto-capture is disabled", async () => {
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      pluginConfig: { autoCapture: false },
+      on,
+    });
+
+    plugin.register(api);
+
+    const handler = on.mock.calls.find((call) => call[0] === "agent_end")?.[1];
+    expect(handler).toBeTypeOf("function");
+    await expect(
+      handler?.(
+        {
+          success: true,
+          messages: [{ role: "user", content: "remember this animation workflow" }],
+        },
+        {},
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps agent_end registered but inert when review mode is off", async () => {
     const on = vi.fn();
     const api = createTestPluginApi({
       pluginConfig: { reviewMode: "off" },
@@ -464,8 +566,17 @@ describe("skill-workshop", () => {
 
     plugin.register(api);
 
-    expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
-    expect(on).not.toHaveBeenCalledWith("agent_end", expect.any(Function));
+    const handler = on.mock.calls.find((call) => call[0] === "agent_end")?.[1];
+    expect(handler).toBeTypeOf("function");
+    await expect(
+      handler?.(
+        {
+          success: true,
+          messages: [{ role: "user", content: "remember this animation workflow" }],
+        },
+        {},
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("lets explicit tool suggestions stay pending in auto mode", async () => {

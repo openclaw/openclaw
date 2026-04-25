@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { resolvePluginConfigObject, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
@@ -96,7 +97,8 @@ function piAiWouldInjectCachePoints(modelId: string): boolean {
  * System-defined profiles (us., eu., global.) and base model IDs always
  * contain the model name and are handled by pi-ai natively.
  */
-const BEDROCK_APP_INFERENCE_PROFILE_RE = /^arn:aws(-cn|-us-gov)?:bedrock:.*:application-inference-profile\//i;
+const BEDROCK_APP_INFERENCE_PROFILE_RE =
+  /^arn:aws(-cn|-us-gov)?:bedrock:.*:application-inference-profile\//i;
 
 function isBedrockAppInferenceProfile(modelId: string): boolean {
   return BEDROCK_APP_INFERENCE_PROFILE_RE.test(modelId);
@@ -155,6 +157,10 @@ function resolvedModelSupportsCaching(modelArn: string): boolean {
  */
 const appProfileCacheEligibleCache = new Map<string, boolean>();
 
+export function resetBedrockAppProfileCacheEligibilityForTest(): void {
+  appProfileCacheEligibleCache.clear();
+}
+
 async function resolveAppProfileCacheEligible(
   modelId: string,
   fallbackRegion: string | undefined,
@@ -172,9 +178,7 @@ async function resolveAppProfileCacheEligible(
     const models = resp.models ?? [];
     const eligible =
       models.length > 0 &&
-      models.every((m: { modelArn?: string }) =>
-      resolvedModelSupportsCaching(m.modelArn ?? ""),
-    );
+      models.every((m: { modelArn?: string }) => resolvedModelSupportsCaching(m.modelArn ?? ""));
     appProfileCacheEligibleCache.set(modelId, eligible);
     return eligible;
   } catch {
@@ -250,8 +254,17 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     /ModelStreamErrorException.*(?:Input is too long|too many input tokens)/i,
   ] as const;
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
-  const pluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
-  const guardrail = pluginConfig.guardrail;
+  const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
+
+  function resolveCurrentPluginConfig(
+    config: OpenClawConfig | undefined,
+  ): AmazonBedrockPluginConfig | undefined {
+    const runtimePluginConfig = resolvePluginConfigObject(config, providerId);
+    return (
+      (runtimePluginConfig as AmazonBedrockPluginConfig | undefined) ??
+      (config ? undefined : startupPluginConfig)
+    );
+  }
 
   api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
@@ -266,11 +279,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     }
     return createBedrockNoCacheWrapper(streamFn);
   };
-
-  const cacheWrapStreamFn =
-    guardrail?.guardrailIdentifier && guardrail?.guardrailVersion
-      ? createGuardrailWrapStreamFn(baseWrapStreamFn, guardrail)
-      : baseWrapStreamFn;
 
   /** Extract the AWS region from a bedrock-runtime baseUrl. */
   function extractRegionFromBaseUrl(baseUrl: string | undefined): string | undefined {
@@ -322,9 +330,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
         const implicit = await resolveImplicitBedrockProvider({
           config: ctx.config,
-          pluginConfig,
+          pluginConfig: currentPluginConfig,
           env: ctx.env,
         });
         if (!implicit) {
@@ -341,8 +350,12 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn }) => {
+      const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;
       // Apply cache + guardrail wrapping.
-      const wrapped = cacheWrapStreamFn({ modelId, streamFn });
+      const wrapped =
+        currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
+          ? createGuardrailWrapStreamFn(baseWrapStreamFn, currentGuardrail)({ modelId, streamFn })
+          : baseWrapStreamFn({ modelId, streamFn });
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !piAiWouldInjectCachePoints(modelId);
@@ -374,9 +387,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         // to also teach resolveAnthropicCacheRetentionFamily about opaque profiles
         // (tracked separately). In practice, users with app inference profiles
         // want caching enabled, so defaulting to "short" is the safer behavior.
-        const cacheRetention = typeof merged.cacheRetention === "string"
-          ? merged.cacheRetention
-          : "short";
+        const cacheRetention =
+          typeof merged.cacheRetention === "string" ? merged.cacheRetention : "short";
 
         if (heuristicMatch) {
           // Fast path: ARN heuristic already identified this as Claude.

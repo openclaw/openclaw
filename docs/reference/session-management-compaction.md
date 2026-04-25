@@ -4,7 +4,7 @@ read_when:
   - You need to debug session ids, transcript JSONL, or sessions.json fields
   - You are changing auto-compaction behavior or adding “pre-compaction” housekeeping
   - You want to implement memory flushes or silent system turns
-title: "Session Management Deep Dive"
+title: "Session management deep dive"
 ---
 
 # Session Management & Compaction (Deep Dive)
@@ -267,6 +267,10 @@ OpenClaw also enforces a safety floor for embedded runs:
 - Default floor is `20000` tokens.
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
 - If it’s already higher, OpenClaw leaves it alone.
+- Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
+  and keeps Pi's recent-tail cut point. Without an explicit keep budget,
+  manual compaction remains a hard checkpoint and rebuilt context starts from
+  the new summary.
 
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
@@ -283,6 +287,10 @@ Plugins can register a compaction provider via `registerCompactionProvider()` on
 - Setting a `provider` forces `mode: "safeguard"`.
 - Providers receive the same compaction instructions and identifier-preservation policy as the built-in path.
 - The safeguard still preserves recent-turn and split-turn suffix context after provider output.
+- Built-in safeguard summarization re-distills prior summaries with new messages
+  instead of preserving the full previous summary verbatim.
+- Safeguard mode enables summary quality audits by default; set
+  `qualityGuard.enabled: false` to skip retry-on-malformed-output behavior.
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
 - Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
 
@@ -365,3 +373,9 @@ flush logic lives on the Gateway side today.
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
   - tool-result bloat: enable/tune session pruning
 - Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you’re on a build that includes the streaming suppression fix.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)
+- [Context engine](/concepts/context-engine)

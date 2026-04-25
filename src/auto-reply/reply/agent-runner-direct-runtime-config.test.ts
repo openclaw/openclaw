@@ -172,6 +172,35 @@ describe("runReplyAgent runtime config", () => {
     );
   });
 
+  it("passes the derived runtime-policy key to pre-run maintenance", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const runtimePolicySessionKey = "agent:main:telegram:default:direct:test";
+    followupRun.run.sessionKey = "agent:main:main";
+    followupRun.run.runtimePolicySessionKey = runtimePolicySessionKey;
+    replyParams.sessionKey = "agent:main:main";
+    replyParams.runtimePolicySessionKey = runtimePolicySessionKey;
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runMemoryFlushIfNeededMock.mockRejectedValue(sentinelError);
+
+    await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
+
+    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey,
+      }),
+    );
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey,
+      }),
+    );
+  });
+
   it("does not resolve secrets before the enqueue-followup queue path", async () => {
     const { followupRun, resolvedQueue, replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: true,

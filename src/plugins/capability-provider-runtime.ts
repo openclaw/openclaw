@@ -98,6 +98,30 @@ function findProviderById<K extends CapabilityProviderRegistryKey>(
   return undefined;
 }
 
+function mergeCapabilityProviders<K extends CapabilityProviderRegistryKey>(
+  left: PluginRegistry[K],
+  right: PluginRegistry[K],
+): CapabilityProviderForKey<K>[] {
+  const merged = new Map<string, CapabilityProviderForKey<K>>();
+  const unnamed: CapabilityProviderForKey<K>[] = [];
+  const addEntries = (entries: PluginRegistry[K]) => {
+    for (const entry of entries) {
+      const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
+      if (!provider.id) {
+        unnamed.push(provider);
+        continue;
+      }
+      if (!merged.has(provider.id)) {
+        merged.set(provider.id, provider);
+      }
+    }
+  };
+
+  addEntries(left);
+  addEntries(right);
+  return [...merged.values(), ...unnamed];
+}
+
 export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   providerId: string;
@@ -134,29 +158,15 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
+  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders" && !params.cfg) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
   const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const registry = resolveRuntimePluginRegistry(loadOptions);
+  const loadedProviders = registry?.[params.key] ?? [];
   if (params.key !== "memoryEmbeddingProviders") {
-    return (registry?.[params.key] ?? []).map(
-      (entry) => entry.provider,
-    ) as CapabilityProviderForKey<K>[];
+    return mergeCapabilityProviders(activeProviders, loadedProviders);
   }
-  const merged = new Map<string, CapabilityProviderForKey<K>>();
-  for (const entry of activeProviders) {
-    const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
-    if (provider.id) {
-      merged.set(provider.id, provider);
-    }
-  }
-  for (const entry of registry?.[params.key] ?? []) {
-    const provider = entry.provider as CapabilityProviderForKey<K> & { id?: string };
-    if (provider.id && !merged.has(provider.id)) {
-      merged.set(provider.id, provider);
-    }
-  }
-  return [...merged.values()];
+  return mergeCapabilityProviders(activeProviders, loadedProviders);
 }

@@ -132,7 +132,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "boolean",
             title: "Diagnostics Enabled",
             description:
-              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
           },
           flags: {
             type: "array",
@@ -232,6 +232,58 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "OpenTelemetry Flush Interval (ms)",
                 description:
                   "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+              },
+              captureContent: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                        title: "OpenTelemetry Content Capture Enabled",
+                        description:
+                          "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+                      },
+                      inputMessages: {
+                        type: "boolean",
+                        title: "OpenTelemetry Input Messages Capture",
+                        description:
+                          "Capture model input message text on OTEL spans when content capture is enabled.",
+                      },
+                      outputMessages: {
+                        type: "boolean",
+                        title: "OpenTelemetry Output Messages Capture",
+                        description:
+                          "Capture model output message text on OTEL spans when content capture is enabled.",
+                      },
+                      toolInputs: {
+                        type: "boolean",
+                        title: "OpenTelemetry Tool Inputs Capture",
+                        description:
+                          "Capture tool input text on OTEL spans when content capture is enabled.",
+                      },
+                      toolOutputs: {
+                        type: "boolean",
+                        title: "OpenTelemetry Tool Outputs Capture",
+                        description:
+                          "Capture tool output text on OTEL spans when content capture is enabled.",
+                      },
+                      systemPrompt: {
+                        type: "boolean",
+                        title: "OpenTelemetry System Prompt Capture",
+                        description:
+                          "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+                title: "OpenTelemetry Content Capture",
+                description:
+                  "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
               },
             },
             additionalProperties: false,
@@ -692,6 +744,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
                 },
+                headless: {
+                  type: "boolean",
+                  title: "Browser Profile Headless Mode",
+                  description:
+                    "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
+                },
                 attachOnly: {
                   type: "boolean",
                   title: "Browser Profile Attach-only Mode",
@@ -823,6 +881,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "integer",
                       exclusiveMinimum: 0,
                       maximum: 20971520,
+                    },
+                    allowInsecurePath: {
+                      type: "boolean",
                     },
                   },
                   required: ["source", "path"],
@@ -2734,6 +2795,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           "azure-openai-responses",
                         ],
                       },
+                      baseUrl: {
+                        type: "string",
+                        minLength: 1,
+                      },
                       reasoning: {
                         type: "boolean",
                       },
@@ -2895,6 +2960,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               },
                               {
                                 type: "string",
+                                const: "deepseek",
+                              },
+                              {
+                                type: "string",
                                 const: "zai",
                               },
                               {
@@ -2940,6 +3009,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           },
                         },
                         additionalProperties: false,
+                      },
+                      metadataSource: {
+                        type: "string",
+                        const: "models-add",
                       },
                     },
                     required: ["id", "name"],
@@ -3014,22 +3087,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   runtime: {
                     type: "string",
-                    title: "Default Embedded Harness Runtime",
+                    title: "Default Agent Runtime",
                     description:
-                      "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+                      "Embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime uses built-in OpenClaw Pi.",
                   },
                   fallback: {
                     type: "string",
                     enum: ["pi", "none"],
                     title: "Default Embedded Harness Fallback",
                     description:
-                      "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+                      "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
                   },
                 },
                 additionalProperties: false,
-                title: "Default Embedded Harness",
+                title: "Default Agent Runtime Settings",
                 description:
-                  "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+                  "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
               },
               model: {
                 anyOf: [
@@ -3320,6 +3393,43 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
               systemPromptOverride: {
                 type: "string",
+              },
+              promptOverlays: {
+                type: "object",
+                properties: {
+                  gpt5: {
+                    type: "object",
+                    properties: {
+                      personality: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "friendly",
+                          },
+                          {
+                            type: "string",
+                            const: "on",
+                          },
+                          {
+                            type: "string",
+                            const: "off",
+                          },
+                        ],
+                        title: "GPT-5 Personality Overlay",
+                        description:
+                          'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "GPT-5 Prompt Overlay",
+                    description:
+                      "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Prompt Overlays",
+                description:
+                  "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
               },
               skipBootstrap: {
                 type: "boolean",
@@ -4126,6 +4236,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       modelCacheDir: {
                         type: "string",
                       },
+                      contextSize: {
+                        anyOf: [
+                          {
+                            type: "integer",
+                            exclusiveMinimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          {
+                            type: "string",
+                            const: "auto",
+                          },
+                        ],
+                        title: "Local Embedding Context Size",
+                        description:
+                          'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128–512 tokens) while keeping non-weight VRAM bounded. Lower to 1024–2048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum — not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40 960 tokens can push VRAM from ~8.8 GB to ~32 GB).',
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -4596,7 +4722,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "boolean",
                         title: "Compaction Quality Guard Enabled",
                         description:
-                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
                       },
                       maxRetries: {
                         type: "integer",
@@ -4610,7 +4736,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     additionalProperties: false,
                     title: "Compaction Quality Guard",
                     description:
-                      "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+                      "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
                   },
                   postIndexSync: {
                     type: "string",
@@ -5716,22 +5842,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   properties: {
                     runtime: {
                       type: "string",
-                      title: "Agent Embedded Harness Runtime",
+                      title: "Agent Runtime",
                       description:
-                        "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+                        "Per-agent embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime inherits the default OpenClaw Pi behavior.",
                     },
                     fallback: {
                       type: "string",
                       enum: ["pi", "none"],
                       title: "Agent Embedded Harness Fallback",
                       description:
-                        "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+                        "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
                     },
                   },
                   additionalProperties: false,
                   title: "Agent Embedded Harness",
                   description:
-                    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+                    "Per-agent embedded harness policy override. Use runtime=codex to force Codex for one agent while defaults stay in auto mode.",
                 },
                 model: {
                   anyOf: [
@@ -6011,6 +6137,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         modelCacheDir: {
                           type: "string",
+                        },
+                        contextSize: {
+                          anyOf: [
+                            {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
                         },
                       },
                       additionalProperties: false,
@@ -6292,6 +6431,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Context Limits",
                   description:
                     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
+                },
+                contextTokens: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
                 },
                 heartbeat: {
                   type: "object",
@@ -18787,7 +18931,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         default: {
           native: "auto",
           nativeSkills: "auto",
-          modelsWrite: true,
           restart: true,
           ownerDisplay: "raw",
         },
@@ -18828,13 +18971,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Text Commands",
             description:
               "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
-          },
-          modelsWrite: {
-            default: true,
-            type: "boolean",
-            title: "Allow /models writes",
-            description:
-              "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
           },
           bash: {
             type: "boolean",
@@ -18937,7 +19073,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
           },
         },
-        required: ["native", "nativeSkills", "modelsWrite", "restart", "ownerDisplay"],
+        required: ["native", "nativeSkills", "restart", "ownerDisplay"],
         additionalProperties: false,
         title: "Commands",
         description:
@@ -22632,6 +22768,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
                     },
+                    allowConversationAccess: {
+                      type: "boolean",
+                      title: "Allow Conversation Access Hooks",
+                      description:
+                        "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Plugin Hook Policy",
@@ -23244,7 +23386,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "diagnostics.enabled": {
       label: "Diagnostics Enabled",
-      help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+      help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
       tags: ["observability"],
     },
     "diagnostics.flags": {
@@ -23306,6 +23448,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "OpenTelemetry Flush Interval (ms)",
       help: "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
       tags: ["observability", "performance"],
+    },
+    "diagnostics.otel.captureContent": {
+      label: "OpenTelemetry Content Capture",
+      help: "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.enabled": {
+      label: "OpenTelemetry Content Capture Enabled",
+      help: "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.inputMessages": {
+      label: "OpenTelemetry Input Messages Capture",
+      help: "Capture model input message text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.outputMessages": {
+      label: "OpenTelemetry Output Messages Capture",
+      help: "Capture model output message text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.toolInputs": {
+      label: "OpenTelemetry Tool Inputs Capture",
+      help: "Capture tool input text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.toolOutputs": {
+      label: "OpenTelemetry Tool Outputs Capture",
+      help: "Capture tool output text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.systemPrompt": {
+      label: "OpenTelemetry System Prompt Capture",
+      help: "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
+      tags: ["observability"],
     },
     "diagnostics.cacheTrace.enabled": {
       label: "Cache Trace Enabled",
@@ -23423,18 +23600,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["performance"],
     },
     "agents.defaults.embeddedHarness": {
-      label: "Default Embedded Harness",
-      help: "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+      label: "Default Agent Runtime Settings",
+      help: "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedHarness.runtime": {
-      label: "Default Embedded Harness Runtime",
-      help: "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      label: "Default Agent Runtime",
+      help: "Embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime uses built-in OpenClaw Pi.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedHarness.fallback": {
       label: "Default Embedded Harness Fallback",
-      help: "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+      help: "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
       tags: ["reliability"],
     },
     "agents.list": {
@@ -23479,17 +23656,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.list.*.embeddedHarness": {
       label: "Agent Embedded Harness",
-      help: "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+      help: "Per-agent embedded harness policy override. Use runtime=codex to force Codex for one agent while defaults stay in auto mode.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.runtime": {
-      label: "Agent Embedded Harness Runtime",
-      help: "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      label: "Agent Runtime",
+      help: "Per-agent embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime inherits the default OpenClaw Pi behavior.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.fallback": {
       label: "Agent Embedded Harness Fallback",
-      help: "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+      help: "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
       tags: ["reliability"],
     },
     "gateway.port": {
@@ -23782,6 +23959,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.profiles.*.driver": {
       label: "Browser Profile Driver",
       help: 'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+      tags: ["storage"],
+    },
+    "browser.profiles.*.headless": {
+      label: "Browser Profile Headless Mode",
+      help: "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
       tags: ["storage"],
     },
     "browser.profiles.*.attachOnly": {
@@ -24875,6 +25057,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
       tags: ["advanced"],
     },
+    "agents.defaults.promptOverlays": {
+      label: "Prompt Overlays",
+      help: "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays.gpt5": {
+      label: "GPT-5 Prompt Overlay",
+      help: "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays.gpt5.personality": {
+      label: "GPT-5 Personality Overlay",
+      help: 'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+      tags: ["advanced"],
+    },
     "agents.defaults.contextInjection": {
       label: "Context Injection",
       help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
@@ -25090,6 +25287,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Local Embedding Model Path",
       help: "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
       tags: ["storage"],
+    },
+    "agents.defaults.memorySearch.local.contextSize": {
+      label: "Local Embedding Context Size",
+      help: 'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128–512 tokens) while keeping non-weight VRAM bounded. Lower to 1024–2048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum — not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40 960 tokens can push VRAM from ~8.8 GB to ~32 GB).',
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.store.path": {
       label: "Memory Search Index Path",
@@ -25869,12 +26071,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.compaction.qualityGuard": {
       label: "Compaction Quality Guard",
-      help: "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+      help: "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard.enabled": {
       label: "Compaction Quality Guard Enabled",
-      help: "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+      help: "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard.maxRetries": {
@@ -26035,11 +26237,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
       tags: ["advanced"],
     },
-    "commands.modelsWrite": {
-      label: "Allow /models writes",
-      help: "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
-      tags: ["advanced"],
-    },
     "commands.bash": {
       label: "Allow Bash Chat Command",
       help: "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
@@ -26144,6 +26341,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.snapshotDefaults.mode": {
       label: "Browser Snapshot Mode",
       help: "Default snapshot extraction mode controlling how page content is transformed for agent consumption. Choose the mode that balances readability, fidelity, and token footprint for your workflows.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup": {
+      label: "Browser Tab Cleanup",
+      help: "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.enabled": {
+      label: "Browser Tab Cleanup Enabled",
+      help: "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.idleMinutes": {
+      label: "Browser Tab Cleanup Idle Minutes",
+      help: "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.maxTabsPerSession": {
+      label: "Browser Tab Cleanup Max Tabs Per Session",
+      help: "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+      tags: ["performance", "storage"],
+    },
+    "browser.tabCleanup.sweepMinutes": {
+      label: "Browser Tab Cleanup Sweep Minutes",
+      help: "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
       tags: ["advanced"],
     },
     "browser.ssrfPolicy": {
@@ -27153,6 +27375,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
       tags: ["advanced"],
     },
+    "plugins.entries.*.hooks.allowConversationAccess": {
+      label: "Allow Conversation Access Hooks",
+      help: "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+      tags: ["access"],
+    },
     "plugins.entries.*.hooks.allowPromptInjection": {
       label: "Allow Prompt Injection Hooks",
       help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
@@ -27620,6 +27847,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       sensitive: true,
       tags: ["security", "auth"],
     },
+    "models.providers.*.models[].baseUrl": {
+      tags: ["models", "url-secret"],
+    },
     "agents.list[].memorySearch.remote.baseUrl": {
       tags: ["advanced", "url-secret"],
     },
@@ -27669,6 +27899,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.22",
+  version: "2026.4.24",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

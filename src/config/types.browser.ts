@@ -7,6 +7,8 @@ export type BrowserProfileConfig = {
   userDataDir?: string;
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "clawd" | "existing-session";
+  /** If true, launch this profile in headless mode. Falls back to browser.headless. */
+  headless?: boolean;
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
@@ -15,6 +17,16 @@ export type BrowserProfileConfig = {
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
   mode?: "efficient";
+};
+export type BrowserTabCleanupConfig = {
+  /** Enable best-effort cleanup for tracked primary-agent browser tabs. Default: true */
+  enabled?: boolean;
+  /** Close tracked tabs after this many idle minutes. Set 0 to disable idle cleanup. Default: 120 */
+  idleMinutes?: number;
+  /** Keep at most this many tracked tabs per primary session. Set 0 to disable the cap. Default: 8 */
+  maxTabsPerSession?: number;
+  /** Cleanup sweep interval in minutes. Default: 5 */
+  sweepMinutes?: number;
 };
 export type BrowserSsrFPolicyConfig = {
   /** If true, permit browser navigation to private/internal networks. Default: true */
@@ -58,6 +70,8 @@ export type BrowserConfig = {
   profiles?: Record<string, BrowserProfileConfig>;
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
+  /** Best-effort cleanup policy for tabs opened by primary-agent browser sessions. */
+  tabCleanup?: BrowserTabCleanupConfig;
   /** SSRF policy for browser navigation/open-tab operations. */
   ssrfPolicy?: BrowserSsrFPolicyConfig;
   /**

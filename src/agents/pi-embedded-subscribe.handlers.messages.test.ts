@@ -68,6 +68,8 @@ function createMessageUpdateContext(
     emitReasoningStream: vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
+    recordAssistantUsage: vi.fn(),
+    commitAssistantUsage: vi.fn(),
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
@@ -114,6 +116,7 @@ function createMessageEndContext(
     },
     noteLastAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
+    commitAssistantUsage: vi.fn(),
     log: { debug: vi.fn(), warn: vi.fn() },
     stripBlockTags: (text: string) => text,
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),

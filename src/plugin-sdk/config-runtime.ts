@@ -34,6 +34,17 @@ export function resolvePluginConfigObject(
     : undefined;
 }
 
+export function resolveLivePluginConfigObject(
+  runtimeConfigLoader: (() => OpenClawConfig | undefined) | undefined,
+  pluginId: string,
+  startupPluginConfig?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (typeof runtimeConfigLoader !== "function") {
+    return startupPluginConfig;
+  }
+  return resolvePluginConfigObject(runtimeConfigLoader(), pluginId);
+}
+
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
   clearRuntimeConfigSnapshot,

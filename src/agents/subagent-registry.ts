@@ -156,7 +156,7 @@ let sweepInProgress = false;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 // Use var to avoid TDZ when init runs across circular imports during bootstrap.
-var restoreAttempted = false;
+let restoreAttempted = false;
 const ORPHAN_RECOVERY_DEBOUNCE_MS = 1_000;
 let lastOrphanRecoveryScheduleAt = 0;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;

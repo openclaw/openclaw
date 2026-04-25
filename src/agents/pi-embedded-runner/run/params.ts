@@ -22,6 +22,8 @@ export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "o
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
+  sandboxSessionKey?: string;
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
@@ -76,6 +78,8 @@ export type RunEmbeddedPiAgentParams = {
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
+  /** User-visible prompt body to persist instead of runtime-enriched prompt text. */
+  transcriptPrompt?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
@@ -84,6 +88,8 @@ export type RunEmbeddedPiAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  agentHarnessId?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;

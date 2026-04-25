@@ -59,6 +59,7 @@ import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.
 import { createScopedVitestConfig, resolveVitestIsolation } from "./vitest/vitest.scoped-config.ts";
 import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
+import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { createTasksVitestConfig } from "./vitest/vitest.tasks.config.ts";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
@@ -129,6 +130,17 @@ describe("createScopedVitestConfig", () => {
     });
 
     expect(config.test?.include).toEqual(["slack/**/*.test.*"]);
+  });
+
+  it("keeps broad scoped cli directory filters aligned with repo-root include patterns", () => {
+    const config = createScopedVitestConfig([BUNDLED_PLUGIN_TEST_GLOB], {
+      argv: ["vitest", "run", "extensions/speech-core"],
+      dir: "extensions",
+      env: {},
+      passWithNoTests: true,
+    });
+
+    expect(config.test?.include).toEqual(["speech-core/**/*.test.*"]);
   });
 
   it("relativizes scoped include and exclude patterns to the configured dir", () => {
@@ -310,7 +322,7 @@ describe("scoped vitest configs", () => {
   });
 
   it("keeps the broad agents lane on shared file parallelism", () => {
-    expect(defaultAgentsConfig.test?.fileParallelism).toBe(true);
+    expect(defaultAgentsConfig.test?.fileParallelism).toBe(sharedVitestConfig.test.fileParallelism);
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {

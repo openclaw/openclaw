@@ -4,7 +4,7 @@ read_when:
   - Explaining how streaming or chunking works on channels
   - Changing block streaming or channel chunking behavior
   - Debugging duplicate/early block replies or channel preview streaming
-title: "Streaming and Chunking"
+title: "Streaming and chunking"
 ---
 
 # Streaming + chunking
@@ -156,6 +156,7 @@ Slack:
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`) when available.
 - `block` uses append-style draft previews.
 - `progress` uses status preview text, then final answer.
+- Native and draft preview streaming suppress block replies for that turn, so a Slack reply is streamed by one delivery path only.
 - Final media/error payloads and progress finals do not create throwaway draft messages; only text/block finals that can edit the preview flush pending draft text.
 
 Mattermost:
@@ -175,9 +176,28 @@ Preview streaming can also include **tool-progress** updates — short status li
 
 Supported surfaces:
 
-- **Discord**, **Slack**, and **Telegram** stream tool-progress into the live preview edit.
+- **Discord**, **Slack**, and **Telegram** stream tool-progress into the live preview edit by default when preview streaming is active.
+- Telegram has shipped with tool-progress preview updates enabled since `v2026.4.22`; keeping them enabled preserves that released behavior.
 - **Mattermost** already folds tool activity into its single draft preview post (see above).
 - Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message.
+- To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To disable preview edits entirely, set `streaming.mode` to `off`.
+
+Example:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "streaming": {
+        "mode": "partial",
+        "preview": {
+          "toolProgress": false
+        }
+      }
+    }
+  }
+}
+```
 
 ## Related
 

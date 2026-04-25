@@ -2,11 +2,13 @@ import { type ChildProcess, type ChildProcessWithoutNullStreams, spawn } from "n
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
+import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import {
   CHROME_BOOTSTRAP_EXIT_POLL_MS,
   CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS,
@@ -120,7 +122,7 @@ export function buildOpenClawChromeLaunchArgs(params: {
     "--password-store=basic",
   ];
 
-  if (resolved.headless) {
+  if (profile.headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
   }
@@ -130,6 +132,9 @@ export function buildOpenClawChromeLaunchArgs(params: {
   }
   if (process.platform === "linux") {
     args.push("--disable-dev-shm-usage");
+  }
+  if (!hasChromeProxyControlArg(resolved.extraArgs)) {
+    args.push("--no-proxy-server");
   }
   if (resolved.extraArgs.length > 0) {
     args.push(...resolved.extraArgs);
@@ -290,13 +295,16 @@ export async function launchOpenClawChrome(
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
     // the tuple overload resolution varies across @types/node versions.
-    return spawn(exe.path, args, {
-      stdio: ["ignore", "ignore", "pipe"],
+    const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
       env: {
-        ...process.env,
+        ...omitChromeProxyEnv(process.env),
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
       },
+    });
+    return spawn(preparedSpawn.command, preparedSpawn.args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: preparedSpawn.env,
     }) as unknown as ChildProcessWithoutNullStreams;
   };
 

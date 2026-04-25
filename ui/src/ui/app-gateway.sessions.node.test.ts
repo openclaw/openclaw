@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
@@ -41,6 +42,7 @@ vi.mock("./controllers/nodes.ts", () => ({
   loadNodes: vi.fn(),
 }));
 vi.mock("./controllers/sessions.ts", () => ({
+  applySessionsChangedEvent: vi.fn(),
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
 }));

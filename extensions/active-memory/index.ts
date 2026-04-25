@@ -9,6 +9,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolveLivePluginConfigObject,
   resolvePluginConfigObject,
   resolveSessionStoreEntry,
   updateSessionStore,
@@ -1883,11 +1884,15 @@ export default definePluginEntry({
     };
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
-      const livePluginConfig =
-        resolvePluginConfigObject(api.runtime.config.loadConfig(), "active-memory") ??
-        api.pluginConfig;
-      config = normalizePluginConfig(livePluginConfig);
-      warnDeprecatedModelFallbackPolicy(livePluginConfig);
+      const livePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.loadConfig,
+        "active-memory",
+        api.pluginConfig as Record<string, unknown>,
+      );
+      config = normalizePluginConfig(livePluginConfig ?? { enabled: false });
+      if (livePluginConfig) {
+        warnDeprecatedModelFallbackPolicy(livePluginConfig);
+      }
     };
     api.registerCommand({
       name: "active-memory",

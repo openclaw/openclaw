@@ -10,6 +10,13 @@ import { icons } from "../icons.ts";
 import type { BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
+import {
+  hasLocalUserIdentity,
+  normalizeLocalUserIdentity,
+  resolveLocalUserAvatarText,
+  resolveLocalUserAvatarUrl,
+  resolveLocalUserName,
+} from "../user-identity.ts";
 import { CONFIG_PRESETS, detectActivePreset, type ConfigPresetId } from "./config-presets.ts";
 
 // ── Types ──
@@ -70,10 +77,17 @@ export type QuickSettingsProps = {
   // Appearance
   theme: ThemeName;
   themeMode: ThemeMode;
+  hasCustomTheme: boolean;
+  customThemeLabel?: string | null;
   borderRadius: number;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
+  onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setBorderRadius: (value: number) => void;
+  userName?: string | null;
+  userAvatar?: string | null;
+  onUserNameChange?: (next: string) => void;
+  onUserAvatarChange?: (next: string | null) => void;
 
   // Presets
   configObject?: Record<string, unknown>;
@@ -92,7 +106,7 @@ export type QuickSettingsProps = {
 // ── Theme options ──
 
 type ThemeOption = { id: ThemeName; label: string };
-const THEME_OPTIONS: ThemeOption[] = [
+const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw" },
   { id: "knot", label: "Knot" },
   { id: "dash", label: "Dash" },
@@ -107,6 +121,65 @@ const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
 ];
 
 const THINKING_LEVELS = ["off", "low", "medium", "high"];
+// Keep raw uploads comfortably below the 2 MB persisted data URL limit after
+// base64 expansion and a small MIME/header prefix are added.
+const MAX_LOCAL_USER_AVATAR_FILE_BYTES = 1_500_000;
+
+function renderDefaultUserAvatar() {
+  return html`
+    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M20 21a8 8 0 1 0-16 0" />
+    </svg>
+  `;
+}
+
+function renderLocalUserAvatarPreview(
+  name: string | null | undefined,
+  avatar: string | null | undefined,
+) {
+  const identity = normalizeLocalUserIdentity({ name, avatar });
+  const label = resolveLocalUserName(identity);
+  const avatarUrl = resolveLocalUserAvatarUrl(identity);
+  const avatarText = resolveLocalUserAvatarText(identity);
+  if (avatarUrl) {
+    return html`<img class="qs-user-avatar" src=${avatarUrl} alt=${label} />`;
+  }
+  if (avatarText) {
+    return html`<div class="qs-user-avatar qs-user-avatar--text" aria-label=${label}>
+      ${avatarText}
+    </div>`;
+  }
+  return html`
+    <div class="qs-user-avatar qs-user-avatar--default" aria-label=${label}>
+      ${renderDefaultUserAvatar()}
+    </div>
+  `;
+}
+
+function handleLocalUserAvatarFileSelect(e: Event, props: QuickSettingsProps) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  const onUserAvatarChange = props.onUserAvatarChange;
+  if (!file || !onUserAvatarChange) {
+    input.value = "";
+    return;
+  }
+  if (!file.type.startsWith("image/")) {
+    input.value = "";
+    return;
+  }
+  if (file.size > MAX_LOCAL_USER_AVATAR_FILE_BYTES) {
+    input.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    onUserAvatarChange(typeof reader.result === "string" ? reader.result : null);
+  });
+  reader.readAsDataURL(file);
+  input.value = "";
+}
 
 // ── Card renderers ──
 
@@ -308,6 +381,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
 }
 
 function renderAppearanceCard(props: QuickSettingsProps) {
+  const themeOptions: ThemeOption[] = [...BUILTIN_THEME_OPTIONS, { id: "custom", label: "Custom" }];
   return html`
     <div class="qs-card">
       ${renderCardHeader(icons.spark, "Appearance")}
@@ -315,13 +389,17 @@ function renderAppearanceCard(props: QuickSettingsProps) {
         <div class="qs-row">
           <span class="qs-row__label">Theme</span>
           <div class="qs-segmented">
-            ${THEME_OPTIONS.map(
+            ${themeOptions.map(
               (opt) => html`
                 <button
                   class="qs-segmented__btn ${opt.id === props.theme
                     ? "qs-segmented__btn--active"
                     : ""}"
                   @click=${(e: Event) => {
+                    if (opt.id === "custom" && !props.hasCustomTheme) {
+                      props.onOpenCustomThemeImport?.();
+                      return;
+                    }
                     if (opt.id !== props.theme) {
                       props.setTheme(opt.id, {
                         element: (e.currentTarget as HTMLElement) ?? undefined,
@@ -381,6 +459,80 @@ function renderAppearanceCard(props: QuickSettingsProps) {
   `;
 }
 
+function renderPersonalCard(props: QuickSettingsProps) {
+  const identity = normalizeLocalUserIdentity({
+    name: props.userName ?? null,
+    avatar: props.userAvatar ?? null,
+  });
+  const avatarText = resolveLocalUserAvatarText(identity) ?? "";
+  const label = resolveLocalUserName(identity);
+  return html`
+    <div class="qs-card">
+      ${renderCardHeader(icons.image, "Personal")}
+      <div class="qs-card__body">
+        <div class="qs-personal-preview">
+          ${renderLocalUserAvatarPreview(props.userName, props.userAvatar)}
+          <div class="qs-personal-preview__copy">
+            <div class="qs-personal-preview__title">${label}</div>
+            <div class="muted">This browser only</div>
+          </div>
+        </div>
+        <div class="qs-row">
+          <label class="qs-field">
+            <span class="qs-row__label">Name</span>
+            <input
+              class="qs-field__input"
+              type="text"
+              maxlength="50"
+              .value=${props.userName ?? ""}
+              placeholder="You"
+              @input=${(e: Event) => props.onUserNameChange?.((e.target as HTMLInputElement).value)}
+            />
+          </label>
+        </div>
+        <div class="qs-row">
+          <label class="qs-field">
+            <span class="qs-row__label">Avatar text / emoji</span>
+            <input
+              class="qs-field__input"
+              type="text"
+              maxlength="16"
+              .value=${avatarText}
+              placeholder="JD or 🦞"
+              @input=${(e: Event) => {
+                const value = (e.target as HTMLInputElement).value;
+                props.onUserAvatarChange?.(value.trim() ? value : null);
+              }}
+            />
+          </label>
+        </div>
+        <div class="qs-personal-actions">
+          <label class="btn btn--sm">
+            Choose image
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              @change=${(e: Event) => handleLocalUserAvatarFileSelect(e, props)}
+            />
+          </label>
+          <button
+            type="button"
+            class="btn btn--sm btn--ghost"
+            ?disabled=${!hasLocalUserIdentity(identity)}
+            @click=${() => {
+              props.onUserNameChange?.("");
+              props.onUserAvatarChange?.(null);
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderPresetsCard(props: QuickSettingsProps) {
   const activePreset = props.configObject ? detectActivePreset(props.configObject) : "personal";
 
@@ -418,6 +570,10 @@ function renderConnectionFooter(props: QuickSettingsProps) {
   `;
 }
 
+function renderStack(...cards: TemplateResult[]) {
+  return html`<div class="qs-stack">${cards}</div>`;
+}
+
 // ── Main render ──
 
 export function renderQuickSettings(props: QuickSettingsProps) {
@@ -431,9 +587,10 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       </div>
 
       <div class="qs-grid">
-        ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderApiKeysCard(props)}
-        ${renderAutomationsCard(props)} ${renderSecurityCard(props)} ${renderAppearanceCard(props)}
-        ${renderPresetsCard(props)}
+        ${renderStack(renderModelCard(props), renderSecurityCard(props))}
+        ${renderStack(renderChannelsCard(props), renderAutomationsCard(props))}
+        ${renderStack(renderApiKeysCard(props), renderAppearanceCard(props))}
+        ${renderStack(renderPersonalCard(props))} ${renderPresetsCard(props)}
       </div>
 
       ${renderConnectionFooter(props)}

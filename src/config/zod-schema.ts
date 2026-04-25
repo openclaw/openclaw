@@ -161,6 +161,7 @@ const PluginEntrySchema = z
     hooks: z
       .object({
         allowPromptInjection: z.boolean().optional(),
+        allowConversationAccess: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -298,6 +299,21 @@ export const OpenClawSchema = z
             logs: z.boolean().optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
+            captureContent: z
+              .union([
+                z.boolean(),
+                z
+                  .object({
+                    enabled: z.boolean().optional(),
+                    inputMessages: z.boolean().optional(),
+                    outputMessages: z.boolean().optional(),
+                    toolInputs: z.boolean().optional(),
+                    toolOutputs: z.boolean().optional(),
+                    systemPrompt: z.boolean().optional(),
+                  })
+                  .strict(),
+              ])
+              .optional(),
           })
           .strict()
           .optional(),
@@ -393,6 +409,7 @@ export const OpenClawSchema = z
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
+                headless: z.boolean().optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })

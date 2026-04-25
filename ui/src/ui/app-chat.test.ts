@@ -13,12 +13,19 @@ vi.mock("./app-last-active-session.ts", () => ({
 }));
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
+let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
+let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 
 async function loadChatHelpers(): Promise<void> {
-  ({ handleSendChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
-    await import("./app-chat.ts"));
+  ({
+    handleSendChat,
+    steerQueuedChatMessage,
+    handleAbortChat,
+    refreshChatAvatar,
+    clearPendingQueueItemsForRun,
+  } = await import("./app-chat.ts"));
 }
 
 function requestUrl(input: string | URL | Request): string {
@@ -513,6 +520,42 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
         text: "/steer tighten the plan",
+        kind: "steered",
+        pendingRunId: "run-1",
+      }),
+    ]);
+  });
+
+  it("steers a queued message into the active run without replacing run tracking", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "steer-run" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      chatQueue: [{ id: "queued-1", text: "tighten the plan", createdAt: 1 }],
+      sessionKey: "agent:main:main",
+    });
+
+    await steerQueuedChatMessage(host, "queued-1");
+
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "agent:main:main",
+      message: "tighten the plan",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+    expect(host.chatRunId).toBe("run-1");
+    expect(host.chatStream).toBe("Working...");
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        text: "tighten the plan",
+        kind: "steered",
         pendingRunId: "run-1",
       }),
     ]);
@@ -543,6 +586,40 @@ describe("handleSendChat", () => {
         text: "follow up",
       }),
     ]);
+  });
+});
+
+describe("handleAbortChat", () => {
+  beforeAll(async () => {
+    await loadChatHelpers();
+  });
+
+  it("queues the active run abort while disconnected", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: "run-main",
+      chatMessage: "draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host);
+
+    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("");
+    expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("keeps the draft when disconnected without an active run", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: null,
+      chatMessage: "draft",
+    });
+
+    await handleAbortChat(host);
+
+    expect(host.pendingAbort).toBeUndefined();
+    expect(host.chatMessage).toBe("draft");
   });
 });
 

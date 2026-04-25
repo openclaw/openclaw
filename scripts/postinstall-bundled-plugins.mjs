@@ -34,18 +34,16 @@ const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
+const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
 const LEGACY_UPDATE_COMPAT_SIDECARS = [
   {
-    path: "dist/extensions/qa-channel/runtime-api.js",
-    removedPrefix: "dist/extensions/qa-channel/",
-    content:
-      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
+    path: `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/runtime-api.js`,
+    content: "export {};\n",
   },
   {
-    path: "dist/extensions/qa-lab/runtime-api.js",
-    removedPrefix: "dist/extensions/qa-lab/",
-    content:
-      "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
+    path: `dist/extensions/${LEGACY_QA_LAB_DIR}/runtime-api.js`,
+    content: "export {};\n",
   },
 ];
 const BAILEYS_MEDIA_FILE = join(

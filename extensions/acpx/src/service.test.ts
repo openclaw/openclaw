@@ -6,6 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const { runtimeRegistry } = vi.hoisted(() => ({
   runtimeRegistry: new Map<string, { runtime: unknown; healthy?: () => boolean }>(),
 }));
+const { prepareAcpxCodexAuthConfigMock } = vi.hoisted(() => ({
+  prepareAcpxCodexAuthConfigMock: vi.fn(
+    async ({ pluginConfig }: { pluginConfig: unknown }) => pluginConfig,
+  ),
+}));
 
 vi.mock("../runtime-api.js", () => ({
   getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
@@ -24,6 +29,10 @@ vi.mock("./runtime.js", () => ({
   createFileSessionStore: vi.fn(() => ({})),
 }));
 
+vi.mock("./codex-auth-bridge.js", () => ({
+  prepareAcpxCodexAuthConfig: prepareAcpxCodexAuthConfigMock,
+}));
+
 import { getAcpRuntimeBackend } from "../runtime-api.js";
 import { createAcpxRuntimeService } from "./service.js";
 
@@ -37,6 +46,7 @@ async function makeTempDir(): Promise<string> {
 
 afterEach(async () => {
   runtimeRegistry.clear();
+  prepareAcpxCodexAuthConfigMock.mockClear();
   delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
   delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
   for (const dir of tempDirs.splice(0)) {
@@ -128,6 +138,92 @@ describe("createAcpxRuntimeService", () => {
       expect.objectContaining({
         pluginConfig: expect.objectContaining({
           timeoutSeconds: 120,
+        }),
+      }),
+    );
+
+    await service.stop?.(ctx);
+  });
+
+  it("forwards a configured probeAgent to the runtime factory so the probe does not hardcode the default", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = {
+      ensureSession: vi.fn(),
+      runTurn: vi.fn(),
+      cancel: vi.fn(),
+      close: vi.fn(),
+      probeAvailability: vi.fn(async () => {}),
+      isHealthy: vi.fn(() => true),
+      doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
+    };
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService({
+      pluginConfig: { probeAgent: "opencode" },
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          probeAgent: "opencode",
+        }),
+      }),
+    );
+
+    await service.stop?.(ctx);
+  });
+
+  it("uses the first allowed ACP agent as the default probe agent", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    ctx.config = {
+      acp: {
+        allowedAgents: ["  OpenCode  ", "codex"],
+      },
+    };
+    const runtime = createMockRuntime();
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          probeAgent: "opencode",
+        }),
+      }),
+    );
+
+    await service.stop?.(ctx);
+  });
+
+  it("keeps explicit probeAgent ahead of acp.allowedAgents", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    ctx.config = {
+      acp: {
+        allowedAgents: ["opencode"],
+      },
+    };
+    const runtime = createMockRuntime();
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService({
+      pluginConfig: { probeAgent: "codex" },
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          probeAgent: "codex",
         }),
       }),
     );

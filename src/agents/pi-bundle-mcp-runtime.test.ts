@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
 import {
   __testing,
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
 } from "./pi-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
@@ -68,6 +70,25 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator<{ url: string }>({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        url: { type: "string" },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    });
+
+    expect(validator({ url: "https://example.com" })).toEqual({
+      valid: true,
+      data: { url: "https://example.com" },
+      errorMessage: undefined,
+    });
+    expect(validator({ url: 42 }).valid).toBe(false);
+  });
+
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
     const catalogA = [
       { toolName: "alpha?", description: "question" },
@@ -318,5 +339,26 @@ describe("session MCP runtime", () => {
     expect(__testing.getCachedSessionIds()).not.toContain("session-retire");
 
     await expect(retireSessionMcpRuntime({ sessionId: " ", reason: "test" })).resolves.toBe(false);
+  });
+
+  it("retires global session runtimes by session key", async () => {
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session-retire-key",
+      sessionKey: "agent:test:session-retire-key",
+      workspaceDir: "/workspace",
+    });
+    expect(__testing.getCachedSessionIds()).toContain("session-retire-key");
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({
+        sessionKey: " agent:test:session-retire-key ",
+        reason: "test",
+      }),
+    ).resolves.toBe(true);
+    expect(__testing.getCachedSessionIds()).not.toContain("session-retire-key");
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({ sessionKey: "agent:test:missing", reason: "test" }),
+    ).resolves.toBe(false);
   });
 });

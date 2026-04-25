@@ -16,7 +16,7 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 
 ## Quick start
 
-> **Requires OpenClaw 2026.4.10 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
+> **Requires OpenClaw 2026.4.24 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
 
 <Steps>
   <Step title="Run the channel setup wizard">
@@ -134,6 +134,8 @@ Default: `allowlist`
 ```
 
 ---
+
+<a id="get-groupuser-ids"></a>
 
 ## Get group/user IDs
 

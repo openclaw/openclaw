@@ -25,7 +25,10 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
-import { listThinkingLevelLabels, resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import {
+  listThinkingLevelOptions,
+  resolveThinkingDefaultForModel,
+} from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -978,89 +981,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   };
 }
 
-// Merge with existing entry based on latest timestamp to ensure data consistency and avoid overwriting with less complete data.
-function mergeSessionEntryIntoCombined(params: {
-  cfg: OpenClawConfig;
-  combined: Record<string, SessionEntry>;
-  entry: SessionEntry;
-  agentId: string;
-  canonicalKey: string;
-}) {
-  const { cfg, combined, entry, agentId, canonicalKey } = params;
-  const existing = combined[canonicalKey];
-
-  if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
-    combined[canonicalKey] = {
-      ...entry,
-      ...existing,
-      spawnedBy: canonicalizeSpawnedByForAgent(cfg, agentId, existing.spawnedBy ?? entry.spawnedBy),
-    };
-  } else {
-    combined[canonicalKey] = {
-      ...existing,
-      ...entry,
-      spawnedBy: canonicalizeSpawnedByForAgent(
-        cfg,
-        agentId,
-        entry.spawnedBy ?? existing?.spawnedBy,
-      ),
-    };
-  }
-}
-
-export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
-  storePath: string;
-  store: Record<string, SessionEntry>;
-} {
-  const storeConfig = cfg.session?.store;
-  if (storeConfig && !isStorePathTemplate(storeConfig)) {
-    const storePath = resolveStorePath(storeConfig);
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadSessionStore(storePath);
-    const combined: Record<string, SessionEntry> = {};
-    for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId: defaultAgentId,
-        sessionKey: key,
-      });
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId: defaultAgentId,
-        canonicalKey,
-      });
-    }
-    return { storePath, store: combined };
-  }
-
-  const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
-  const combined: Record<string, SessionEntry> = {};
-  for (const target of targets) {
-    const agentId = target.agentId;
-    const storePath = target.storePath;
-    const store = loadSessionStore(storePath);
-    for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId,
-        sessionKey: key,
-      });
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId,
-        canonicalKey,
-      });
-    }
-  }
-
-  const storePath =
-    typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
-  return { storePath, store: combined };
-}
+export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
 export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
@@ -1072,10 +993,17 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
+  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model);
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
+    thinkingLevels,
+    thinkingOptions: thinkingLevels.map((level) => level.label),
+    thinkingDefault: resolveThinkingDefaultForModel({
+      provider: resolved.provider,
+      model: resolved.model,
+    }),
   };
 }
 
@@ -1377,6 +1305,7 @@ export function buildGatewaySessionRow(params: {
   const rowModel = selectedModel?.model ?? model;
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
 
   return {
     key,
@@ -1402,7 +1331,8 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
-    thinkingOptions: listThinkingLevelLabels(thinkingProvider, thinkingModel),
+    thinkingLevels,
+    thinkingOptions: thinkingLevels.map((level) => level.label),
     thinkingDefault: resolveThinkingDefaultForModel({
       provider: thinkingProvider,
       model: thinkingModel,

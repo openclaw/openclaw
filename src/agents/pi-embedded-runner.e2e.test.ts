@@ -111,6 +111,7 @@ const installRunEmbeddedMocks = () => {
   }));
   vi.doMock("./pi-bundle-mcp-tools.js", () => ({
     disposeSessionMcpRuntime: (sessionId: string) => disposeSessionMcpRuntimeMock(sessionId),
+    retireSessionMcpRuntimeForSessionKey: () => Promise.resolve(false),
     retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
       sessionId ? disposeSessionMcpRuntimeMock(sessionId) : Promise.resolve(false),
   }));

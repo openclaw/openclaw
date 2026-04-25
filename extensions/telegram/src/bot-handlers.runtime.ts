@@ -4,7 +4,7 @@ import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/channel-inbound";
+} from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
 import {
   resolveCommandAuthorization,
@@ -37,13 +37,15 @@ import {
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveDefaultModelForAgent,
 } from "./bot-handlers.agent.runtime.js";
-import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
+import {
+  buildTelegramInboundDebounceConversationKey,
+  buildTelegramInboundDebounceKey,
+} from "./bot-handlers.debounce-key.js";
 import {
   hasInboundMedia,
   hasReplyTargetMedia,
@@ -61,7 +63,7 @@ import {
   type MediaGroupEntry,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
-import { resolveMedia } from "./bot/delivery.js";
+import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   getTelegramTextParts,
   buildTelegramGroupFrom,
@@ -119,7 +121,7 @@ export const registerTelegramHandlers = ({
   shouldSkipUpdate,
   processMessage,
   logger,
-  telegramDeps = defaultTelegramBotDeps,
+  telegramDeps,
 }: RegisterTelegramHandlerParams) => {
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
     cfg,
@@ -1165,9 +1167,10 @@ export const registerTelegramHandlers = ({
         ]
       : [];
     const senderId = msg.from?.id ? String(msg.from.id) : "";
-    const conversationThreadId = resolvedThreadId ?? dmThreadId;
-    const conversationKey =
-      conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
+    const conversationKey = buildTelegramInboundDebounceConversationKey({
+      chatId,
+      threadId: resolvedThreadId ?? dmThreadId,
+    });
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
       ? buildTelegramInboundDebounceKey({
@@ -1559,7 +1562,7 @@ export const registerTelegramHandlers = ({
         } catch (err) {
           throw new TelegramRetryableCallbackError(err);
         }
-        const { byProvider, providers } = modelData;
+        const { byProvider, providers, modelNames } = modelData;
 
         const editMessageWithButtons = async (
           text: string,
@@ -1643,6 +1646,7 @@ export const registerTelegramHandlers = ({
             currentPage: safePage,
             totalPages,
             pageSize,
+            modelNames,
           });
           const text = formatModelsAvailableHeader({
             provider,

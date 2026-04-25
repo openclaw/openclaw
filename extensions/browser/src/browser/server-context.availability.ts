@@ -8,11 +8,7 @@ import {
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import {
-  closeChromeMcpSession,
-  ensureChromeMcpAvailable,
-  listChromeMcpTabs,
-} from "./chrome-mcp.js";
+import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import {
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
@@ -78,6 +74,7 @@ export function createProfileAvailability({
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
       // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
+      const { listChromeMcpTabs } = await getChromeMcpModule();
       await listChromeMcpTabs(profile.name, profile.userDataDir);
       return true;
     }
@@ -155,6 +152,7 @@ export function createProfileAvailability({
       setProfileRunning(null);
     }
     if (getBrowserProfileCapabilities(previousProfile).usesChromeMcp) {
+      const { closeChromeMcpSession } = await getChromeMcpModule();
       await closeChromeMcpSession(previousProfile.name).catch(() => false);
     }
     await closePlaywrightBrowserConnectionForProfile(previousProfile.cdpUrl);
@@ -191,6 +189,7 @@ export function createProfileAvailability({
     let lastError: unknown;
     while (Date.now() < deadlineMs) {
       try {
+        const { listChromeMcpTabs } = await getChromeMcpModule();
         await listChromeMcpTabs(profile.name, profile.userDataDir);
         return;
       } catch (err) {
@@ -209,6 +208,7 @@ export function createProfileAvailability({
           `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
         );
       }
+      const { ensureChromeMcpAvailable } = await getChromeMcpModule();
       await ensureChromeMcpAvailable(profile.name, profile.userDataDir);
       await waitForChromeMcpReadyAfterAttach();
       return;
@@ -308,6 +308,7 @@ export function createProfileAvailability({
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
+      const { closeChromeMcpSession } = await getChromeMcpModule();
       const stopped = await closeChromeMcpSession(profile.name);
       return { stopped };
     }
