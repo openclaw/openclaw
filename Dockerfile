@@ -258,8 +258,66 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-# Install Codex CLI for autonomous engineering pipeline (pinned 2026-03-26)
-RUN npm install -g @openai/codex@0.117.0
+# Install Codex CLI (floating — always latest; unpinned 2026-04-24)
+RUN npm install -g @openai/codex@latest
+# Install Claude Code CLI for Claude CLI backend
+RUN npm install -g @anthropic-ai/claude-code
+
+# Install GitHub CLI
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh
+
+# Install utility tools (PDF + OCR + dev utilities + editors)
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+ && apt-get install -y --no-install-recommends \
+      poppler-utils \
+      tesseract-ocr \
+      jq \
+      trash-cli \
+      tree \
+      sqlite3 \
+      htop \
+      vim \
+      nano \
+      ffmpeg \
+      zip \
+      unzip \
+      git-lfs \
+      rsync \
+      python3-pip
+
+# Install Python libraries (PDF + data analytics + testing + calendar)
+RUN pip3 install --no-cache-dir --break-system-packages \
+      pypdf \
+      PyPDF2 \
+      PyMuPDF \
+      pdfplumber \
+      pytest \
+      icalendar \
+      python-dateutil \
+      yt-dlp \
+      duckdb \
+      numpy \
+      pandas \
+      matplotlib \
+      plotly
+
+# Install obsidian-headless CLI (floating)
+RUN npm install -g obsidian-headless
+
+# Symlink ob's config to the persisted openclaw volume
+RUN mkdir -p /home/node/.config \
+ && ln -sfn /home/node/.openclaw/obsidian-headless /home/node/.config/obsidian-headless \
+ && chown -h node:node /home/node/.config /home/node/.config/obsidian-headless
 
 ENV NODE_ENV=production
 
@@ -298,6 +356,23 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
     RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo
 
+# Secret-to-env bridge: load file-based secrets into env vars at container start.
+# Useful for CLIs like `gh` that expect GITHUB_TOKEN as an env var, not a file path.
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'set -eu' \
+    '# Load GITHUB_TOKEN from secret file if present' \
+    'if [ -n "${GITHUB_TOKEN_PATH:-}" ] && [ -r "$GITHUB_TOKEN_PATH" ] && [ -z "${GITHUB_TOKEN:-}" ]; then' \
+    '  export GITHUB_TOKEN="$(cat "$GITHUB_TOKEN_PATH")"' \
+    'fi' \
+    '# Also set GH_TOKEN alias (some tools check it instead of GITHUB_TOKEN)' \
+    'if [ -n "${GITHUB_TOKEN:-}" ] && [ -z "${GH_TOKEN:-}" ]; then' \
+    '  export GH_TOKEN="$GITHUB_TOKEN"' \
+    'fi' \
+    'exec "$@"' \
+    > /usr/local/bin/openclaw-entrypoint.sh \
+ && chmod 755 /usr/local/bin/openclaw-entrypoint.sh
+
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
@@ -317,4 +392,5 @@ USER node
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENTRYPOINT ["/usr/local/bin/openclaw-entrypoint.sh"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]

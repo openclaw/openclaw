@@ -61,15 +61,7 @@ if [ -x "/usr/local/bin/preflight-pipeline.sh" ] && [ -d "${OCPIPELINE_VENV:-/op
     || echo "[entrypoint-secrets] WARNING: pipeline preflight failed (non-fatal for gateway)" >&2
 fi
 
-# Start obsidian headless sync daemon in background.
-# ob is installed globally at /usr/local/bin/ob (baked into image via npm install -g obsidian-headless).
-# The while loop auto-restarts if ob exits. Logs → /home/node/obsidian-sync.log.
-nohup sh -c '
-  while true; do
-    ob sync --continuous --path /home/node/obsidian
-    echo "[obsidian-sync] ob exited. Restarting in 5 seconds..."
-    sleep 5
-  done
-' >> /home/node/obsidian-sync.log 2>&1 &
+# Obsidian sync runs on the host via systemd (obsidian-sync.service), not inside this container.
+# The vault is shared via the /home/node/obsidian volume mount.
 
 exec "$@"

@@ -6,6 +6,7 @@ services:
       args:
         OPENCLAW_INSTALL_RUST: "1"
         OPENCLAW_INSTALL_PIPELINE: "1"
+        OPENCLAW_INSTALL_BROWSER: "1"
         OPENCLAW_PIPELINE_PY_PKG: "opendataloader-pdf[hybrid]==2.2.1"
     # user omitted — image ends with USER node (UID 1000), matching host jpow UID
     restart: unless-stopped
@@ -69,6 +70,7 @@ services:
       # .ssh volume removed — deploy key injected via Docker secret instead (see github_deploy_key)
       - /home/jpow/obsidian-vault:/home/node/obsidian:rw
       - /home/jpow/.codex:/home/node/.codex:rw
+      - /home/jpow/.claude:/home/node/.claude:rw
     secrets:
       - source: discord_bot_token
         target: discord_bot_token
@@ -134,6 +136,7 @@ services:
       args:
         OPENCLAW_INSTALL_RUST: "1"
         OPENCLAW_INSTALL_PIPELINE: "1"
+        OPENCLAW_INSTALL_BROWSER: "1"
         OPENCLAW_PIPELINE_PY_PKG: "opendataloader-pdf[hybrid]==2.2.1"
     restart: unless-stopped
     stop_signal: SIGTERM
