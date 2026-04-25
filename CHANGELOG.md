@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Browser/config: allow local managed Chrome launch discovery and post-launch
   CDP readiness timeouts to be raised for slower hosts such as Raspberry Pi.
   Fixes #66803. Thanks @beat843796.
+- Discord: allow `channels.discord.voice.model` to override the LLM used for voice channel responses while keeping STT and TTS on their existing media settings. (#64368) Thanks @mrdavey.
 - Browser/CLI: add `openclaw browser start --headless` as a one-shot local managed browser launch override without rewriting persisted browser config. Thanks @BenediktSchackenberg.
 - CLI/Crestodian: open interactive Crestodian in the full OpenClaw TUI shell instead of a basic readline prompt.
 - CLI/Crestodian: shorten the startup greeting to the active planner/model, config state, Gateway probe result, and next debug action instead of dumping every discovered backend.
@@ -80,6 +81,7 @@ Docs: https://docs.openclaw.ai
 - Agents/heartbeat: stop injecting the heartbeat system prompt into non-heartbeat runs, preventing ordinary user replies from being suppressed as `HEARTBEAT_OK` acknowledgments. Fixes #69079. (#69278) Thanks @stainlu.
 - Active Memory: keep silent recall sub-agent billing/auth failures out of shared auth-profile cooldown state, so a Claude CLI extra-usage rejection cannot disable normal Claude-backed turns. Fixes #71284. (#71539) Thanks @vishutdhar and @obviyus.
 - Auth/Claude CLI: sync refreshed Claude CLI OAuth credentials into the managed auth profile so long-running Claude CLI runs stop falling back to stale OpenClaw snapshots. (#70902) Thanks @starvex.
+- Sessions: make `sessions_spawn(mode="session")` errors name usable alternatives when the current channel cannot bind subagent threads. Fixes #67400. (#67790) Thanks @stainlu.
 
 ## 2026.4.25 (Unreleased)
 

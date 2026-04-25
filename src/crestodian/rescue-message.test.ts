@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { extractCrestodianRescueMessage, runCrestodianRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+let tempRoot = "";
+let tempDirId = 0;
 
 type TestConfig = Record<string, unknown>;
 
@@ -101,6 +103,12 @@ vi.mock("../config/model-input.js", () => ({
     typeof model === "string" ? model : model?.primary,
 }));
 
+async function makeStateDir(prefix: string): Promise<string> {
+  const dir = path.join(tempRoot, `${prefix}${tempDirId++}`);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
 function commandContext(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
     surface: "whatsapp",
@@ -134,6 +142,10 @@ async function runRescue(
 }
 
 describe("Crestodian rescue message", () => {
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-rescue-"));
+  });
+
   beforeEach(() => {
     mockConfig.reset();
   });
@@ -143,6 +155,12 @@ describe("Crestodian rescue message", () => {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+  });
+
+  afterAll(async () => {
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 
@@ -179,7 +197,7 @@ describe("Crestodian rescue message", () => {
   });
 
   it("queues and applies persistent writes through conversational approval", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-rescue-"));
+    const tempDir = await makeStateDir("models-");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
 
     const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
@@ -203,7 +221,7 @@ describe("Crestodian rescue message", () => {
   });
 
   it("queues and applies gateway restart through conversational approval", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-rescue-gateway-"));
+    const tempDir = await makeStateDir("gateway-");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
     const deps = { runGatewayRestart: vi.fn(async () => {}) };
@@ -229,7 +247,7 @@ describe("Crestodian rescue message", () => {
   });
 
   it("queues and applies agent creation through conversational approval", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-rescue-agent-"));
+    const tempDir = await makeStateDir("agent-");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
     const deps = { runAgentsAdd: vi.fn(async () => {}) };
