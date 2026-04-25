@@ -10,6 +10,7 @@ import {
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
+  runPluginRegistryPostinstallMigration,
   restoreLegacyUpdaterCompatSidecars,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
 import { NPM_UPDATE_COMPAT_SIDECARS } from "../../src/infra/npm-update-compat-sidecars.ts";
@@ -245,6 +246,95 @@ describe("bundled plugin postinstall", () => {
     });
 
     await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).resolves.toBeTruthy();
+  });
+
+  it("migrates the plugin registry during postinstall from built dist contracts", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-postinstall-registry-");
+    const log = { log: vi.fn(), warn: vi.fn() };
+    const readBestEffortConfig = vi.fn(async () => ({
+      plugins: {
+        installs: {
+          demo: {
+            source: "npm",
+            resolvedName: "@vendor/demo",
+            resolvedVersion: "1.0.0",
+          },
+        },
+      },
+    }));
+    const ensurePluginRegistryMigrated = vi.fn(async () => ({
+      migrated: true,
+      current: {
+        plugins: [{ pluginId: "demo" }],
+      },
+    }));
+    const importModule = vi.fn(async (specifier: string) => {
+      if (specifier.endsWith("/dist/config/config.js")) {
+        return { readBestEffortConfig };
+      }
+      if (specifier.endsWith("/dist/plugins/plugin-registry.js")) {
+        return { ensurePluginRegistryMigrated };
+      }
+      throw new Error(`unexpected import: ${specifier}`);
+    });
+
+    const result = await runPluginRegistryPostinstallMigration({
+      packageRoot,
+      existsSync: vi.fn(
+        (filePath: string) =>
+          filePath.endsWith(path.join("dist", "config", "config.js")) ||
+          filePath.endsWith(path.join("dist", "plugins", "plugin-registry.js")),
+      ),
+      importModule,
+      env: { OPENCLAW_HOME: "/tmp/home" },
+      log,
+    });
+
+    expect(result).toMatchObject({ status: "migrated" });
+    expect(readBestEffortConfig).toHaveBeenCalled();
+    expect(ensurePluginRegistryMigrated).toHaveBeenCalledWith({
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              resolvedName: "@vendor/demo",
+              resolvedVersion: "1.0.0",
+            },
+          },
+        },
+      },
+      env: { OPENCLAW_HOME: "/tmp/home" },
+      packageRoot,
+    });
+    expect(log.log).toHaveBeenCalledWith(
+      "[postinstall] migrated plugin registry: 1 plugin(s) indexed",
+    );
+  });
+
+  it("keeps plugin registry postinstall migration non-fatal when dist entries are unavailable", async () => {
+    const warn = vi.fn();
+
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        packageRoot: "/pkg",
+        existsSync: vi.fn(() => false),
+        log: { log: vi.fn(), warn },
+      }),
+    ).resolves.toEqual({
+      status: "skipped",
+      reason: "missing-dist-entry",
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("honors plugin registry postinstall migration disable env", async () => {
+    await expect(
+      runPluginRegistryPostinstallMigration({
+        env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "1" },
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).resolves.toEqual({ status: "disabled" });
   });
 
   it("prunes stale dist files from packaged installs", async () => {

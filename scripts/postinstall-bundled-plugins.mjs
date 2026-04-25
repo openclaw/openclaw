@@ -32,6 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
@@ -645,6 +646,68 @@ function applyBundledPluginRuntimeHotfixes(params = {}) {
   }
 }
 
+function resolveDistModuleUrl(packageRoot, distPath) {
+  return pathToFileURL(join(packageRoot, distPath)).href;
+}
+
+async function importInstalledDistModule(params, distPath) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const modulePath = join(packageRoot, distPath);
+  if (!pathExists(modulePath)) {
+    return null;
+  }
+  const importModule = params.importModule ?? ((specifier) => import(specifier));
+  return await importModule(resolveDistModuleUrl(packageRoot, distPath));
+}
+
+export async function runPluginRegistryPostinstallMigration(params = {}) {
+  const env = params.env ?? process.env;
+  const log = params.log ?? console;
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  if (env?.[DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]?.trim()) {
+    return { status: "disabled" };
+  }
+
+  try {
+    const [configModule, registryModule] = await Promise.all([
+      importInstalledDistModule(params, "dist/config/config.js"),
+      importInstalledDistModule(params, "dist/plugins/plugin-registry.js"),
+    ]);
+    if (!configModule || !registryModule) {
+      return { status: "skipped", reason: "missing-dist-entry" };
+    }
+    const readConfig =
+      typeof configModule.readBestEffortConfig === "function"
+        ? configModule.readBestEffortConfig
+        : configModule.loadConfig;
+    if (
+      typeof readConfig !== "function" ||
+      typeof registryModule.ensurePluginRegistryMigrated !== "function"
+    ) {
+      return { status: "skipped", reason: "missing-dist-contract" };
+    }
+
+    const config = await readConfig();
+    const inspection = await registryModule.ensurePluginRegistryMigrated({
+      config,
+      env,
+      packageRoot,
+    });
+    if (inspection.migrated) {
+      log.log(
+        `[postinstall] migrated plugin registry: ${inspection.current.plugins.length} plugin(s) indexed`,
+      );
+      return { status: "migrated", inspection };
+    }
+    return { status: "fresh", inspection };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`[postinstall] could not migrate plugin registry: ${message}`);
+    return { status: "failed", error: message };
+  }
+}
+
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
   return (
@@ -836,4 +899,5 @@ export function isDirectPostinstallInvocation(params = {}) {
 
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
+  await runPluginRegistryPostinstallMigration();
 }

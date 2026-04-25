@@ -23,6 +23,7 @@ import {
 import type { PluginDiagnostic } from "./manifest-types.js";
 
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
+export const INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION = 1;
 
 export type InstalledPluginIndexRefreshReason =
   | "missing"
@@ -30,6 +31,7 @@ export type InstalledPluginIndexRefreshReason =
   | "stale-package"
   | "source-changed"
   | "policy-changed"
+  | "migration"
   | "host-contract-changed"
   | "compat-registry-changed"
   | "manual";
@@ -103,6 +105,7 @@ export type InstalledPluginIndex = {
   version: typeof INSTALLED_PLUGIN_INDEX_VERSION;
   hostContractVersion: string;
   compatRegistryVersion: string;
+  migrationVersion: typeof INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION;
   policyHash: string;
   generatedAtMs: number;
   refreshReason?: InstalledPluginIndexRefreshReason;
@@ -491,6 +494,7 @@ function buildInstalledPluginIndex(
     version: INSTALLED_PLUGIN_INDEX_VERSION,
     hostContractVersion: resolveCompatibilityHostVersion(env),
     compatRegistryVersion: resolveCompatRegistryVersion(),
+    migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
     policyHash: resolvePolicyHash(params.config),
     generatedAtMs,
     ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
@@ -691,6 +695,9 @@ export function diffInstalledPluginIndexInvalidationReasons(
   }
   if (previous.compatRegistryVersion !== current.compatRegistryVersion) {
     reasons.add("compat-registry-changed");
+  }
+  if (previous.migrationVersion !== current.migrationVersion) {
+    reasons.add("migration");
   }
   if (previous.policyHash !== current.policyHash) {
     reasons.add("policy-changed");

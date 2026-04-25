@@ -154,6 +154,7 @@ describe("installed plugin index", () => {
 
     expect(index).toMatchObject({
       version: 1,
+      migrationVersion: 1,
       generatedAtMs: 1777118400000,
       plugins: [
         {
@@ -557,7 +558,7 @@ describe("installed plugin index", () => {
     expect(index.refreshReason).toBe("manual");
   });
 
-  it("diffs invalidation reasons for manifest, package, source, host, and compat changes", () => {
+  it("diffs invalidation reasons for manifest, package, source, host, compat, and migration changes", () => {
     const fixture = createRichPluginFixture();
     const previous = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
@@ -604,11 +605,13 @@ describe("installed plugin index", () => {
         env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
       }),
       compatRegistryVersion: "different-compat-registry",
+      migrationVersion: 2 as 1,
     };
 
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
       "compat-registry-changed",
       "host-contract-changed",
+      "migration",
       "source-changed",
       "stale-manifest",
       "stale-package",
