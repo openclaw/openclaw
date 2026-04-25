@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   installPwToolsCoreTestHooks,
@@ -9,14 +9,9 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-let mod: typeof import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    mod = await import("./pw-tools-core.js");
-  });
-
   it("last file-chooser arm wins", async () => {
     const firstPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-1-${crypto.randomUUID()}.txt`);
     const secondPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-2-${crypto.randomUUID()}.txt`);
@@ -154,5 +149,52 @@ describe("pw-tools-core", () => {
     expect(waitForFunction).toHaveBeenCalledWith("window.ready===true", {
       timeout: 1234,
     });
+  });
+
+  it("clamps wait timeoutMs to 120000 for wait steps", async () => {
+    const waitForSelector = vi.fn(async () => {});
+    const page = {
+      locator: vi.fn(() => ({
+        first: () => ({ waitFor: waitForSelector }),
+      })),
+      waitForURL: vi.fn(async () => {}),
+      waitForLoadState: vi.fn(async () => {}),
+      waitForFunction: vi.fn(async () => {}),
+      waitForTimeout: vi.fn(async () => {}),
+      getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn() }) })),
+    };
+    setPwToolsCoreCurrentPage(page);
+
+    await mod.waitForViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      selector: "#main",
+      timeoutMs: 999_999,
+    });
+
+    expect(waitForSelector).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 120_000,
+    });
+  });
+
+  it("clamps interaction timeoutMs to 60000 for click steps", async () => {
+    const click = vi.fn(async () => {});
+    const page = {
+      url: vi.fn(() => "https://example.com"),
+      locator: vi.fn(() => ({ click })),
+    };
+    setPwToolsCoreCurrentPage(page);
+
+    await mod.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      selector: "#main",
+      timeoutMs: 999_999,
+    });
+
+    expect(click).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeout: 60_000,
+      }),
+    );
   });
 });

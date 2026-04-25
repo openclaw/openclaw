@@ -1,5 +1,7 @@
 import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createVoiceCaptureState } from "./capture-state.js";
+import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 const {
   createConnectionMock,
@@ -9,6 +11,7 @@ const {
   resolveAgentRouteMock,
   agentCommandMock,
   transcribeAudioFileMock,
+  textToSpeechMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -23,11 +26,26 @@ const {
       };
       subscribe: ReturnType<typeof vi.fn>;
     };
+    state: {
+      status: string;
+      networking: {
+        state: {
+          code: string;
+          dave: {
+            session: {
+              setPassthroughMode: ReturnType<typeof vi.fn>;
+            };
+          };
+        };
+      };
+    };
+    daveSetPassthroughMode: ReturnType<typeof vi.fn>;
     handlers: Map<string, EventHandler>;
   };
 
   const createConnectionMock = (): MockConnection => {
     const handlers = new Map<string, EventHandler>();
+    const daveSetPassthroughMode = vi.fn();
     const connection: MockConnection = {
       destroy: vi.fn(),
       subscribe: vi.fn(),
@@ -42,9 +60,24 @@ const {
         },
         subscribe: vi.fn(() => ({
           on: vi.fn(),
+          destroy: vi.fn(),
           [Symbol.asyncIterator]: async function* () {},
         })),
       },
+      state: {
+        status: "ready",
+        networking: {
+          state: {
+            code: "networking-ready",
+            dave: {
+              session: {
+                setPassthroughMode: daveSetPassthroughMode,
+              },
+            },
+          },
+        },
+      },
+      daveSetPassthroughMode,
       handlers,
     };
     return connection;
@@ -66,13 +99,15 @@ const {
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
   };
 });
 
 vi.mock("./sdk-runtime.js", () => ({
   loadDiscordVoiceSdk: () => ({
     AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
-    EndBehaviorType: { AfterSilence: "AfterSilence" },
+    EndBehaviorType: { AfterSilence: "AfterSilence", Manual: "Manual" },
+    NetworkingStatusCode: { Ready: "networking-ready", Resuming: "networking-resuming" },
     VoiceConnectionStatus: {
       Ready: "ready",
       Disconnected: "disconnected",
@@ -87,24 +122,35 @@ vi.mock("./sdk-runtime.js", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+vi.mock("openclaw/plugin-sdk/routing", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/routing")>(
+    "openclaw/plugin-sdk/routing",
+  );
   return {
     ...actual,
     resolveAgentRoute: resolveAgentRouteMock,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
-  transcribeAudioFile: transcribeAudioFileMock,
+vi.mock("../runtime.js", () => ({
+  getDiscordRuntime: () => ({
+    mediaUnderstanding: {
+      transcribeAudioFile: transcribeAudioFileMock,
+    },
+    tts: {
+      textToSpeech: textToSpeechMock,
+    },
+  }),
 }));
 
 let managerModule: typeof import("./manager.js");
@@ -153,6 +199,8 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock.mockResolvedValue({ payloads: [] });
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    textToSpeechMock.mockReset();
+    textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
   });
 
   const createManager = (
@@ -213,6 +261,12 @@ describe("DiscordVoiceManager", () => {
         guildId: "g1",
         channelId: "1001",
         route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
+        connection: createConnectionMock(),
+        player: createAudioPlayerMock(),
+        playbackQueue: Promise.resolve(),
+        processingQueue: Promise.resolve(),
+        capture: createVoiceCaptureState(),
+        receiveRecovery: createVoiceReceiveRecoveryState(),
       },
       wavPath: "/tmp/test.wav",
       userId,
@@ -269,6 +323,7 @@ describe("DiscordVoiceManager", () => {
 
     const player = createAudioPlayerMock.mock.results[0]?.value;
     expect(connection.receiver.speaking.off).toHaveBeenCalledWith("start", expect.any(Function));
+    expect(connection.receiver.speaking.off).toHaveBeenCalledWith("end", expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith("disconnected", expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith("destroyed", expect.any(Function));
     expect(player.off).toHaveBeenCalledWith("error", expect.any(Function));
@@ -292,6 +347,16 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("keeps the shorter timeout for initial voice connection readiness", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 15_000);
+  });
+
   it("stores guild metadata on joined voice sessions", async () => {
     const manager = createManager();
 
@@ -303,18 +368,100 @@ describe("DiscordVoiceManager", () => {
     expect(entry?.guildName).toBe("Guild One");
   });
 
-  it("attempts rejoin after repeated decrypt failures", async () => {
+  it("enables DAVE receive passthrough after join", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
 
+    expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 30);
+  });
+
+  it("re-arms passthrough but still rejoin-recovers after repeated decrypt failures", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock
+      .mockReturnValueOnce(connection)
+      .mockReturnValueOnce(createConnectionMock());
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    connection.daveSetPassthroughMode.mockClear();
+
     emitDecryptFailure(manager);
     emitDecryptFailure(manager);
     emitDecryptFailure(manager);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
     expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows the same speaker to restart after finalize fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const connection = createConnectionMock();
+      joinVoiceChannelMock.mockReturnValueOnce(connection);
+      const manager = createManager();
+
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(
+        "g1",
+      ) as
+        | {
+            guildId: string;
+            channelId: string;
+            capture: {
+              activeSpeakers: Set<string>;
+              activeCaptureStreams: Map<
+                string,
+                { generation: number; stream: { destroy: () => void } }
+              >;
+              captureFinalizeTimers: Map<string, unknown>;
+              captureGenerations: Map<string, number>;
+            };
+          }
+        | undefined;
+      expect(entry).toBeDefined();
+
+      const firstStream = { destroy: vi.fn() };
+      entry?.capture.activeSpeakers.add("u1");
+      entry?.capture.captureGenerations.set("u1", 1);
+      entry?.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
+
+      (
+        manager as unknown as {
+          scheduleCaptureFinalize: (entry: unknown, userId: string, reason: string) => void;
+        }
+      ).scheduleCaptureFinalize(entry, "u1", "test");
+
+      await vi.advanceTimersByTimeAsync(1_200);
+
+      expect(firstStream.destroy).toHaveBeenCalledTimes(1);
+      expect(entry?.capture.activeSpeakers.has("u1")).toBe(false);
+
+      const secondStream = {
+        on: vi.fn(),
+        destroy: vi.fn(),
+        async *[Symbol.asyncIterator]() {},
+      };
+      connection.receiver.subscribe.mockReturnValueOnce(secondStream);
+
+      await (
+        manager as unknown as {
+          handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+        }
+      ).handleSpeakingStart(entry, "u1");
+
+      expect(connection.receiver.subscribe).toHaveBeenCalledWith(
+        "u1",
+        expect.objectContaining({ end: { behavior: "Manual" } }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("passes senderIsOwner=true for allowlisted voice speakers", async () => {
@@ -532,5 +679,18 @@ describe("DiscordVoiceManager", () => {
 
     expect(client.fetchGuild).toHaveBeenCalledWith("g1");
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("DiscordVoiceReadyListener: propagates autoJoin errors fire-and-forget without throwing", async () => {
+    const manager = createManager();
+    const autoJoinSpy = vi
+      .spyOn(manager, "autoJoin")
+      .mockRejectedValue(new Error("autoJoin rejected"));
+
+    const { DiscordVoiceReadyListener } = managerModule;
+    const listener = new DiscordVoiceReadyListener(manager);
+
+    await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
+    expect(autoJoinSpy).toHaveBeenCalledTimes(1);
   });
 });

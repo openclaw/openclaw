@@ -1,7 +1,8 @@
 // Public speech helpers for bundled or third-party plugins.
 //
-// Keep this surface neutral. Provider plugins should not need to know about the
-// bundled `speech-core` plugin id just to consume shared speech types/helpers.
+// Keep this surface provider-facing: types, validation, directive parsing, and
+// registry helpers. Runtime synthesis lives on `api.runtime.tts` or narrower
+// core/runtime seams, not here.
 
 export type { SpeechProviderPlugin } from "../plugins/types.js";
 export type {
@@ -22,14 +23,6 @@ export type {
   TtsDirectiveParseResult,
 } from "../tts/provider-types.js";
 
-export {
-  scheduleCleanup,
-  summarizeText,
-  normalizeApplyTextNormalization,
-  normalizeLanguageCode,
-  normalizeSeed,
-  requireInRange,
-} from "../tts/tts-core.js";
 export { parseTtsDirectives } from "../tts/directives.js";
 export {
   canonicalizeSpeechProviderId,
@@ -39,8 +32,23 @@ export {
 } from "../tts/provider-registry.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
 export {
+  asBoolean,
+  asFiniteNumber,
   asObject,
+  assertOkOrThrowProviderError,
+  createProviderHttpError,
+  extractProviderErrorDetail,
+  extractProviderRequestId,
+  formatProviderHttpErrorMessage,
+  formatProviderErrorPayload,
   readResponseTextLimited,
   trimToUndefined,
   truncateErrorDetail,
-} from "../tts/provider-error-utils.js";
+} from "../agents/provider-http-errors.js";
+export {
+  normalizeApplyTextNormalization,
+  normalizeLanguageCode,
+  normalizeSeed,
+  requireInRange,
+  scheduleCleanup,
+} from "../tts/tts-provider-helpers.js";

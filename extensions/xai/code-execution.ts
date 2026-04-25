@@ -1,27 +1,13 @@
-import { Type } from "@sinclair/typebox";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  jsonResult,
-  readConfiguredSecretString,
-  readProviderEnvValue,
-  readStringParam,
-  resolveProviderWebSearchPluginConfig,
-} from "openclaw/plugin-sdk/provider-web-search";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { Type } from "typebox";
 import {
   buildXaiCodeExecutionPayload,
   requestXaiCodeExecution,
   resolveXaiCodeExecutionMaxTurns,
   resolveXaiCodeExecutionModel,
 } from "./src/code-execution-shared.js";
-
-type XaiPluginConfig = NonNullable<
-  NonNullable<OpenClawConfig["plugins"]>["entries"]
->["xai"] extends {
-  config?: infer Config;
-}
-  ? Config
-  : undefined;
+import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 
 type CodeExecutionConfig = {
   enabled?: boolean;
@@ -36,24 +22,19 @@ function readCodeExecutionConfigRecord(
   return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
 }
 
-function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
+function readPluginCodeExecutionConfig(cfg?: unknown): CodeExecutionConfig | undefined {
+  if (!cfg || typeof cfg !== "object") {
     return undefined;
   }
-  const grok = (search as Record<string, unknown>).grok;
-  return readConfiguredSecretString(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-    "tools.web.search.grok.apiKey",
-  );
-}
-
-function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfig | undefined {
-  const entries = cfg?.plugins?.entries;
-  if (!entries || typeof entries !== "object") {
+  const entries = (cfg as Record<string, unknown>).plugins;
+  const pluginEntries =
+    entries && typeof entries === "object"
+      ? ((entries as Record<string, unknown>).entries as Record<string, unknown> | undefined)
+      : undefined;
+  if (!pluginEntries) {
     return undefined;
   }
-  const xaiEntry = (entries as Record<string, unknown>).xai;
+  const xaiEntry = pluginEntries.xai;
   if (!xaiEntry || typeof xaiEntry !== "object") {
     return undefined;
   }
@@ -68,34 +49,21 @@ function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfi
   return codeExecution as CodeExecutionConfig;
 }
 
-function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
-  return (
-    readConfiguredSecretString(
-      resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")
-        ?.apiKey,
-      "plugins.entries.xai.config.webSearch.apiKey",
-    ) ?? readLegacyGrokApiKey(cfg)
-  );
-}
-
 function resolveCodeExecutionEnabled(params: {
-  sourceConfig?: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig;
+  sourceConfig?: unknown;
+  runtimeConfig?: unknown;
   config?: CodeExecutionConfig;
 }): boolean {
-  if (readCodeExecutionConfigRecord(params.config)?.enabled === false) {
-    return false;
-  }
-  return Boolean(
-    resolveFallbackXaiApiKey(params.runtimeConfig) ??
-    resolveFallbackXaiApiKey(params.sourceConfig) ??
-    readProviderEnvValue(["XAI_API_KEY"]),
-  );
+  return isXaiToolEnabled({
+    enabled: readCodeExecutionConfigRecord(params.config)?.enabled as boolean | undefined,
+    runtimeConfig: params.runtimeConfig as never,
+    sourceConfig: params.sourceConfig as never,
+  });
 }
 
 export function createCodeExecutionTool(options?: {
-  config?: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig | null;
+  config?: unknown;
+  runtimeConfig?: Record<string, unknown> | null;
 }) {
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   const codeExecutionConfig =
@@ -123,10 +91,10 @@ export function createCodeExecutionTool(options?: {
       }),
     }),
     execute: async (_toolCallId: string, args: Record<string, unknown>) => {
-      const apiKey =
-        resolveFallbackXaiApiKey(runtimeConfig ?? undefined) ??
-        resolveFallbackXaiApiKey(options?.config) ??
-        readProviderEnvValue(["XAI_API_KEY"]);
+      const apiKey = resolveXaiToolApiKey({
+        runtimeConfig: (runtimeConfig ?? undefined) as never,
+        sourceConfig: options?.config as never,
+      });
       if (!apiKey) {
         return jsonResult({
           error: "missing_xai_api_key",

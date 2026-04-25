@@ -35,6 +35,7 @@ import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import { getAvailableCommands } from "./commands.js";
 import {
@@ -55,15 +56,24 @@ const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
 const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
 const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
+const ACP_TRACE_LEVEL_CONFIG_ID = "trace_level";
 const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
 const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
+const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
+
+type DisconnectContext = {
+  generation: number;
+  reason: string;
+};
 
 type PendingPrompt = {
   sessionId: string;
   sessionKey: string;
   idempotencyKey: string;
+  sendAccepted?: boolean;
+  disconnectContext?: DisconnectContext;
   resolve: (response: PromptResponse) => void;
   reject: (err: Error) => void;
   sentTextLength?: number;
@@ -95,6 +105,7 @@ type GatewaySessionPresentationRow = Pick<
   | "modelProvider"
   | "model"
   | "verboseLevel"
+  | "traceLevel"
   | "reasoningLevel"
   | "responseUsage"
   | "elevatedLevel"
@@ -133,9 +144,18 @@ function isAdminScopeProvenanceRejection(err: unknown): boolean {
   );
 }
 
+function isGatewayCloseError(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith("gateway closed (");
+}
+
 type SessionSnapshot = SessionPresentation & {
   metadata?: SessionMetadata;
   usage?: SessionUsageSnapshot;
+};
+
+type AgentWaitResult = {
+  status?: "ok" | "error" | "timeout";
+  error?: string;
 };
 
 type GatewayTranscriptMessage = {
@@ -215,7 +235,7 @@ function buildSessionPresentation(params: {
     ...params.overrides,
   };
   const availableLevelIds: string[] = [...listThinkingLevels(row.modelProvider, row.model)];
-  const currentModeId = row.thinkingLevel?.trim() || "adaptive";
+  const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
   if (!availableLevelIds.includes(currentModeId)) {
     availableLevelIds.push(currentModeId);
   }
@@ -251,14 +271,21 @@ function buildSessionPresentation(params: {
       name: "Tool verbosity",
       description:
         "Controls how much tool progress and output detail OpenClaw keeps enabled for the session.",
-      currentValue: row.verboseLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.verboseLevel) || "off",
       values: ["off", "on", "full"],
+    }),
+    buildSelectConfigOption({
+      id: ACP_TRACE_LEVEL_CONFIG_ID,
+      name: "Plugin trace",
+      description: "Controls whether plugin-owned trace lines are shown for the session.",
+      currentValue: normalizeOptionalString(row.traceLevel) || "off",
+      values: ["off", "on"],
     }),
     buildSelectConfigOption({
       id: ACP_REASONING_LEVEL_CONFIG_ID,
       name: "Reasoning stream",
       description: "Controls whether reasoning-capable models emit reasoning text for the session.",
-      currentValue: row.reasoningLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.reasoningLevel) || "off",
       values: ["off", "on", "stream"],
     }),
     buildSelectConfigOption({
@@ -266,14 +293,14 @@ function buildSessionPresentation(params: {
       name: "Usage detail",
       description:
         "Controls how much usage information OpenClaw attaches to responses for the session.",
-      currentValue: row.responseUsage?.trim() || "off",
+      currentValue: normalizeOptionalString(row.responseUsage) || "off",
       values: ["off", "tokens", "full"],
     }),
     buildSelectConfigOption({
       id: ACP_ELEVATED_LEVEL_CONFIG_ID,
       name: "Elevated actions",
       description: "Controls how aggressively the session allows elevated execution behavior.",
-      currentValue: row.elevatedLevel?.trim() || "off",
+      currentValue: normalizeOptionalString(row.elevatedLevel) || "off",
       values: ["off", "on", "ask", "full"],
     }),
   ];
@@ -333,9 +360,9 @@ function buildSessionMetadata(params: {
   sessionKey: string;
 }): SessionMetadata {
   const title =
-    params.row?.derivedTitle?.trim() ||
-    params.row?.displayName?.trim() ||
-    params.row?.label?.trim() ||
+    normalizeOptionalString(params.row?.derivedTitle) ||
+    normalizeOptionalString(params.row?.displayName) ||
+    normalizeOptionalString(params.row?.label) ||
     params.sessionKey;
   const updatedAt =
     typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
@@ -398,6 +425,17 @@ export class AcpGatewayAgent implements Agent {
   private sessionStore: AcpSessionStore;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
+  private disconnectTimer: NodeJS.Timeout | null = null;
+  private activeDisconnectContext: DisconnectContext | null = null;
+  private disconnectGeneration = 0;
+
+  private getPendingPrompt(sessionId: string, runId: string): PendingPrompt | undefined {
+    const pending = this.pendingPrompts.get(sessionId);
+    if (pending?.idempotencyKey !== runId) {
+      return undefined;
+    }
+    return pending;
+  }
 
   constructor(
     connection: AgentSideConnection,
@@ -427,15 +465,29 @@ export class AcpGatewayAgent implements Agent {
 
   handleGatewayReconnect(): void {
     this.log("gateway reconnected");
+    const disconnectContext = this.activeDisconnectContext;
+    this.activeDisconnectContext = null;
+    if (!disconnectContext) {
+      return;
+    }
+    void this.reconcilePendingPrompts(disconnectContext.generation, false);
   }
 
   handleGatewayDisconnect(reason: string): void {
     this.log(`gateway disconnected: ${reason}`);
-    for (const pending of this.pendingPrompts.values()) {
-      pending.reject(new Error(`Gateway disconnected: ${reason}`));
-      this.sessionStore.clearActiveRun(pending.sessionId);
+    const disconnectContext = {
+      generation: this.disconnectGeneration + 1,
+      reason,
+    };
+    this.disconnectGeneration = disconnectContext.generation;
+    this.activeDisconnectContext = disconnectContext;
+    if (this.pendingPrompts.size === 0) {
+      return;
     }
-    this.pendingPrompts.clear();
+    for (const pending of this.pendingPrompts.values()) {
+      pending.disconnectContext = disconnectContext;
+    }
+    this.armDisconnectTimer(disconnectContext);
   }
 
   async handleGatewayEvent(evt: EventFrame): Promise<void> {
@@ -672,9 +724,13 @@ export class AcpGatewayAgent implements Agent {
         sessionId: params.sessionId,
         sessionKey: session.sessionKey,
         idempotencyKey: runId,
+        disconnectContext: this.activeDisconnectContext ?? undefined,
         resolve,
         reject,
       });
+      if (this.activeDisconnectContext && !this.disconnectTimer) {
+        this.armDisconnectTimer(this.activeDisconnectContext);
+      }
 
       const sendWithProvenanceFallback = async () => {
         try {
@@ -685,14 +741,22 @@ export class AcpGatewayAgent implements Agent {
               systemInputProvenance,
               systemProvenanceReceipt,
             },
-            { expectFinal: true },
+            { timeoutMs: null },
           );
+          const pending = this.getPendingPrompt(params.sessionId, runId);
+          if (pending) {
+            pending.sendAccepted = true;
+          }
         } catch (err) {
           if (
             (systemInputProvenance || systemProvenanceReceipt) &&
             isAdminScopeProvenanceRejection(err)
           ) {
-            await this.gateway.request("chat.send", requestParams, { expectFinal: true });
+            await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
+            const pending = this.getPendingPrompt(params.sessionId, runId);
+            if (pending) {
+              pending.sendAccepted = true;
+            }
             return;
           }
           throw err;
@@ -700,8 +764,14 @@ export class AcpGatewayAgent implements Agent {
       };
 
       void sendWithProvenanceFallback().catch((err) => {
+        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
+          return;
+        }
         this.pendingPrompts.delete(params.sessionId);
         this.sessionStore.clearActiveRun(params.sessionId);
+        if (this.pendingPrompts.size === 0) {
+          this.clearDisconnectTimer();
+        }
         reject(err instanceof Error ? err : new Error(String(err)));
       });
     });
@@ -733,6 +803,9 @@ export class AcpGatewayAgent implements Agent {
 
     if (pending) {
       this.pendingPrompts.delete(params.sessionId);
+      if (this.pendingPrompts.size === 0) {
+        this.clearDisconnectTimer();
+      }
       pending.resolve({ stopReason: "cancelled" });
     }
   }
@@ -892,11 +965,9 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     if (state === "error") {
-      // ACP has no explicit "server_error" stop reason.  Use "end_turn" so clients
-      // do not treat transient backend errors (timeouts, rate-limits) as deliberate
-      // refusals.  TODO: when ChatEventSchema gains a structured errorKind field
-      // (e.g. "refusal" | "timeout" | "rate_limit"), use it to distinguish here.
-      void this.finishPrompt(pending.sessionId, pending, "end_turn");
+      const errorKind = payload.errorKind as string | undefined;
+      const stopReason: StopReason = errorKind === "refusal" ? "refusal" : "end_turn";
+      void this.finishPrompt(pending.sessionId, pending, stopReason);
     }
   }
 
@@ -958,6 +1029,9 @@ export class AcpGatewayAgent implements Agent {
   ): Promise<void> {
     this.pendingPrompts.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+    }
     const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
     try {
       await this.sendSessionSnapshotUpdate(sessionId, sessionSnapshot, {
@@ -980,6 +1054,157 @@ export class AcpGatewayAgent implements Agent {
       return pending;
     }
     return undefined;
+  }
+
+  private clearDisconnectTimer(): void {
+    if (!this.disconnectTimer) {
+      return;
+    }
+    clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = null;
+  }
+
+  private armDisconnectTimer(disconnectContext: DisconnectContext): void {
+    this.clearDisconnectTimer();
+    this.disconnectTimer = setTimeout(() => {
+      this.disconnectTimer = null;
+      void this.reconcilePendingPrompts(disconnectContext.generation, true);
+    }, ACP_GATEWAY_DISCONNECT_GRACE_MS);
+    this.disconnectTimer.unref?.();
+  }
+
+  private rejectPendingPrompt(pending: PendingPrompt, error: Error): void {
+    const currentPending = this.getPendingPrompt(pending.sessionId, pending.idempotencyKey);
+    if (currentPending !== pending) {
+      return;
+    }
+    this.pendingPrompts.delete(pending.sessionId);
+    this.sessionStore.clearActiveRun(pending.sessionId);
+    if (this.pendingPrompts.size === 0) {
+      this.clearDisconnectTimer();
+    }
+    pending.reject(error);
+  }
+
+  private clearPendingDisconnectState(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): void {
+    if (pending.disconnectContext !== disconnectContext) {
+      return;
+    }
+    pending.disconnectContext = undefined;
+  }
+
+  private shouldRejectPendingAtDisconnectDeadline(
+    pending: PendingPrompt,
+    disconnectContext: DisconnectContext,
+  ): boolean {
+    return (
+      pending.disconnectContext === disconnectContext &&
+      (!pending.sendAccepted ||
+        this.activeDisconnectContext?.generation === disconnectContext.generation)
+    );
+  }
+
+  private async reconcilePendingPrompts(
+    observedDisconnectGeneration: number,
+    deadlineExpired: boolean,
+  ): Promise<void> {
+    if (this.pendingPrompts.size === 0) {
+      if (this.disconnectGeneration === observedDisconnectGeneration) {
+        this.clearDisconnectTimer();
+      }
+      return;
+    }
+
+    const pendingEntries = [...this.pendingPrompts.entries()];
+    let keepDisconnectTimer = false;
+    for (const [sessionId, pending] of pendingEntries) {
+      if (this.pendingPrompts.get(sessionId) !== pending) {
+        continue;
+      }
+      if (pending.disconnectContext?.generation !== observedDisconnectGeneration) {
+        continue;
+      }
+      const shouldKeepPending = await this.reconcilePendingPrompt(
+        sessionId,
+        pending,
+        deadlineExpired,
+      );
+      if (shouldKeepPending) {
+        keepDisconnectTimer = true;
+      }
+    }
+
+    if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
+      this.clearDisconnectTimer();
+    }
+  }
+
+  private async reconcilePendingPrompt(
+    sessionId: string,
+    pending: PendingPrompt,
+    deadlineExpired: boolean,
+  ): Promise<boolean> {
+    const disconnectContext = pending.disconnectContext;
+    if (!disconnectContext) {
+      return false;
+    }
+    let result: AgentWaitResult | undefined;
+    try {
+      result = await this.gateway.request(
+        "agent.wait",
+        {
+          runId: pending.idempotencyKey,
+          timeoutMs: 0,
+        },
+        { timeoutMs: null },
+      );
+    } catch (err) {
+      this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
+      if (deadlineExpired) {
+        if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
+          this.rejectPendingPrompt(
+            pending,
+            new Error(`Gateway disconnected: ${disconnectContext.reason}`),
+          );
+          return false;
+        }
+        this.clearPendingDisconnectState(pending, disconnectContext);
+        return false;
+      }
+      return true;
+    }
+
+    const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
+    if (!currentPending) {
+      return false;
+    }
+    if (result?.status === "ok") {
+      await this.finishPrompt(sessionId, currentPending, "end_turn");
+      return false;
+    }
+    if (result?.status === "error") {
+      void this.finishPrompt(sessionId, currentPending, "end_turn");
+      return false;
+    }
+    if (deadlineExpired) {
+      if (this.shouldRejectPendingAtDisconnectDeadline(currentPending, disconnectContext)) {
+        const currentDisconnectContext = currentPending.disconnectContext;
+        if (!currentDisconnectContext) {
+          return false;
+        }
+        this.rejectPendingPrompt(
+          currentPending,
+          new Error(`Gateway disconnected: ${currentDisconnectContext.reason}`),
+        );
+        return false;
+      }
+      this.clearPendingDisconnectState(currentPending, disconnectContext);
+      return false;
+    }
+    return true;
   }
 
   private async sendAvailableCommands(sessionId: string): Promise<void> {
@@ -1034,6 +1259,7 @@ export class AcpGatewayAgent implements Agent {
       model: session.model,
       fastMode: session.fastMode,
       verboseLevel: session.verboseLevel,
+      traceLevel: session.traceLevel,
       reasoningLevel: session.reasoningLevel,
       responseUsage: session.responseUsage,
       elevatedLevel: session.elevatedLevel,
@@ -1071,6 +1297,11 @@ export class AcpGatewayAgent implements Agent {
           patch: { verboseLevel: value },
           overrides: { verboseLevel: value },
         };
+      case ACP_TRACE_LEVEL_CONFIG_ID:
+        return {
+          patch: { traceLevel: value },
+          overrides: { traceLevel: value },
+        };
       case ACP_REASONING_LEVEL_CONFIG_ID:
         return {
           patch: { reasoningLevel: value },
@@ -1092,7 +1323,7 @@ export class AcpGatewayAgent implements Agent {
   }
 
   private async getSessionTranscript(sessionKey: string): Promise<GatewayTranscriptMessage[]> {
-    const result = await this.gateway.request<{ messages?: unknown[] }>("sessions.get", {
+    const result = await this.gateway.request("sessions.get", {
       key: sessionKey,
       limit: ACP_LOAD_SESSION_REPLAY_LIMIT,
     });

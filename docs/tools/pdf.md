@@ -1,13 +1,11 @@
 ---
-title: "PDF Tool"
 summary: "Analyze one or more PDF documents with native provider support and extraction fallback"
+title: "PDF tool"
 read_when:
   - You want to analyze PDFs from agents
   - You need exact pdf tool parameters and limits
   - You are debugging native PDF mode vs extraction fallback
 ---
-
-# PDF tool
 
 `pdf` analyzes one or more PDF documents and returns text.
 
@@ -23,18 +21,45 @@ The tool is only registered when OpenClaw can resolve a PDF-capable model config
 
 1. `agents.defaults.pdfModel`
 2. fallback to `agents.defaults.imageModel`
-3. fallback to best effort provider defaults based on available auth
+3. fallback to the agent's resolved session/default model
+4. if native-PDF providers are auth-backed, prefer them ahead of generic image fallback candidates
 
 If no usable model can be resolved, the `pdf` tool is not exposed.
 
+Availability notes:
+
+- The fallback chain is auth-aware. A configured `provider/model` only counts if
+  OpenClaw can actually authenticate that provider for the agent.
+- Native PDF providers are currently **Anthropic** and **Google**.
+- If the resolved session/default provider already has a configured vision/PDF
+  model, the PDF tool reuses that before falling back to other auth-backed
+  providers.
+
 ## Input reference
 
-- `pdf` (`string`): one PDF path or URL
-- `pdfs` (`string[]`): multiple PDF paths or URLs, up to 10 total
-- `prompt` (`string`): analysis prompt, default `Analyze this PDF document.`
-- `pages` (`string`): page filter like `1-5` or `1,3,7-9`
-- `model` (`string`): optional model override (`provider/model`)
-- `maxBytesMb` (`number`): per-PDF size cap in MB
+<ParamField path="pdf" type="string">
+One PDF path or URL.
+</ParamField>
+
+<ParamField path="pdfs" type="string[]">
+Multiple PDF paths or URLs, up to 10 total.
+</ParamField>
+
+<ParamField path="prompt" type="string" default="Analyze this PDF document.">
+Analysis prompt.
+</ParamField>
+
+<ParamField path="pages" type="string">
+Page filter like `1-5` or `1,3,7-9`.
+</ParamField>
+
+<ParamField path="model" type="string">
+Optional model override in `provider/model` form.
+</ParamField>
+
+<ParamField path="maxBytesMb" type="number">
+Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxBytesMb` or `10`.
+</ParamField>
 
 Input notes:
 
@@ -48,12 +73,14 @@ Input notes:
 - local file path (including `~` expansion)
 - `file://` URL
 - `http://` and `https://` URL
+- OpenClaw-managed inbound refs such as `media://inbound/<id>`
 
 Reference notes:
 
 - Other URI schemes (for example `ftp://`) are rejected with `unsupported_pdf_reference`.
 - In sandbox mode, remote `http(s)` URLs are rejected.
 - With workspace-only file policy enabled, local file paths outside allowed roots are rejected.
+- Managed inbound refs and replayed paths under OpenClaw's inbound media store are allowed with workspace-only file policy.
 
 ## Execution modes
 
@@ -65,6 +92,8 @@ The tool sends raw PDF bytes directly to provider APIs.
 Native mode limits:
 
 - `pages` is not supported. If set, the tool returns an error.
+- Multi-PDF input is supported; each PDF is sent as a native document block /
+  inline PDF part before the prompt.
 
 ### Extraction fallback mode
 
@@ -80,7 +109,12 @@ Fallback details:
 
 - Page image extraction uses a pixel budget of `4,000,000`.
 - If the target model does not support image input and there is no extractable text, the tool errors.
-- Extraction fallback requires `pdfjs-dist` (and `@napi-rs/canvas` for image rendering).
+- If text extraction succeeds but image extraction would require vision on a
+  text-only model, OpenClaw drops the rendered images and continues with the
+  extracted text.
+- Extraction fallback uses the bundled `document-extract` plugin. The plugin owns
+  `pdfjs-dist`; `@napi-rs/canvas` is used only when image rendering fallback is
+  available.
 
 ## Config
 
@@ -90,7 +124,7 @@ Fallback details:
     defaults: {
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["openai/gpt-5-mini"],
+        fallbacks: ["openai/gpt-5.4-mini"],
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
@@ -150,7 +184,7 @@ Page-filtered fallback model:
 {
   "pdf": "https://example.com/report.pdf",
   "pages": "1-3,7",
-  "model": "openai/gpt-5-mini",
+  "model": "openai/gpt-5.4-mini",
   "prompt": "Extract only customer-impacting incidents"
 }
 ```
@@ -158,4 +192,4 @@ Page-filtered fallback model:
 ## Related
 
 - [Tools Overview](/tools) — all available agent tools
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — pdfMaxBytesMb and pdfMaxPages config
+- [Configuration Reference](/gateway/config-agents#agent-defaults) — pdfMaxBytesMb and pdfMaxPages config

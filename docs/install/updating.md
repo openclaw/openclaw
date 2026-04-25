@@ -6,8 +6,6 @@ read_when:
 title: "Updating"
 ---
 
-# Updating
-
 Keep OpenClaw up to date.
 
 ## Recommended: `openclaw update`
@@ -26,6 +24,10 @@ openclaw update --tag main
 openclaw update --dry-run   # preview without applying
 ```
 
+`--channel beta` prefers beta, but the runtime falls back to stable/latest when
+the beta tag is missing or older than the latest stable release. Use `--tag beta`
+if you want the raw npm beta dist-tag for a one-off package update.
+
 See [Development channels](/install/development-channels) for channel semantics.
 
 ## Alternative: re-run the installer
@@ -36,7 +38,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 Add `--no-onboard` to skip onboarding. For source installs, pass `--install-method git --no-onboard`.
 
-## Alternative: manual npm or pnpm
+## Alternative: manual npm, pnpm, or bun
 
 ```bash
 npm i -g openclaw@latest
@@ -45,6 +47,45 @@ npm i -g openclaw@latest
 ```bash
 pnpm add -g openclaw@latest
 ```
+
+```bash
+bun add -g openclaw@latest
+```
+
+### Global npm installs and runtime dependencies
+
+OpenClaw treats packaged global installs as read-only at runtime, even when the
+global package directory is writable by the current user. Bundled plugin runtime
+dependencies are staged into a writable runtime directory instead of mutating the
+package tree. This keeps `openclaw update` from racing with a running gateway or
+local agent that is repairing plugin dependencies during the same install.
+
+Some Linux npm setups install global packages under root-owned directories such
+as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout through the
+same external staging path.
+
+For hardened systemd units, set a writable stage directory that is included in
+`ReadWritePaths`:
+
+```ini
+Environment=OPENCLAW_PLUGIN_STAGE_DIR=/var/lib/openclaw/plugin-runtime-deps
+ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
+```
+
+If `OPENCLAW_PLUGIN_STAGE_DIR` is not set, OpenClaw uses `$STATE_DIRECTORY` when
+systemd provides it, then falls back to `~/.openclaw/plugin-runtime-deps`.
+
+### Bundled plugin runtime dependencies
+
+Packaged installs keep bundled plugin runtime dependencies out of the read-only
+package tree. On startup and during `openclaw doctor --fix`, OpenClaw repairs
+runtime dependencies only for bundled plugins that are active in config, active
+through legacy channel config, or enabled by their bundled manifest default.
+
+Explicit disablement wins. A disabled plugin or channel does not get its
+runtime dependencies repaired just because it exists in the package. External
+plugins and custom load paths still use `openclaw plugins install` or
+`openclaw plugins update`.
 
 ## Auto-updater
 
@@ -124,6 +165,7 @@ To return to latest: `git checkout main && git pull`.
 ## If you are stuck
 
 - Run `openclaw doctor` again and read the output carefully.
+- For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
 

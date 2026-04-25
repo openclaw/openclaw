@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { runBrowserResizeWithOutput } from "../browser-cli-resize.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
@@ -24,7 +25,7 @@ export function registerBrowserNavigationCommands(
             query: profile ? { profile } : undefined,
             body: {
               url,
-              targetId: opts.targetId?.trim() || undefined,
+              targetId: normalizeOptionalString(opts.targetId),
             },
           },
           { timeoutMs: 20000 },

@@ -15,6 +15,7 @@ let pageState: {
 };
 
 const sessionMocks = vi.hoisted(() => ({
+  assertPageNavigationCompletedSafely: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
     if (!currentPage) {
       throw new Error("missing page");
@@ -23,6 +24,13 @@ const sessionMocks = vi.hoisted(() => ({
   }),
   ensurePageState: vi.fn(() => pageState),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
+  gotoPageWithNavigationGuard: vi.fn(
+    async (opts: {
+      url: string;
+      timeoutMs: number;
+      page: { goto: (url: string, init: { timeout: number }) => Promise<unknown> };
+    }) => (await opts.page.goto(opts.url, { timeout: opts.timeoutMs })) ?? null,
+  ),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
@@ -34,10 +42,26 @@ const sessionMocks = vi.hoisted(() => ({
   rememberRoleRefsForTarget: vi.fn(() => {}),
 }));
 
+const navigationGuardMocks = vi.hoisted(() => ({
+  assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => ({ ssrfPolicy })),
+}));
+
 vi.mock("./pw-session.js", () => sessionMocks);
+vi.mock("./navigation-guard.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    ...navigationGuardMocks,
+  };
+});
 
 export function getPwToolsCoreSessionMocks() {
   return sessionMocks;
+}
+
+export function getPwToolsCoreNavigationGuardMocks() {
+  return navigationGuardMocks;
 }
 
 export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) {
@@ -60,6 +84,9 @@ export function installPwToolsCoreTestHooks() {
     };
 
     for (const fn of Object.values(sessionMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(navigationGuardMocks)) {
       fn.mockClear();
     }
   });

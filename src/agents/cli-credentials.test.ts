@@ -251,6 +251,7 @@ describe("cli credentials", () => {
       expect(cmd).toContain(accountHash);
       return JSON.stringify({
         tokens: {
+          id_token: "keychain-id-token",
           access_token: createJwtWithExp(expSeconds),
           refresh_token: "keychain-refresh",
         },
@@ -265,6 +266,7 @@ describe("cli credentials", () => {
       refresh: "keychain-refresh",
       provider: "openai-codex",
       expires: expSeconds * 1000,
+      idToken: "keychain-id-token",
     });
   });
 
@@ -282,6 +284,7 @@ describe("cli credentials", () => {
       authPath,
       JSON.stringify({
         tokens: {
+          id_token: "file-id-token",
           access_token: createJwtWithExp(expSeconds),
           refresh_token: "file-refresh",
         },
@@ -296,6 +299,7 @@ describe("cli credentials", () => {
       refresh: "file-refresh",
       provider: "openai-codex",
       expires: expSeconds * 1000,
+      idToken: "file-id-token",
     });
   });
 

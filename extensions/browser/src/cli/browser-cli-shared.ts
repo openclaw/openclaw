@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
 export type BrowserParentOpts = GatewayRpcOpts & {
@@ -75,7 +76,7 @@ export async function callBrowserResize(
         kind: "resize",
         width: params.width,
         height: params.height,
-        targetId: params.targetId?.trim() || undefined,
+        targetId: normalizeOptionalString(params.targetId),
       },
     },
     extra,

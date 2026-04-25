@@ -26,6 +26,10 @@ function loadRootAliasWithStubs(options?: {
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
   aliasPath?: string;
+  packageExports?: Record<string, unknown>;
+  platform?: string;
+  existingPaths?: string[];
+  privateLocalOnlySubpaths?: unknown;
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
@@ -39,6 +43,7 @@ function loadRootAliasWithStubs(options?: {
     {
       process: {
         env: options?.env ?? {},
+        platform: options?.platform ?? "darwin",
       },
     },
     { filename: rootAliasPath },
@@ -57,15 +62,27 @@ function loadRootAliasWithStubs(options?: {
     }
     if (id === "node:fs") {
       return {
-        readFileSync: () =>
-          JSON.stringify({
+        readFileSync: (targetPath: string) => {
+          if (
+            targetPath.endsWith(
+              path.join("scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+            )
+          ) {
+            return JSON.stringify(options?.privateLocalOnlySubpaths ?? []);
+          }
+          return JSON.stringify({
             exports: {
               "./plugin-sdk/group-access": { default: "./dist/plugin-sdk/group-access.js" },
+              ...options?.packageExports,
             },
-          }),
+          });
+        },
         existsSync: (targetPath: string) => {
           if (targetPath.endsWith(path.join("dist", "infra", "diagnostic-events.js"))) {
             return options?.distExists ?? false;
+          }
+          if (options?.existingPaths?.includes(targetPath)) {
+            return true;
           }
           return options?.distExists ?? false;
         },
@@ -114,6 +131,26 @@ function createPackageRoot() {
 
 function createDistAliasPath() {
   return path.join(createPackageRoot(), "dist", "plugin-sdk", "root-alias.cjs");
+}
+
+function loadDiagnosticEventsAlias(distEntries: string[]) {
+  return loadRootAliasWithStubs({
+    aliasPath: createDistAliasPath(),
+    distExists: false,
+    distEntries,
+    monolithicExports: {
+      r: (): (() => void) => () => undefined,
+      slowHelper: (): string => "loaded",
+    },
+  });
+}
+
+function expectDiagnosticEventAccessor(lazyModule: ReturnType<typeof loadRootAliasWithStubs>) {
+  expect(
+    typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
+      () => undefined,
+    ),
+  ).toBe("function");
 }
 
 describe("plugin-sdk root alias", () => {
@@ -206,6 +243,18 @@ describe("plugin-sdk root alias", () => {
       },
       expectedTryNative: false,
     },
+    {
+      name: "prefers source loading on Windows even when compat resolves to dist",
+      options: {
+        distExists: true,
+        env: { NODE_ENV: "production" },
+        platform: "win32",
+        monolithicExports: {
+          slowHelper: (): string => "loaded",
+        },
+      },
+      expectedTryNative: false,
+    },
   ])("$name", ({ options, expectedTryNative }) => {
     const lazyModule = loadRootAliasWithStubs(options);
 
@@ -239,29 +288,134 @@ describe("plugin-sdk root alias", () => {
     );
   });
 
-  it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
-    const packageRoot = createPackageRoot();
-    const distAliasPath = createDistAliasPath();
+  it("builds scoped and unscoped plugin-sdk aliases for jiti loads", () => {
     const lazyModule = loadRootAliasWithStubs({
-      aliasPath: distAliasPath,
-      distExists: false,
-      distEntries: ["diagnostic-events-W3Hz61fI.js"],
+      distExists: true,
       monolithicExports: {
-        r: (): (() => void) => () => undefined,
         slowHelper: (): string => "loaded",
       },
     });
 
-    expect(
-      typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
-        () => undefined,
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    expect(lazyModule.createJitiOptions.at(-1)?.alias).toMatchObject({
+      "openclaw/plugin-sdk": rootAliasPath,
+      "@openclaw/plugin-sdk": rootAliasPath,
+      "openclaw/plugin-sdk/group-access": expect.stringContaining(
+        path.join("src", "plugin-sdk", "group-access.ts"),
       ),
-    ).toBe("function");
+      "@openclaw/plugin-sdk/group-access": expect.stringContaining(
+        path.join("src", "plugin-sdk", "group-access.ts"),
+      ),
+    });
+  });
+
+  it("keeps bootstrap plugin-sdk aliases deterministic and ignores unsafe subpaths", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      distExists: true,
+      packageExports: {
+        "./plugin-sdk/zeta": { default: "./dist/plugin-sdk/zeta.js" },
+        "./plugin-sdk/../escape": { default: "./dist/plugin-sdk/escape.js" },
+        "./plugin-sdk/alpha": { default: "./dist/plugin-sdk/alpha.js" },
+      },
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    const aliasKeys = Object.keys(
+      (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>,
+    );
+    expect(aliasKeys).toEqual([
+      "openclaw/plugin-sdk/alpha",
+      "@openclaw/plugin-sdk/alpha",
+      "openclaw/plugin-sdk/group-access",
+      "@openclaw/plugin-sdk/group-access",
+      "openclaw/plugin-sdk/zeta",
+      "@openclaw/plugin-sdk/zeta",
+      "openclaw/plugin-sdk",
+      "@openclaw/plugin-sdk",
+    ]);
+  });
+
+  it("ignores unsafe private local-only plugin-sdk subpaths in the CJS root alias", () => {
+    const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const lazyModule = loadRootAliasWithStubs({
+      env: { OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" },
+      privateLocalOnlySubpaths: ["qa-lab", "../escape", "nested/path"],
+      existingPaths: [path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts")],
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["openclaw/plugin-sdk/qa-lab"]).toBe(
+      path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts"),
+    );
+    expect(aliasMap["@openclaw/plugin-sdk/qa-lab"]).toBe(
+      path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts"),
+    );
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/../escape");
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/nested/path");
+  });
+
+  it("builds source plugin-sdk subpath aliases through the wider source extension family", () => {
+    const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const lazyModule = loadRootAliasWithStubs({
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+      existingPaths: [path.join(packageRoot, "src", "plugin-sdk", "channel-runtime.mts")],
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    expect(lazyModule.createJitiOptions.at(-1)?.alias).toMatchObject({
+      "openclaw/plugin-sdk/channel-runtime": path.join(
+        packageRoot,
+        "src",
+        "plugin-sdk",
+        "channel-runtime.mts",
+      ),
+      "@openclaw/plugin-sdk/channel-runtime": path.join(
+        packageRoot,
+        "src",
+        "plugin-sdk",
+        "channel-runtime.mts",
+      ),
+    });
+  });
+
+  it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
+    const packageRoot = createPackageRoot();
+    const lazyModule = loadDiagnosticEventsAlias(["diagnostic-events-W3Hz61fI.js"]);
+
+    expectDiagnosticEventAccessor(lazyModule);
     expect(lazyModule.loadedSpecifiers).toContain(
       path.join(packageRoot, "dist", "diagnostic-events-W3Hz61fI.js"),
     );
     expect(lazyModule.loadedSpecifiers).not.toContain(
       path.join(packageRoot, "src", "infra", "diagnostic-events.ts"),
+    );
+  });
+
+  it("chooses hashed dist diagnostic events chunks deterministically", () => {
+    const packageRoot = createPackageRoot();
+    const lazyModule = loadDiagnosticEventsAlias([
+      "diagnostic-events-zeta.js",
+      "diagnostic-events-alpha.js",
+    ]);
+
+    expectDiagnosticEventAccessor(lazyModule);
+    expect(lazyModule.loadedSpecifiers).toContain(
+      path.join(packageRoot, "dist", "diagnostic-events-alpha.js"),
+    );
+    expect(lazyModule.loadedSpecifiers).not.toContain(
+      path.join(packageRoot, "dist", "diagnostic-events-zeta.js"),
     );
   });
 
@@ -311,12 +465,37 @@ describe("plugin-sdk root alias", () => {
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("publishes the Discord plugin-sdk subpath", () => {
+  it("does not publish removed channel-specific plugin-sdk subpaths", () => {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
       exports?: Record<string, unknown>;
     };
 
-    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeDefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/signal"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-core"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-runtime-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-thread-bindings"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-timeouts"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-account"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-session-key"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/signal-account"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/signal-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-account"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-runtime-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-target-parser"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-targets"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-account"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-allow-from"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-auth-presence"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-core"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-shared"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-targets"]).toBeUndefined();
   });
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {

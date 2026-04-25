@@ -2,21 +2,25 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  BUNDLED_PLUGIN_PATH_PREFIX,
-  BUNDLED_PLUGIN_ROOT_DIR,
-  bundledPluginFile,
-} from "../../../../test/helpers/bundled-plugin-paths.js";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugins/public-artifacts.js";
+import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../../test/helpers/plugins/public-artifacts.js";
+import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
-const BUNDLED_EXTENSION_IDS = readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
-  .filter((entry) => entry.isDirectory() && entry.name !== "shared")
-  .map((entry) => entry.name)
-  .toSorted((left, right) => right.length - left.length);
+const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
+const bundledPluginRecords = loadPluginManifestRegistry({
+  cache: true,
+  config: {},
+}).plugins.filter((plugin) => plugin.origin === "bundled");
+const bundledPluginRoots = new Map(
+  bundledPluginRecords.map((plugin) => [plugin.id, plugin.rootDir] as const),
+);
+const BUNDLED_EXTENSION_IDS = [...bundledPluginRoots.keys()].toSorted(
+  (left, right) => right.length - left.length,
+);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -40,6 +44,13 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "zalo",
   "zalouser",
 ]);
+function bundledPluginFile(pluginId: string, relativePath: string): string {
+  const rootDir = bundledPluginRoots.get(pluginId);
+  if (!rootDir) {
+    throw new Error(`missing bundled plugin root for ${pluginId}`);
+  }
+  return normalizePath(resolve(rootDir, relativePath));
+}
 
 type GuardedSource = {
   path: string;
@@ -132,12 +143,7 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   },
   {
     path: bundledPluginFile("signal", "src/setup-surface.ts"),
-    forbiddenPatterns: [
-      /\bdetectBinary\b/,
-      /\binstallSignalCli\b/,
-      /\bformatCliCommand\b/,
-      /\bformatDocsLink\b/,
-    ],
+    forbiddenPatterns: [/\bdetectBinary\b/, /\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
   {
     path: bundledPluginFile("slack", "src/setup-core.ts"),
@@ -225,6 +231,8 @@ const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Direct import avoids a circular init path:
   // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> plugin api barrel -> accounts.ts
   bundledPluginFile("matrix", "src/matrix/accounts.ts"),
+  // Config schema stays on the public SDK seam and is covered by dedicated config guardrails.
+  bundledPluginFile("msteams", "src/config-schema.ts"),
 ] as const;
 
 const sourceTextCache = new Map<string, string>();
@@ -237,6 +245,14 @@ const sourceAnalysisCache = new Map<string, SourceAnalysis>();
 let extensionSourceFilesCache: string[] | null = null;
 let coreSourceFilesCache: string[] | null = null;
 const extensionFilesCache = new Map<string, string[]>();
+const STATIC_FROM_IMPORT_RE =
+  /^\s*import(?:\s+type)?\s+(?!["'])(?:[\s\S]*?)\s+from\s*["']([^"']+)["']/gmu;
+const STATIC_SIDE_EFFECT_IMPORT_RE = /^\s*import\s*["']([^"']+)["']/gmu;
+const RE_EXPORT_STAR_RE =
+  /^\s*export\s+(?:type\s+)?\*\s*(?:as\s+\w+\s+)?from\s*["']([^"']+)["']/gmu;
+const RE_EXPORT_NAMED_RE = /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu;
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gmu;
+const REQUIRE_RE = /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gmu;
 
 type SourceFileCollectorOptions = {
   rootDir: string;
@@ -320,22 +336,18 @@ function readSetupBarrelImportBlock(path: string): string {
 }
 
 function collectExtensionSourceFiles(): string[] {
-  const extensionsDir = normalizePath(resolve(ROOT_DIR, "..", "extensions"));
-  const sharedExtensionsDir = normalizePath(resolve(extensionsDir, "shared"));
-  extensionSourceFilesCache = collectSourceFiles(extensionSourceFilesCache, {
-    rootDir: resolve(ROOT_DIR, "..", "extensions"),
-    shouldSkipPath: (normalizedFullPath) =>
-      normalizedFullPath.includes(sharedExtensionsDir) ||
-      normalizedFullPath.includes(`${extensionsDir}/shared/`),
-    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-      normalizedFullPath.includes(".test.") ||
-      normalizedFullPath.includes(".test-") ||
-      normalizedFullPath.includes(".fixture.") ||
-      normalizedFullPath.includes(".snap") ||
-      normalizedFullPath.includes("test-support") ||
-      entryName === "api.ts" ||
-      entryName === "runtime-api.ts",
-  });
+  if (extensionSourceFilesCache) {
+    return extensionSourceFilesCache;
+  }
+  extensionSourceFilesCache = bundledPluginRecords.flatMap((plugin) =>
+    collectSourceFiles(undefined, {
+      rootDir: plugin.rootDir,
+      shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
+        classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
+        entryName === "api.ts" ||
+        entryName === "runtime-api.ts",
+    }),
+  );
   return extensionSourceFilesCache;
 }
 
@@ -365,16 +377,14 @@ function collectCoreSourceFiles(): string[] {
 
 function collectExtensionFiles(extensionId: string): string[] {
   const cached = extensionFilesCache.get(extensionId);
+  const rootDir = bundledPluginRoots.get(extensionId);
+  if (!rootDir) {
+    return [];
+  }
   const files = collectSourceFiles(cached, {
-    rootDir: resolve(ROOT_DIR, "..", "extensions", extensionId),
+    rootDir,
     shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-      normalizedFullPath.includes(".test.") ||
-      normalizedFullPath.includes(".test-") ||
-      normalizedFullPath.includes(".spec.") ||
-      normalizedFullPath.includes(".fixture.") ||
-      normalizedFullPath.includes(".snap") ||
-      normalizedFullPath.includes("test-support") ||
-      entryName === "test-support.ts" ||
+      classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
       entryName === "runtime-api.ts",
   });
   extensionFilesCache.set(extensionId, files);
@@ -383,16 +393,18 @@ function collectExtensionFiles(extensionId: string): string[] {
 
 function collectModuleSpecifiers(text: string): string[] {
   const patterns = [
-    /\bimport\s*\(\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']\s*\)/g,
-    /\brequire\s*\(\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']\s*\)/g,
-    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']/g,
-    /\bimport\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']/g,
+    DYNAMIC_IMPORT_RE,
+    REQUIRE_RE,
+    STATIC_FROM_IMPORT_RE,
+    STATIC_SIDE_EFFECT_IMPORT_RE,
+    RE_EXPORT_STAR_RE,
+    RE_EXPORT_NAMED_RE,
   ] as const;
   const specifiers = new Set<string>();
   for (const pattern of patterns) {
     for (const match of text.matchAll(pattern)) {
       const specifier = match[1]?.trim();
-      if (specifier) {
+      if (specifier && /\.(?:[cm]?[jt]sx?)$/u.test(specifier)) {
         specifiers.add(specifier);
       }
     }
@@ -416,7 +428,7 @@ function getSourceAnalysis(path: string): SourceAnalysis {
     text,
     importSpecifiers,
     extensionImports: importSpecifiers.filter((specifier) =>
-      specifier.includes(BUNDLED_PLUGIN_PATH_PREFIX),
+      specifier.includes(`/${BUNDLED_PLUGIN_ROOT_DIR}/`),
     ),
   } satisfies SourceAnalysis;
   sourceAnalysisCache.set(fullPath, analysis);
@@ -484,6 +496,26 @@ function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): v
     }
     expect.fail(
       `${file} should not import another bundled plugin facade, got ${specifier}. Promote shared helpers to a neutral plugin-sdk subpath instead.`,
+    );
+  }
+}
+
+function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports: string[]): void {
+  for (const specifier of imports) {
+    if (!specifier.includes("/plugin-sdk/")) {
+      continue;
+    }
+    const targetSubpath = specifier.split("/plugin-sdk/")[1]?.replace(/\.[cm]?[jt]sx?$/u, "") ?? "";
+    const targetExtensionId =
+      [...GUARDED_CHANNEL_EXTENSIONS].find(
+        (extensionId) =>
+          targetSubpath === extensionId || targetSubpath.startsWith(`${extensionId}-`),
+      ) ?? null;
+    if (!targetExtensionId) {
+      continue;
+    }
+    expect.fail(
+      `${file} should not import plugin-specific SDK facades (${specifier}) from core production code. Use a neutral contract surface or plugin hook instead.`,
     );
   }
 }
@@ -564,6 +596,15 @@ describe("channel import guardrails", () => {
   it("keeps core extension imports limited to approved public surfaces", () => {
     for (const file of collectCoreSourceFiles()) {
       expectOnlyApprovedExtensionSeams(file, getSourceAnalysis(file).extensionImports);
+    }
+  });
+
+  it("keeps core production files off plugin-specific sdk facades", () => {
+    for (const file of collectCoreSourceFiles()) {
+      expectCoreSourceStaysOffPluginSpecificSdkFacades(
+        file,
+        getSourceAnalysis(file).importSpecifiers,
+      );
     }
   });
 

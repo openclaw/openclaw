@@ -1,16 +1,15 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { expect, it } from "vitest";
-
 // Narrow public testing surface for plugin authors.
 // Keep this list additive and limited to helpers we are willing to support.
 
 export { removeAckReactionAfterReply, shouldAckReaction } from "../channels/ack-reactions.js";
 export {
-  createSlackOutboundPayloadHarness,
   expectChannelInboundContextContract,
   primeChannelOutboundSendMock,
-} from "../channels/plugins/contracts/suites.js";
+} from "../channels/plugins/contracts/test-helpers.js";
+export {
+  installChannelOutboundPayloadContractSuite,
+  type OutboundPayloadHarnessParams,
+} from "../channels/plugins/contracts/outbound-payload-testkit.js";
 export { buildDispatchInboundCaptureMock } from "../channels/plugins/contracts/inbound-testkit.js";
 export {
   createCliRuntimeCapture,
@@ -20,8 +19,9 @@ export {
   spyRuntimeLogs,
 } from "../cli/test-runtime-capture.js";
 export type { CliMockOutputRuntime, CliRuntimeCapture } from "../cli/test-runtime-capture.js";
-export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-helpers.js";
-export type { ChannelAccountSnapshot, ChannelGatewayContext } from "../channels/plugins/types.js";
+export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-registry.js";
+export type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+export type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { callGateway } from "../gateway/call.js";
 export { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -51,87 +51,12 @@ export { buildCommandTestParams } from "../auto-reply/reply/commands-spawn.test-
 export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
-export {
-  createWhatsAppPollFixture,
-  expectWhatsAppPollSent,
-} from "../test-helpers/whatsapp-outbound.js";
+export { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
+export { installCommonResolveTargetErrorCases } from "../test-helpers/resolve-target-error-cases.js";
 export { sanitizeTerminalText } from "../terminal/safe-text.js";
 export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-
-/** Create a tiny Windows `.cmd` shim fixture for plugin tests that spawn CLIs. */
-export async function createWindowsCmdShimFixture(params: {
-  shimPath: string;
-  scriptPath: string;
-  shimLine: string;
-}): Promise<void> {
-  await fs.mkdir(path.dirname(params.scriptPath), { recursive: true });
-  await fs.mkdir(path.dirname(params.shimPath), { recursive: true });
-  await fs.writeFile(params.scriptPath, "module.exports = {};\n", "utf8");
-  await fs.writeFile(params.shimPath, `@echo off\r\n${params.shimLine}\r\n`, "utf8");
-}
-
-type ResolveTargetMode = "explicit" | "implicit" | "heartbeat";
-
-type ResolveTargetResult = {
-  ok: boolean;
-  to?: string;
-  error?: unknown;
-};
-
-type ResolveTargetFn = (params: {
-  to?: string;
-  mode: ResolveTargetMode;
-  allowFrom: string[];
-}) => ResolveTargetResult;
-
-/** Install a shared test matrix for target-resolution error handling. */
-export function installCommonResolveTargetErrorCases(params: {
-  resolveTarget: ResolveTargetFn;
-  implicitAllowFrom: string[];
-}) {
-  const { resolveTarget, implicitAllowFrom } = params;
-
-  it("should error on normalization failure with allowlist (implicit mode)", () => {
-    const result = resolveTarget({
-      to: "invalid-target",
-      mode: "implicit",
-      allowFrom: implicitAllowFrom,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should error when no target provided with allowlist", () => {
-    const result = resolveTarget({
-      to: undefined,
-      mode: "implicit",
-      allowFrom: implicitAllowFrom,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should error when no target and no allowlist", () => {
-    const result = resolveTarget({
-      to: undefined,
-      mode: "explicit",
-      allowFrom: [],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should handle whitespace-only target", () => {
-    const result = resolveTarget({
-      to: "   ",
-      mode: "explicit",
-      allowFrom: [],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-}
+export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
+export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
+export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
+export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
+export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";

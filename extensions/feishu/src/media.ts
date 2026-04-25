@@ -1,9 +1,15 @@
-import fs from "fs";
-import path from "path";
-import { Readable } from "stream";
+import fs from "node:fs";
+import path from "node:path";
+import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
+import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
+import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import {
+  resolvePreferredOpenClawTmpDir,
+  withTempDownloadPath,
+} from "openclaw/plugin-sdk/temp-path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -12,6 +18,24 @@ import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result
 import { resolveFeishuSendTarget } from "./send-target.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
+const FEISHU_VOICE_FILE_NAME = "voice.ogg";
+const FEISHU_VOICE_SAMPLE_RATE_HZ = 48_000;
+const FEISHU_VOICE_BITRATE = "64k";
+
+const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
+  ".aac",
+  ".aiff",
+  ".alac",
+  ".amr",
+  ".caf",
+  ".flac",
+  ".m4a",
+  ".mp3",
+  ".oga",
+  ".wav",
+  ".webm",
+  ".wma",
+]);
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -105,9 +129,8 @@ function readHeaderValue(
   if (!headers) {
     return undefined;
   }
-  const target = name.toLowerCase();
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== target) {
+    if (normalizeLowercaseStringOrEmpty(key) !== normalizeLowercaseStringOrEmpty(name)) {
       continue;
     }
     if (typeof value === "string" && value.trim()) {
@@ -356,7 +379,7 @@ export async function uploadImageFeishu(params: {
  * in chat (regression in v2026.3.2).
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
-  return fileName.replace(/[\x00-\x1F\x7F\r\n"\\]/g, "_");
+  return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 
 /**
@@ -495,7 +518,7 @@ export async function sendFileFeishu(params: {
 export function detectFileType(
   fileName: string,
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
-  const ext = path.extname(fileName).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
   switch (ext) {
     case ".opus":
     case ".ogg":
@@ -525,7 +548,7 @@ function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?
   msgType: "image" | "file" | "audio" | "media";
 } {
   const { fileName, contentType } = params;
-  const ext = path.extname(fileName).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
   const mimeKind = mediaKindFromMime(contentType);
 
   const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
@@ -567,6 +590,89 @@ function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?
   };
 }
 
+function isFeishuNativeVoiceAudio(params: { fileName: string; contentType?: string }): boolean {
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+  const contentType = normalizeLowercaseStringOrEmpty(params.contentType);
+  return (
+    ext === ".opus" || ext === ".ogg" || contentType === "audio/ogg" || contentType === "audio/opus"
+  );
+}
+
+function isLikelyTranscodableAudio(params: { fileName: string; contentType?: string }): boolean {
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+  const contentType = normalizeLowercaseStringOrEmpty(params.contentType);
+  return FEISHU_TRANSCODABLE_AUDIO_EXTS.has(ext) || mediaKindFromMime(contentType) === "audio";
+}
+
+async function transcodeToFeishuVoiceOpus(params: {
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+}): Promise<{ buffer: Buffer; fileName: string; contentType: string }> {
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  await fs.promises.mkdir(tempRoot, { recursive: true, mode: 0o700 });
+  const tempDir = await fs.promises.mkdtemp(path.join(tempRoot, "feishu-voice-"));
+  try {
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+    const inputExt = ext && ext.length <= 12 ? ext : ".audio";
+    const inputPath = path.join(tempDir, `input${inputExt}`);
+    const outputPath = path.join(tempDir, FEISHU_VOICE_FILE_NAME);
+    await fs.promises.writeFile(inputPath, params.buffer, { mode: 0o600 });
+    await runFfmpeg([
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      inputPath,
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+      "-ar",
+      String(FEISHU_VOICE_SAMPLE_RATE_HZ),
+      "-ac",
+      "1",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      FEISHU_VOICE_BITRATE,
+      outputPath,
+    ]);
+    return {
+      buffer: await fs.promises.readFile(outputPath),
+      fileName: FEISHU_VOICE_FILE_NAME,
+      contentType: "audio/ogg",
+    };
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function prepareFeishuVoiceMedia(params: {
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+  audioAsVoice?: boolean;
+}): Promise<{ buffer: Buffer; fileName: string; contentType?: string }> {
+  if (isFeishuNativeVoiceAudio(params)) {
+    return params;
+  }
+  if (params.audioAsVoice !== true || !isLikelyTranscodableAudio(params)) {
+    return params;
+  }
+  try {
+    return await transcodeToFeishuVoiceOpus(params);
+  } catch (err) {
+    console.warn(
+      `[feishu] audioAsVoice transcode failed; sending ${params.fileName} as a file attachment:`,
+      err,
+    );
+    return params;
+  }
+}
+
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
@@ -583,6 +689,8 @@ export async function sendMediaFeishu(params: {
   accountId?: string;
   /** Allowed roots for local path reads; required for local filePath to work. */
   mediaLocalRoots?: readonly string[];
+  /** When true, transcode compatible audio to Feishu native Ogg/Opus voice bubbles. */
+  audioAsVoice?: boolean;
 }): Promise<SendMediaResult> {
   const {
     cfg,
@@ -594,6 +702,7 @@ export async function sendMediaFeishu(params: {
     replyInThread,
     accountId,
     mediaLocalRoots,
+    audioAsVoice,
   } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
@@ -621,27 +730,36 @@ export async function sendMediaFeishu(params: {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
 
+  const prepared = await prepareFeishuVoiceMedia({
+    buffer,
+    fileName: name,
+    contentType,
+    audioAsVoice,
+  });
+  buffer = prepared.buffer;
+  name = prepared.fileName;
+  contentType = prepared.contentType;
+
   const routing = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
 
   if (routing.msgType === "image") {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
-  } else {
-    const { fileKey } = await uploadFileFeishu({
-      cfg,
-      file: buffer,
-      fileName: name,
-      fileType: routing.fileType ?? "stream",
-      accountId,
-    });
-    return sendFileFeishu({
-      cfg,
-      to,
-      fileKey,
-      msgType: routing.msgType,
-      replyToMessageId,
-      replyInThread,
-      accountId,
-    });
   }
+  const { fileKey } = await uploadFileFeishu({
+    cfg,
+    file: buffer,
+    fileName: name,
+    fileType: routing.fileType ?? "stream",
+    accountId,
+  });
+  return sendFileFeishu({
+    cfg,
+    to,
+    fileKey,
+    msgType: routing.msgType,
+    replyToMessageId,
+    replyInThread,
+    accountId,
+  });
 }

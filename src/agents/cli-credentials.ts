@@ -2,6 +2,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -55,6 +56,7 @@ export type CodexCliCredential = {
   refresh: string;
   expires: number;
   accountId?: string;
+  idToken?: string;
 };
 
 export type MiniMaxCliCredential = {
@@ -114,12 +116,8 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   };
 }
 
-function resolveCodexCliAuthPath() {
-  return path.join(resolveCodexHomePath(), CODEX_CLI_AUTH_FILENAME);
-}
-
-function resolveCodexHomePath() {
-  const configured = process.env.CODEX_HOME;
+function resolveCodexHomePath(codexHome?: string) {
+  const configured = codexHome ?? process.env.CODEX_HOME;
   const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
   try {
     return fs.realpathSync.native(home);
@@ -185,6 +183,18 @@ function computeCodexKeychainAccount(codexHome: string) {
   return `cli|${hash.slice(0, 16)}`;
 }
 
+function resolveCodexKeychainParams(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}) {
+  return {
+    platform: options?.platform ?? process.platform,
+    execSyncImpl: options?.execSync ?? execSync,
+    codexHome: resolveCodexHomePath(options?.codexHome),
+  };
+}
+
 function decodeJwtExpiryMs(token: string): number | null {
   const parts = token.split(".");
   if (parts.length < 2) {
@@ -201,17 +211,15 @@ function decodeJwtExpiryMs(token: string): number | null {
   }
 }
 
-function readCodexKeychainCredentials(options?: {
+function readCodexKeychainAuthRecord(options?: {
+  codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
-}): CodexCliCredential | null {
-  const platform = options?.platform ?? process.platform;
+}): Record<string, unknown> | null {
+  const { platform, execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
   if (platform !== "darwin") {
     return null;
   }
-  const execSyncImpl = options?.execSync ?? execSync;
-
-  const codexHome = resolveCodexHomePath();
   const account = computeCodexKeychainAccount(codexHome);
 
   try {
@@ -225,7 +233,23 @@ function readCodexKeychainCredentials(options?: {
     ).trim();
 
     const parsed = JSON.parse(secret) as Record<string, unknown>;
-    const tokens = parsed.tokens as Record<string, unknown> | undefined;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function readCodexKeychainCredentials(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}): CodexCliCredential | null {
+  const parsed = readCodexKeychainAuthRecord(options);
+  if (!parsed) {
+    return null;
+  }
+  const tokens = parsed.tokens as Record<string, unknown> | undefined;
+  try {
     const accessToken = tokens?.access_token;
     const refreshToken = tokens?.refresh_token;
     if (typeof accessToken !== "string" || !accessToken) {
@@ -246,6 +270,7 @@ function readCodexKeychainCredentials(options?: {
       : Date.now() + 60 * 60 * 1000;
     const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
+    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
@@ -259,6 +284,7 @@ function readCodexKeychainCredentials(options?: {
       refresh: refreshToken,
       expires,
       accountId,
+      idToken,
     };
   } catch {
     return null;
@@ -419,7 +445,7 @@ export function writeClaudeCliKeychainCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -461,7 +487,7 @@ export function writeClaudeCliFileCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli file", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -488,10 +514,12 @@ export function writeClaudeCliCredentials(
 }
 
 export function readCodexCliCredentials(options?: {
+  codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
   const keychain = readCodexKeychainCredentials({
+    codexHome: options?.codexHome,
     platform: options?.platform,
     execSync: options?.execSync,
   });
@@ -499,7 +527,7 @@ export function readCodexCliCredentials(options?: {
     return keychain;
   }
 
-  const authPath = resolveCodexCliAuthPath();
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const raw = loadJsonFile(authPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -537,21 +565,24 @@ export function readCodexCliCredentials(options?: {
     refresh: refreshToken,
     expires,
     accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
+    idToken: typeof tokens.id_token === "string" ? tokens.id_token : undefined,
   };
 }
 
 export function readCodexCliCredentialsCached(options?: {
+  codexHome?: string;
   ttlMs?: number;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
-  const authPath = resolveCodexCliAuthPath();
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   return readCachedCliCredential({
     ttlMs: options?.ttlMs ?? 0,
     cache: codexCliCache,
     cacheKey: `${options?.platform ?? process.platform}|${authPath}`,
     read: () =>
       readCodexCliCredentials({
+        codexHome: options?.codexHome,
         platform: options?.platform,
         execSync: options?.execSync,
       }),

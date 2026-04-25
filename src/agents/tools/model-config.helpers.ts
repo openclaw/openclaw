@@ -1,10 +1,14 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  ensureAuthProfileStore,
+  hasAnyAuthProfileStoreSource,
+  listProfilesForProvider,
+} from "../auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveEnvApiKey } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
@@ -37,6 +41,9 @@ export function hasAuthForProvider(params: { provider: string; agentDir?: string
   if (!agentDir) {
     return false;
   }
+  if (!hasAnyAuthProfileStoreSource(agentDir)) {
+    return false;
+  }
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
@@ -56,6 +63,7 @@ export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   agentDir?: string;
   candidates: Array<string | null | undefined>;
+  isProviderConfigured?: (provider: string) => boolean;
 }): ToolModelConfig | null {
   if (hasToolModelConfig(params.explicit)) {
     return params.explicit;
@@ -68,7 +76,10 @@ export function buildToolModelConfigFromCandidates(params: {
       continue;
     }
     const provider = trimmed.slice(0, trimmed.indexOf("/")).trim();
-    if (!provider || !hasAuthForProvider({ provider, agentDir: params.agentDir })) {
+    const providerConfigured =
+      params.isProviderConfigured?.(provider) ??
+      hasAuthForProvider({ provider, agentDir: params.agentDir });
+    if (!provider || !providerConfigured) {
       continue;
     }
     if (!deduped.includes(trimmed)) {

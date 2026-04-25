@@ -1,14 +1,12 @@
-import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
-import { describe, expect, it, vi } from "vitest";
-import plugin, {
+import { describe, expect, it } from "vitest";
+import {
   buildMemoryFlushPlan,
-  buildPromptSection,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_PROMPT,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
-} from "./index.js";
-import { memoryRuntime } from "./src/runtime-provider.js";
+} from "./src/flush-plan.js";
+import { buildPromptSection } from "./src/prompt-section.js";
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
@@ -22,6 +20,7 @@ describe("buildPromptSection", () => {
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
     expect(result[1]).toContain("then use memory_get");
+    expect(result[1]).toContain("indexed session transcripts");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -32,6 +31,7 @@ describe("buildPromptSection", () => {
     const result = buildPromptSection({ availableTools: new Set(["memory_search"]) });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
+    expect(result[1]).toContain("indexed session transcripts");
     expect(result[1]).not.toContain("then use memory_get");
   });
 
@@ -84,7 +84,7 @@ describe("buildMemoryFlushPlan", () => {
 
     expect(plan?.prompt).toContain("memory/2026-02-16.md");
     expect(plan?.prompt).toContain(
-      "Current time: Monday, February 16th, 2026 — 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
+      "Current time: Monday, February 16th, 2026 - 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
     );
     expect(plan?.relativePath).toBe("memory/2026-02-16.md");
   });

@@ -1,10 +1,9 @@
-import {
-  ZAI_CN_BASE_URL,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_CODING_GLOBAL_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../plugin-sdk/zai.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+
+const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
+const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
+const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
 
 export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";
 
@@ -103,28 +102,28 @@ export async function detectZaiEndpoint(params: {
       {
         endpoint: "global" as const,
         baseUrl: ZAI_GLOBAL_BASE_URL,
-        modelId: "glm-5",
-        note: "Verified GLM-5 on global endpoint.",
+        modelId: "glm-5.1",
+        note: "Verified GLM-5.1 on global endpoint.",
       },
       {
         endpoint: "cn" as const,
         baseUrl: ZAI_CN_BASE_URL,
-        modelId: "glm-5",
-        note: "Verified GLM-5 on cn endpoint.",
+        modelId: "glm-5.1",
+        note: "Verified GLM-5.1 on cn endpoint.",
       },
     ];
-    const codingGlm5 = [
+    const codingGlm51 = [
       {
         endpoint: "coding-global" as const,
         baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
-        modelId: "glm-5",
-        note: "Verified GLM-5 on coding-global endpoint.",
+        modelId: "glm-5.1",
+        note: "Verified GLM-5.1 on coding-global endpoint.",
       },
       {
         endpoint: "coding-cn" as const,
         baseUrl: ZAI_CODING_CN_BASE_URL,
-        modelId: "glm-5",
-        note: "Verified GLM-5 on coding-cn endpoint.",
+        modelId: "glm-5.1",
+        note: "Verified GLM-5.1 on coding-cn endpoint.",
       },
     ];
     const codingFallback = [
@@ -132,13 +131,13 @@ export async function detectZaiEndpoint(params: {
         endpoint: "coding-global" as const,
         baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
         modelId: "glm-4.7",
-        note: "Coding Plan endpoint verified, but this key/plan does not expose GLM-5 there. Defaulting to GLM-4.7.",
+        note: "Coding Plan endpoint verified, but this key/plan does not expose GLM-5.1 there. Defaulting to GLM-4.7.",
       },
       {
         endpoint: "coding-cn" as const,
         baseUrl: ZAI_CODING_CN_BASE_URL,
         modelId: "glm-4.7",
-        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5 there. Defaulting to GLM-4.7.",
+        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5.1 there. Defaulting to GLM-4.7.",
       },
     ];
 
@@ -149,16 +148,16 @@ export async function detectZaiEndpoint(params: {
         return general.filter((candidate) => candidate.endpoint === "cn");
       case "coding-global":
         return [
-          ...codingGlm5.filter((candidate) => candidate.endpoint === "coding-global"),
+          ...codingGlm51.filter((candidate) => candidate.endpoint === "coding-global"),
           ...codingFallback.filter((candidate) => candidate.endpoint === "coding-global"),
         ];
       case "coding-cn":
         return [
-          ...codingGlm5.filter((candidate) => candidate.endpoint === "coding-cn"),
+          ...codingGlm51.filter((candidate) => candidate.endpoint === "coding-cn"),
           ...codingFallback.filter((candidate) => candidate.endpoint === "coding-cn"),
         ];
       default:
-        return [...general, ...codingGlm5, ...codingFallback];
+        return [...general, ...codingGlm51, ...codingFallback];
     }
   })();
 

@@ -22,34 +22,40 @@ function buildConfig(
 }
 
 describe("discord exec approvals", () => {
-  it("requires enablement and explicit or owner approvers", () => {
+  it("requires explicit enablement even when owner approvers resolve", () => {
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
-    expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }, { allowFrom: ["123"] }),
+        cfg: buildConfig({ enabled: true }),
       }),
     ).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+        cfg: buildConfig({ approvers: ["123"] }),
+      }),
+    ).toBe(false);
+    expect(
+      isDiscordExecApprovalClientEnabled({
+        cfg: {
+          ...buildConfig(),
+          commands: { ownerAllowFrom: ["discord:789"] },
+        } as OpenClawConfig,
+      }),
+    ).toBe(false);
+    expect(
+      isDiscordExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: "auto", approvers: ["123"] }),
       }),
     ).toBe(true);
     expect(
       isDiscordExecApprovalClientEnabled({
-        cfg: {
-          ...buildConfig({ enabled: true }),
-          commands: { ownerAllowFrom: ["discord:789"] },
-        } as OpenClawConfig,
+        cfg: buildConfig({ enabled: false, approvers: ["123"] }),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("prefers explicit approvers when configured", () => {
-    const cfg = buildConfig(
-      { enabled: true, approvers: ["456"] },
-      { allowFrom: ["123"], defaultTo: "user:789" },
-    );
+    const cfg = buildConfig({ approvers: ["456"] }, { allowFrom: ["123"], defaultTo: "user:789" });
 
     expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["456"]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
@@ -72,7 +78,7 @@ describe("discord exec approvals", () => {
 
   it("falls back to commands.ownerAllowFrom for exec approvers", () => {
     const cfg = {
-      ...buildConfig({ enabled: true }),
+      ...buildConfig(),
       commands: { ownerAllowFrom: ["discord:123", "user:456", "789"] },
     } as OpenClawConfig;
 

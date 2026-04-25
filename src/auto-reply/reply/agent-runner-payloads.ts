@@ -1,11 +1,11 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
+import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
@@ -47,11 +47,11 @@ async function normalizeReplyPayloadMedia(params: {
 }
 
 async function normalizeSentMediaUrlsForDedupe(params: {
-  sentMediaUrls: string[];
+  sentMediaUrls: readonly string[];
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<string[]> {
   if (params.sentMediaUrls.length === 0 || !params.normalizeMediaPaths) {
-    return params.sentMediaUrls;
+    return [...params.sentMediaUrls];
   }
 
   const normalizedUrls: string[] = [];
@@ -99,6 +99,7 @@ export async function buildReplyPayloads(params: {
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
+  replyThreading?: ReplyThreadingPolicy;
   messageProvider?: string;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -140,17 +141,25 @@ export async function buildReplyPayloads(params: {
         replyToMode: params.replyToMode,
         replyToChannel: params.replyToChannel,
         currentMessageId: params.currentMessageId,
+        replyThreading: params.replyThreading,
       }).map(async (payload) => {
         const parsed = normalizeReplyPayloadDirectives({
           payload,
           currentMessageId: params.currentMessageId,
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
-        }).payload;
-        return await normalizeReplyPayloadMedia({
-          payload: parsed,
+        });
+        const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
+          payload: parsed.payload,
           normalizeMediaPaths: params.normalizeMediaPaths,
         });
+        if (
+          parsed.isSilent &&
+          !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia
+        ) {
+          mediaNormalizedPayload.text = undefined;
+        }
+        return mediaNormalizedPayload;
       }),
     )
   ).filter(isRenderablePayload);
@@ -197,32 +206,50 @@ export async function buildReplyPayloads(params: {
         normalizeMediaPaths: params.normalizeMediaPaths,
       })
     : (params.messagingToolSentMediaUrls ?? []);
-  const dedupedPayloads = dedupeMessagingToolPayloads
-    ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
-        payloads: silentFilteredPayloads,
-        sentTexts: messagingToolSentTexts,
-      })
-    : silentFilteredPayloads;
   const mediaFilteredPayloads = dedupeMessagingToolPayloads
     ? (
         dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
       ).filterMessagingToolMediaDuplicates({
-        payloads: dedupedPayloads,
+        payloads: silentFilteredPayloads,
         sentMediaUrls: messagingToolSentMediaUrls,
       })
-    : dedupedPayloads;
-  // Filter out payloads already sent via pipeline or directly during tool flush.
-  const filteredPayloads = shouldDropFinalPayloads
-    ? []
+    : silentFilteredPayloads;
+  const dedupedPayloads = dedupeMessagingToolPayloads
+    ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
+        payloads: mediaFilteredPayloads,
+        sentTexts: messagingToolSentTexts,
+      })
+    : mediaFilteredPayloads;
+  const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
+    Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
+  const contentSuppressedPayloads = shouldDropFinalPayloads
+    ? dedupedPayloads.filter((payload) => payload.isError)
     : params.blockStreamingEnabled
-      ? mediaFilteredPayloads.filter(
-          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+      ? dedupedPayloads.filter(
+          (payload) =>
+            !params.blockReplyPipeline?.hasSentPayload(payload) &&
+            !isDirectlySentBlockPayload(payload),
         )
       : params.directlySentBlockKeys?.size
-        ? mediaFilteredPayloads.filter(
+        ? dedupedPayloads.filter(
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
           )
-        : mediaFilteredPayloads;
+        : dedupedPayloads;
+  const blockSentMediaUrls = params.blockStreamingEnabled
+    ? await normalizeSentMediaUrlsForDedupe({
+        sentMediaUrls: params.blockReplyPipeline?.getSentMediaUrls() ?? [],
+        normalizeMediaPaths: params.normalizeMediaPaths,
+      })
+    : [];
+  const filteredPayloads =
+    blockSentMediaUrls.length > 0
+      ? (
+          dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
+        ).filterMessagingToolMediaDuplicates({
+          payloads: contentSuppressedPayloads,
+          sentMediaUrls: blockSentMediaUrls,
+        })
+      : contentSuppressedPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
   return {

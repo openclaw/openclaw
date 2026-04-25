@@ -1,13 +1,13 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { resolveAuthorizedWhatsAppOutboundTarget } from "./action-runtime-target-auth.js";
-import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 import {
   createActionGate,
   jsonResult,
   readReactionParams,
   readStringParam,
-  type OpenClawConfig,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveAuthorizedWhatsAppOutboundTarget } from "./action-runtime-target-auth.js";
+import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 import { sendReactionWhatsApp } from "./send.js";
 
 export const whatsAppActionRuntime = {
@@ -64,6 +64,7 @@ export async function handleWhatsAppAction(
       fromMe,
       participant: participant ?? undefined,
       accountId: resolved.accountId,
+      cfg,
     });
     if (!remove && !isEmpty) {
       return jsonResult({ ok: true, added: emoji });

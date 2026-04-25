@@ -1,3 +1,12 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  StopReason,
+} from "@mariozechner/pi-ai";
+import * as piAi from "@mariozechner/pi-ai";
 /**
  * OpenAI WebSocket StreamFn Integration
  *
@@ -20,32 +29,47 @@
  *
  * @see src/agents/openai-ws-connection.ts for the connection manager
  */
-
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import * as piAi from "@mariozechner/pi-ai";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  AssistantMessageEventStream,
-  StopReason,
-} from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
+  resolveProviderTransportTurnStateWithPlugin,
+  resolveProviderWebSocketSessionPolicyWithPlugin,
+} from "../plugins/provider-runtime.js";
+import type { ProviderTransportTurnState } from "../plugins/types.js";
+import {
+  encodeAssistantTextSignature,
+  normalizeAssistantPhase,
+} from "../shared/chat-message-content.js";
+import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
+import {
+  getOpenAIWebSocketErrorDetails,
   OpenAIWebSocketManager,
   type FunctionToolDefinition,
+  type OpenAIResponsesAssistantPhase,
   type OpenAIWebSocketManagerOptions,
 } from "./openai-ws-connection.js";
 import {
   buildAssistantMessageFromResponse,
   convertMessagesToInputItems,
+  convertResponseToInputItems,
   convertTools,
   planTurnInput,
 } from "./openai-ws-message-conversion.js";
+import {
+  buildOpenAIWebSocketResponseCreatePayload,
+  planOpenAIWebSocketRequestPayload,
+} from "./openai-ws-request.js";
+import type { ResponseCreateEvent } from "./openai-ws-types.js";
 import { log } from "./pi-embedded-runner/logger.js";
-import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
+import { normalizeProviderId } from "./provider-id.js";
+import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
 } from "./stream-message-shared.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
+import { mergeTransportMetadata } from "./transport-stream-shared.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-session state
@@ -53,14 +77,38 @@ import {
 
 interface WsSession {
   manager: OpenAIWebSocketManager;
+  managerConfigSignature: string;
+  authSignature: string;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
+  /** Last full canonical request, before any incremental previous_response_id delta rewrite. */
+  lastRequestPayload?: ResponseCreateEvent;
+  /** Last response output converted to the same replay form used by future full-context sends. */
+  lastResponseInputItems: ReturnType<typeof convertResponseToInputItems>;
   /** True if the connection has been established at least once. */
   everConnected: boolean;
   /** True once a best-effort warm-up attempt has run for this session. */
   warmUpAttempted: boolean;
   /** True if the session is permanently broken (no more reconnect). */
   broken: boolean;
+  /** Pending idle release timer when disabled-by-default pooling retains a session. */
+  idleTimer?: ReturnType<typeof setTimeout>;
+  pooledUntil?: number;
+  /** Session-scoped cool-down after repeated websocket failures. */
+  degradedUntil: number | null;
+  degradeCooldownMs: number;
+}
+
+function resolveOpenAIWebSocketStrictToolSetting(
+  model: Parameters<StreamFn>[0],
+): boolean | undefined {
+  return resolveOpenAIStrictToolSetting(model, {
+    transport: "websocket",
+    supportsStrictMode:
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsStrictMode?: boolean }).supportsStrictMode
+        : undefined,
+  });
 }
 
 /** Module-level registry: sessionId → WsSession */
@@ -68,11 +116,15 @@ const wsRegistry = new Map<string, WsSession>();
 
 type OpenAIWsStreamDeps = {
   createManager: (options?: OpenAIWebSocketManagerOptions) => OpenAIWebSocketManager;
+  createHttpFallbackStreamFn: (model: ProviderRuntimeModel) => StreamFn | undefined;
   streamSimple: typeof piAi.streamSimple;
 };
 
+type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
+
 const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
   createManager: (options) => new OpenAIWebSocketManager(options),
+  createHttpFallbackStreamFn: (model) => createBoundaryAwareStreamFnForModel(model),
   streamSimple: (...args) => piAi.streamSimple(...args),
 };
 
@@ -162,20 +214,72 @@ function createEventStream(): AssistantMessageEventStream {
 // Public registry helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ReleaseWsSessionOptions = {
+  allowPool?: boolean;
+  env?: NodeJS.ProcessEnv;
+};
+
+function resolveWsSessionPoolConfig(env: NodeJS.ProcessEnv = process.env): {
+  enabled: boolean;
+  idleMs: number;
+} {
+  const enabled =
+    env.OPENCLAW_OPENAI_WS_POOL === "1" || env.OPENCLAW_OPENAI_WS_SESSION_POOL === "1";
+  const rawIdleMs = Number(env.OPENCLAW_OPENAI_WS_SESSION_POOL_IDLE_MS);
+  const idleMs = Number.isFinite(rawIdleMs)
+    ? Math.min(300_000, Math.max(1_000, Math.trunc(rawIdleMs)))
+    : 30_000;
+  return { enabled, idleMs };
+}
+
+function clearWsSessionIdleTimer(session: WsSession): void {
+  if (!session.idleTimer) {
+    return;
+  }
+  clearTimeout(session.idleTimer);
+  session.idleTimer = undefined;
+  session.pooledUntil = undefined;
+}
+
+function closeWsSession(sessionId: string, session: WsSession): void {
+  clearWsSessionIdleTimer(session);
+  try {
+    session.manager.close();
+  } catch {
+    // Ignore close errors — connection may already be gone.
+  }
+  wsRegistry.delete(sessionId);
+}
+
 /**
  * Release and close the WebSocket session for the given sessionId.
  * Call this after the agent run completes to free the connection.
  */
-export function releaseWsSession(sessionId: string): void {
+export function releaseWsSession(sessionId: string, options: ReleaseWsSessionOptions = {}): void {
   const session = wsRegistry.get(sessionId);
-  if (session) {
-    try {
-      session.manager.close();
-    } catch {
-      // Ignore close errors — connection may already be gone.
-    }
-    wsRegistry.delete(sessionId);
+  if (!session) {
+    return;
   }
+  const pool = resolveWsSessionPoolConfig(options.env);
+  if (
+    options.allowPool === true &&
+    pool.enabled &&
+    !session.broken &&
+    session.manager.isConnected()
+  ) {
+    clearWsSessionIdleTimer(session);
+    session.pooledUntil = Date.now() + pool.idleMs;
+    session.idleTimer = setTimeout(() => {
+      const current = wsRegistry.get(sessionId);
+      if (current === session) {
+        closeWsSession(sessionId, session);
+      }
+    }, pool.idleMs);
+    session.idleTimer.unref?.();
+    log.debug(`[ws-stream] pooled websocket session=${sessionId} idleMs=${pool.idleMs}`);
+    return;
+  }
+  closeWsSession(sessionId, session);
 }
 
 /**
@@ -206,6 +310,33 @@ export interface OpenAIWebSocketStreamOptions {
 
 type WsTransport = "sse" | "websocket" | "auto";
 const WARM_UP_TIMEOUT_MS = 8_000;
+const MAX_AUTO_WS_RUNTIME_RETRIES = 1;
+const DEFAULT_WS_DEGRADE_COOLDOWN_MS = 60_000;
+let wsDegradeCooldownMsOverride: number | undefined;
+
+class OpenAIWebSocketRuntimeError extends Error {
+  readonly kind: "disconnect" | "send" | "server";
+  readonly retryable: boolean;
+  readonly closeCode?: number;
+  readonly closeReason?: string;
+
+  constructor(
+    message: string,
+    params: {
+      kind: "disconnect" | "send" | "server";
+      retryable: boolean;
+      closeCode?: number;
+      closeReason?: string;
+    },
+  ) {
+    super(message);
+    this.name = "OpenAIWebSocketRuntimeError";
+    this.kind = params.kind;
+    this.retryable = params.retryable;
+    this.closeCode = params.closeCode;
+    this.closeReason = params.closeReason;
+  }
+}
 
 function resolveWsTransport(options: Parameters<StreamFn>[2]): WsTransport {
   const transport = (options as { transport?: unknown } | undefined)?.transport;
@@ -221,11 +352,293 @@ function resolveWsWarmup(options: Parameters<StreamFn>[2]): boolean {
   return warmup === true;
 }
 
+function resetWsSession(params: {
+  session: WsSession;
+  createManager: () => OpenAIWebSocketManager;
+  preserveDegradeUntil?: boolean;
+}): void {
+  clearWsSessionIdleTimer(params.session);
+  try {
+    params.session.manager.close();
+  } catch {
+    /* ignore */
+  }
+  params.session.manager = params.createManager();
+  params.session.everConnected = false;
+  params.session.warmUpAttempted = false;
+  params.session.broken = false;
+  params.session.lastContextLength = 0;
+  params.session.lastRequestPayload = undefined;
+  params.session.lastResponseInputItems = [];
+  if (!params.preserveDegradeUntil) {
+    params.session.degradedUntil = null;
+  }
+}
+
+function markWsSessionDegraded(session: WsSession): void {
+  session.degradedUntil = Date.now() + session.degradeCooldownMs;
+}
+
+function isWsSessionDegraded(session: WsSession): boolean {
+  if (!session.degradedUntil) {
+    return false;
+  }
+  if (session.degradedUntil <= Date.now()) {
+    session.degradedUntil = null;
+    return false;
+  }
+  return true;
+}
+
+function createWsManager(
+  managerOptions: OpenAIWebSocketManagerOptions | undefined,
+  sessionHeaders?: Record<string, string>,
+): OpenAIWebSocketManager {
+  return openAIWsStreamDeps.createManager({
+    ...managerOptions,
+    ...(sessionHeaders
+      ? {
+          headers: {
+            ...managerOptions?.headers,
+            ...sessionHeaders,
+          },
+        }
+      : {}),
+  });
+}
+
+function stringifyStable(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stringifyStable(entry)).join(",")}]`;
+  }
+  const entries = Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right));
+  return `{${entries
+    .map(([key, entry]) => `${JSON.stringify(key)}:${stringifyStable(entry)}`)
+    .join(",")}}`;
+}
+
+function resolveWsManagerConfigSignature(
+  managerOptions: OpenAIWebSocketManagerOptions | undefined,
+  sessionHeaders?: Record<string, string>,
+): string {
+  return stringifyStable({
+    headers: sessionHeaders,
+    request: managerOptions?.request,
+    url: managerOptions?.url,
+  });
+}
+
+function resolveWsAuthSignature(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+
+const AZURE_OPENAI_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+
+function normalizeTransportIdentityValue(value: string, maxLength = 160): string {
+  const trimmed = value.trim().replace(/[\r\n]+/gu, " ");
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+}
+
+function usesNativeOpenAIRoute(provider: string, baseUrl?: string): boolean {
+  const endpointClass = resolveProviderEndpoint(baseUrl).endpointClass;
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!normalizedProvider) {
+    return false;
+  }
+  if (normalizedProvider === "openai") {
+    return endpointClass === "default" || endpointClass === "openai-public";
+  }
+  if (AZURE_OPENAI_PROVIDER_IDS.has(normalizedProvider)) {
+    return endpointClass === "default" || endpointClass === "azure-openai";
+  }
+  if (normalizedProvider === OPENAI_CODEX_PROVIDER_ID) {
+    return (
+      endpointClass === "default" ||
+      endpointClass === "openai-public" ||
+      endpointClass === "openai-codex"
+    );
+  }
+  return false;
+}
+
+function resolveNativeOpenAISessionHeaders(params: {
+  provider: string;
+  baseUrl?: string;
+  sessionId?: string;
+}): Record<string, string> | undefined {
+  if (!params.sessionId || !usesNativeOpenAIRoute(params.provider, params.baseUrl)) {
+    return undefined;
+  }
+  const sessionId = normalizeTransportIdentityValue(params.sessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+  return {
+    "x-client-request-id": sessionId,
+    "x-openclaw-session-id": sessionId,
+  };
+}
+
+function resolveNativeOpenAITransportTurnState(params: {
+  provider: string;
+  baseUrl?: string;
+  sessionId?: string;
+  turnId: string;
+  attempt: number;
+  transport: "stream" | "websocket";
+}): ProviderTransportTurnState | undefined {
+  const sessionHeaders = resolveNativeOpenAISessionHeaders({
+    provider: params.provider,
+    baseUrl: params.baseUrl,
+    sessionId: params.sessionId,
+  });
+  if (!sessionHeaders) {
+    return undefined;
+  }
+  const turnId = normalizeTransportIdentityValue(params.turnId);
+  const attempt = String(Math.max(1, params.attempt));
+  return {
+    headers: {
+      ...sessionHeaders,
+      "x-openclaw-turn-id": turnId,
+      "x-openclaw-turn-attempt": attempt,
+    },
+    metadata: {
+      openclaw_session_id: sessionHeaders["x-openclaw-session-id"] ?? "",
+      openclaw_turn_id: turnId,
+      openclaw_turn_attempt: attempt,
+      openclaw_transport: params.transport,
+    },
+  };
+}
+
+function resolveProviderTransportTurnState(
+  model: Parameters<StreamFn>[0],
+  params: {
+    sessionId?: string;
+    turnId: string;
+    attempt: number;
+    transport: "stream" | "websocket";
+  },
+): ProviderTransportTurnState | undefined {
+  if (usesNativeOpenAIRoute(model.provider, (model as { baseUrl?: string }).baseUrl)) {
+    return resolveNativeOpenAITransportTurnState({
+      provider: model.provider,
+      baseUrl: (model as { baseUrl?: string }).baseUrl,
+      sessionId: params.sessionId,
+      turnId: params.turnId,
+      attempt: params.attempt,
+      transport: params.transport,
+    });
+  }
+  return (
+    resolveProviderTransportTurnStateWithPlugin({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: model as ProviderRuntimeModel,
+        sessionId: params.sessionId,
+        turnId: params.turnId,
+        attempt: params.attempt,
+        transport: params.transport,
+      },
+    }) ?? undefined
+  );
+}
+
+function resolveWebSocketSessionPolicy(
+  model: Parameters<StreamFn>[0],
+  sessionId: string,
+): { headers?: Record<string, string>; degradeCooldownMs: number } {
+  if (usesNativeOpenAIRoute(model.provider, (model as { baseUrl?: string }).baseUrl)) {
+    return {
+      headers: resolveNativeOpenAISessionHeaders({
+        provider: model.provider,
+        baseUrl: (model as { baseUrl?: string }).baseUrl,
+        sessionId,
+      }),
+      degradeCooldownMs: Math.max(0, wsDegradeCooldownMsOverride ?? DEFAULT_WS_DEGRADE_COOLDOWN_MS),
+    };
+  }
+  const policy = resolveProviderWebSocketSessionPolicyWithPlugin({
+    provider: model.provider,
+    context: {
+      provider: model.provider,
+      modelId: model.id,
+      model: model as ProviderRuntimeModel,
+      sessionId,
+    },
+  });
+  return {
+    headers: policy?.headers,
+    degradeCooldownMs: Math.max(
+      0,
+      wsDegradeCooldownMsOverride ?? policy?.degradeCooldownMs ?? DEFAULT_WS_DEGRADE_COOLDOWN_MS,
+    ),
+  };
+}
+
+function formatOpenAIWebSocketError(
+  event: Parameters<OpenAIWebSocketManager["onMessage"]>[0] extends (arg: infer T) => void
+    ? Extract<T, { type: "error" }>
+    : never,
+): string {
+  const details = getOpenAIWebSocketErrorDetails(event);
+  const code = details.code ?? "unknown";
+  const message = details.message ?? "Unknown error";
+  const extras = [
+    typeof details.status === "number" ? `status=${details.status}` : null,
+    details.type ? `type=${details.type}` : null,
+    details.param ? `param=${details.param}` : null,
+  ].filter(Boolean);
+  return extras.length > 0
+    ? `${message} (code=${code}; ${extras.join(", ")})`
+    : `${message} (code=${code})`;
+}
+
+function formatOpenAIWebSocketResponseFailure(response: {
+  error?: { code?: string; message?: string };
+  incomplete_details?: { reason?: string };
+}): string {
+  if (response.error) {
+    return `${response.error.code || "unknown"}: ${response.error.message || "no message"}`;
+  }
+  if (response.incomplete_details?.reason) {
+    return `incomplete: ${response.incomplete_details.reason}`;
+  }
+  return "Unknown error (no error details in response)";
+}
+
+function normalizeWsRunError(err: unknown): OpenAIWebSocketRuntimeError {
+  if (err instanceof OpenAIWebSocketRuntimeError) {
+    return err;
+  }
+  return new OpenAIWebSocketRuntimeError(formatErrorMessage(err), {
+    kind: "server",
+    retryable: false,
+  });
+}
+
+function buildRetryableSendError(err: unknown): OpenAIWebSocketRuntimeError {
+  return new OpenAIWebSocketRuntimeError(
+    err instanceof Error ? err.message : `WebSocket send failed: ${String(err)}`,
+    {
+      kind: "send",
+      retryable: true,
+    },
+  );
+}
 async function runWarmUp(params: {
   manager: OpenAIWebSocketManager;
   modelId: string;
   tools: FunctionToolDefinition[];
   instructions?: string;
+  metadata?: Record<string, string>;
   signal?: AbortSignal;
 }): Promise<void> {
   if (params.signal?.aborted) {
@@ -251,11 +664,12 @@ async function runWarmUp(params: {
         resolve();
       } else if (event.type === "response.failed") {
         cleanup();
-        const errMsg = event.response?.error?.message ?? "Response failed";
-        reject(new Error(`warm-up failed: ${errMsg}`));
+        reject(
+          new Error(`warm-up failed: ${formatOpenAIWebSocketResponseFailure(event.response)}`),
+        );
       } else if (event.type === "error") {
         cleanup();
-        reject(new Error(`warm-up error: ${event.message} (code=${event.code})`));
+        reject(new Error(`warm-up error: ${formatOpenAIWebSocketError(event)}`));
       }
     });
 
@@ -272,6 +686,7 @@ async function runWarmUp(params: {
       model: params.modelId,
       tools: params.tools.length > 0 ? params.tools : undefined,
       instructions: params.instructions,
+      ...(params.metadata ? { metadata: params.metadata } : {}),
     });
   });
 }
@@ -303,310 +718,565 @@ export function createOpenAIWebSocketStreamFn(
         return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
       }
 
-      // ── 1. Get or create session state ──────────────────────────────────
-      let session = wsRegistry.get(sessionId);
-
-      if (!session) {
-        const manager = openAIWsStreamDeps.createManager(opts.managerOptions);
-        session = {
-          manager,
-          lastContextLength: 0,
-          everConnected: false,
-          warmUpAttempted: false,
-          broken: false,
-        };
-        wsRegistry.set(sessionId, session);
-      }
-
-      // ── 2. Ensure connection is open ─────────────────────────────────────
-      if (!session.manager.isConnected() && !session.broken) {
-        try {
-          await session.manager.connect(apiKey);
-          session.everConnected = true;
-          log.debug(`[ws-stream] connected for session=${sessionId}`);
-        } catch (connErr) {
-          // Cancel any background reconnect attempts before marking as broken.
-          try {
-            session.manager.close();
-          } catch {
-            /* ignore */
-          }
-          session.broken = true;
-          wsRegistry.delete(sessionId);
-          if (transport === "websocket") {
-            throw connErr instanceof Error ? connErr : new Error(String(connErr));
-          }
-          log.warn(
-            `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
-          );
-          // Fall back to HTTP immediately
-          return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
-        }
-      }
-
-      if (session.broken || !session.manager.isConnected()) {
-        if (transport === "websocket") {
-          throw new Error("WebSocket session disconnected");
-        }
-        log.warn(`[ws-stream] session=${sessionId} broken/disconnected; falling back to HTTP`);
-        // Clean up stale session to prevent next turn from using stale
-        // previousResponseId / lastContextLength after a mid-request drop.
-        try {
-          session.manager.close();
-        } catch {
-          /* ignore */
-        }
-        wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
-      }
-
       const signal = opts.signal ?? (options as WsOptions | undefined)?.signal;
+      let emittedStart = false;
+      let runtimeRetries = 0;
+      const turnId = randomUUID();
+      let turnAttempt = 0;
+      const wsSessionPolicy = resolveWebSocketSessionPolicy(model, sessionId);
+      const sessionHeaders = wsSessionPolicy.headers;
 
-      if (resolveWsWarmup(options) && !session.warmUpAttempted) {
-        session.warmUpAttempted = true;
-        let warmupFailed = false;
-        try {
-          await runWarmUp({
-            manager: session.manager,
-            modelId: model.id,
-            tools: convertTools(context.tools),
-            instructions: context.systemPrompt ?? undefined,
-            signal,
+      while (true) {
+        let session = wsRegistry.get(sessionId);
+        const authSignature = resolveWsAuthSignature(apiKey);
+        const managerConfigSignature = resolveWsManagerConfigSignature(
+          opts.managerOptions,
+          sessionHeaders,
+        );
+        if (!session) {
+          const manager = createWsManager(opts.managerOptions, sessionHeaders);
+          session = {
+            manager,
+            managerConfigSignature,
+            authSignature,
+            lastContextLength: 0,
+            lastResponseInputItems: [],
+            everConnected: false,
+            warmUpAttempted: false,
+            broken: false,
+            degradedUntil: null,
+            degradeCooldownMs: wsSessionPolicy.degradeCooldownMs,
+          };
+          wsRegistry.set(sessionId, session);
+        } else if (
+          session.managerConfigSignature !== managerConfigSignature ||
+          session.authSignature !== authSignature
+        ) {
+          clearWsSessionIdleTimer(session);
+          resetWsSession({
+            session,
+            createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
           });
-          log.debug(`[ws-stream] warm-up completed for session=${sessionId}`);
-        } catch (warmErr) {
-          if (signal?.aborted) {
-            throw warmErr instanceof Error ? warmErr : new Error(String(warmErr));
-          }
-          warmupFailed = true;
-          log.warn(
-            `[ws-stream] warm-up failed for session=${sessionId}; continuing without warm-up. error=${String(warmErr)}`,
-          );
+          session.managerConfigSignature = managerConfigSignature;
+          session.authSignature = authSignature;
+          session.degradeCooldownMs = wsSessionPolicy.degradeCooldownMs;
+        } else {
+          clearWsSessionIdleTimer(session);
         }
-        if (warmupFailed && !session.manager.isConnected()) {
-          try {
-            session.manager.close();
-          } catch {
-            /* ignore */
-          }
+
+        if (transport !== "websocket" && isWsSessionDegraded(session)) {
+          log.debug(
+            `[ws-stream] session=${sessionId} in websocket cool-down; using HTTP fallback until ${new Date(session.degradedUntil!).toISOString()}`,
+          );
+          return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+            suppressStart: emittedStart,
+            turnState: resolveProviderTransportTurnState(model, {
+              sessionId,
+              turnId,
+              attempt: Math.max(1, turnAttempt),
+              transport: "stream",
+            }),
+          });
+        }
+
+        if (!session.manager.isConnected() && !session.broken) {
           try {
             await session.manager.connect(apiKey);
             session.everConnected = true;
-            log.debug(`[ws-stream] reconnected after warm-up failure for session=${sessionId}`);
-          } catch (reconnectErr) {
-            session.broken = true;
-            wsRegistry.delete(sessionId);
+            session.degradedUntil = null;
+            log.debug(`[ws-stream] connected for session=${sessionId}`);
+          } catch (connErr) {
+            markWsSessionDegraded(session);
+            resetWsSession({
+              session,
+              createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
+              preserveDegradeUntil: true,
+            });
             if (transport === "websocket") {
-              throw reconnectErr instanceof Error ? reconnectErr : new Error(String(reconnectErr));
+              throw connErr instanceof Error ? connErr : new Error(String(connErr));
             }
             log.warn(
-              `[ws-stream] reconnect after warm-up failed for session=${sessionId}; falling back to HTTP. error=${String(reconnectErr)}`,
+              `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
             );
-            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
-          }
-        }
-      }
-
-      // ── 3. Compute incremental vs full input ─────────────────────────────
-      const turnInput = planTurnInput({
-        context,
-        model,
-        previousResponseId: session.manager.previousResponseId,
-        lastContextLength: session.lastContextLength,
-      });
-
-      if (turnInput.mode === "incremental_tool_results") {
-        log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${turnInput.inputItems.length} tool results) previous_response_id=${turnInput.previousResponseId}`,
-        );
-      } else if (turnInput.mode === "full_context_restart") {
-        // The WebSocket guide requires a fresh full-context turn here: when we
-        // cannot continue the incremental chain, omit previous_response_id.
-        log.debug(
-          `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
-        );
-      } else {
-        log.debug(
-          `[ws-stream] session=${sessionId}: full context send (${turnInput.inputItems.length} items)`,
-        );
-      }
-
-      // ── 4. Build & send response.create ──────────────────────────────────
-      const tools = convertTools(context.tools);
-
-      // Forward generation options that the HTTP path (openai-responses provider) also uses.
-      // Cast to record since SimpleStreamOptions carries openai-specific fields as unknown.
-      const streamOpts = options as
-        | (Record<string, unknown> & {
-            temperature?: number;
-            maxTokens?: number;
-            topP?: number;
-            toolChoice?: unknown;
-            textVerbosity?: string;
-            text_verbosity?: string;
-          })
-        | undefined;
-      const extraParams: Record<string, unknown> = {};
-      if (streamOpts?.temperature !== undefined) {
-        extraParams.temperature = streamOpts.temperature;
-      }
-      if (streamOpts?.maxTokens !== undefined) {
-        extraParams.max_output_tokens = streamOpts.maxTokens;
-      }
-      if (streamOpts?.topP !== undefined) {
-        extraParams.top_p = streamOpts.topP;
-      }
-      if (streamOpts?.toolChoice !== undefined) {
-        extraParams.tool_choice = streamOpts.toolChoice;
-      }
-      if (
-        streamOpts?.reasoningEffort !== "none" &&
-        (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary)
-      ) {
-        const reasoning: { effort?: string; summary?: string } = {};
-        if (streamOpts.reasoningEffort !== undefined) {
-          reasoning.effort = streamOpts.reasoningEffort as string;
-        }
-        if (streamOpts.reasoningSummary !== undefined) {
-          reasoning.summary = streamOpts.reasoningSummary as string;
-        }
-        extraParams.reasoning = reasoning;
-      }
-      const textVerbosity = resolveOpenAITextVerbosity(
-        streamOpts as Record<string, unknown> | undefined,
-      );
-      if (textVerbosity !== undefined) {
-        const existingText =
-          extraParams.text && typeof extraParams.text === "object"
-            ? (extraParams.text as Record<string, unknown>)
-            : {};
-        extraParams.text = { ...existingText, verbosity: textVerbosity };
-      }
-
-      // Respect compat.supportsStore — providers like Gemini reject unknown
-      // fields such as `store` with a 400 error.  Fixes #39086.
-      const supportsStore = (model as { compat?: { supportsStore?: boolean } }).compat
-        ?.supportsStore;
-
-      const payload: Record<string, unknown> = {
-        type: "response.create",
-        model: model.id,
-        ...(supportsStore !== false ? { store: false } : {}),
-        input: turnInput.inputItems,
-        instructions: context.systemPrompt ?? undefined,
-        tools: tools.length > 0 ? tools : undefined,
-        ...(turnInput.previousResponseId
-          ? { previous_response_id: turnInput.previousResponseId }
-          : {}),
-        ...extraParams,
-      };
-      const nextPayload = options?.onPayload?.(payload, model);
-      const requestPayload = (nextPayload ?? payload) as Parameters<
-        OpenAIWebSocketManager["send"]
-      >[0];
-
-      try {
-        session.manager.send(requestPayload);
-      } catch (sendErr) {
-        if (transport === "websocket") {
-          throw sendErr instanceof Error ? sendErr : new Error(String(sendErr));
-        }
-        log.warn(
-          `[ws-stream] send failed for session=${sessionId}; falling back to HTTP. error=${String(sendErr)}`,
-        );
-        // Fully reset session state so the next WS turn doesn't use stale
-        // previous_response_id or lastContextLength from before the failure.
-        try {
-          session.manager.close();
-        } catch {
-          /* ignore */
-        }
-        wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
-      }
-
-      eventStream.push({
-        type: "start",
-        partial: buildAssistantMessageWithZeroUsage({
-          model,
-          content: [],
-          stopReason: "stop",
-        }),
-      });
-
-      // ── 5. Wait for response.completed ───────────────────────────────────
-      const capturedContextLength = context.messages.length;
-
-      await new Promise<void>((resolve, reject) => {
-        // Honour abort signal
-        const abortHandler = () => {
-          cleanup();
-          reject(new Error("aborted"));
-        };
-        if (signal?.aborted) {
-          reject(new Error("aborted"));
-          return;
-        }
-        signal?.addEventListener("abort", abortHandler, { once: true });
-
-        // If the WebSocket drops mid-request, reject so we don't hang forever.
-        const closeHandler = (code: number, reason: string) => {
-          cleanup();
-          reject(
-            new Error(`WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`),
-          );
-        };
-        session.manager.on("close", closeHandler);
-
-        const cleanup = () => {
-          signal?.removeEventListener("abort", abortHandler);
-          session.manager.off("close", closeHandler);
-          unsubscribe();
-        };
-
-        const unsubscribe = session.manager.onMessage((event) => {
-          if (event.type === "response.completed") {
-            cleanup();
-            // Update session state
-            session.lastContextLength = capturedContextLength;
-            // Build and emit the assistant message
-            const assistantMsg = buildAssistantMessageFromResponse(event.response, {
-              api: model.api,
-              provider: model.provider,
-              id: model.id,
-            });
-            const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-              assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
-            eventStream.push({ type: "done", reason, message: assistantMsg });
-            resolve();
-          } else if (event.type === "response.failed") {
-            cleanup();
-            const errMsg = event.response?.error?.message ?? "Response failed";
-            reject(new Error(`OpenAI WebSocket response failed: ${errMsg}`));
-          } else if (event.type === "error") {
-            cleanup();
-            reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
-          } else if (event.type === "response.output_text.delta") {
-            // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
-              model,
-              content: [{ type: "text", text: event.delta }],
-              stopReason: "stop",
-            });
-            eventStream.push({
-              type: "text_delta",
-              contentIndex: 0,
-              delta: event.delta,
-              partial: partialMsg,
+            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+              suppressStart: emittedStart,
+              turnState: resolveProviderTransportTurnState(model, {
+                sessionId,
+                turnId,
+                attempt: Math.max(1, turnAttempt),
+                transport: "stream",
+              }),
             });
           }
+        }
+
+        if (session.broken || !session.manager.isConnected()) {
+          if (transport === "websocket") {
+            throw new Error("WebSocket session disconnected");
+          }
+          log.warn(`[ws-stream] session=${sessionId} broken/disconnected; falling back to HTTP`);
+          markWsSessionDegraded(session);
+          resetWsSession({
+            session,
+            createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
+            preserveDegradeUntil: true,
+          });
+          return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+            suppressStart: emittedStart,
+            turnState: resolveProviderTransportTurnState(model, {
+              sessionId,
+              turnId,
+              attempt: Math.max(1, turnAttempt),
+              transport: "stream",
+            }),
+          });
+        }
+
+        if (resolveWsWarmup(options) && !session.warmUpAttempted) {
+          session.warmUpAttempted = true;
+          let warmupFailed = false;
+          try {
+            await runWarmUp({
+              manager: session.manager,
+              modelId: model.id,
+              tools: convertTools(context.tools, {
+                strict: resolveOpenAIWebSocketStrictToolSetting(model),
+              }),
+              instructions: context.systemPrompt
+                ? stripSystemPromptCacheBoundary(context.systemPrompt)
+                : undefined,
+              metadata: resolveProviderTransportTurnState(model, {
+                sessionId,
+                turnId,
+                attempt: Math.max(1, turnAttempt),
+                transport: "websocket",
+              })?.metadata,
+              signal,
+            });
+            log.debug(`[ws-stream] warm-up completed for session=${sessionId}`);
+          } catch (warmErr) {
+            if (signal?.aborted) {
+              throw warmErr instanceof Error ? warmErr : new Error(String(warmErr));
+            }
+            warmupFailed = true;
+            log.warn(
+              `[ws-stream] warm-up failed for session=${sessionId}; continuing without warm-up. error=${String(warmErr)}`,
+            );
+          }
+          if (warmupFailed && !session.manager.isConnected()) {
+            try {
+              session.manager.close();
+            } catch {
+              /* ignore */
+            }
+            try {
+              session.manager = createWsManager(opts.managerOptions, sessionHeaders);
+              await session.manager.connect(apiKey);
+              session.everConnected = true;
+              session.degradedUntil = null;
+              log.debug(`[ws-stream] reconnected after warm-up failure for session=${sessionId}`);
+            } catch (reconnectErr) {
+              markWsSessionDegraded(session);
+              resetWsSession({
+                session,
+                createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
+                preserveDegradeUntil: true,
+              });
+              if (transport === "websocket") {
+                throw reconnectErr instanceof Error
+                  ? reconnectErr
+                  : new Error(String(reconnectErr));
+              }
+              log.warn(
+                `[ws-stream] reconnect after warm-up failed for session=${sessionId}; falling back to HTTP. error=${String(reconnectErr)}`,
+              );
+              return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+                suppressStart: emittedStart,
+                turnState: resolveProviderTransportTurnState(model, {
+                  sessionId,
+                  turnId,
+                  attempt: Math.max(1, turnAttempt),
+                  transport: "stream",
+                }),
+              });
+            }
+          }
+        }
+
+        turnAttempt++;
+        const turnState = resolveProviderTransportTurnState(model, {
+          sessionId,
+          turnId,
+          attempt: turnAttempt,
+          transport: "websocket",
         });
-      });
+        const fullTurnInput = {
+          inputItems: convertMessagesToInputItems(context.messages, model),
+        };
+        let fullPayload = buildOpenAIWebSocketResponseCreatePayload({
+          model,
+          context,
+          options: options as WsOptions | undefined,
+          turnInput: fullTurnInput,
+          tools: convertTools(context.tools, {
+            strict: resolveOpenAIWebSocketStrictToolSetting(model),
+          }),
+          metadata: turnState?.metadata,
+        }) as Record<string, unknown>;
+        const nextPayload = await options?.onPayload?.(fullPayload, model);
+        fullPayload = mergeTransportMetadata(
+          (nextPayload ?? fullPayload) as Record<string, unknown>,
+          turnState?.metadata,
+        );
+        const plannedPayload = planOpenAIWebSocketRequestPayload({
+          fullPayload: fullPayload as ResponseCreateEvent,
+          previousRequestPayload: session.lastRequestPayload,
+          previousResponseId: session.manager.previousResponseId,
+          previousResponseInputItems: session.lastResponseInputItems,
+        });
+        const plannedInputItems = Array.isArray(plannedPayload.payload.input)
+          ? plannedPayload.payload.input
+          : [];
+        if (plannedPayload.mode === "incremental") {
+          log.debug(
+            `[ws-stream] session=${sessionId}: incremental send (${plannedInputItems.length} items) previous_response_id=${plannedPayload.payload.previous_response_id}`,
+          );
+        } else {
+          log.debug(
+            `[ws-stream] session=${sessionId}: full context send (${plannedInputItems.length} items)`,
+          );
+        }
+        const requestPayload = plannedPayload.payload as Parameters<
+          OpenAIWebSocketManager["send"]
+        >[0];
+
+        try {
+          session.manager.send(requestPayload);
+        } catch (sendErr) {
+          const normalizedErr = buildRetryableSendError(sendErr);
+          if (
+            transport !== "websocket" &&
+            !signal?.aborted &&
+            runtimeRetries < MAX_AUTO_WS_RUNTIME_RETRIES
+          ) {
+            runtimeRetries++;
+            log.warn(
+              `[ws-stream] retrying websocket turn after send failure for session=${sessionId} (${runtimeRetries}/${MAX_AUTO_WS_RUNTIME_RETRIES}). error=${normalizedErr.message}`,
+            );
+            resetWsSession({
+              session,
+              createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
+            });
+            continue;
+          }
+          if (transport !== "websocket") {
+            log.warn(
+              `[ws-stream] send failed for session=${sessionId}; falling back to HTTP. error=${normalizedErr.message}`,
+            );
+            markWsSessionDegraded(session);
+            resetWsSession({
+              session,
+              createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
+              preserveDegradeUntil: true,
+            });
+            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+              suppressStart: emittedStart,
+              turnState: resolveProviderTransportTurnState(model, {
+                sessionId,
+                turnId,
+                attempt: turnAttempt,
+                transport: "stream",
+              }),
+            });
+          }
+          throw normalizedErr;
+        }
+
+        if (!emittedStart) {
+          eventStream.push({
+            type: "start",
+            partial: buildAssistantMessageWithZeroUsage({
+              model,
+              content: [],
+              stopReason: "stop",
+            }),
+          });
+          emittedStart = true;
+        }
+
+        const outputItemPhaseById = new Map<string, OpenAIResponsesAssistantPhase | undefined>();
+        const outputTextByPart = new Map<string, string>();
+        const emittedTextByPart = new Map<string, string>();
+        const getOutputTextKey = (itemId: string, contentIndex: number) =>
+          `${itemId}:${contentIndex}`;
+        const emitTextDelta = (params: {
+          fullText: string;
+          deltaText: string;
+          itemId?: string;
+          contentIndex?: number;
+        }) => {
+          const resolvedItemId = params.itemId;
+          const contentIndex = params.contentIndex ?? 0;
+          const itemPhase = resolvedItemId
+            ? normalizeAssistantPhase(outputItemPhaseById.get(resolvedItemId))
+            : undefined;
+          const partialBase = buildAssistantMessageWithZeroUsage({
+            model,
+            content: [
+              {
+                type: "text",
+                text: params.fullText,
+                ...(resolvedItemId
+                  ? {
+                      textSignature: encodeAssistantTextSignature({
+                        id: resolvedItemId,
+                        ...(itemPhase ? { phase: itemPhase } : {}),
+                      }),
+                    }
+                  : {}),
+              },
+            ],
+            stopReason: "stop",
+          });
+          const partialMsg: AssistantMessageWithPhase = itemPhase
+            ? ({ ...partialBase, phase: itemPhase } as AssistantMessageWithPhase)
+            : partialBase;
+          eventStream.push({
+            type: "text_delta",
+            contentIndex,
+            delta: params.deltaText,
+            partial: partialMsg,
+          });
+        };
+        const emitBufferedTextDelta = (params: { itemId: string; contentIndex: number }) => {
+          const key = getOutputTextKey(params.itemId, params.contentIndex);
+          const fullText = outputTextByPart.get(key) ?? "";
+          const emittedText = emittedTextByPart.get(key) ?? "";
+          if (!fullText || fullText === emittedText) {
+            return;
+          }
+          const deltaText = fullText.startsWith(emittedText)
+            ? fullText.slice(emittedText.length)
+            : fullText;
+          emittedTextByPart.set(key, fullText);
+          emitTextDelta({
+            fullText,
+            deltaText,
+            itemId: params.itemId,
+            contentIndex: params.contentIndex,
+          });
+        };
+        const capturedContextLength = context.messages.length;
+        let sawWsOutput = false;
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const abortHandler = () => {
+              outputItemPhaseById.clear();
+              outputTextByPart.clear();
+              emittedTextByPart.clear();
+              cleanup();
+              reject(new Error("aborted"));
+            };
+            if (signal?.aborted) {
+              reject(new Error("aborted"));
+              return;
+            }
+            signal?.addEventListener("abort", abortHandler, { once: true });
+
+            const closeHandler = (code: number, reason: string) => {
+              outputItemPhaseById.clear();
+              outputTextByPart.clear();
+              emittedTextByPart.clear();
+              cleanup();
+              const closeInfo = session.manager.lastCloseInfo;
+              reject(
+                new OpenAIWebSocketRuntimeError(
+                  `WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`,
+                  {
+                    kind: "disconnect",
+                    retryable: closeInfo?.retryable ?? true,
+                    closeCode: closeInfo?.code ?? code,
+                    closeReason: closeInfo?.reason ?? reason,
+                  },
+                ),
+              );
+            };
+            session.manager.on("close", closeHandler);
+
+            const cleanup = () => {
+              signal?.removeEventListener("abort", abortHandler);
+              session.manager.off("close", closeHandler);
+              unsubscribe();
+            };
+
+            const unsubscribe = session.manager.onMessage((event) => {
+              if (
+                event.type === "response.output_item.added" ||
+                event.type === "response.output_item.done" ||
+                event.type === "response.content_part.added" ||
+                event.type === "response.content_part.done" ||
+                event.type === "response.output_text.delta" ||
+                event.type === "response.output_text.done" ||
+                event.type === "response.function_call_arguments.delta" ||
+                event.type === "response.function_call_arguments.done"
+              ) {
+                sawWsOutput = true;
+              }
+
+              if (
+                event.type === "response.output_item.added" ||
+                event.type === "response.output_item.done"
+              ) {
+                if (typeof event.item.id === "string") {
+                  const itemPhase =
+                    event.item.type === "message"
+                      ? normalizeAssistantPhase((event.item as { phase?: unknown }).phase)
+                      : undefined;
+                  outputItemPhaseById.set(event.item.id, itemPhase);
+                  if (itemPhase !== undefined) {
+                    for (const key of outputTextByPart.keys()) {
+                      if (key.startsWith(`${event.item.id}:`)) {
+                        const [, contentIndexText] = key.split(":");
+                        emitBufferedTextDelta({
+                          itemId: event.item.id,
+                          contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
+                        });
+                      }
+                    }
+                  }
+                }
+                return;
+              }
+
+              if (event.type === "response.output_text.delta") {
+                const key = getOutputTextKey(event.item_id, event.content_index);
+                const nextText = `${outputTextByPart.get(key) ?? ""}${event.delta}`;
+                outputTextByPart.set(key, nextText);
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
+                  emitBufferedTextDelta({
+                    itemId: event.item_id,
+                    contentIndex: event.content_index,
+                  });
+                }
+                return;
+              }
+
+              if (event.type === "response.output_text.done") {
+                const key = getOutputTextKey(event.item_id, event.content_index);
+                if (event.text && event.text !== outputTextByPart.get(key)) {
+                  outputTextByPart.set(key, event.text);
+                }
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
+                  emitBufferedTextDelta({
+                    itemId: event.item_id,
+                    contentIndex: event.content_index,
+                  });
+                }
+                return;
+              }
+
+              if (event.type === "response.completed") {
+                outputItemPhaseById.clear();
+                outputTextByPart.clear();
+                emittedTextByPart.clear();
+                cleanup();
+                session.lastContextLength = capturedContextLength;
+                session.lastRequestPayload = fullPayload as ResponseCreateEvent;
+                session.lastResponseInputItems = convertResponseToInputItems(event.response, {
+                  api: model.api,
+                  provider: model.provider,
+                  id: model.id,
+                  input: model.input,
+                });
+                const assistantMsg = buildAssistantMessageFromResponse(event.response, {
+                  api: model.api,
+                  provider: model.provider,
+                  id: model.id,
+                });
+                const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
+                  assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
+                eventStream.push({ type: "done", reason, message: assistantMsg });
+                resolve();
+              } else if (event.type === "response.failed") {
+                outputItemPhaseById.clear();
+                outputTextByPart.clear();
+                emittedTextByPart.clear();
+                cleanup();
+                reject(
+                  new OpenAIWebSocketRuntimeError(
+                    `OpenAI WebSocket response failed: ${formatOpenAIWebSocketResponseFailure(event.response)}`,
+                    {
+                      kind: "server",
+                      retryable: false,
+                    },
+                  ),
+                );
+              } else if (event.type === "error") {
+                outputItemPhaseById.clear();
+                outputTextByPart.clear();
+                emittedTextByPart.clear();
+                cleanup();
+                reject(
+                  new OpenAIWebSocketRuntimeError(
+                    `OpenAI WebSocket error: ${formatOpenAIWebSocketError(event)}`,
+                    {
+                      kind: "server",
+                      retryable: false,
+                    },
+                  ),
+                );
+              }
+            });
+          });
+          return;
+        } catch (wsRunErr) {
+          const normalizedErr = normalizeWsRunError(wsRunErr);
+          if (
+            transport !== "websocket" &&
+            !signal?.aborted &&
+            normalizedErr.retryable &&
+            !sawWsOutput &&
+            runtimeRetries < MAX_AUTO_WS_RUNTIME_RETRIES
+          ) {
+            runtimeRetries++;
+            log.warn(
+              `[ws-stream] retrying websocket turn after retryable runtime failure for session=${sessionId} (${runtimeRetries}/${MAX_AUTO_WS_RUNTIME_RETRIES}). error=${normalizedErr.message}`,
+            );
+            resetWsSession({
+              session,
+              createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
+            });
+            continue;
+          }
+          if (transport !== "websocket" && !signal?.aborted && !sawWsOutput) {
+            log.warn(
+              `[ws-stream] session=${sessionId} runtime failure before output; falling back to HTTP. error=${normalizedErr.message}`,
+            );
+            markWsSessionDegraded(session);
+            resetWsSession({
+              session,
+              createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
+              preserveDegradeUntil: true,
+            });
+            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+              suppressStart: true,
+              turnState: resolveProviderTransportTurnState(model, {
+                sessionId,
+                turnId,
+                attempt: turnAttempt,
+                transport: "stream",
+              }),
+            });
+          }
+          throw normalizedErr;
+        }
+      }
     };
 
     queueMicrotask(() =>
       run().catch((err) => {
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorMessage = formatErrorMessage(err);
         log.warn(`[ws-stream] session=${sessionId} run error: ${errorMessage}`);
         eventStream.push({
           type: "error",
@@ -625,24 +1295,55 @@ export function createOpenAIWebSocketStreamFn(
 }
 
 /**
- * Fall back to HTTP (`streamSimple`) and pipe events into the existing stream.
+ * Fall back to HTTP and pipe events into the existing stream.
  * This is called when the WebSocket is broken or unavailable.
  */
 async function fallbackToHttp(
   model: Parameters<StreamFn>[0],
   context: Parameters<StreamFn>[1],
-  options: Parameters<StreamFn>[2],
+  streamOptions: Parameters<StreamFn>[2],
   apiKey: string,
   eventStream: AssistantMessageEventStreamLike,
   signal?: AbortSignal,
+  fallbackOptions?: {
+    suppressStart?: boolean;
+    turnState?: ProviderTransportTurnState;
+  },
 ): Promise<void> {
+  const baseOnPayload = streamOptions?.onPayload;
   const mergedOptions = {
-    ...options,
+    ...streamOptions,
     apiKey,
+    ...(fallbackOptions?.turnState?.headers
+      ? {
+          headers: {
+            ...streamOptions?.headers,
+            ...fallbackOptions.turnState.headers,
+          },
+        }
+      : {}),
+    ...(fallbackOptions?.turnState?.metadata
+      ? {
+          onPayload: async (
+            payload: unknown,
+            payloadModel: Parameters<NonNullable<typeof baseOnPayload>>[1],
+          ) => {
+            const nextPayload = await baseOnPayload?.(payload, payloadModel);
+            const resolvedPayload = (nextPayload ?? payload) as Record<string, unknown>;
+            return mergeTransportMetadata(resolvedPayload, fallbackOptions.turnState?.metadata);
+          },
+        }
+      : {}),
     ...(signal ? { signal } : {}),
   };
-  const httpStream = openAIWsStreamDeps.streamSimple(model, context, mergedOptions);
+  const httpStreamFn =
+    openAIWsStreamDeps.createHttpFallbackStreamFn(model as ProviderRuntimeModel) ??
+    openAIWsStreamDeps.streamSimple;
+  const httpStream = await httpStreamFn(model, context, mergedOptions);
   for await (const event of httpStream) {
+    if (fallbackOptions?.suppressStart && event.type === "start") {
+      continue;
+    }
     eventStream.push(event);
   }
 }
@@ -655,5 +1356,8 @@ export const __testing = {
           ...overrides,
         }
       : defaultOpenAIWsStreamDeps;
+  },
+  setWsDegradeCooldownMsForTest(nextMs?: number) {
+    wsDegradeCooldownMsOverride = nextMs;
   },
 };

@@ -6,6 +6,7 @@ import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileFailure,
+  markAuthProfileUsed,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
   resolveProfileUnusableUntilForDisplay,
@@ -17,14 +18,10 @@ const storeMocks = vi.hoisted(() => ({
 }));
 const fetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./store.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./store.js")>();
-  return {
-    ...original,
-    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
-    saveAuthProfileStore: storeMocks.saveAuthProfileStore,
-  };
-});
+vi.mock("./store.js", () => ({
+  updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
+  saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -524,7 +521,7 @@ describe("clearExpiredCooldowns", () => {
   it("ignores NaN and Infinity cooldown values", () => {
     const store = makeStore({
       "anthropic:default": {
-        cooldownUntil: NaN,
+        cooldownUntil: Number.NaN,
         errorCount: 2,
       },
       "openai:default": {
@@ -602,6 +599,59 @@ describe("clearAuthProfileCooldown", () => {
   });
 });
 
+describe("markAuthProfileUsed", () => {
+  it("updates usage stats and persists through the fallback save path when lock update misses", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        errorCount: 3,
+        cooldownUntil: Date.now() + 60_000,
+      },
+    });
+
+    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
+
+    await markAuthProfileUsed({
+      store,
+      profileId: "anthropic:default",
+      agentDir: "/tmp/openclaw-auth-profiles-used",
+    });
+
+    expect(storeMocks.saveAuthProfileStore).toHaveBeenCalledWith(
+      store,
+      "/tmp/openclaw-auth-profiles-used",
+    );
+    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
+    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
+    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toEqual(expect.any(Number));
+  });
+
+  it("adopts locked store usage stats without saving locally when lock update succeeds", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        errorCount: 3,
+        cooldownUntil: Date.now() + 60_000,
+      },
+    });
+    const lockedStore = makeStore({
+      "anthropic:default": {
+        lastUsed: 123_456,
+        errorCount: 0,
+      },
+    });
+
+    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(lockedStore);
+
+    await markAuthProfileUsed({
+      store,
+      profileId: "anthropic:default",
+      agentDir: "/tmp/openclaw-auth-profiles-used",
+    });
+
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+    expect(store.usageStats).toEqual(lockedStore.usageStats);
+  });
+});
+
 describe("markAuthProfileFailure — active windows do not extend on retry", () => {
   // Regression for https://github.com/openclaw/openclaw/issues/23516
   // When all providers are at saturation backoff (60 min) and retries fire every 30 min,
@@ -653,7 +703,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       label: "disabledUntil(auth_permanent)",
       reason: "auth_permanent" as const,
       buildUsageStats: (now: number): WindowStats => ({
-        disabledUntil: now + 20 * 60 * 60 * 1000,
+        disabledUntil: now + 50 * 60 * 1000,
         disabledReason: "auth_permanent",
         errorCount: 5,
         failureCounts: { auth_permanent: 5 },
@@ -709,7 +759,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, billing count resets to 1 →
-      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
+      // calculateDisabledLaneBackoffMs(1, 5h, 24h) = 5h
       expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
@@ -724,8 +774,8 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, auth_permanent count resets to 1 →
-      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
-      expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
+      // calculateDisabledLaneBackoffMs(1, 10m, 60m) = 10m
+      expectedUntil: (now: number) => now + 10 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
   ];

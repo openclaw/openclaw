@@ -42,7 +42,11 @@ function isDiscordExecApprovalClientEnabledForTest(params: {
   const rootConfig = params.cfg.channels?.discord?.execApprovals;
   const accountConfig =
     accountId && accountId !== "default"
-      ? params.cfg.channels?.discordAccounts?.[accountId]?.execApprovals
+      ? (
+          params.cfg.channels?.discordAccounts?.[accountId] as
+            | { execApprovals?: { enabled?: boolean; approvers?: unknown[] } }
+            | undefined
+        )?.execApprovals
       : undefined;
   const config = accountConfig ?? rootConfig;
   return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
@@ -56,7 +60,11 @@ function isTelegramExecApprovalClientEnabledForTest(params: {
   const rootConfig = params.cfg.channels?.telegram?.execApprovals;
   const accountConfig =
     accountId && accountId !== "default"
-      ? params.cfg.channels?.telegramAccounts?.[accountId]?.execApprovals
+      ? (
+          params.cfg.channels?.telegramAccounts?.[accountId] as
+            | { execApprovals?: { enabled?: boolean; approvers?: unknown[] } }
+            | undefined
+        )?.execApprovals
       : undefined;
   const config = accountConfig ?? rootConfig;
   return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
@@ -95,7 +103,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
             },
             {
               label: "Allow Always",
-              value: `/approve ${params.request.id} always`,
+              value: `/approve ${params.request.id} allow-always`,
               style: "primary",
             },
             {
@@ -115,7 +123,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
         buttons: [
           [
             { text: "Allow Once", callback_data: `/approve ${params.request.id} allow-once` },
-            { text: "Allow Always", callback_data: `/approve ${params.request.id} always` },
+            { text: "Allow Always", callback_data: `/approve ${params.request.id} allow-always` },
           ],
           [{ text: "Deny", callback_data: `/approve ${params.request.id} deny` }],
         ],
@@ -126,17 +134,22 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
 
 const telegramApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "approvals"
+  "id" | "meta" | "capabilities" | "config" | "approvalCapability"
 > = {
   ...createChannelTestPluginBase({ id: "telegram" }),
-  approvals: {
+  approvalCapability: {
     delivery: {
-      shouldSuppressForwardingFallback: (params) =>
-        shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params),
+      shouldSuppressForwardingFallback: (params: {
+        cfg: OpenClawConfig;
+        target: { channel: string; accountId?: string | null };
+        request: {
+          request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null };
+        };
+      }) => shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params),
     },
     render: {
       exec: {
-        buildPendingPayload: ({ request }) =>
+        buildPendingPayload: ({ request }: { request: { id: string } }) =>
           buildTelegramExecApprovalPendingPayloadForTest({ request }),
       },
     },
@@ -144,12 +157,18 @@ const telegramApprovalPlugin: Pick<
 };
 const discordApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "approvals"
+  "id" | "meta" | "capabilities" | "config" | "approvalCapability"
 > = {
   ...createChannelTestPluginBase({ id: "discord" }),
-  approvals: {
+  approvalCapability: {
     delivery: {
-      shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      shouldSuppressForwardingFallback: ({
+        cfg,
+        target,
+      }: {
+        cfg: OpenClawConfig;
+        target: { channel: string; accountId?: string | null };
+      }) =>
         target.channel === "discord" &&
         isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
     },
@@ -327,7 +346,7 @@ describe("exec approval forwarder", () => {
     });
     expect(deliver).toHaveBeenCalledTimes(2);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
@@ -339,7 +358,7 @@ describe("exec approval forwarder", () => {
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
@@ -465,7 +484,7 @@ describe("exec approval forwarder", () => {
                     },
                     {
                       label: "Allow Always",
-                      value: "/approve req-1 always",
+                      value: "/approve req-1 allow-always",
                       style: "primary",
                     },
                     {
@@ -476,6 +495,31 @@ describe("exec approval forwarder", () => {
                   ],
                 },
               ],
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("stores exec metadata on generic forwarded fallback payloads", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            channelData: expect.objectContaining({
+              execApproval: expect.objectContaining({
+                approvalId: "req-1",
+                approvalKind: "exec",
+                agentId: "main",
+                sessionKey: "agent:main:main",
+              }),
             }),
           }),
         ],
@@ -521,7 +565,7 @@ describe("exec approval forwarder", () => {
     },
     {
       command: "echo `uname`\necho done",
-      expectedText: "```\necho `uname`\necho done\n```",
+      expectedText: "```\necho `uname`\\u{A}echo done\n```",
     },
     {
       command: "echo ```danger```",

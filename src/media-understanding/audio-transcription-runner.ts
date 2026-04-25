@@ -1,7 +1,7 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { ActiveMediaModel } from "./active-model.types.js";
 import {
-  type ActiveMediaModel,
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
@@ -24,10 +24,10 @@ export async function runAudioTranscription(params: {
   }
 
   const providerRegistry = buildProviderRegistry(params.providers, params.cfg);
-  const cache = createMediaAttachmentCache(
-    attachments,
-    params.localPathRoots ? { localPathRoots: params.localPathRoots } : undefined,
-  );
+  const cache = createMediaAttachmentCache(attachments, {
+    ...(params.localPathRoots ? { localPathRoots: params.localPathRoots } : {}),
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+  });
 
   try {
     const result = await runCapability({

@@ -1,8 +1,12 @@
+import {
+  applyProviderNativeStreamingUsageCompat,
+  supportsNativeStreamingUsageCompat,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
-export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
+export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.6";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 262144;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 262144;
 const MOONSHOT_DEFAULT_COST = {
@@ -11,14 +15,35 @@ const MOONSHOT_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+const MOONSHOT_K2_6_COST = {
+  input: 0.95,
+  output: 4,
+  cacheRead: 0.16,
+  cacheWrite: 0,
+};
+const MOONSHOT_K2_5_COST = {
+  input: 0.6,
+  output: 3,
+  cacheRead: 0.1,
+  cacheWrite: 0,
+};
 
 const MOONSHOT_MODEL_CATALOG = [
+  {
+    id: "kimi-k2.6",
+    name: "Kimi K2.6",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: MOONSHOT_K2_6_COST,
+    contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  },
   {
     id: "kimi-k2.5",
     name: "Kimi K2.5",
     reasoning: false,
     input: ["text", "image"],
-    cost: MOONSHOT_DEFAULT_COST,
+    cost: MOONSHOT_K2_5_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
   },
@@ -51,59 +76,28 @@ const MOONSHOT_MODEL_CATALOG = [
   },
 ] as const;
 
-function normalizeMoonshotBaseUrl(baseUrl: string | undefined): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    const url = new URL(trimmed);
-    url.hash = "";
-    url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
-  } catch {
-    return trimmed.replace(/\/+$/, "").toLowerCase();
-  }
-}
-
 export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
-  const normalized = normalizeMoonshotBaseUrl(baseUrl);
-  return normalized === MOONSHOT_BASE_URL || normalized === MOONSHOT_CN_BASE_URL;
-}
-
-function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
-    return provider;
-  }
-
-  let changed = false;
-  const models = provider.models.map((model) => {
-    if (model.compat?.supportsUsageInStreaming !== undefined) {
-      return model;
-    }
-    changed = true;
-    return {
-      ...model,
-      compat: {
-        ...model.compat,
-        supportsUsageInStreaming: true,
-      },
-    };
+  return supportsNativeStreamingUsageCompat({
+    providerId: "moonshot",
+    baseUrl,
   });
-
-  return changed ? { ...provider, models } : provider;
 }
 
 export function applyMoonshotNativeStreamingUsageCompat(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
-  return isNativeMoonshotBaseUrl(provider.baseUrl) ? withStreamingUsageCompat(provider) : provider;
+  return applyProviderNativeStreamingUsageCompat({
+    providerId: "moonshot",
+    providerConfig: provider,
+  });
 }
 
 export function buildMoonshotProvider(): ModelProviderConfig {
   return {
     baseUrl: MOONSHOT_BASE_URL,
     api: "openai-completions",
-    models: MOONSHOT_MODEL_CATALOG.map((model) => ({ ...model, input: [...model.input] })),
+    models: MOONSHOT_MODEL_CATALOG.map((model) =>
+      Object.assign({}, model, { input: [...model.input] }),
+    ),
   };
 }

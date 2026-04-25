@@ -1,1 +1,1 @@
-export { maybeCreateMatrixMigrationSnapshot } from "openclaw/plugin-sdk/matrix-runtime-heavy";
+export { maybeCreateMatrixMigrationSnapshot } from "../../migration-snapshot-backup.js";

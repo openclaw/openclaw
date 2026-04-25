@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
+  loadConfig: vi.fn(() => ({})),
   applyPluginAutoEnable: vi.fn(),
   listChannelPlugins: vi.fn(),
   buildChannelUiCatalog: vi.fn(),
@@ -10,14 +10,14 @@ const mocks = vi.hoisted(() => ({
   getChannelActivity: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-  return {
-    ...actual,
-    loadConfig: mocks.loadConfig,
-  };
-});
+vi.mock("../../config/config.js", () => ({
+  loadConfig: mocks.loadConfig,
+  readConfigFileSnapshot: vi.fn(async () => ({
+    config: {},
+    path: "openclaw.config.json",
+    raw: "{}",
+  })),
+}));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
@@ -25,6 +25,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
+  getLoadedChannelPlugin: vi.fn(),
   getChannelPlugin: vi.fn(),
   normalizeChannelId: (value: string) => value,
 }));
@@ -130,6 +131,35 @@ describe("channelsHandlers channels.status", () => {
         },
       }),
       undefined,
+    );
+  });
+
+  it("caps probe timeout before passing it to channel plugins", async () => {
+    const autoEnabledConfig = { autoEnabled: true };
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: async () => true,
+        },
+        status: {
+          probeAccount,
+        },
+      },
+    ]);
+
+    await channelsHandlers["channels.status"](createOptions({ probe: true, timeoutMs: 999_999 }));
+
+    expect(probeAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 30_000,
+        cfg: autoEnabledConfig,
+      }),
     );
   });
 });

@@ -70,18 +70,34 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
-  it("classifies nodes as exec-capable even for list actions", () => {
-    expect(
-      classify({
-        title: "nodes: list",
-        rawInput: { name: "nodes", action: "list" },
-      }),
-    ).toEqual({
-      toolName: "nodes",
-      approvalClass: "exec_capable",
-      autoApprove: false,
-    });
-  });
+  it.each([
+    {
+      title: "cron: status",
+      rawInput: { name: "cron", action: "status" },
+      expectedToolName: "cron",
+      expectedClass: "control_plane",
+    },
+    {
+      title: "nodes: list",
+      rawInput: { name: "nodes", action: "list" },
+      expectedToolName: "nodes",
+      expectedClass: "exec_capable",
+    },
+  ] as const)(
+    "classifies shared owner-only ACP backstops for $expectedToolName",
+    ({ title, rawInput, expectedToolName, expectedClass }) => {
+      expect(
+        classify({
+          title,
+          rawInput,
+        }),
+      ).toEqual({
+        toolName: expectedToolName,
+        approvalClass: expectedClass,
+        autoApprove: false,
+      });
+    },
+  );
 
   it("classifies gateway as control-plane", () => {
     expect(

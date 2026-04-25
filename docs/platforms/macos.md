@@ -3,10 +3,8 @@ summary: "OpenClaw macOS companion app (menu bar + gateway broker)"
 read_when:
   - Implementing macOS app features
   - Changing gateway lifecycle or node bridging on macOS
-title: "macOS App"
+title: "macOS app"
 ---
-
-# OpenClaw macOS Companion (menu bar + gateway broker)
 
 The macOS app is the **menu‑bar companion** for OpenClaw. It owns permissions,
 manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
@@ -21,7 +19,7 @@ capabilities to the agent as a node.
 - Exposes macOS‑only tools (Canvas, Camera, Screen Recording, `system.run`).
 - Starts the local node host service in **remote** mode (launchd), and stops it in **local** mode.
 - Optionally hosts **PeekabooBridge** for UI automation.
-- Installs the global CLI (`openclaw`) via npm/pnpm on request (bun not recommended for the Gateway runtime).
+- Installs the global CLI (`openclaw`) on request via npm, pnpm, or bun (the app prefers npm, then pnpm, then bun; Node remains the recommended Gateway runtime).
 
 ## Local vs remote mode
 
@@ -55,7 +53,7 @@ The macOS app presents itself as a node. Common commands:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
-- Screen: `screen.record`
+- Screen: `screen.snapshot`, `screen.record`
 - System: `system.run`, `system.notify`
 
 The node reports a `permissions` map so agents can decide what’s allowed.
@@ -104,7 +102,7 @@ Example:
 
 Notes:
 
-- `allowlist` entries are glob patterns for resolved binary paths.
+- `allowlist` entries are glob patterns for resolved binary paths, or bare command names for PATH-invoked commands.
 - Raw shell command text that contains shell control or expansion syntax (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss and requires explicit approval (or allowlisting the shell binary).
 - Choosing “Always Allow” in the prompt adds that command to the allowlist.
 - `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`) and then merged with the app’s environment.
@@ -196,7 +194,8 @@ Discovery options:
 - `--json`: structured output for diffing
 
 Tip: compare against `openclaw gateway discover --json` to see whether the
-macOS app’s discovery pipeline (NWBrowser + tailnet DNS‑SD fallback) differs from
+macOS app’s discovery pipeline (`local.` plus the configured wide-area domain, with
+wide-area and Tailscale Serve fallbacks) differs from
 the Node CLI’s `dns-sd` based discovery.
 
 ## Remote connection plumbing (SSH tunnels)

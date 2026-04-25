@@ -6,9 +6,10 @@ import {
 } from "@whiskeysockets/baileys";
 import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { jidToE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
+import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
+import type { WhatsAppStructuredContactContext } from "./types.js";
 
 const MESSAGE_WRAPPER_KEYS = [
   "botInvokeMessage",
@@ -99,7 +100,7 @@ function getMessageContentType(
 
 function extractMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
   if (typeof extractMessageContent === "function") {
-    return extractMessageContent(message) as proto.IMessage | undefined;
+    return extractMessageContent(message);
   }
   const normalized = fallbackNormalizeMessageContent(message);
   const contentType = fallbackGetContentType(normalized);
@@ -293,6 +294,20 @@ export function extractMediaPlaceholder(
 }
 
 function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): string | undefined {
+  const contactContext = extractContactContext(rawMessage);
+  if (!contactContext) {
+    return undefined;
+  }
+  if (contactContext.kind === "contact") {
+    return "<contact>";
+  }
+  const suffix = contactContext.total === 1 ? "contact" : "contacts";
+  return `<contacts: ${contactContext.total} ${suffix}>`;
+}
+
+export function extractContactContext(
+  rawMessage: proto.IMessage | undefined,
+): WhatsAppStructuredContactContext | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) {
     return undefined;
@@ -303,17 +318,23 @@ function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): stri
       displayName: contact.displayName,
       vcard: contact.vcard,
     });
-    return formatContactPlaceholder(name, phones);
+    return {
+      kind: "contact",
+      total: 1,
+      contacts: [{ name, phones }],
+    };
   }
   const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
   if (!contactsArray || contactsArray.length === 0) {
     return undefined;
   }
-  const labels = contactsArray
-    .map((entry) => describeContact({ displayName: entry.displayName, vcard: entry.vcard }))
-    .map((entry) => formatContactLabel(entry.name, entry.phones))
-    .filter((value): value is string => Boolean(value));
-  return formatContactsPlaceholder(labels, contactsArray.length);
+  return {
+    kind: "contacts",
+    total: contactsArray.length,
+    contacts: contactsArray.map((entry) =>
+      describeContact({ displayName: entry.displayName, vcard: entry.vcard }),
+    ),
+  };
 }
 
 function describeContact(input: { displayName?: string | null; vcard?: string | null }): {
@@ -324,60 +345,6 @@ function describeContact(input: { displayName?: string | null; vcard?: string | 
   const parsed = parseVcard(input.vcard ?? undefined);
   const name = displayName || parsed.name;
   return { name, phones: parsed.phones };
-}
-
-function formatContactPlaceholder(name?: string, phones?: string[]): string {
-  const label = formatContactLabel(name, phones);
-  if (!label) {
-    return "<contact>";
-  }
-  return `<contact: ${label}>`;
-}
-
-function formatContactsPlaceholder(labels: string[], total: number): string {
-  const cleaned = labels.map((label) => label.trim()).filter(Boolean);
-  if (cleaned.length === 0) {
-    const suffix = total === 1 ? "contact" : "contacts";
-    return `<contacts: ${total} ${suffix}>`;
-  }
-  const remaining = Math.max(total - cleaned.length, 0);
-  const suffix = remaining > 0 ? ` +${remaining} more` : "";
-  return `<contacts: ${cleaned.join(", ")}${suffix}>`;
-}
-
-function formatContactLabel(name?: string, phones?: string[]): string | undefined {
-  const phoneLabel = formatPhoneList(phones);
-  const parts = [name, phoneLabel].filter((value): value is string => Boolean(value));
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return parts.join(", ");
-}
-
-function formatPhoneList(phones?: string[]): string | undefined {
-  const cleaned = phones?.map((phone) => phone.trim()).filter(Boolean) ?? [];
-  if (cleaned.length === 0) {
-    return undefined;
-  }
-  const { shown, remaining } = summarizeList(cleaned, cleaned.length, 1);
-  const [primary] = shown;
-  if (!primary) {
-    return undefined;
-  }
-  if (remaining === 0) {
-    return primary;
-  }
-  return `${primary} (+${remaining} more)`;
-}
-
-function summarizeList(
-  values: string[],
-  total: number,
-  maxShown: number,
-): { shown: string[]; remaining: number } {
-  const shown = values.slice(0, maxShown);
-  const remaining = Math.max(total - shown.length, 0);
-  return { shown, remaining };
 }
 
 export function extractLocationData(
@@ -393,8 +360,8 @@ export function extractLocationData(
     const latitudeRaw = live.degreesLatitude;
     const longitudeRaw = live.degreesLongitude;
     if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = Number(latitudeRaw);
-      const longitude = Number(longitudeRaw);
+      const latitude = latitudeRaw;
+      const longitude = longitudeRaw;
       if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
         return {
           latitude,
@@ -413,8 +380,8 @@ export function extractLocationData(
     const latitudeRaw = location.degreesLatitude;
     const longitudeRaw = location.degreesLongitude;
     if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = Number(latitudeRaw);
-      const longitude = Number(longitudeRaw);
+      const latitude = latitudeRaw;
+      const longitude = longitudeRaw;
       if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
         const isLive = Boolean(location.isLive);
         return {
@@ -466,7 +433,7 @@ export function describeReplyContext(
     label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
   });
   return {
-    id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
+    id: contextInfo?.stanzaId || undefined,
     body,
     sender,
   };

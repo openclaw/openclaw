@@ -1,6 +1,7 @@
-import * as agentRuntimeModule from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as agentRuntimeModule from "openclaw/plugin-sdk/simple-completion-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 
 const completeWithPreparedSimpleCompletionModelMock =
   vi.fn<typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel>();
@@ -23,12 +24,12 @@ beforeEach(() => {
   prepareSimpleCompletionModelForAgentMock.mockResolvedValue({
     selection: {
       provider: "anthropic",
-      modelId: "claude-opus-4-6",
+      modelId: "claude-sonnet-4-6",
       agentDir: "/tmp/openclaw-agent",
     },
     model: {
       provider: "anthropic",
-      id: "claude-opus-4-6",
+      id: "claude-sonnet-4-6",
     },
     auth: {
       apiKey: "sk-test",
@@ -92,7 +93,7 @@ describe("generateThreadTitle", () => {
   });
 
   it("passes model override refs into shared model prep", async () => {
-    const cfg = {} as OpenClawConfig;
+    const cfg = EMPTY_DISCORD_TEST_CONFIG;
     await generateThreadTitle({
       cfg,
       agentId: "main",
@@ -114,7 +115,7 @@ describe("generateThreadTitle", () => {
     } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
 
     const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
       messageText: "Need a thread title.",
     });
@@ -128,13 +129,13 @@ describe("generateThreadTitle", () => {
       error: 'No API key resolved for provider "anthropic" (auth mode: api-key).',
       selection: {
         provider: "anthropic",
-        modelId: "claude-opus-4-6",
+        modelId: "claude-sonnet-4-6",
         agentDir: "/tmp/openclaw-agent",
       },
     } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
 
     const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
       messageText: "Need a thread title.",
     });
@@ -145,7 +146,7 @@ describe("generateThreadTitle", () => {
 
   it("builds contextual prompt and forwards completion options", async () => {
     const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
       messageText: "Summarize deployment blockers and owner follow-ups.",
       channelName: "release-status",
@@ -172,10 +173,12 @@ describe("generateThreadTitle", () => {
     ).toContain("Channel description: Deploy updates and incident notes");
     expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options).toEqual(
       expect.objectContaining({
-        maxTokens: 24,
-        temperature: 0.2,
+        maxTokens: 512,
       }),
     );
+    expect(
+      completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options,
+    ).not.toHaveProperty("temperature");
   });
 
   it("returns null when completion throws", async () => {
@@ -184,7 +187,7 @@ describe("generateThreadTitle", () => {
     );
 
     const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
       messageText: "Generate title.",
     });

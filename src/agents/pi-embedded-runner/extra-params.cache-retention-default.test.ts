@@ -1,7 +1,9 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
-import { applyExtraParamsToAgent } from "../pi-embedded-runner.js";
-import { resolveCacheRetention } from "./anthropic-cache-retention.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
+import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { __testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
+import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
   cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
@@ -34,6 +36,20 @@ vi.mock("./logger.js", () => ({
     warn: vi.fn(),
   },
 }));
+
+vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
+
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: () => undefined,
+    resolveProviderExtraParamsForTransport: () => undefined,
+    wrapProviderStreamFn: () => undefined,
+  });
+});
+
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+});
 
 describe("cacheRetention default behavior", () => {
   it("returns 'short' for Anthropic when not configured", () => {
@@ -213,5 +229,101 @@ describe("cacheRetention default behavior", () => {
     expect(
       resolveCacheRetention({ cacheRetention: "short" }, "litellm", "anthropic-messages"),
     ).toBe("short");
+  });
+
+  it("does not treat non-Anthropic Bedrock models as cache-retention eligible", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.nova-micro-v1:0",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps explicit cacheRetention for Anthropic Bedrock models", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "amazon-bedrock",
+        "openai-completions",
+        "us.anthropic.claude-sonnet-4-6",
+      ),
+    ).toBe("long");
+  });
+
+  it("defaults to 'short' for anthropic-vertex without explicit config", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+  });
+
+  it("respects explicit 'long' for anthropic-vertex", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("long");
+  });
+
+  it("respects explicit 'none' for anthropic-vertex", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("none");
+  });
+
+  it("passes through explicit cacheRetention for opaque Bedrock app inference profile ARNs", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "amazon-bedrock",
+        "openai-completions",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
+      ),
+    ).toBe("long");
+  });
+
+  it("passes through explicit 'none' for opaque Bedrock app inference profile ARNs", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "amazon-bedrock",
+        "openai-completions",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
+      ),
+    ).toBe("none");
+  });
+
+  it("does not default cacheRetention for opaque Bedrock app inference profile ARNs", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "amazon-bedrock",
+        "openai-completions",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe("anthropic-family cache semantics", () => {
+  it("classifies OpenRouter Anthropic model refs centrally", () => {
+    expect(isOpenRouterAnthropicModelRef("openrouter", "anthropic/claude-opus-4-6")).toBe(true);
+    expect(isOpenRouterAnthropicModelRef("openrouter", "google/gemini-2.5-pro")).toBe(false);
+    expect(isOpenRouterAnthropicModelRef("OpenRouter", "Anthropic/Claude-Sonnet-4")).toBe(true);
   });
 });

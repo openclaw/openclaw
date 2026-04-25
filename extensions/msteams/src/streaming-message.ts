@@ -10,6 +10,7 @@
  */
 
 import { createDraftStreamLoop, type DraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 /** Default throttle interval between stream updates (ms).
  * Teams docs recommend buffering tokens for 1.5-2s; limit is 1 req/s. */
@@ -21,7 +22,13 @@ const MIN_INITIAL_CHARS = 20;
 /** Teams message text limit. */
 const TEAMS_MAX_CHARS = 4000;
 
-type StreamSendFn = (activity: Record<string, unknown>) => Promise<{ id?: string } | unknown>;
+/**
+ * Stop streaming before Teams expires the content stream server-side.
+ * The exact service limit is opaque, so stay comfortably under it.
+ */
+const MAX_STREAM_AGE_MS = 45_000;
+
+type StreamSendFn = (activity: Record<string, unknown>) => Promise<unknown>;
 
 export type TeamsStreamOptions = {
   /** Function to send an activity (POST to Bot Framework). */
@@ -39,8 +46,7 @@ import { formatUnknownError } from "./errors.js";
 
 function extractId(response: unknown): string | undefined {
   if (response && typeof response === "object" && "id" in response) {
-    const id = (response as { id?: unknown }).id;
-    return typeof id === "string" ? id : undefined;
+    return readStringValue((response as { id?: unknown }).id);
   }
   return undefined;
 }
@@ -77,6 +83,7 @@ export class TeamsHttpStream {
   private finalized = false;
   private streamFailed = false;
   private lastStreamedText = "";
+  private streamStartedAt: number | undefined = undefined;
   private loop: DraftStreamLoop;
 
   constructor(options: TeamsStreamOptions) {
@@ -137,6 +144,15 @@ export class TeamsHttpStream {
     // Text exceeded Teams limit — finalize immediately with what we have
     // so the user isn't left waiting while the LLM keeps generating.
     if (this.accumulatedText.length > TEAMS_MAX_CHARS) {
+      this.streamFailed = true;
+      void this.finalize();
+      return;
+    }
+
+    // Stop early before Teams expires the stream server-side. finalize() will
+    // close the stream with the last good content, and reply-stream-controller
+    // will deliver any remaining suffix via normal fallback delivery.
+    if (this.streamStartedAt && Date.now() - this.streamStartedAt >= MAX_STREAM_AGE_MS) {
       this.streamFailed = true;
       void this.finalize();
       return;
@@ -256,6 +272,9 @@ export class TeamsHttpStream {
 
     try {
       const response = await this.sendActivity(activity);
+      if (!this.streamStartedAt) {
+        this.streamStartedAt = Date.now();
+      }
       if (!this.streamId) {
         this.streamId = extractId(response);
       }

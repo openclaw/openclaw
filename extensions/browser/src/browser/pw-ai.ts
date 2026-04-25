@@ -13,7 +13,6 @@ export {
   getPageForTargetId,
   listPagesViaPlaywright,
   refLocator,
-  type WithSnapshotForAI,
 } from "./pw-session.js";
 
 export {
@@ -29,6 +28,7 @@ export {
   dragViaPlaywright,
   emulateMediaViaPlaywright,
   evaluateViaPlaywright,
+  executeActViaPlaywright,
   fillFormViaPlaywright,
   getConsoleMessagesViaPlaywright,
   getNetworkRequestsViaPlaywright,

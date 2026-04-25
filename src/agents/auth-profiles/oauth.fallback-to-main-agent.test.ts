@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
+import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn(async () => {
@@ -11,15 +13,10 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
-  );
-  return {
-    ...actual,
-    getOAuthApiKey: getOAuthApiKeyMock,
-  };
-});
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: getOAuthApiKeyMock,
+  getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
+}));
 
 vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
@@ -34,14 +31,19 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   refreshProviderOAuthCredentialWithPlugin: async () => null,
 }));
 
-let clearRuntimeAuthProfileStoreSnapshots: typeof import("./store.js").clearRuntimeAuthProfileStoreSnapshots;
-let ensureAuthProfileStore: typeof import("./store.js").ensureAuthProfileStore;
-let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
 
-async function loadFreshOAuthModuleForTest() {
-  vi.resetModules();
-  ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } = await import("./store.js"));
-  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+afterAll(() => {
+  vi.doUnmock("@mariozechner/pi-ai/oauth");
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("../../plugins/provider-runtime.js");
+});
+
+function createUsableOAuthExpiry(): number {
+  return Date.now() + 30 * 60 * 1000;
 }
 
 describe("resolveApiKeyForProfile fallback to main agent", () => {
@@ -70,7 +72,6 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
     process.env.PI_CODING_AGENT_DIR = mainAgentDir;
-    await loadFreshOAuthModuleForTest();
     clearRuntimeAuthProfileStoreSnapshots();
   });
 
@@ -128,7 +129,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
           provider: "anthropic",
           access: "oauth-token",
           refresh: "refresh-token",
-          expires: Date.now() + 60_000,
+          expires: createUsableOAuthExpiry(),
         },
       },
     };
@@ -248,7 +249,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         profileId,
         access: "secondary-stale",
         refresh: "secondary-refresh",
-        expires: NaN,
+        expires: Number.NaN,
       }),
     );
 
@@ -330,5 +331,45 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await expect(resolveFromSecondaryAgent(profileId)).rejects.toThrow(
       /OAuth token refresh failed/,
     );
+  });
+
+  it("still falls back to main agent credentials when the refresh-token-reused retry throws", async () => {
+    const profileId = "anthropic:claude-cli";
+    const now = Date.now();
+    const expiredTime = now - 60 * 60 * 1000;
+    const freshTime = now + 60 * 60 * 1000;
+
+    await writeAuthProfilesStore(
+      secondaryAgentDir,
+      createOauthStore({
+        profileId,
+        access: "expired-access-token",
+        refresh: "expired-refresh-token",
+        expires: expiredTime,
+      }),
+    );
+
+    await writeAuthProfilesStore(
+      mainAgentDir,
+      createOauthStore({
+        profileId,
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+        expires: freshTime,
+      }),
+    );
+
+    getOAuthApiKeyMock
+      .mockImplementationOnce(async () => {
+        throw new Error("refresh_token_reused");
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error("retry also failed");
+      });
+
+    const result = await resolveFromSecondaryAgent(profileId);
+
+    expect(result?.apiKey).toBe("fresh-access-token");
+    expect(result?.provider).toBe("anthropic");
   });
 });

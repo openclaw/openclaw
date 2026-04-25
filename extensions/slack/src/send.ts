@@ -1,5 +1,5 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import {
@@ -11,11 +11,15 @@ import {
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWriteClient } from "./client.js";
+import { createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
@@ -27,6 +31,7 @@ const SLACK_UPLOAD_SSRF_POLICY = {
 };
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const slackDmChannelCache = new Map<string, string>();
+const slackSendQueues = new Map<string, Promise<void>>();
 
 type SlackRecipient =
   | {
@@ -45,7 +50,7 @@ export type SlackSendIdentity = {
 };
 
 type SlackSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -78,18 +83,18 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
       response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
     };
   };
-  const code = maybeData.data?.error?.toLowerCase();
+  const code = normalizeLowercaseStringOrEmpty(maybeData.data?.error);
   if (code !== "missing_scope") {
     return false;
   }
-  const needed = maybeData.data?.needed?.toLowerCase();
+  const needed = normalizeLowercaseStringOrEmpty(maybeData.data?.needed);
   if (needed?.includes("chat:write.customize")) {
     return true;
   }
   const scopes = [
     ...(maybeData.data?.response_metadata?.scopes ?? []),
     ...(maybeData.data?.response_metadata?.acceptedScopes ?? []),
-  ].map((scope) => scope.toLowerCase());
+  ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
   return scopes.includes("chat:write.customize");
 }
 
@@ -107,24 +112,25 @@ async function postSlackMessageBestEffort(params: {
     thread_ts: params.threadTs,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
+  const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
     // Build payloads in explicit branches so TS and runtime stay aligned.
     if (params.identity?.iconUrl) {
-      return await params.client.chat.postMessage({
+      return await postChatMessage({
         ...basePayload,
         ...(params.identity.username ? { username: params.identity.username } : {}),
         icon_url: params.identity.iconUrl,
       });
     }
     if (params.identity?.iconEmoji) {
-      return await params.client.chat.postMessage({
+      return await postChatMessage({
         ...basePayload,
         ...(params.identity.username ? { username: params.identity.username } : {}),
         icon_emoji: params.identity.iconEmoji,
       });
     }
-    return await params.client.chat.postMessage({
+    return await postChatMessage({
       ...basePayload,
       ...(params.identity?.username ? { username: params.identity.username } : {}),
     });
@@ -133,7 +139,7 @@ async function postSlackMessageBestEffort(params: {
       throw err;
     }
     logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
-    return params.client.chat.postMessage(basePayload);
+    return postChatMessage(basePayload);
   }
 }
 
@@ -174,12 +180,46 @@ function parseRecipient(raw: string): SlackRecipient {
   return { kind: target.kind, id: target.id };
 }
 
+function createSlackSendQueueKey(params: {
+  accountId: string;
+  token: string;
+  recipient: SlackRecipient;
+  threadTs?: string;
+}): string {
+  const isUserId = params.recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(params.recipient.id);
+  const recipientKey = `${isUserId ? "user" : params.recipient.kind}:${params.recipient.id}`;
+  return `${params.accountId}:${createSlackTokenCacheKey(params.token)}:${recipientKey}:${
+    params.threadTs ?? ""
+  }`;
+}
+
+async function runQueuedSlackSend<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = slackSendQueues.get(key) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queuedCurrent = previous.catch(() => undefined).then(() => current);
+  slackSendQueues.set(key, queuedCurrent);
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    releaseCurrent();
+    if (slackSendQueues.get(key) === queuedCurrent) {
+      slackSendQueues.delete(key);
+    }
+  }
+}
+
 function createSlackDmCacheKey(params: {
   accountId?: string;
   token: string;
   recipientId: string;
 }): string {
-  return `${params.accountId ?? "default"}:${params.token}:${params.recipientId}`;
+  return `${params.accountId ?? "default"}:${createSlackTokenCacheKey(params.token)}:${
+    params.recipientId
+  }`;
 }
 
 function setSlackDmChannelCache(key: string, channelId: string): void {
@@ -229,6 +269,10 @@ async function resolveChannelId(
 
 export function clearSlackDmChannelCache(): void {
   slackDmChannelCache.clear();
+}
+
+export function clearSlackSendQueuesForTest(): void {
+  slackSendQueues.clear();
 }
 
 async function uploadSlackFile(params: {
@@ -305,9 +349,9 @@ async function uploadSlackFile(params: {
 export async function sendMessageSlack(
   to: string,
   message: string,
-  opts: SlackSendOpts = {},
+  opts: SlackSendOpts,
 ): Promise<SlackSendResult> {
-  const trimmedMessage = message?.trim() ?? "";
+  const trimmedMessage = normalizeOptionalString(message) ?? "";
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return { messageId: "suppressed", channelId: "" };
@@ -316,7 +360,7 @@ export async function sendMessageSlack(
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Slack send");
   const account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,
@@ -327,8 +371,37 @@ export async function sendMessageSlack(
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = opts.client ?? createSlackWriteClient(token);
   const recipient = parseRecipient(to);
+  const queueKey = createSlackSendQueueKey({
+    accountId: account.accountId,
+    token,
+    recipient,
+    threadTs: opts.threadTs,
+  });
+  return await runQueuedSlackSend(queueKey, () =>
+    sendMessageSlackQueued({
+      trimmedMessage,
+      opts,
+      cfg,
+      account,
+      token,
+      recipient,
+      blocks,
+    }),
+  );
+}
+
+async function sendMessageSlackQueued(params: {
+  trimmedMessage: string;
+  opts: SlackSendOpts;
+  cfg: OpenClawConfig;
+  account: ReturnType<typeof resolveSlackAccount>;
+  token: string;
+  recipient: SlackRecipient;
+  blocks?: (Block | KnownBlock)[];
+}): Promise<SlackSendResult> {
+  const { opts, cfg, account, token, recipient, blocks, trimmedMessage } = params;
+  const client = opts.client ?? getSlackWriteClient(token);
   const { channelId } = await resolveChannelId(client, recipient, {
     accountId: account.accountId,
     token,

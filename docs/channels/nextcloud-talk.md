@@ -5,13 +5,15 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-# Nextcloud Talk (plugin)
+Status: bundled plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
 
-Status: supported via plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
+## Bundled plugin
 
-## Plugin required
+Nextcloud Talk ships as a bundled plugin in current OpenClaw releases, so
+normal packaged builds do not need a separate install.
 
-Nextcloud Talk ships as a plugin and is not bundled with the core install.
+If you are on an older build or a custom install that excludes Nextcloud Talk,
+install it manually:
 
 Install via CLI (npm registry):
 
@@ -25,14 +27,13 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 ```
 
-If you choose Nextcloud Talk during setup and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
-
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Install the Nextcloud Talk plugin.
+1. Ensure the Nextcloud Talk plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. On your Nextcloud server, create a bot:
 
    ```bash
@@ -43,6 +44,31 @@ Details: [Plugins](/tools/plugin)
 4. Configure OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Or env: `NEXTCLOUD_TALK_BOT_SECRET` (default account only)
+
+   CLI setup:
+
+   ```bash
+   openclaw channels add --channel nextcloud-talk \
+     --url https://cloud.example.com \
+     --token "<shared-secret>"
+   ```
+
+   Equivalent explicit fields:
+
+   ```bash
+   openclaw channels add --channel nextcloud-talk \
+     --base-url https://cloud.example.com \
+     --secret "<shared-secret>"
+   ```
+
+   File-backed secret:
+
+   ```bash
+   openclaw channels add --channel nextcloud-talk \
+     --base-url https://cloud.example.com \
+     --secret-file /path/to/nextcloud-talk-secret
+   ```
+
 5. Restart the gateway (or finish setup).
 
 Minimal config:

@@ -4,17 +4,16 @@ read_when:
   - You want to understand how OpenClaw assembles model context
   - You are switching between the legacy engine and a plugin engine
   - You are building a context engine plugin
-title: "Context Engine"
+title: "Context engine"
 ---
 
-# Context Engine
+A **context engine** controls how OpenClaw builds model context for each run:
+which messages to include, how to summarize older history, and how to manage
+context across subagent boundaries.
 
-A **context engine** controls how OpenClaw builds model context for each run.
-It decides which messages to include, how to summarize older history, and how
-to manage context across subagent boundaries.
-
-OpenClaw ships with a built-in `legacy` engine. Plugins can register
-alternative engines that replace the active context-engine lifecycle.
+OpenClaw ships with a built-in `legacy` engine and uses it by default — most
+users never need to change this. Install and select a plugin engine only when
+you want different assembly, compaction, or cross-session recall behavior.
 
 ## Quick start
 
@@ -78,14 +77,20 @@ four lifecycle points:
 4. **After turn** — called after a run completes. The engine can persist state,
    trigger background compaction, or update indexes.
 
+For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by
+projecting assembled context into Codex developer instructions and the current
+turn prompt. Codex still owns its native thread history and native compactor.
+
 ### Subagent lifecycle (optional)
 
-OpenClaw currently calls one subagent lifecycle hook:
+OpenClaw calls two optional subagent lifecycle hooks:
 
+- **prepareSubagentSpawn** — prepare shared context state before a child run
+  starts. The hook receives parent/child session keys, `contextMode`
+  (`isolated` or `fork`), available transcript ids/files, and optional TTL.
+  If it returns a rollback handle, OpenClaw calls it when spawn fails after
+  preparation succeeds.
 - **onSubagentEnded** — clean up when a subagent session completes or is swept.
-
-The `prepareSubagentSpawn` hook is part of the interface for future use, but
-the runtime does not invoke it yet.
 
 ### System prompt addition
 
@@ -115,6 +120,8 @@ engine is used automatically.
 A plugin can register a context engine using the plugin API:
 
 ```ts
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
 export default function register(api) {
   api.registerContextEngine("my-engine", () => ({
     info: {
@@ -128,12 +135,15 @@ export default function register(api) {
       return { ingested: true };
     },
 
-    async assemble({ sessionId, messages, tokenBudget }) {
+    async assemble({ sessionId, messages, tokenBudget, availableTools, citationsMode }) {
       // Return messages that fit the budget
       return {
         messages: buildContext(messages, tokenBudget),
         estimatedTokens: countTokens(messages),
-        systemPromptAddition: "Use lcm_grep to search history...",
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
       };
     },
 
@@ -188,7 +198,7 @@ Optional members:
 | `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history). |
 | `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.     |
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                         |
-| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session.                                                                        |
+| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                       |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
 | `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload — not per-session.                           |
 
@@ -200,7 +210,10 @@ enabled for the run:
 - `true` — the engine owns compaction behavior. OpenClaw disables Pi's built-in
   auto-compaction for that run, and the engine's `compact()` implementation is
   responsible for `/compact`, overflow recovery compaction, and any proactive
-  compaction it wants to do in `afterTurn()`.
+  compaction it wants to do in `afterTurn()`. OpenClaw may still run the
+  pre-prompt overflow safeguard; when it predicts the full transcript will
+  overflow, the recovery path calls the active engine's `compact()` before
+  submitting another prompt.
 - `false` or unset — Pi's built-in auto-compaction may still run during prompt
   execution, but the active engine's `compact()` method is still called for
   `/compact` and overflow recovery.
@@ -248,7 +261,13 @@ OpenClaw resolves when it needs a context engine.
 - **Memory plugins** (`plugins.slots.memory`) are separate from context engines.
   Memory plugins provide search/retrieval; context engines control what the
   model sees. They can work together — a context engine might use memory
-  plugin data during assembly.
+  plugin data during assembly. Plugin engines that want the active memory
+  prompt path should prefer `buildMemorySystemPromptAddition(...)` from
+  `openclaw/plugin-sdk/core`, which converts the active memory prompt sections
+  into a ready-to-prepend `systemPromptAddition`. If an engine needs lower-level
+  control, it can still pull raw lines from
+  `openclaw/plugin-sdk/memory-host-core` via
+  `buildActiveMemoryPromptSection(...)`.
 - **Session pruning** (trimming old tool results in-memory) still runs
   regardless of which context engine is active.
 

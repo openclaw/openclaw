@@ -1,12 +1,10 @@
 ---
-title: "QMD Memory Engine"
 summary: "Local-first search sidecar with BM25, vectors, reranking, and query expansion"
+title: "QMD memory engine"
 read_when:
   - You want to set up QMD as your memory backend
   - You want advanced memory features like reranking or extra indexed paths
 ---
-
-# QMD Memory Engine
 
 [QMD](https://github.com/tobi/qmd) is a local-first search sidecar that runs
 alongside OpenClaw. It combines BM25, vector search, and reranking in a single
@@ -17,7 +15,8 @@ binary, and can index content beyond your workspace memory files.
 - **Reranking and query expansion** for better recall.
 - **Index extra directories** -- project docs, team notes, anything on disk.
 - **Index session transcripts** -- recall earlier conversations.
-- **Fully local** -- runs via Bun + node-llama-cpp, auto-downloads GGUF models.
+- **Fully local** -- runs with the optional node-llama-cpp runtime package and
+  auto-downloads GGUF models.
 - **Automatic fallback** -- if QMD is unavailable, OpenClaw falls back to the
   builtin engine seamlessly.
 
@@ -25,7 +24,7 @@ binary, and can index content beyond your workspace memory files.
 
 ### Prerequisites
 
-- Install QMD: `bun install -g @tobilu/qmd`
+- Install QMD: `npm install -g @tobilu/qmd` or `bun install -g @tobilu/qmd`
 - SQLite build that allows extensions (`brew install sqlite` on macOS).
 - QMD must be on the gateway's `PATH`.
 - macOS and Linux work out of the box. Windows is best supported via WSL2.
@@ -43,12 +42,19 @@ binary, and can index content beyond your workspace memory files.
 OpenClaw creates a self-contained QMD home under
 `~/.openclaw/agents/<agentId>/qmd/` and manages the sidecar lifecycle
 automatically -- collections, updates, and embedding runs are handled for you.
+It prefers current QMD collection and MCP query shapes, but still falls back to
+legacy `--mask` collection flags and older MCP tool names when needed.
+Boot-time reconciliation also recreates stale managed collections back to their
+canonical patterns when an older QMD collection with the same name is still
+present.
 
 ## How the sidecar works
 
 - OpenClaw creates collections from your workspace memory files and any
   configured `memory.qmd.paths`, then runs `qmd update` + `qmd embed` on boot
   and periodically (default every 5 minutes).
+- The default workspace collection tracks `MEMORY.md` plus the `memory/`
+  tree. Lowercase `memory.md` is not indexed as a root memory file.
 - Boot refresh runs in the background so chat startup is not blocked.
 - Searches use the configured `searchMode` (default: `search`; also supports
   `vsearch` and `query`). If a mode fails, OpenClaw retries with `qmd query`.
@@ -58,6 +64,20 @@ automatically -- collections, updates, and embedding runs are handled for you.
 The first search may be slow -- QMD auto-downloads GGUF models (~2 GB) for
 reranking and query expansion on the first `qmd query` run.
 </Info>
+
+## Model overrides
+
+QMD model environment variables pass through unchanged from the gateway
+process, so you can tune QMD globally without adding new OpenClaw config:
+
+```bash
+export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
+export QMD_RERANK_MODEL="/absolute/path/to/reranker.gguf"
+export QMD_GENERATE_MODEL="/absolute/path/to/generator.gguf"
+```
+
+After changing the embedding model, rerun embeddings so the index matches the
+new vector space.
 
 ## Indexing extra paths
 
@@ -98,8 +118,8 @@ collection under `~/.openclaw/agents/<id>/qmd/sessions/`.
 
 ## Search scope
 
-By default, QMD search results are only surfaced in DM sessions (not groups or
-channels). Configure `memory.qmd.scope` to change this:
+By default, QMD search results are surfaced in direct and channel sessions
+(not groups). Configure `memory.qmd.scope` to change this:
 
 ```json5
 {
@@ -148,7 +168,12 @@ with `qmd query "test"` using the same XDG dirs OpenClaw uses.
 Set to `120000` for slower hardware.
 
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
-allows DM sessions.
+allows direct and channel sessions.
+
+**Root memory search suddenly got too broad?** Restart the gateway or wait for
+the next startup reconciliation. OpenClaw recreates stale managed collections
+back to canonical `MEMORY.md` and `memory/` patterns when it detects a same-name
+conflict.
 
 **Workspace-visible temp repos causing `ENAMETOOLONG` or broken indexing?**
 QMD traversal currently follows the underlying QMD scanner behavior rather than
@@ -161,3 +186,9 @@ cycle-safe traversal or explicit exclusion controls.
 For the full config surface (`memory.qmd.*`), search modes, update intervals,
 scope rules, and all other knobs, see the
 [Memory configuration reference](/reference/memory-config).
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Honcho memory](/concepts/memory-honcho)

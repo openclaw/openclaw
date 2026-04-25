@@ -4,10 +4,8 @@ read_when:
   - Configuring SecretRefs for provider credentials and `auth-profiles.json` refs
   - Operating secrets reload, audit, configure, and apply safely in production
   - Understanding startup fail-fast, inactive-surface filtering, and last-known-good behavior
-title: "Secrets Management"
+title: "Secrets management"
 ---
-
-# Secrets management
 
 OpenClaw supports additive SecretRefs so supported credentials do not need to be stored as plaintext in configuration.
 
@@ -417,7 +415,7 @@ Command paths can opt into supported SecretRef resolution via gateway snapshot R
 
 There are two broad behaviors:
 
-- Strict command paths (for example `openclaw memory` remote-memory paths and `openclaw qr --remote`) read from the active snapshot and fail fast when a required SecretRef is unavailable.
+- Strict command paths (for example `openclaw memory` remote-memory paths and `openclaw qr --remote` when it needs remote shared-secret refs) read from the active snapshot and fail fast when a required SecretRef is unavailable.
 - Read-only command paths (for example `openclaw status`, `openclaw status --all`, `openclaw channels status`, `openclaw channels resolve`, `openclaw security audit`, and read-only doctor/config repair flows) also prefer the active snapshot, but degrade instead of aborting when a targeted SecretRef is unavailable in that command path.
 
 Read-only behavior:

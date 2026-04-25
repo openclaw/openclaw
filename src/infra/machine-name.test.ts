@@ -4,9 +4,14 @@ import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  execFile: (...args: unknown[]) => execFileMock(...args),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeChildProcessExecFile } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeChildProcessExecFile(
+    Object.assign(execFileMock, {
+      __promisify__: vi.fn(),
+    }) as typeof import("node:child_process").execFile,
+  );
+});
 
 const originalVitest = process.env.VITEST;
 const originalNodeEnv = process.env.NODE_ENV;

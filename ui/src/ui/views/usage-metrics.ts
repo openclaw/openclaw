@@ -5,6 +5,7 @@ import {
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -105,7 +106,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
       value: `${(entry.rate * 100).toFixed(2)}%`,
-      sub: `${Math.round(entry.errors)} ${t("usage.overview.errors").toLowerCase()} · ${Math.round(entry.msgs)} ${t("usage.overview.messagesAbbrev")}`,
+      sub: `${Math.round(entry.errors)} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${Math.round(entry.msgs)} ${t("usage.overview.messagesAbbrev")}`,
     }));
 }
 
@@ -198,7 +199,7 @@ function renderUsageMosaic(
             <div class="usage-mosaic-sub">${t("usage.mosaic.subtitleEmpty")}</div>
           </div>
           <div class="usage-mosaic-total">
-            ${formatTokens(0)} ${t("usage.metrics.tokens").toLowerCase()}
+            ${formatTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
           </div>
         </div>
         <div class="usage-empty-block usage-empty-block--compact">
@@ -226,7 +227,8 @@ function renderUsageMosaic(
           </div>
         </div>
         <div class="usage-mosaic-total">
-          ${formatTokens(stats.totalTokens)} ${t("usage.metrics.tokens").toLowerCase()}
+          ${formatTokens(stats.totalTokens)}
+          ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
         </div>
       </div>
       <div class="usage-mosaic-grid">
@@ -260,7 +262,9 @@ function renderUsageMosaic(
                 value > 0
                   ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
                   : "transparent";
-              const title = `${hour}:00 · ${formatTokens(value)} ${t("usage.metrics.tokens").toLowerCase()}`;
+              const title = `${hour}:00 · ${formatTokens(value)} ${normalizeLowercaseStringOrEmpty(
+                t("usage.metrics.tokens"),
+              )}`;
               const border =
                 intensity > 0.7
                   ? "color-mix(in srgb, var(--accent) 60%, transparent)"
@@ -575,15 +579,25 @@ const buildUsageInsightStats = (
   const errorRate = aggregates.messages.total
     ? aggregates.messages.errors / aggregates.messages.total
     : 0;
-  const peakErrorDay = aggregates.daily
-    .filter((day) => day.messages > 0 && day.errors > 0)
-    .map((day) => ({
+  let peakErrorDay: UsageInsightStats["peakErrorDay"];
+  for (const day of aggregates.daily) {
+    if (day.messages <= 0 || day.errors <= 0) {
+      continue;
+    }
+    const candidate = {
       date: day.date,
       errors: day.errors,
       messages: day.messages,
       rate: day.errors / day.messages,
-    }))
-    .toSorted((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
+    };
+    if (
+      !peakErrorDay ||
+      candidate.rate > peakErrorDay.rate ||
+      (candidate.rate === peakErrorDay.rate && candidate.errors > peakErrorDay.errors)
+    ) {
+      peakErrorDay = candidate;
+    }
+  }
 
   return {
     durationSumMs,

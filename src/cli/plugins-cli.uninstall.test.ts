@@ -2,9 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  buildPluginStatusReport,
+  buildPluginDiagnosticsReport,
   loadConfig,
-  parseClawHubPluginSpec,
   promptYesNo,
   resetPluginsCliTestState,
   runPluginsCommand,
@@ -39,7 +38,7 @@ describe("plugins cli uninstall", () => {
         },
       },
     } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -74,7 +73,7 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
 
     loadConfig.mockReturnValue(baseConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -111,7 +110,7 @@ describe("plugins cli uninstall", () => {
         installs: {},
       },
     } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
+    buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
@@ -122,74 +121,5 @@ describe("plugins cli uninstall", () => {
 
     expect(runtimeErrors.at(-1)).toContain("is not managed by plugins config/install records");
     expect(uninstallPlugin).not.toHaveBeenCalled();
-  });
-
-  it("accepts the recorded ClawHub spec as an uninstall target", async () => {
-    loadConfig.mockReturnValue({
-      plugins: {
-        entries: {
-          "linkmind-context": { enabled: true },
-        },
-        installs: {
-          "linkmind-context": {
-            source: "npm",
-            spec: "clawhub:linkmind-context",
-            clawhubPackage: "linkmind-context",
-          },
-        },
-      },
-    } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
-      plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
-      diagnostics: [],
-    });
-    parseClawHubPluginSpec.mockImplementation((raw: string) =>
-      raw === "clawhub:linkmind-context" ? { name: "linkmind-context" } : null,
-    );
-
-    await runPluginsCommand(["plugins", "uninstall", "clawhub:linkmind-context", "--force"]);
-
-    expect(uninstallPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginId: "linkmind-context",
-      }),
-    );
-  });
-
-  it("accepts a versionless ClawHub spec when the install was pinned", async () => {
-    loadConfig.mockReturnValue({
-      plugins: {
-        entries: {
-          "linkmind-context": { enabled: true },
-        },
-        installs: {
-          "linkmind-context": {
-            source: "npm",
-            spec: "clawhub:linkmind-context@1.2.3",
-          },
-        },
-      },
-    } as OpenClawConfig);
-    buildPluginStatusReport.mockReturnValue({
-      plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
-      diagnostics: [],
-    });
-    parseClawHubPluginSpec.mockImplementation((raw: string) => {
-      if (raw === "clawhub:linkmind-context") {
-        return { name: "linkmind-context" };
-      }
-      if (raw === "clawhub:linkmind-context@1.2.3") {
-        return { name: "linkmind-context", version: "1.2.3" };
-      }
-      return null;
-    });
-
-    await runPluginsCommand(["plugins", "uninstall", "clawhub:linkmind-context", "--force"]);
-
-    expect(uninstallPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginId: "linkmind-context",
-      }),
-    );
   });
 });

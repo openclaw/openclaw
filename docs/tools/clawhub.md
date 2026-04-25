@@ -7,8 +7,6 @@ read_when:
 title: "ClawHub"
 ---
 
-# ClawHub
-
 ClawHub is the public registry for **OpenClaw skills and plugins**.
 
 - Use native `openclaw` commands to search/install/update skills and install
@@ -43,6 +41,14 @@ openclaw plugins install openclaw-codex-app-server
 
 Native `openclaw` commands install into your active workspace and persist source
 metadata so later `update` calls can stay on ClawHub.
+
+Plugin installs validate advertised `pluginApi` and `minGatewayVersion`
+compatibility before archive install runs, so incompatible hosts fail closed
+early instead of partially installing the package.
+
+`openclaw plugins install clawhub:...` only accepts installable plugin families.
+If a ClawHub package is actually a skill, OpenClaw stops and points you at
+`openclaw skills install <slug>` instead.
 
 ## What ClawHub is
 
@@ -101,6 +107,10 @@ pnpm add -g clawhub
 Native `openclaw skills install` installs into the active workspace `skills/`
 directory. `openclaw plugins install clawhub:...` records a normal managed
 plugin install plus ClawHub source metadata for updates.
+
+Anonymous ClawHub plugin installs also fail closed for private packages.
+Community or other non-official channels can still install, but OpenClaw warns
+so operators can review source and verification before enabling them.
 
 The separate `clawhub` CLI also installs skills into `./skills` under your
 current working directory. If an OpenClaw workspace is configured, `clawhub`
@@ -285,7 +295,8 @@ Code plugins must include the required OpenClaw metadata in `package.json`:
   "version": "1.0.0",
   "type": "module",
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
     "compat": {
       "pluginApi": ">=2026.3.24-beta.2",
       "minGatewayVersion": "2026.3.24-beta.2"
@@ -297,6 +308,11 @@ Code plugins must include the required OpenClaw metadata in `package.json`:
   }
 }
 ```
+
+Published packages should ship built JavaScript and point `runtimeExtensions`
+at that output. Git checkout installs can still fall back to TypeScript source
+when no built files exist, but built runtime entries avoid runtime TypeScript
+compilation in startup, doctor, and plugin loading paths.
 
 ## Advanced details (technical)
 
@@ -334,3 +350,9 @@ export CLAWHUB_DISABLE_TELEMETRY=1
 - `CLAWHUB_CONFIG_PATH`: Override where the CLI stores the token/config.
 - `CLAWHUB_WORKDIR`: Override the default workdir.
 - `CLAWHUB_DISABLE_TELEMETRY=1`: Disable telemetry on `sync`.
+
+## Related
+
+- [Plugin](/tools/plugin)
+- [Skills](/tools/skills)
+- [Community plugins](/plugins/community)

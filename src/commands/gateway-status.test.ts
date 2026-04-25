@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
+import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { gatewayStatusCommand } from "./gateway-status.js";
+import { createSecretRefGatewayConfig } from "./gateway-status/test-support.js";
 
 const mocks = vi.hoisted(() => {
   const sshStop = vi.fn(async () => {});
@@ -37,6 +39,13 @@ const mocks = vi.hoisted(() => {
       stderr: [],
       stop: sshStop,
     })),
+    loadGatewayTlsRuntime: vi.fn(
+      async (): Promise<GatewayTlsRuntime> => ({
+        enabled: true,
+        required: true,
+        fingerprintSha256: "sha256:local-fingerprint",
+      }),
+    ),
     probeGateway: vi.fn(async (opts: { url: string }): Promise<GatewayProbeResult> => {
       const { url } = opts;
       if (url.includes("127.0.0.1")) {
@@ -46,6 +55,11 @@ const mocks = vi.hoisted(() => {
           connectLatencyMs: 12,
           error: null,
           close: null,
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            capability: "read_only",
+          },
           health: { ok: true },
           status: {
             linkChannel: {
@@ -84,6 +98,11 @@ const mocks = vi.hoisted(() => {
         connectLatencyMs: 34,
         error: null,
         close: null,
+        auth: {
+          role: "operator",
+          scopes: ["operator.admin"],
+          capability: "admin_capable",
+        },
         health: { ok: true },
         status: {
           linkChannel: {
@@ -124,6 +143,7 @@ const {
   sshStop,
   resolveSshConfig,
   startSshPortForward,
+  loadGatewayTlsRuntime,
   probeGateway,
 } = mocks;
 
@@ -132,31 +152,62 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/bonjour-discovery.js")>();
-  return {
-    ...actual,
-    discoverGatewayBeacons: mocks.discoverGatewayBeacons,
-  };
-});
+vi.mock("../infra/bonjour-discovery.js", () => ({
+  discoverGatewayBeacons: mocks.discoverGatewayBeacons,
+  resolveGatewayDiscoveryEndpoint: (beacon: GatewayBonjourBeacon) => {
+    const host = beacon.host?.trim();
+    const port = beacon.port;
+    if (!host || typeof port !== "number" || !Number.isFinite(port) || port <= 0) {
+      return null;
+    }
+    const scheme = beacon.gatewayTls === true ? "wss" : "ws";
+    return {
+      host,
+      port,
+      gatewayTls: beacon.gatewayTls === true,
+      gatewayTlsFingerprintSha256: beacon.gatewayTlsFingerprintSha256,
+      scheme,
+      wsUrl: `${scheme}://${host}:${port}`,
+    };
+  },
+}));
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
-vi.mock("../infra/ssh-tunnel.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/ssh-tunnel.js")>();
-  return {
-    ...actual,
-    startSshPortForward: mocks.startSshPortForward,
-  };
-});
+vi.mock("../infra/ssh-tunnel.js", () => ({
+  parseSshTarget: (rawTarget: string) => {
+    const trimmed = rawTarget.trim();
+    if (!trimmed || trimmed.startsWith("-")) {
+      return null;
+    }
+    const [userHost, rawPort] = trimmed.split(":");
+    const [maybeUser, maybeHost] = userHost.includes("@")
+      ? userHost.split("@", 2)
+      : [undefined, userHost];
+    if (!maybeHost) {
+      return null;
+    }
+    return {
+      user: maybeUser,
+      host: maybeHost,
+      port: rawPort ? Number(rawPort) : 22,
+    };
+  },
+  startSshPortForward: mocks.startSshPortForward,
+}));
 
 vi.mock("../infra/ssh-config.js", () => ({
   resolveSshConfig: mocks.resolveSshConfig,
 }));
 
-vi.mock("../gateway/probe.js", () => ({
+vi.mock("../infra/tls/gateway.js", () => ({
+  loadGatewayTlsRuntime: mocks.loadGatewayTlsRuntime,
+}));
+
+vi.mock("../gateway/probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/probe.js")>()),
   probeGateway: mocks.probeGateway,
 }));
 
@@ -223,6 +274,10 @@ function findUnresolvedSecretRefWarning(runtimeLogs: string[]) {
 }
 
 describe("gateway-status command", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("prints human output by default", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
 
@@ -302,6 +357,11 @@ describe("gateway-status command", () => {
       connectLatencyMs: 51,
       error: "missing scope: operator.read",
       close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable",
+      },
       health: null,
       status: null,
       presence: null,
@@ -314,6 +374,7 @@ describe("gateway-status command", () => {
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       ok?: boolean;
       degraded?: boolean;
+      capability?: string;
       warnings?: Array<{ code?: string; targetIds?: string[] }>;
       targets?: Array<{
         connect?: {
@@ -321,15 +382,20 @@ describe("gateway-status command", () => {
           rpcOk?: boolean;
           scopeLimited?: boolean;
         };
+        auth?: {
+          capability?: string;
+        };
       }>;
     };
     expect(parsed.ok).toBe(true);
     expect(parsed.degraded).toBe(true);
+    expect(parsed.capability).toBe("write_capable");
     expect(parsed.targets?.[0]?.connect).toMatchObject({
       ok: true,
       rpcOk: false,
       scopeLimited: true,
     });
+    expect(parsed.targets?.[0]?.auth?.capability).toBe("write_capable");
     const scopeLimitedWarning = parsed.warnings?.find(
       (warning) => warning.code === "probe_scope_limited",
     );
@@ -338,11 +404,14 @@ describe("gateway-status command", () => {
 
   it("suppresses unresolved SecretRef auth warnings when probe is reachable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
-      mockLocalTokenEnvRefConfig();
+    await withEnvAsync(
+      { MISSING_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
+      async () => {
+        mockLocalTokenEnvRefConfig();
 
-      await runGatewayStatus(runtime, { timeout: "1000", json: true });
-    });
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      },
+    );
 
     expect(runtimeErrors).toHaveLength(0);
     const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);
@@ -351,23 +420,49 @@ describe("gateway-status command", () => {
 
   it("surfaces unresolved SecretRef auth diagnostics when probe fails", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
-      mockLocalTokenEnvRefConfig();
-      probeGateway.mockResolvedValueOnce({
-        ok: false,
-        url: "ws://127.0.0.1:18789",
-        connectLatencyMs: null,
-        error: "connection refused",
-        close: null,
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
-      });
-      await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
-        "__exit__:1",
+    const defaultReadBestEffortConfig = readBestEffortConfig.getMockImplementation();
+    const defaultProbeGateway = probeGateway.getMockImplementation();
+    try {
+      await withEnvAsync(
+        { MISSING_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
+        async () => {
+          readBestEffortConfig.mockReset();
+          probeGateway.mockReset();
+          mockLocalTokenEnvRefConfig();
+          probeGateway.mockImplementation(async (opts: { url: string }) => {
+            const { url } = opts;
+            return {
+              ok: false,
+              url,
+              connectLatencyMs: null,
+              error: "connection refused",
+              close: null,
+              auth: {
+                role: null,
+                scopes: [],
+                capability: "unknown",
+              },
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            };
+          });
+          await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+            "__exit__:1",
+          );
+        },
       );
-    });
+    } finally {
+      readBestEffortConfig.mockReset();
+      if (defaultReadBestEffortConfig) {
+        readBestEffortConfig.mockImplementation(defaultReadBestEffortConfig);
+      }
+      probeGateway.mockReset();
+      if (defaultProbeGateway) {
+        probeGateway.mockImplementation(defaultProbeGateway);
+      }
+    }
 
     expect(runtimeErrors).toHaveLength(0);
     const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);
@@ -503,6 +598,11 @@ describe("gateway-status command", () => {
       connectLatencyMs: 20,
       error: null,
       close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
       health: { ok: true },
       status: {
         linkChannel: {
@@ -528,24 +628,7 @@ describe("gateway-status command", () => {
         exists: true,
         valid: true,
         config: {
-          secrets: {
-            defaults: {
-              env: "default",
-            },
-          },
-          gateway: {
-            mode: "remote",
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
-            },
-            remote: {
-              url: "wss://remote.example:18789",
-              token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-              password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
-            },
-          },
+          ...createSecretRefGatewayConfig({ gatewayMode: "remote" }),
           discovery: {
             wideArea: { enabled: true },
           },
@@ -618,6 +701,69 @@ describe("gateway-status command", () => {
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     const targets = parsed.targets as Array<Record<string, unknown>>;
     expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
+  });
+
+  it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+    loadGatewayTlsRuntime.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:18789",
+        tlsFingerprint: "sha256:local-fingerprint",
+        timeoutMs: 15_000,
+      }),
+    );
+  });
+
+  it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    probeGateway.mockClear();
+    loadGatewayTlsRuntime.mockResolvedValueOnce({
+      enabled: false,
+      required: true,
+      error: "gateway tls: cert/key missing",
+    });
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:18789",
+        tlsFingerprint: undefined,
+      }),
+    );
+
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+    };
+    expect(parsed.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "local_tls_runtime_unavailable",
+        targetIds: ["localLoopback"],
+      }),
+    );
+    expect(
+      parsed.warnings?.find((warning) => warning.code === "local_tls_runtime_unavailable")?.message,
+    ).toContain("gateway tls: cert/key missing");
   });
 
   it("passes the full caller timeout through to local loopback probes", async () => {

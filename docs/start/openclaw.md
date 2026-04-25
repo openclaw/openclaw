@@ -3,12 +3,12 @@ summary: "End-to-end guide for running OpenClaw as a personal assistant with saf
 read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
-title: "Personal Assistant Setup"
+title: "Personal assistant setup"
 ---
 
 # Building a personal assistant with OpenClaw
 
-OpenClaw is a self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
+OpenClaw is a self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
 
 ## ⚠️ Safety first
 
@@ -16,7 +16,7 @@ You’re putting an agent in a position to:
 
 - run commands on your machine (depending on your tool policy)
 - read/write files in your workspace
-- send messages back out via WhatsApp/Telegram/Discord/Mattermost (plugin)
+- send messages back out via WhatsApp/Telegram/Discord/Mattermost and other bundled channels
 
 Start conservative:
 
@@ -59,13 +59,14 @@ openclaw gateway --port 18789
 
 ```json5
 {
+  gateway: { mode: "local" },
   channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
 
 Now message the assistant number from your allowlisted phone.
 
-When onboarding finishes, we auto-open the dashboard and print a clean (non-tokenized) link. If it prompts for auth, paste the token from `gateway.auth.token` into Control UI settings. To reopen later: `openclaw dashboard`.
+When onboarding finishes, OpenClaw auto-opens the dashboard and prints a clean (non-tokenized) link. If the dashboard prompts for auth, paste the configured shared secret into Control UI settings. Onboarding uses a token by default (`gateway.auth.token`), but password auth works too if you switched `gateway.auth.mode` to `password`. To reopen later: `openclaw dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
@@ -86,8 +87,10 @@ Optional: choose a different workspace with `agents.defaults.workspace` (support
 
 ```json5
 {
-  agent: {
-    workspace: "~/.openclaw/workspace",
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+    },
   },
 }
 ```
@@ -96,8 +99,10 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 ```json5
 {
-  agent: {
-    skipBootstrap: true,
+  agents: {
+    defaults: {
+      skipBootstrap: true,
+    },
   },
 }
 ```
@@ -106,7 +111,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
 
-- persona/instructions in `SOUL.md`
+- persona/instructions in [`SOUL.md`](/concepts/soul)
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
 
@@ -205,8 +210,8 @@ That means generated images/files outside the workspace can now send when your f
 ```bash
 openclaw status          # local status (creds, sessions, queued events)
 openclaw status --all    # full diagnosis (read-only, pasteable)
-openclaw status --deep   # adds gateway health probes (Telegram + Discord)
-openclaw health --json   # gateway health snapshot (WS)
+openclaw status --deep   # asks the gateway for a live health probe with channel probes when supported
+openclaw health --json   # gateway health snapshot (WS; default can return a fresh cached snapshot)
 ```
 
 Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
@@ -222,3 +227,9 @@ Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
 - Windows status: [Windows (WSL2)](/platforms/windows)
 - Linux status: [Linux app](/platforms/linux)
 - Security: [Security](/gateway/security)
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [Setup](/start/setup)
+- [Channels overview](/channels)

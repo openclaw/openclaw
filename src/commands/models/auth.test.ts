@@ -20,16 +20,50 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
+  isRemoteEnvironment: vi.fn(() => false),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   listProfilesForProvider: mocks.listProfilesForProvider,
-  clearAuthProfileCooldown: mocks.clearAuthProfileCooldown,
   upsertAuthProfile: mocks.upsertAuthProfile,
+}));
+
+vi.mock("../../agents/auth-profiles/store.js", () => ({
+  loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+}));
+
+vi.mock("../../agents/auth-profiles/usage.js", () => ({
+  clearAuthProfileCooldown: mocks.clearAuthProfileCooldown,
+}));
+
+vi.mock("../../plugins/provider-auth-helpers.js", () => ({
+  applyAuthProfileConfig: (
+    cfg: OpenClawConfig,
+    params: {
+      profileId: string;
+      provider: string;
+      mode: "api_key" | "oauth" | "token";
+      email?: string;
+      displayName?: string;
+    },
+  ): OpenClawConfig => ({
+    ...cfg,
+    auth: {
+      ...cfg.auth,
+      profiles: {
+        ...cfg.auth?.profiles,
+        [params.profileId]: {
+          provider: params.provider,
+          mode: params.mode,
+          ...(params.email ? { email: params.email } : {}),
+          ...(params.displayName ? { displayName: params.displayName } : {}),
+        },
+      },
+    },
+  }),
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -58,14 +92,10 @@ vi.mock("../../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
 }));
 
-vi.mock("./shared.js", async (importActual) => {
-  const actual = await importActual<typeof import("./shared.js")>();
-  return {
-    ...actual,
-    loadValidConfigOrThrow: mocks.loadValidConfigOrThrow,
-    updateConfig: mocks.updateConfig,
-  };
-});
+vi.mock("./shared.js", () => ({
+  loadValidConfigOrThrow: mocks.loadValidConfigOrThrow,
+  updateConfig: mocks.updateConfig,
+}));
 
 vi.mock("../../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
@@ -74,6 +104,100 @@ vi.mock("../../config/logging.js", () => ({
 vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
+
+vi.mock("../oauth-env.js", () => ({
+  isRemoteEnvironment: mocks.isRemoteEnvironment,
+}));
+
+vi.mock("../oauth-flow.js", () => ({
+  createVpsAwareOAuthHandlers: vi.fn(() => ({
+    onAuth: vi.fn(),
+    onPrompt: vi.fn(),
+  })),
+}));
+
+vi.mock("../auth-token.js", () => ({
+  validateAnthropicSetupToken: vi.fn(() => undefined),
+}));
+
+vi.mock("../provider-auth-helpers.js", () => {
+  const normalize = (value: string | undefined) => value?.trim().toLowerCase() ?? "";
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value && typeof value === "object" && !Array.isArray(value));
+  const mergePatch = <T>(base: T, patch: unknown): T => {
+    if (!isRecord(base) || !isRecord(patch)) {
+      return patch as T;
+    }
+    const next: Record<string, unknown> = { ...base };
+    for (const [key, value] of Object.entries(patch)) {
+      next[key] = mergePatch(next[key], value);
+    }
+    return next as T;
+  };
+
+  return {
+    resolveProviderMatch: vi.fn((providers: ProviderPlugin[], rawProvider?: string) => {
+      const requested = normalize(rawProvider);
+      return (
+        providers.find((provider) => normalize(provider.id) === requested) ??
+        providers.find((provider) =>
+          provider.aliases?.some((alias) => normalize(alias) === requested),
+        ) ??
+        null
+      );
+    }),
+    pickAuthMethod: vi.fn((provider: ProviderPlugin, rawMethod?: string) => {
+      const requested = normalize(rawMethod);
+      return (
+        provider.auth.find((method) => normalize(method.id) === requested) ??
+        provider.auth.find((method) => normalize(method.label) === requested) ??
+        null
+      );
+    }),
+    applyProviderAuthConfigPatch: vi.fn(
+      (cfg: OpenClawConfig, patch: unknown, options?: { replaceDefaultModels?: boolean }) => {
+        const merged = mergePatch(cfg, patch);
+        if (!options?.replaceDefaultModels) {
+          return merged;
+        }
+        const patchModels = (patch as { agents?: { defaults?: { models?: unknown } } })?.agents
+          ?.defaults?.models;
+        return isRecord(patchModels)
+          ? {
+              ...merged,
+              agents: {
+                ...merged.agents,
+                defaults: {
+                  ...merged.agents?.defaults,
+                  models: patchModels,
+                },
+              },
+            }
+          : merged;
+      },
+    ),
+    applyDefaultModel: vi.fn((cfg: OpenClawConfig, model: string) => ({
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          models: {
+            ...cfg.agents?.defaults?.models,
+            [model]: cfg.agents?.defaults?.models?.[model] ?? {},
+          },
+          model: {
+            ...(typeof cfg.agents?.defaults?.model === "object" &&
+            "fallbacks" in cfg.agents.defaults.model
+              ? { fallbacks: cfg.agents.defaults.model.fallbacks }
+              : undefined),
+            primary: model,
+          },
+        },
+      },
+    })),
+  };
+});
 
 const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand, modelsAuthSetupTokenCommand } =
   await import("./auth.js");
@@ -147,6 +271,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
+    mocks.isRemoteEnvironment.mockReturnValue(false);
     mocks.loadValidConfigOrThrow.mockImplementation(async () => currentConfig);
     mocks.updateConfig.mockImplementation(
       async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
@@ -173,7 +298,7 @@ describe("modelsAuthLoginCommand", () => {
           },
         },
       ],
-      defaultModel: "openai-codex/gpt-5.4",
+      defaultModel: "openai-codex/gpt-5.5",
     });
     mocks.resolvePluginProviders.mockReturnValue([
       createProvider({
@@ -193,92 +318,6 @@ describe("modelsAuthLoginCommand", () => {
   });
 
   it("runs plugin-owned openai-codex login", async () => {
-    const runtime = createRuntime();
-
-    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
-
-    expect(runProviderAuth).toHaveBeenCalledOnce();
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "openai-codex:user@example.com",
-      credential: expect.objectContaining({
-        type: "oauth",
-        provider: "openai-codex",
-      }),
-      agentDir: "/tmp/openclaw/agents/main",
-    });
-    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
-      provider: "openai-codex",
-      mode: "oauth",
-    });
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
-    );
-  });
-
-  it("applies openai-codex default model when --set-default is used", async () => {
-    const runtime = createRuntime();
-
-    await modelsAuthLoginCommand({ provider: "openai-codex", setDefault: true }, runtime);
-
-    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
-      primary: "openai-codex/gpt-5.4",
-    });
-    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.4");
-  });
-
-  it("supports provider-owned Claude CLI migration without writing auth profiles", async () => {
-    const runtime = createRuntime();
-    const runClaudeCliMigration = vi.fn().mockResolvedValue({
-      profiles: [],
-      defaultModel: "claude-cli/claude-sonnet-4-6",
-      configPatch: {
-        agents: {
-          defaults: {
-            models: {
-              "claude-cli/claude-sonnet-4-6": {},
-            },
-          },
-        },
-      },
-    });
-    mocks.resolvePluginProviders.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [
-          {
-            id: "cli",
-            label: "Claude CLI",
-            kind: "custom",
-            run: runClaudeCliMigration,
-          },
-        ],
-      },
-    ]);
-
-    await modelsAuthLoginCommand(
-      { provider: "anthropic", method: "cli", setDefault: true },
-      runtime,
-    );
-
-    expect(runClaudeCliMigration).toHaveBeenCalledOnce();
-    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
-    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
-      primary: "claude-cli/claude-sonnet-4-6",
-    });
-    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
-      "claude-cli/claude-sonnet-4-6": {},
-    });
-    expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
-  });
-
-  it("clears stale auth lockouts before attempting openai-codex login", async () => {
     const runtime = createRuntime();
     const fakeStore = {
       profiles: {
@@ -300,15 +339,302 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
     expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
       store: fakeStore,
       profileId: "openai-codex:user@example.com",
       agentDir: "/tmp/openclaw/agents/main",
     });
-    // Verify clearing happens before login attempt
-    const clearOrder = mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0];
-    const loginOrder = runProviderAuth.mock.invocationCallOrder[0];
-    expect(clearOrder).toBeLessThan(loginOrder);
+    expect(mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0]).toBeLessThan(
+      runProviderAuth.mock.invocationCallOrder[0],
+    );
+    expect(runProviderAuth).toHaveBeenCalledOnce();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai-codex:user@example.com",
+      credential: expect.objectContaining({
+        type: "oauth",
+        provider: "openai-codex",
+      }),
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Default model available: openai-codex/gpt-5.5 (use --set-default to apply)",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+    );
+  });
+
+  it("loads the owning plugin for an explicit provider even in a clean config", async () => {
+    const runtime = createRuntime();
+    const runClaudeCliMigration = vi.fn().mockResolvedValue({
+      profiles: [],
+      defaultModel: "claude-cli/claude-sonnet-4-6",
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      },
+    });
+    mocks.resolvePluginProviders.mockImplementation(
+      (params: { activate?: boolean; providerRefs?: string[] } | undefined) =>
+        params?.activate === true && params?.providerRefs?.[0] === "anthropic"
+          ? [
+              {
+                id: "anthropic",
+                label: "Anthropic",
+                auth: [
+                  {
+                    id: "cli",
+                    label: "Claude CLI",
+                    kind: "custom",
+                    run: runClaudeCliMigration,
+                  },
+                ],
+              },
+            ]
+          : [],
+    );
+
+    await modelsAuthLoginCommand(
+      { provider: "anthropic", method: "cli", setDefault: true },
+      runtime,
+    );
+
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: "/tmp/openclaw/workspace",
+        bundledProviderAllowlistCompat: true,
+        bundledProviderVitestCompat: true,
+        providerRefs: ["anthropic"],
+        activate: true,
+      }),
+    );
+    expect(runClaudeCliMigration).toHaveBeenCalledOnce();
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "claude-cli/claude-sonnet-4-6",
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "claude-cli/claude-sonnet-4-6": {},
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
+  });
+
+  it("runs the requested anthropic cli auth method with the full login context", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
+          },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            "anthropic/claude-opus-4-6": { alias: "Opus" },
+            "openai/gpt-5.2": {},
+          },
+        },
+      },
+    };
+    const note = vi.fn(async () => {});
+    mocks.createClackPrompter.mockReturnValue({
+      note,
+      select: vi.fn(),
+    });
+    const runApiKeyAuth = vi.fn();
+    const runClaudeCliMigration = vi.fn().mockImplementation(async (ctx) => {
+      expect(ctx.config).toEqual(currentConfig);
+      expect(ctx.agentDir).toBe("/tmp/openclaw/agents/main");
+      expect(ctx.workspaceDir).toBe("/tmp/openclaw/workspace");
+      expect(ctx.prompter).toMatchObject({ note, select: expect.any(Function) });
+      expect(ctx.runtime).toBe(runtime);
+      expect(ctx.env).toBe(process.env);
+      expect(ctx.allowSecretRefPrompt).toBe(false);
+      expect(ctx.isRemote).toBe(false);
+      expect(ctx.openUrl).toEqual(expect.any(Function));
+      expect(ctx.oauth).toMatchObject({
+        createVpsAwareHandlers: expect.any(Function),
+      });
+      return {
+        profiles: [],
+        defaultModel: "claude-cli/claude-sonnet-4-6",
+        configPatch: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "claude-cli/claude-sonnet-4-6",
+                fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
+              },
+              models: {
+                "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+                "claude-cli/claude-opus-4-6": { alias: "Opus" },
+                "openai/gpt-5.2": {},
+              },
+            },
+          },
+        },
+        replaceDefaultModels: true,
+        notes: [
+          "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
+          "Existing Anthropic auth profiles are kept for rollback.",
+        ],
+      };
+    });
+    const fakeStore = {
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "anthropic",
+        },
+        "anthropic:legacy": {
+          type: "token",
+          provider: "anthropic",
+        },
+      },
+      usageStats: {
+        "anthropic:claude-cli": {
+          disabledUntil: Date.now() + 3_600_000,
+          disabledReason: "auth_permanent",
+          errorCount: 2,
+        },
+      },
+    };
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(fakeStore);
+    mocks.listProfilesForProvider.mockReturnValue(["anthropic:claude-cli", "anthropic:legacy"]);
+    mocks.resolvePluginProviders.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [
+          {
+            id: "cli",
+            label: "Claude CLI",
+            kind: "custom",
+            run: runClaudeCliMigration,
+          },
+          {
+            id: "api-key",
+            label: "Anthropic API key",
+            kind: "api_key",
+            run: runApiKeyAuth,
+          },
+        ],
+      },
+    ]);
+
+    await modelsAuthLoginCommand(
+      { provider: "anthropic", method: "cli", setDefault: true },
+      runtime,
+    );
+
+    expect(runClaudeCliMigration).toHaveBeenCalledOnce();
+    expect(runApiKeyAuth).not.toHaveBeenCalled();
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledTimes(2);
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenNthCalledWith(1, {
+      store: fakeStore,
+      profileId: "anthropic:claude-cli",
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenNthCalledWith(2, {
+      store: fakeStore,
+      profileId: "anthropic:legacy",
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(
+      mocks.clearAuthProfileCooldown.mock.invocationCallOrder.every(
+        (order) => order < runClaudeCliMigration.mock.invocationCallOrder[0],
+      ),
+    ).toBe(true);
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "claude-cli/claude-sonnet-4-6",
+      fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+      "claude-cli/claude-opus-4-6": { alias: "Opus" },
+      "openai/gpt-5.2": {},
+    });
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
+        "Existing Anthropic auth profiles are kept for rollback.",
+      ].join("\n"),
+      "Provider notes",
+    );
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
+  });
+
+  it("preserves other providers' allowlist entries on an openai-codex OAuth login", async () => {
+    const runtime = createRuntime();
+    const existingModels = {
+      "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+      "anthropic/claude-opus-4-6": { alias: "opus" },
+      "moonshot/kimi-k2.5": { alias: "kimi" },
+      "openai/gpt-5.5": { alias: "gpt55" },
+    };
+    currentConfig = { agents: { defaults: { models: existingModels } } };
+    runProviderAuth.mockResolvedValue({
+      profiles: [
+        {
+          profileId: "openai-codex:user@example.com",
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "a",
+            refresh: "r",
+            expires: Date.now() + 60_000,
+            email: "user@example.com",
+          },
+        },
+      ],
+      configPatch: { agents: { defaults: { models: { "openai-codex/gpt-5.5": {} } } } },
+      defaultModel: "openai-codex/gpt-5.5",
+    });
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      ...existingModels,
+      "openai-codex/gpt-5.5": {},
+    });
+  });
+
+  it("overwrites an existing primary when login uses --set-default", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: { "anthropic/claude-opus-4-6": {} },
+        },
+      },
+    };
+
+    await modelsAuthLoginCommand({ provider: "openai-codex", setDefault: true }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.5",
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-6": {},
+      "openai-codex/gpt-5.5": {},
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.5");
   });
 
   it("survives lockout clearing failure without blocking login", async () => {
@@ -320,16 +646,6 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
     expect(runProviderAuth).toHaveBeenCalledOnce();
-  });
-
-  it("loads lockout state from the agent-scoped store", async () => {
-    const runtime = createRuntime();
-    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {}, usageStats: {} });
-    mocks.listProfilesForProvider.mockReturnValue([]);
-
-    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
-
-    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
   });
 
   it("reports loaded plugin providers when requested provider is unavailable", async () => {
@@ -364,21 +680,30 @@ describe("modelsAuthLoginCommand", () => {
     }
   });
 
-  it("writes pasted tokens to the resolved agent store", async () => {
+  it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {
     const runtime = createRuntime();
-    mocks.clackText.mockResolvedValue("tok-fresh");
+    mocks.clackText.mockResolvedValue(`sk-ant-oat01-${"a".repeat(80)}`);
 
-    await modelsAuthPasteTokenCommand({ provider: "openai" }, runtime);
+    await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
 
     expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "openai:manual",
+      profileId: "anthropic:manual",
       credential: {
         type: "token",
-        provider: "openai",
-        token: "tok-fresh",
+        provider: "anthropic",
+        token: `sk-ant-oat01-${"a".repeat(80)}`,
       },
       agentDir: "/tmp/openclaw/agents/main",
     });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Anthropic setup-token auth is supported in OpenClaw.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "OpenClaw prefers Claude CLI reuse when it is available on the host.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Anthropic staff told us this OpenClaw path is allowed again.",
+    );
   });
 
   it("runs token auth for any token-capable provider plugin", async () => {

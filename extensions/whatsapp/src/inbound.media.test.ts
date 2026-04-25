@@ -15,6 +15,19 @@ type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaBufferSpy = vi.fn();
+let currentMockSocket:
+  | {
+      ev: import("node:events").EventEmitter;
+      ws: { close: ReturnType<typeof vi.fn> };
+      sendPresenceUpdate: ReturnType<typeof vi.fn>;
+      sendMessage: ReturnType<typeof vi.fn>;
+      readMessages: ReturnType<typeof vi.fn>;
+      groupFetchAllParticipating: ReturnType<typeof vi.fn>;
+      updateMediaMessage: ReturnType<typeof vi.fn>;
+      logger: Record<string, never>;
+      user: { id: string };
+    }
+  | undefined;
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
@@ -47,9 +60,9 @@ vi.mock("../../../src/pairing/pairing-store.js", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
+vi.mock("openclaw/plugin-sdk/media-store", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-store")>(
+    "openclaw/plugin-sdk/media-store",
   );
   return {
     ...actual,
@@ -63,8 +76,9 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
 const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
 process.env.HOME = HOME;
 
-vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@whiskeysockets/baileys")>();
+vi.mock("@whiskeysockets/baileys", async () => {
+  const actual =
+    await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
   const jpegBuffer = Buffer.from([
     0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x02, 0x02,
     0x02, 0x03, 0x03, 0x03, 0x03, 0x04, 0x06, 0x04, 0x04, 0x04, 0x04, 0x04, 0x08, 0x06, 0x06, 0x05,
@@ -93,21 +107,22 @@ vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   const { EventEmitter } = require("node:events");
-  const ev = new EventEmitter();
-  const sock = {
-    ev,
-    ws: { close: vi.fn() },
-    sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-    readMessages: vi.fn().mockResolvedValue(undefined),
-    groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
-    updateMediaMessage: vi.fn(),
-    logger: {},
-    user: { id: "me@s.whatsapp.net" },
-  };
   return {
     ...actual,
-    createWaSocket: vi.fn().mockResolvedValue(sock),
+    createWaSocket: vi.fn().mockImplementation(async () => {
+      currentMockSocket ??= {
+        ev: new EventEmitter(),
+        ws: { close: vi.fn() },
+        sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+        readMessages: vi.fn().mockResolvedValue(undefined),
+        groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
+        updateMediaMessage: vi.fn(),
+        logger: {},
+        user: { id: "me@s.whatsapp.net" },
+      };
+      return currentMockSocket;
+    }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
     getStatusCode: vi.fn(() => 200),
   };
@@ -134,27 +149,28 @@ describe("web inbound media saves with extension", () => {
 
   beforeEach(() => {
     vi.useRealTimers();
-    vi.resetModules();
+    currentMockSocket = undefined;
     saveMediaBufferSpy.mockClear();
-  });
-
-  beforeEach(async () => {
-    ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
-    ({ createWaSocket } = await import("./session.js"));
     resetWebInboundDedupe();
   });
 
   beforeAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
+    ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
+    ({ createWaSocket } = await import("./session.js"));
   });
 
   afterAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
   });
 
-  it("stores image extension, extracts caption mentions, and keeps document filename", async () => {
+  it("stores image extension and keeps document filename", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
       verbose: false,
       onMessage,
       accountId: "default",
@@ -181,34 +197,6 @@ describe("web inbound media saves with extension", () => {
     expect(stat.size).toBeGreaterThan(0);
 
     onMessage.mockClear();
-    realSock.ev.emit("messages.upsert", {
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "img2",
-            fromMe: false,
-            remoteJid: "123@g.us",
-            participant: "999@s.whatsapp.net",
-          },
-          message: {
-            messageContextInfo: {},
-            imageMessage: {
-              caption: "@bot",
-              contextInfo: { mentionedJid: ["999@s.whatsapp.net"] },
-              mimetype: "image/jpeg",
-            },
-          },
-          messageTimestamp: 1_700_000_002,
-        },
-      ],
-    });
-
-    const second = await waitForMessage(onMessage);
-    expect(second.chatType).toBe("group");
-    expect(second.mentionedJids).toEqual(["999@s.whatsapp.net"]);
-
-    onMessage.mockClear();
     const fileName = "invoice.pdf";
     realSock.ev.emit("messages.upsert", {
       type: "notify",
@@ -221,8 +209,8 @@ describe("web inbound media saves with extension", () => {
       ],
     });
 
-    const third = await waitForMessage(onMessage);
-    expect(third.mediaFileName).toBe(fileName);
+    const second = await waitForMessage(onMessage);
+    expect(second.mediaFileName).toBe(fileName);
     expect(saveMediaBufferSpy).toHaveBeenCalled();
     const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
     expect(lastCall?.[4]).toBe(fileName);
@@ -233,6 +221,10 @@ describe("web inbound media saves with extension", () => {
   it("passes mediaMaxMb to saveMediaBuffer", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
       verbose: false,
       onMessage,
       mediaMaxMb: 1,

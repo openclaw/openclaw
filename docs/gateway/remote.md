@@ -2,10 +2,8 @@
 summary: "Remote access using SSH tunnels (Gateway WS) and tailnets"
 read_when:
   - Running or troubleshooting remote gateway setups
-title: "Remote Access"
+title: "Remote access"
 ---
-
-# Remote access (SSH, tunnels, and tailnets)
 
 This repo supports “remote over SSH” by keeping a single Gateway (the master) running on a dedicated host (desktop/server) and connecting clients to it.
 
@@ -77,7 +75,7 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 With the tunnel up:
 
 - `openclaw health` and `openclaw status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
-- `openclaw gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
+- `openclaw gateway status`, `openclaw gateway health`, `openclaw gateway probe`, and `openclaw gateway call` can also target the forwarded URL via `--url` when needed.
 
 Note: replace `18789` with your configured `gateway.port` (or `--port`/`OPENCLAW_GATEWAY_PORT`).
 Note: when you pass `--url`, the CLI does not fall back to config or environment credentials.
@@ -138,16 +136,21 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
 
 - **Loopback + SSH/Tailscale Serve** is the safest default (no public exposure).
 - Plaintext `ws://` is loopback-only by default. For trusted private networks,
-  set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
-- **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
+  set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
+  break-glass. There is no `openclaw.json` equivalent; this must be process
+  environment for the client making the WebSocket connection.
+- **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - `gateway.remote.token` / `.password` are client credential sources. They do **not** configure server auth by themselves.
 - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
-  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still
-  require token/password auth. This tokenless flow assumes the gateway host is
-  trusted. Set it to `false` if you want tokens/passwords everywhere.
+  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints do not
+  use that Tailscale header auth and instead follow the gateway's normal HTTP
+  auth mode. This tokenless flow assumes the gateway host is trusted. Set it to
+  `false` if you want shared-secret auth everywhere.
+- **Trusted-proxy** auth is for non-loopback identity-aware proxy setups only.
+  Same-host loopback reverse proxies do not satisfy `gateway.auth.mode: "trusted-proxy"`.
 - Treat browser control like operator access: tailnet-only + deliberate node pairing.
 
 Deep dive: [Security](/gateway/security).
@@ -246,3 +249,9 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 | `ssh -N`                             | SSH without executing remote commands (port-forwarding only) |
 | `KeepAlive`                          | Automatically restarts the tunnel if it crashes              |
 | `RunAtLoad`                          | Starts the tunnel when the LaunchAgent loads at login        |
+
+## Related
+
+- [Tailscale](/gateway/tailscale)
+- [Authentication](/gateway/authentication)
+- [Remote gateway setup](/gateway/remote-gateway-readme)

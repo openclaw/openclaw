@@ -25,6 +25,7 @@ describe("validateProviderConfig", () => {
   const clearProviderEnv = () => {
     delete process.env.TWILIO_ACCOUNT_SID;
     delete process.env.TWILIO_AUTH_TOKEN;
+    delete process.env.TWILIO_FROM_NUMBER;
     delete process.env.TELNYX_API_KEY;
     delete process.env.TELNYX_CONNECTION_ID;
     delete process.env.TELNYX_PUBLIC_KEY;
@@ -63,6 +64,7 @@ describe("validateProviderConfig", () => {
         if (provider === "twilio") {
           process.env.TWILIO_ACCOUNT_SID = "AC123";
           process.env.TWILIO_AUTH_TOKEN = "secret";
+          process.env.TWILIO_FROM_NUMBER = "+15550001234";
         } else if (provider === "telnyx") {
           process.env.TELNYX_API_KEY = "KEY123";
           process.env.TELNYX_CONNECTION_ID = "CONN456";
@@ -88,6 +90,20 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(true);
       expect(result.errors).toEqual([]);
+    });
+
+    it("resolves the Twilio from number from environment", () => {
+      process.env.TWILIO_ACCOUNT_SID = "AC123";
+      process.env.TWILIO_AUTH_TOKEN = "secret";
+      process.env.TWILIO_FROM_NUMBER = "+15550001234";
+
+      const config = resolveVoiceCallConfig({
+        ...createBaseConfig("twilio"),
+        fromNumber: undefined,
+      });
+
+      expect(config.fromNumber).toBe("+15550001234");
+      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
     });
 
     it("fails validation when required twilio credentials are missing", () => {
@@ -179,6 +195,43 @@ describe("validateProviderConfig", () => {
       expect(result.errors).toEqual([]);
     });
   });
+
+  describe("realtime config", () => {
+    it("rejects disabled inbound policy for realtime mode", () => {
+      const config = createBaseConfig("twilio");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "disabled";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
+      );
+    });
+
+    it("rejects enabling realtime and streaming together", () => {
+      const config = createBaseConfig("twilio");
+      config.realtime.enabled = true;
+      config.streaming.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
+      );
+    });
+  });
+});
+
+describe("resolveVoiceCallConfig", () => {
+  it("enables the pre-answer stale call reaper by default", () => {
+    const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
+
+    expect(config.staleCallReaperSeconds).toBe(120);
+  });
 });
 
 describe("normalizeVoiceCallConfig", () => {
@@ -194,9 +247,25 @@ describe("normalizeVoiceCallConfig", () => {
 
     expect(normalized.serve.path).toBe("/voice/webhook");
     expect(normalized.streaming.streamPath).toBe("/custom-stream");
-    expect(normalized.streaming.sttModel).toBe("gpt-4o-transcribe");
+    expect(normalized.streaming.provider).toBeUndefined();
+    expect(normalized.streaming.providers).toEqual({});
+    expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
+    expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
+    expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+  });
+
+  it("derives the realtime stream path from a custom webhook path", () => {
+    const normalized = normalizeVoiceCallConfig({
+      enabled: true,
+      provider: "twilio",
+      serve: {
+        path: "/custom/webhook",
+      },
+    });
+
+    expect(normalized.realtime.streamPath).toBe("/custom/stream/realtime");
   });
 
   it("accepts partial nested TTS overrides and preserves nested objects", () => {
@@ -226,5 +295,41 @@ describe("normalizeVoiceCallConfig", () => {
       id: "ELEVENLABS_API_KEY",
     });
     expect(elevenlabs.voiceSettings).toEqual({ speed: 1.1 });
+  });
+});
+
+describe("resolveVoiceCallConfig", () => {
+  it("preserves configured realtime instructions without env indirection", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "twilio",
+      realtime: {
+        enabled: true,
+        instructions: "Stay concise.",
+      },
+    });
+
+    expect(resolved.realtime.instructions).toBe("Stay concise.");
+    expect(resolved.realtime.toolPolicy).toBe("safe-read-only");
+    expect(resolved.realtime.provider).toBeUndefined();
+  });
+
+  it("leaves responseModel unset so voice responses can inherit runtime defaults", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+    });
+
+    expect(resolved.responseModel).toBeUndefined();
+  });
+
+  it("preserves the configured voice response agent id", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "voice",
+    });
+
+    expect(resolved.agentId).toBe("voice");
   });
 });

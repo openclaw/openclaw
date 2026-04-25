@@ -63,6 +63,11 @@ function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
 
 describe("github-copilot model defaults", () => {
   describe("getDefaultCopilotModelIds", () => {
+    it("includes claude-opus-4.7", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.7");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-opus-4.6");
+    });
+
     it("includes claude-sonnet-4.6", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
     });
@@ -83,12 +88,13 @@ describe("github-copilot model defaults", () => {
     it("builds a valid definition for claude-sonnet-4.6", () => {
       const def = buildCopilotModelDefinition("claude-sonnet-4.6");
       expect(def.id).toBe("claude-sonnet-4.6");
-      expect(def.api).toBe("openai-responses");
+      expect(def.api).toBe("anthropic-messages");
     });
 
     it("trims whitespace from model id", () => {
       const def = buildCopilotModelDefinition("  gpt-4o  ");
       expect(def.id).toBe("gpt-4o");
+      expect(def.api).toBe("openai-responses");
     });
 
     it("throws on empty model id", () => {

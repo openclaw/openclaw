@@ -1,16 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  escapeNextcloudTalkMarkdown,
-  formatNextcloudTalkCodeBlock,
-  formatNextcloudTalkInlineCode,
-  formatNextcloudTalkMention,
-  markdownToNextcloudTalk,
-  stripNextcloudTalkFormatting,
-  truncateNextcloudTalkText,
-} from "./format.js";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
@@ -24,58 +15,10 @@ import {
   generateNextcloudTalkSignature,
   verifyNextcloudTalkSignature,
 } from "./signature.js";
-import type { CoreConfig } from "./types.js";
-
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
-  getBundledChannelRuntimeMap: () => new Map(),
-  getBundledChannelConfigSchemaMap: () => new Map(),
-}));
-
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
-const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
-const readFileSync = vi.hoisted(() => vi.fn());
-
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime-api.js")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard,
-  };
-});
-
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
-    readFileSync,
-  };
-});
 
 const tempDirs: string[] = [];
-let nextcloudTalkPlugin: typeof import("./channel.js").nextcloudTalkPlugin;
-let NextcloudTalkConfigSchema: typeof import("./config-schema.js").NextcloudTalkConfigSchema;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ nextcloudTalkPlugin } = await import("./channel.js"));
-  ({ NextcloudTalkConfigSchema } = await import("./config-schema.js"));
-});
 
 afterEach(async () => {
-  fetchWithSsrFGuard.mockReset();
-  readFileSync.mockReset();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) {
@@ -91,62 +34,6 @@ async function makeTempDir(): Promise<string> {
 }
 
 describe("nextcloud talk core", () => {
-  it("accepts SecretRef botSecret and apiPassword at top-level", () => {
-    const result = NextcloudTalkConfigSchema.safeParse({
-      baseUrl: "https://cloud.example.com",
-      botSecret: { source: "env", provider: "default", id: "NEXTCLOUD_TALK_BOT_SECRET" },
-      apiUser: "bot",
-      apiPassword: { source: "env", provider: "default", id: "NEXTCLOUD_TALK_API_PASSWORD" },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts SecretRef botSecret and apiPassword on account", () => {
-    const result = NextcloudTalkConfigSchema.safeParse({
-      accounts: {
-        main: {
-          baseUrl: "https://cloud.example.com",
-          botSecret: {
-            source: "env",
-            provider: "default",
-            id: "NEXTCLOUD_TALK_MAIN_BOT_SECRET",
-          },
-          apiUser: "bot",
-          apiPassword: {
-            source: "env",
-            provider: "default",
-            id: "NEXTCLOUD_TALK_MAIN_API_PASSWORD",
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("keeps markdown mostly intact while trimming outer whitespace", () => {
-    expect(markdownToNextcloudTalk("  **hello**  ")).toBe("**hello**");
-  });
-
-  it("escapes markdown-sensitive characters", () => {
-    expect(escapeNextcloudTalkMarkdown("*hello* [x](y)")).toBe("\\*hello\\* \\[x\\]\\(y\\)");
-  });
-
-  it("formats mentions and code consistently", () => {
-    expect(formatNextcloudTalkMention("@alice")).toBe("@alice");
-    expect(formatNextcloudTalkMention("bob")).toBe("@bob");
-    expect(formatNextcloudTalkCodeBlock("const x = 1;", "ts")).toBe("```ts\nconst x = 1;\n```");
-    expect(formatNextcloudTalkInlineCode("x")).toBe("`x`");
-    expect(formatNextcloudTalkInlineCode("x ` y")).toBe("`` x ` y ``");
-  });
-
-  it("strips markdown formatting and truncates on word boundaries", () => {
-    expect(stripNextcloudTalkFormatting("**bold** [link](https://example.com) `code`")).toBe(
-      "bold link",
-    );
-    expect(truncateNextcloudTalkText("alpha beta gamma delta", 14)).toBe("alpha beta...");
-    expect(truncateNextcloudTalkText("short", 14)).toBe("short");
-  });
-
   it("builds an outbound session route for normalized room targets", () => {
     const route = resolveNextcloudTalkOutboundSessionRoute({
       cfg: {},
@@ -244,7 +131,7 @@ describe("nextcloud talk core", () => {
     ).toBeNull();
   });
 
-  it("persists replay decisions across guard instances", async () => {
+  it("persists replay decisions across guard instances and scopes account namespaces", async () => {
     const stateDir = await makeTempDir();
 
     const firstGuard = createNextcloudTalkReplayGuard({ stateDir });
@@ -265,62 +152,48 @@ describe("nextcloud talk core", () => {
       roomToken: "room-1",
       messageId: "msg-1",
     });
+    const otherAccountFirstAttempt = await secondGuard.shouldProcessMessage({
+      accountId: "account-b",
+      roomToken: "room-1",
+      messageId: "msg-1",
+    });
 
     expect(firstAttempt).toBe(true);
     expect(replayAttempt).toBe(false);
     expect(restartReplayAttempt).toBe(false);
+    expect(otherAccountFirstAttempt).toBe(true);
   });
 
-  it("scopes replay state by account namespace", async () => {
-    const stateDir = await makeTempDir();
-    const guard = createNextcloudTalkReplayGuard({ stateDir });
+  it("releases in-flight replay claims when processing fails", async () => {
+    const guard = createNextcloudTalkReplayGuard({});
 
-    const accountAFirst = await guard.shouldProcessMessage({
+    const firstClaim = await guard.claimMessage({
       accountId: "account-a",
       roomToken: "room-1",
-      messageId: "msg-9",
+      messageId: "msg-claim",
     });
-    const accountBFirst = await guard.shouldProcessMessage({
-      accountId: "account-b",
+    const secondClaim = await guard.claimMessage({
+      accountId: "account-a",
       roomToken: "room-1",
-      messageId: "msg-9",
+      messageId: "msg-claim",
     });
 
-    expect(accountAFirst).toBe(true);
-    expect(accountBFirst).toBe(true);
-  });
+    expect(firstClaim).toBe("claimed");
+    expect(secondClaim).toBe("inflight");
 
-  it("normalizes trimmed DM allowlist prefixes to lowercase ids", () => {
-    const resolveDmPolicy = nextcloudTalkPlugin.security?.resolveDmPolicy;
-    if (!resolveDmPolicy) {
-      throw new Error("resolveDmPolicy unavailable");
-    }
-
-    const cfg = {
-      channels: {
-        "nextcloud-talk": {
-          baseUrl: "https://cloud.example.com",
-          botSecret: "secret",
-          dmPolicy: "allowlist",
-          allowFrom: ["  nc:User-Id  "],
-        },
-      },
-    } as CoreConfig;
-
-    const result = resolveDmPolicy({
-      cfg,
-      account: nextcloudTalkPlugin.config.resolveAccount(cfg, "default"),
+    guard.releaseMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+      error: new Error("transient"),
     });
-    if (!result) {
-      throw new Error("nextcloud-talk resolveDmPolicy returned null");
-    }
 
-    expect(result.policy).toBe("allowlist");
-    expect(result.allowFrom).toEqual(["  nc:User-Id  "]);
-    expect(result.normalizeEntry?.("  nc:User-Id  ")).toBe("user-id");
-    expect(nextcloudTalkPlugin.pairing?.normalizeAllowEntry?.("  nextcloud-talk:User-Id  ")).toBe(
-      "user-id",
-    );
+    const retryClaim = await guard.claimMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+    });
+    expect(retryClaim).toBe("claimed");
   });
 
   it("resolves allowlist matches and group policy decisions", () => {
@@ -427,99 +300,5 @@ describe("nextcloud talk core", () => {
       outerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
       innerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
     });
-  });
-
-  it("resolves direct rooms from the room info endpoint", async () => {
-    vi.resetModules();
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuard.mockResolvedValue({
-      response: {
-        ok: true,
-        json: async () => ({
-          ocs: {
-            data: {
-              type: 1,
-            },
-          },
-        }),
-      },
-      release,
-    });
-
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
-    const kind = await resolveNextcloudTalkRoomKind({
-      account: {
-        accountId: "acct-direct",
-        baseUrl: "https://nc.example.com",
-        config: {
-          apiUser: "bot",
-          apiPassword: "secret",
-        },
-      } as never,
-      roomToken: "room-direct",
-    });
-
-    expect(kind).toBe("direct");
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-direct",
-        auditContext: "nextcloud-talk.room-info",
-      }),
-    );
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("reads the api password from a file and logs non-ok room info responses", async () => {
-    vi.resetModules();
-    const release = vi.fn(async () => {});
-    const log = vi.fn();
-    const error = vi.fn();
-    const exit = vi.fn();
-    readFileSync.mockReturnValue("file-secret\n");
-    fetchWithSsrFGuard.mockResolvedValue({
-      response: {
-        ok: false,
-        status: 403,
-        json: async () => ({}),
-      },
-      release,
-    });
-
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
-    const kind = await resolveNextcloudTalkRoomKind({
-      account: {
-        accountId: "acct-group",
-        baseUrl: "https://nc.example.com",
-        config: {
-          apiUser: "bot",
-          apiPasswordFile: "/tmp/nextcloud-secret",
-        },
-      } as never,
-      roomToken: "room-group",
-      runtime: { log, error, exit },
-    });
-
-    expect(kind).toBeUndefined();
-    expect(readFileSync).toHaveBeenCalledWith("/tmp/nextcloud-secret", "utf-8");
-    expect(log).toHaveBeenCalledWith("nextcloud-talk: room lookup failed (403) token=room-group");
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns undefined from room info without credentials or base url", async () => {
-    vi.resetModules();
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
-
-    await expect(
-      resolveNextcloudTalkRoomKind({
-        account: {
-          accountId: "acct-missing",
-          baseUrl: "",
-          config: {},
-        } as never,
-        roomToken: "room-missing",
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });

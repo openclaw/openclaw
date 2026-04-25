@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import {
+  isNumericTelegramSenderUserId,
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "./allow-from.js";
 import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
@@ -159,7 +163,6 @@ describe("telegram group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     expect(
       resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
@@ -169,6 +172,48 @@ describe("telegram group policy", () => {
         allow: ["message.send"],
       },
     );
+  });
+
+  it("honors account-scoped topic requireMention overrides", () => {
+    const telegramCfg = {
+      channels: {
+        telegram: {
+          botToken: "telegram-test",
+          groups: {
+            "-1001": {
+              requireMention: true,
+              topics: {
+                "77": {
+                  requireMention: true,
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              botToken: "telegram-work",
+              groups: {
+                "-1001": {
+                  topics: {
+                    "77": {
+                      requireMention: false,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as any;
+
+    expect(
+      resolveTelegramGroupRequireMention({
+        cfg: telegramCfg,
+        accountId: "work",
+        groupId: "-1001:topic:77",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -194,6 +239,17 @@ describe("telegram allow-from helpers", () => {
       expect(isNumericTelegramUserId(testCase.value)).toBe(testCase.expected);
     }
   });
+
+  it("accepts only positive numeric sender user IDs", () => {
+    const cases = [
+      { value: "123456789", expected: true },
+      { value: "-1001234567890", expected: false },
+      { value: "@someone", expected: false },
+    ] as const;
+    for (const testCase of cases) {
+      expect(isNumericTelegramSenderUserId(testCase.value)).toBe(testCase.expected);
+    }
+  });
 });
 
 describe("telegram target normalization", () => {
@@ -217,4 +273,4 @@ describe("telegram target normalization", () => {
   });
 });
 
-installMaybePersistResolvedTelegramTargetTests();
+installMaybePersistResolvedTelegramTargetTests({ includeGatewayScopeCases: true });

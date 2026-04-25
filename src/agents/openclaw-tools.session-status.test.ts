@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -8,8 +8,12 @@ const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
-const buildStatusMessageMock = vi.hoisted(() => vi.fn(() => "OpenClaw\n🧠 Model: GPT-5.4"));
-const resolveQueueSettingsMock = vi.hoisted(() => vi.fn(() => ({ mode: "interrupt" })));
+const buildStatusMessageMock = vi.hoisted(() =>
+  vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
+);
+const resolveQueueSettingsMock = vi.hoisted(() =>
+  vi.fn((_params?: unknown) => ({ mode: "interrupt" })),
+);
 const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
   vi.fn(
     (_: { relatedSessionKey: string; callerOwnerKey: string }) =>
@@ -79,10 +83,9 @@ function installScopedSessionStores(syncUpdates = false) {
   return stores;
 }
 
-async function createSessionsModuleMock(
-  importOriginal: () => Promise<typeof import("../config/sessions.js")>,
-) {
-  const actual = await importOriginal();
+async function createSessionsModuleMock() {
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
@@ -106,10 +109,10 @@ function createGatewayCallModuleMock() {
   };
 }
 
-async function createGatewaySessionUtilsModuleMock(
-  importOriginal: () => Promise<typeof import("../gateway/session-utils.js")>,
-) {
-  const actual = await importOriginal();
+async function createGatewaySessionUtilsModuleMock() {
+  const actual = await vi.importActual<typeof import("../gateway/session-utils.js")>(
+    "../gateway/session-utils.js",
+  );
   return {
     ...actual,
     loadCombinedSessionStoreForGateway: (cfg: unknown) =>
@@ -117,10 +120,8 @@ async function createGatewaySessionUtilsModuleMock(
   };
 }
 
-async function createConfigModuleMock(
-  importOriginal: () => Promise<typeof import("../config/config.js")>,
-) {
-  const actual = await importOriginal();
+async function createConfigModuleMock() {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => mockConfig,
@@ -140,6 +141,7 @@ function createModelCatalogModuleMock() {
         provider: "openai",
         id: "gpt-5.4",
         name: "GPT-5.4",
+        reasoning: true,
         contextWindow: 400000,
       },
     ],
@@ -173,52 +175,111 @@ function createProviderUsageModuleMock() {
   };
 }
 
+function createCommandsStatusRuntimeModuleMock() {
+  return {
+    buildStatusText: async (params: {
+      sessionKey: string;
+      sessionEntry: SessionEntry;
+      statusChannel: string;
+      provider?: string;
+      model: string;
+      primaryModelLabelOverride?: string;
+      includeTranscriptUsage?: boolean;
+      taskLineOverride?: string;
+      resolveDefaultThinkingLevel?: () => unknown;
+    }) => {
+      resolveQueueSettingsMock({
+        channel: params.statusChannel,
+        sessionEntry: params.sessionEntry,
+      });
+      const parsed = params.sessionKey.startsWith("agent:") ? params.sessionKey.split(":") : null;
+      const agentId = parsed?.[1] || "main";
+      const configuredAgent = Array.isArray(
+        (mockConfig as { agents?: { list?: Array<Record<string, unknown>> } }).agents?.list,
+      )
+        ? (mockConfig as { agents?: { list?: Array<Record<string, unknown>> } }).agents?.list?.find(
+            (entry) => entry.id === agentId,
+          )
+        : undefined;
+      const primary =
+        params.primaryModelLabelOverride ??
+        [params.provider, params.model].filter(Boolean).join("/") ??
+        params.model;
+      const customAuth = params.provider
+        ? resolveUsableCustomProviderApiKeyMock({ provider: params.provider })
+        : null;
+      const envAuth =
+        !customAuth && params.provider ? resolveEnvApiKeyMock(params.provider, process.env) : null;
+      const modelAuth = customAuth
+        ? `api-key (${customAuth.source})`
+        : envAuth
+          ? "api-key (env)"
+          : undefined;
+      buildStatusMessageMock({
+        agentId,
+        agent: {
+          model: { primary },
+          thinkingDefault:
+            configuredAgent?.thinkingDefault ?? (await params.resolveDefaultThinkingLevel?.()),
+        },
+        sessionEntry: params.sessionEntry,
+        modelAuth,
+        includeTranscriptUsage: params.includeTranscriptUsage,
+      });
+      return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
+        .filter(Boolean)
+        .join("\n");
+    },
+  };
+}
+
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+// Keep provider-runtime/plugin activation out of this focused tool test. The
+// session_status surface only needs model selection semantics here, not real
+// bundled provider registration.
+vi.mock("../plugins/providers.runtime.js", () => ({
+  resolvePluginProviders: () => [],
+}));
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
+vi.mock("./tools/session-status.runtime.js", createCommandsStatusRuntimeModuleMock);
+vi.mock("../auto-reply/group-activation.js", () => ({
+  normalizeGroupActivation: (value: unknown) => value ?? "always",
+}));
+vi.mock("../auto-reply/reply/queue.js", () => ({
+  getFollowupQueueDepth: () => 0,
+  resolveQueueSettings: resolveQueueSettingsMock,
+}));
+vi.mock("../auto-reply/status.js", () => ({
+  buildStatusMessage: buildStatusMessageMock,
+}));
+vi.mock("../tasks/task-owner-access.js", () => ({
+  listTasksForRelatedSessionKeyForOwner: (params: {
+    relatedSessionKey: string;
+    callerOwnerKey: string;
+  }) => listTasksForRelatedSessionKeyForOwnerMock(params),
+  buildTaskStatusSnapshotForRelatedSessionKeyForOwner: (params: {
+    relatedSessionKey: string;
+    callerOwnerKey: string;
+  }) =>
+    buildTaskStatusSnapshot(listTasksForRelatedSessionKeyForOwnerMock(params) as TaskRecord[], {
+      now: TASK_STATUS_SNAPSHOT_NOW,
+    }),
+}));
 
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
-async function loadFreshOpenClawToolsForSessionStatusTest() {
-  vi.resetModules();
-  vi.doMock("../config/sessions.js", createSessionsModuleMock);
-  vi.doMock("../gateway/call.js", createGatewayCallModuleMock);
-  vi.doMock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
-  vi.doMock("../config/config.js", createConfigModuleMock);
-  vi.doMock("../agents/model-catalog.js", createModelCatalogModuleMock);
-  vi.doMock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
-  vi.doMock("../agents/model-auth.js", createModelAuthModuleMock);
-  vi.doMock("../infra/provider-usage.js", createProviderUsageModuleMock);
-  vi.doMock("../auto-reply/group-activation.js", () => ({
-    normalizeGroupActivation: (value: unknown) => value ?? "always",
-  }));
-  vi.doMock("../auto-reply/reply/queue.js", () => ({
-    getFollowupQueueDepth: () => 0,
-    resolveQueueSettings: resolveQueueSettingsMock,
-  }));
-  vi.doMock("../auto-reply/status.js", () => ({
-    buildStatusMessage: buildStatusMessageMock,
-  }));
-  vi.doMock("../tasks/task-owner-access.js", () => ({
-    listTasksForRelatedSessionKeyForOwner: (params: {
-      relatedSessionKey: string;
-      callerOwnerKey: string;
-    }) => listTasksForRelatedSessionKeyForOwnerMock(params),
-    buildTaskStatusSnapshotForRelatedSessionKeyForOwner: (params: {
-      relatedSessionKey: string;
-      callerOwnerKey: string;
-    }) =>
-      buildTaskStatusSnapshot(listTasksForRelatedSessionKeyForOwnerMock(params) as TaskRecord[], {
-        now: TASK_STATUS_SNAPSHOT_NOW,
-      }),
-  }));
+beforeAll(async () => {
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
-}
+});
 
 function resetSessionStore(store: Record<string, SessionEntry>) {
   buildStatusMessageMock.mockClear();
@@ -325,9 +386,8 @@ function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: 
 }
 
 describe("session_status tool", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     buildStatusMessageMock.mockClear();
-    await loadFreshOpenClawToolsForSessionStatusTest();
   });
 
   it("returns a status card for the current session", async () => {
@@ -346,6 +406,25 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+  });
+
+  it("enables transcript usage fallback for session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-transcript-usage", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeTranscriptUsage: true,
+      }),
+    );
   });
 
   it("errors for unknown session keys", async () => {
@@ -387,6 +466,55 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("main");
+  });
+
+  it("falls back from implicit default-account direct policy keys to persisted direct sessions", async () => {
+    resetSessionStore({
+      "agent:main:telegram:direct:1053274893": {
+        sessionId: "s-direct",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    const result = await tool.execute("call-default-direct", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:telegram:direct:1053274893");
+  });
+
+  it("falls back from implicit default-account direct policy keys to main sessions", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    const result = await tool.execute("call-default-direct-main", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+  });
+
+  it("keeps explicit default-account direct session lookups strict", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    await expect(
+      tool.execute("call-default-direct-explicit", {
+        sessionKey: "agent:main:telegram:default:direct:1053274893",
+      }),
+    ).rejects.toThrow("Unknown sessionKey: agent:main:telegram:default:direct:1053274893");
   });
 
   it("prefers a literal current session key in session_status", async () => {
@@ -658,6 +786,7 @@ describe("session_status tool", () => {
       "/tmp/main/sessions.json",
       expect.objectContaining({
         "agent:main:subagent:child": expect.objectContaining({
+          liveModelSwitchPending: true,
           modelOverride: "claude-sonnet-4-6",
         }),
       }),
@@ -812,12 +941,110 @@ describe("session_status tool", () => {
     }
   });
 
+  it("uses the implicit model thinking default when no config default is set", async () => {
+    resetSessionStore({
+      "agent:kira:main": {
+        sessionId: "agent-thinking-implicit",
+        updatedAt: 10,
+      },
+    });
+    const savedConfig = mockConfig;
+    try {
+      mockConfig = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {},
+          },
+          list: [
+            {
+              id: "kira",
+              model: "openai/gpt-5.4",
+            },
+          ],
+        },
+        tools: {
+          agentToAgent: { enabled: false },
+        },
+      };
+
+      const tool = getSessionStatusTool("agent:kira:main");
+
+      await tool.execute("call-agent-thinking-implicit", {});
+
+      expect(buildStatusMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "kira",
+          agent: expect.objectContaining({
+            thinkingDefault: "medium",
+          }),
+        }),
+      );
+    } finally {
+      mockConfig = savedConfig;
+    }
+  });
+
+  it("hydrates runtime catalog metadata for status when configured model metadata omits reasoning", async () => {
+    resetSessionStore({
+      "agent:kira:main": {
+        sessionId: "agent-thinking-runtime-hydration",
+        updatedAt: 10,
+      },
+    });
+    const savedConfig = mockConfig;
+    try {
+      mockConfig = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {},
+          },
+          list: [
+            {
+              id: "kira",
+              model: "openai/gpt-5.4",
+            },
+          ],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+            },
+          },
+        },
+        tools: {
+          agentToAgent: { enabled: false },
+        },
+      };
+
+      const tool = getSessionStatusTool("agent:kira:main");
+
+      await tool.execute("call-agent-thinking-runtime-hydration", {});
+
+      expect(buildStatusMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "kira",
+          agent: expect.objectContaining({
+            thinkingDefault: "medium",
+          }),
+        }),
+      );
+    } finally {
+      mockConfig = savedConfig;
+    }
+  });
+
   it("falls back to origin.provider when resolving queue settings", async () => {
     resetSessionStore({
       main: {
         sessionId: "status-origin-provider",
         updatedAt: 10,
-        origin: { provider: "discord" },
+        origin: { provider: "quietchat" },
       },
     });
 
@@ -827,9 +1054,9 @@ describe("session_status tool", () => {
 
     expect(resolveQueueSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "discord",
+        channel: "quietchat",
         sessionEntry: expect.objectContaining({
-          origin: { provider: "discord" },
+          origin: { provider: "quietchat" },
         }),
       }),
     );
@@ -1401,5 +1628,6 @@ describe("session_status tool", () => {
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
+    expect(saved.liveModelSwitchPending).toBe(true);
   });
 });

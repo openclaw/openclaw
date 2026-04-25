@@ -1,5 +1,9 @@
 import { logVerbose } from "../../globals.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
@@ -46,7 +50,10 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
     return { action: "status", args: "" };
   }
   const [action, ...tail] = rest.split(/\s+/);
-  return { action: action.toLowerCase(), args: tail.join(" ").trim() };
+  return {
+    action: normalizeOptionalLowercaseString(action) ?? "",
+    args: normalizeOptionalString(tail.join(" ")) ?? "",
+  };
 }
 
 function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string | undefined {
@@ -160,6 +167,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       const payload: ReplyPayload = {
         mediaUrl: result.audioPath,
         audioAsVoice: result.voiceCompatible === true,
+        trustedLocalMedia: true,
+        spokenText: args,
       };
       return { shouldContinue: false, reply: payload };
     }
@@ -214,7 +223,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       };
     }
 
-    const requested = args.trim().toLowerCase();
+    const requested = normalizeOptionalLowercaseString(args) ?? "";
     const resolvedProvider = getSpeechProvider(requested, params.cfg);
     if (!resolvedProvider) {
       return { shouldContinue: false, reply: ttsUsage() };
@@ -273,7 +282,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         },
       };
     }
-    const requested = args.trim().toLowerCase();
+    const requested = normalizeOptionalLowercaseString(args) ?? "";
     if (requested !== "on" && requested !== "off") {
       return { shouldContinue: false, reply: ttsUsage() };
     }
