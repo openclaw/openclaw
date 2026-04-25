@@ -447,8 +447,12 @@ async function runNativeHookRelayPermissionRequest(params: {
       return params.adapter.renderPermissionDecisionResponse("deny", "Denied by user");
     }
   } catch (error) {
-    log.warn(`native hook permission approval failed; deferring: ${String(error)}`);
+    log.warn(
+      `native hook permission approval failed; deferring to provider approval path: ${String(error)}`,
+    );
   }
+  // A PermissionRequest no-op is not an allow decision. Codex interprets it as
+  // "no hook decision" and falls through to its normal guardian/user approval path.
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
@@ -459,7 +463,7 @@ async function requestNativeHookRelayPermissionApprovalWithBudget(params: {
 }): Promise<NativeHookRelayPermissionApprovalResult> {
   if (!consumeNativeHookRelayPermissionBudget(params.registration.relayId)) {
     log.warn(
-      `native hook permission approval rate limit exceeded; deferring: relay=${params.registration.relayId} run=${params.registration.runId}`,
+      `native hook permission approval rate limit exceeded; deferring to provider approval path: relay=${params.registration.relayId} run=${params.registration.runId}`,
     );
     return "defer";
   }
