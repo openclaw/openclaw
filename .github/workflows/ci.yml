@@ -2163,3 +2163,40 @@ jobs:
               exit 1
               ;;
           esac
+
+  ci-gate:
+    name: CI
+    if: always()
+    needs:
+      - preflight
+      - security-scm-fast
+      - security-dependency-audit
+      - security-fast
+      - build-artifacts
+      - checks-fast-core
+      - checks-fast-channel-contracts
+      - checks-fast-protocol
+      - checks-node-extensions
+      - checks
+      - checks-node-compat
+      - checks-node-core-test
+      - extension-fast
+      - check
+      - check-additional
+      - build-smoke
+      - check-docs
+      - skills-python
+      - checks-windows
+      - macos-node
+      - macos-swift
+      - android
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Evaluate results
+        run: |
+          results='${{ toJSON(needs.*.result) }}'
+          echo "Job results: $results"
+          if echo "$results" | grep -qE '"failure"|"cancelled"'; then
+            echo "One or more CI jobs failed or were cancelled"
+            exit 1
+          fi
