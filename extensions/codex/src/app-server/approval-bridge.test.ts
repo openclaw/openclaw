@@ -634,7 +634,7 @@ describe("Codex app-server approval bridge", () => {
         permissions: {
           fileSystem: {
             roots: ["C:/Users/alice"],
-            readPaths: ["C:/Users/alice/.ssh/id_rsa"],
+            readPaths: ["C:/Users/alice/.ssh/id_rsa", "c:/users/bob/project"],
           },
         },
       },
@@ -645,10 +645,12 @@ describe("Codex app-server approval bridge", () => {
 
     const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
     const description = (requestPayload as { description: string }).description;
-    expect(description).toContain("File system roots: ~; readPaths: ~/.ssh/id_rsa");
+    expect(description).toContain("File system roots: ~; readPaths: ~/.ssh/id_rsa, ~/project");
     expect(description).toContain("High-risk targets: home directory");
     expect(description).not.toContain("alice");
+    expect(description).not.toContain("bob");
     expect(description).not.toContain("C:/Users");
+    expect(description).not.toContain("c:/users");
   });
 
   it("strips terminal and invisible controls from permission descriptions", async () => {
