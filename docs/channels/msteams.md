@@ -66,8 +66,7 @@ Alternatives: `ngrok http 3978` or `tailscale funnel 3978` (but these may change
 ```bash
 teams app create \
   --name "OpenClaw" \
-  --endpoint "https://<your-tunnel-url>/api/messages" \
-  --env .teams_env
+  --endpoint "https://<your-tunnel-url>/api/messages"
 ```
 
 This single command:
@@ -76,11 +75,10 @@ This single command:
 - Generates a client secret
 - Builds and uploads a Teams app manifest (with icons)
 - Registers the bot (Teams-managed by default — no Azure subscription needed)
-- Writes `CLIENT_ID`, `CLIENT_SECRET`, and `TENANT_ID` to your `.teams_env` file
 
-The output will show a **Teams App ID** — note this for later steps. It also offers to install the app in Teams directly.
+The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams App ID** — note these for the next steps. It also offers to install the app in Teams directly.
 
-**4. Configure OpenClaw** using the credentials from `.teams_env`:
+**4. Configure OpenClaw** using the credentials from the output:
 
 ```json5
 {
