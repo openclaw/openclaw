@@ -437,8 +437,51 @@ OAuth is optional for creating a Meet link because `googlemeet create` can fall
 back to browser automation. Configure OAuth when you want official API create,
 space resolution, or Meet Media API preflight checks.
 
-Google Meet API access uses a personal OAuth client first. Configure
-`oauth.clientId` and optionally `oauth.clientSecret`, then run:
+Google Meet API access uses user OAuth: create a Google Cloud OAuth client,
+request the required scopes, authorize a Google account, then store the
+resulting refresh token in the Google Meet plugin config or provide the
+`OPENCLAW_GOOGLE_MEET_*` environment variables.
+
+OAuth does not replace the Chrome join path. Chrome and Chrome-node transports
+still join through a signed-in Chrome profile, BlackHole/SoX, and a connected
+node when you use browser participation. OAuth is only for the official Google
+Meet API path: create meeting spaces, resolve spaces, and run Meet Media API
+preflight checks.
+
+### Create Google credentials
+
+In Google Cloud Console:
+
+1. Create or select a Google Cloud project.
+2. Enable **Google Meet REST API** for that project.
+3. Configure the OAuth consent screen.
+   - **Internal** is simplest for a Google Workspace organization.
+   - **External** works for personal/test setups; while the app is in Testing,
+     add each Google account that will authorize the app as a test user.
+4. Add the scopes OpenClaw requests:
+   - `https://www.googleapis.com/auth/meetings.space.created`
+   - `https://www.googleapis.com/auth/meetings.space.readonly`
+   - `https://www.googleapis.com/auth/meetings.conference.media.readonly`
+5. Create an OAuth client ID.
+   - Application type: **Web application**.
+   - Authorized redirect URI:
+
+     ```text
+     http://localhost:8085/oauth2callback
+     ```
+
+6. Copy the client ID and client secret.
+
+`meetings.space.created` is required by Google Meet `spaces.create`.
+`meetings.space.readonly` lets OpenClaw resolve Meet URLs/codes to spaces.
+`meetings.conference.media.readonly` is for Meet Media API preflight and media
+work; Google may require Developer Preview enrollment for actual Media API use.
+If you only need browser-based Chrome joins, skip OAuth entirely.
+
+### Mint the refresh token
+
+Configure `oauth.clientId` and optionally `oauth.clientSecret`, or pass them as
+environment variables, then run:
 
 ```bash
 openclaw googlemeet auth login --json
@@ -448,10 +491,115 @@ The command prints an `oauth` config block with a refresh token. It uses PKCE,
 localhost callback on `http://localhost:8085/oauth2callback`, and a manual
 copy/paste flow with `--manual`.
 
+Examples:
+
+```bash
+OPENCLAW_GOOGLE_MEET_CLIENT_ID="your-client-id" \
+OPENCLAW_GOOGLE_MEET_CLIENT_SECRET="your-client-secret" \
+openclaw googlemeet auth login --json
+```
+
+Use manual mode when the browser cannot reach the local callback:
+
+```bash
+OPENCLAW_GOOGLE_MEET_CLIENT_ID="your-client-id" \
+OPENCLAW_GOOGLE_MEET_CLIENT_SECRET="your-client-secret" \
+openclaw googlemeet auth login --json --manual
+```
+
+The JSON output includes:
+
+```json
+{
+  "oauth": {
+    "clientId": "your-client-id",
+    "clientSecret": "your-client-secret",
+    "refreshToken": "refresh-token",
+    "accessToken": "access-token",
+    "expiresAt": 1770000000000
+  },
+  "scope": "..."
+}
+```
+
+Store the `oauth` object under the Google Meet plugin config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "google-meet": {
+        enabled: true,
+        config: {
+          oauth: {
+            clientId: "your-client-id",
+            clientSecret: "your-client-secret",
+            refreshToken: "refresh-token",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Prefer environment variables when you do not want the refresh token in config.
+If both config and environment values are present, the plugin resolves config
+first and then environment fallback.
+
 The OAuth consent includes Meet space creation, Meet space read access, and Meet
 conference media read access. If you authenticated before meeting creation
 support existed, rerun `openclaw googlemeet auth login --json` so the refresh
 token has the `meetings.space.created` scope.
+
+### Verify OAuth with doctor
+
+Run the OAuth doctor when you want a fast, non-secret health check:
+
+```bash
+openclaw googlemeet doctor --oauth --json
+```
+
+This does not load the Chrome runtime or require a connected Chrome node. It
+checks that OAuth config exists and that the refresh token can mint an access
+token. The JSON report includes only status fields such as `ok`, `configured`,
+`tokenSource`, `expiresAt`, and check messages; it does not print the access
+token, refresh token, or client secret.
+
+Common results:
+
+| Check                | Meaning                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| `oauth-config`       | `oauth.clientId` plus `oauth.refreshToken`, or a cached access token, is present.       |
+| `oauth-token`        | The cached access token is still valid, or the refresh token minted a new access token. |
+| `meet-spaces-get`    | Optional `--meeting` check resolved an existing Meet space.                             |
+| `meet-spaces-create` | Optional `--create-space` check created a new Meet space.                               |
+
+To prove Google Meet API enablement and `spaces.create` scope as well, run the
+side-effecting create check:
+
+```bash
+openclaw googlemeet doctor --oauth --create-space --json
+openclaw googlemeet create --no-join --json
+```
+
+`--create-space` creates a throwaway Meet URL. Use it when you need to confirm
+that the Google Cloud project has the Meet API enabled and that the authorized
+account has the `meetings.space.created` scope.
+
+To prove read access for an existing meeting space:
+
+```bash
+openclaw googlemeet doctor --oauth --meeting https://meet.google.com/abc-defg-hij --json
+openclaw googlemeet resolve-space --meeting https://meet.google.com/abc-defg-hij
+```
+
+`doctor --oauth --meeting` and `resolve-space` prove read access to an existing
+space that the authorized Google account can access. A `403` from these checks
+usually means the Google Meet REST API is disabled, the consented refresh token
+is missing the required scope, or the Google account cannot access that Meet
+space. A refresh-token error means rerun `openclaw googlemeet auth login
+--json` and store the new `oauth` block.
 
 No OAuth credentials are needed for the browser fallback. In that mode, Google
 auth comes from the signed-in Chrome profile on the selected node, not from
@@ -967,7 +1115,10 @@ Also verify:
 `googlemeet doctor [session-id]` prints the session, node, in-call state,
 manual action reason, realtime provider connection, `realtimeReady`, audio
 input/output activity, last audio timestamps, byte counters, and browser URL.
-Use `googlemeet status [session-id]` when you need the raw JSON.
+Use `googlemeet status [session-id]` when you need the raw JSON. Use
+`googlemeet doctor --oauth` when you need to verify Google Meet OAuth refresh
+without exposing tokens; add `--meeting` or `--create-space` when you need a
+Google Meet API proof as well.
 
 If an agent timed out and you can see a Meet tab already open, inspect that tab
 without opening another one:

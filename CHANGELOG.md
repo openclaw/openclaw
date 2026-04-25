@@ -73,6 +73,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google Meet: default Chrome realtime sessions to OpenAI plus SoX `rec`/`play` audio bridge commands, so the usual setup only needs the plugin enabled and `OPENAI_API_KEY`. Thanks @steipete.
 - Plugins/Google Meet: add a `chrome-node` transport so a paired macOS node, such as a Parallels VM, can own Chrome, BlackHole, and SoX while the Gateway machine keeps the agent and model key. Thanks @steipete.
 - Plugins/Google Meet: add `googlemeet artifacts` and `googlemeet attendance` commands plus matching tool/gateway actions for conference records, recordings, transcripts, smart notes, and participant sessions. Thanks @steipete.
+- Plugins/Google Meet: add `googlemeet doctor --oauth` so operators can verify OAuth token refresh, Meet space reads, and side-effecting space creation without printing secrets. Thanks @steipete.
 - Plugins/Voice Call: expose the shared `openclaw_agent_consult` realtime tool so live phone calls can ask the full OpenClaw agent for deeper/tool-backed answers. Thanks @steipete.
 - Plugins/Voice Call: add `voicecall setup` and a dry-run-by-default `voicecall smoke` command so Twilio/provider readiness can be checked before placing a live test call. Thanks @steipete.
 - Plugins/Google Meet: add `googlemeet doctor` and a `recover_current_tab`/`recover-tab` flow so agents can inspect an already-open Meet tab and report the blocker without opening another window. Thanks @steipete.
