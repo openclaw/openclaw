@@ -7,6 +7,7 @@ import {
   type RequestClientOptions,
 } from "@buape/carbon";
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { FormData as UndiciFormData } from "undici";
 
 export type ProxyRequestClientOptions = RequestClientOptions & {
   fetch?: typeof fetch;
@@ -281,7 +282,7 @@ class ProxyRequestClientCompat {
         typeof payload === "string"
           ? { content: payload, attachments: [] }
           : { ...payload, attachments: [] };
-      const formData = new FormData();
+      const formData = new UndiciFormData();
       const files = getMultipartFiles(payload);
 
       for (const [index, file] of files.entries()) {
