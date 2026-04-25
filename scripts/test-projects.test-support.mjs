@@ -230,7 +230,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
   [
     "scripts/run-vitest.mjs",
-    ["test/scripts/test-projects.test.ts", "test/scripts/vitest-local-scheduling.test.ts"],
+    [
+      "test/scripts/run-vitest.test.ts",
+      "test/scripts/test-projects.test.ts",
+      "test/scripts/vitest-local-scheduling.test.ts",
+    ],
   ],
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],

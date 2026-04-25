@@ -58,6 +58,40 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("caps native Rust worker pools for serial Vitest runs", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toMatchObject({
+      OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      RAYON_NUM_THREADS: "1",
+      TOKIO_WORKER_THREADS: "1",
+    });
+  });
+
+  it("keeps explicit native Rust worker pool settings", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: "2",
+          PATH: "/usr/bin",
+          RAYON_NUM_THREADS: "8",
+          TOKIO_WORKER_THREADS: "6",
+        },
+        "darwin",
+      ).env,
+    ).toMatchObject({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+      RAYON_NUM_THREADS: "8",
+      TOKIO_WORKER_THREADS: "6",
+    });
+  });
+
   it("suppresses rolldown plugin timing noise while keeping other stderr intact", () => {
     expect(
       shouldSuppressVitestStderrLine(
