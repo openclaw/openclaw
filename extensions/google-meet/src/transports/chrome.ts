@@ -10,6 +10,15 @@ import {
   startCommandRealtimeAudioBridge,
   type ChromeRealtimeAudioBridgeHandle,
 } from "../realtime.js";
+import {
+  asBrowserTabs,
+  callBrowserProxyOnNode,
+  isSameMeetUrlForReuse,
+  normalizeMeetUrlForReuse,
+  readBrowserTab,
+  resolveChromeNode,
+  type BrowserTab,
+} from "./chrome-browser-proxy.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
 
 export const GOOGLE_MEET_SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
@@ -154,52 +163,6 @@ export async function launchChromeMeet(params: {
   }
 }
 
-function isGoogleMeetNode(node: {
-  caps?: string[];
-  commands?: string[];
-  connected?: boolean;
-  nodeId?: string;
-  displayName?: string;
-  remoteIp?: string;
-}) {
-  const commands = Array.isArray(node.commands) ? node.commands : [];
-  const caps = Array.isArray(node.caps) ? node.caps : [];
-  return (
-    node.connected === true &&
-    commands.includes("googlemeet.chrome") &&
-    (commands.includes("browser.proxy") || caps.includes("browser"))
-  );
-}
-
-async function resolveChromeNode(params: {
-  runtime: PluginRuntime;
-  requestedNode?: string;
-}): Promise<string> {
-  const list = await params.runtime.nodes.list({ connected: true });
-  const nodes = list.nodes.filter(isGoogleMeetNode);
-  if (nodes.length === 0) {
-    throw new Error(
-      "No connected Google Meet-capable node with browser proxy. Run `openclaw node run` on the Chrome host with browser proxy enabled, approve pairing, and allow googlemeet.chrome plus browser.proxy.",
-    );
-  }
-  const requested = params.requestedNode?.trim();
-  if (requested) {
-    const matches = nodes.filter((node) =>
-      [node.nodeId, node.displayName, node.remoteIp].some((value) => value === requested),
-    );
-    if (matches.length === 1) {
-      return matches[0].nodeId;
-    }
-    throw new Error(`Google Meet node not found or ambiguous: ${requested}`);
-  }
-  if (nodes.length === 1) {
-    return nodes[0].nodeId;
-  }
-  throw new Error(
-    "Multiple Google Meet-capable nodes connected. Set plugins.entries.google-meet.config.chromeNode.node.",
-  );
-}
-
 function parseNodeStartResult(raw: unknown): {
   launched?: boolean;
   bridgeId?: string;
@@ -221,68 +184,6 @@ function parseNodeStartResult(raw: unknown): {
   };
 }
 
-type BrowserProxyResult = {
-  result?: unknown;
-};
-
-type BrowserTab = {
-  targetId?: string;
-  title?: string;
-  url?: string;
-};
-
-function unwrapNodeInvokePayload(raw: unknown): unknown {
-  const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  if (typeof record.payloadJSON === "string" && record.payloadJSON.trim()) {
-    return JSON.parse(record.payloadJSON);
-  }
-  if ("payload" in record) {
-    return record.payload;
-  }
-  return raw;
-}
-
-function parseBrowserProxyResult(raw: unknown): unknown {
-  const payload = unwrapNodeInvokePayload(raw);
-  const proxy =
-    payload && typeof payload === "object" ? (payload as BrowserProxyResult) : undefined;
-  if (!proxy || !("result" in proxy)) {
-    throw new Error("Google Meet browser proxy returned an invalid result.");
-  }
-  return proxy.result;
-}
-
-async function callBrowserProxyOnNode(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  method: "GET" | "POST" | "DELETE";
-  path: string;
-  body?: unknown;
-  timeoutMs: number;
-}) {
-  const raw = await params.runtime.nodes.invoke({
-    nodeId: params.nodeId,
-    command: "browser.proxy",
-    params: {
-      method: params.method,
-      path: params.path,
-      body: params.body,
-      timeoutMs: params.timeoutMs,
-    },
-    timeoutMs: params.timeoutMs + 5_000,
-  });
-  return parseBrowserProxyResult(raw);
-}
-
-function asBrowserTabs(result: unknown): BrowserTab[] {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  return Array.isArray(record.tabs) ? (record.tabs as BrowserTab[]) : [];
-}
-
-function readBrowserTab(result: unknown): BrowserTab | undefined {
-  return result && typeof result === "object" ? (result as BrowserTab) : undefined;
-}
-
 function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undefined {
   const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
   const raw = record.result;
@@ -297,6 +198,7 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
     manualActionMessage?: string;
     url?: string;
     title?: string;
+    notes?: string[];
   };
   return {
     inCall: parsed.inCall,
@@ -307,12 +209,28 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
     browserUrl: parsed.url,
     browserTitle: parsed.title,
     status: "browser-control",
+    notes: Array.isArray(parsed.notes)
+      ? parsed.notes.filter((note): note is string => typeof note === "string")
+      : undefined,
   };
 }
 
 function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   return `() => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const buttons = [...document.querySelectorAll('button')];
+  const notes = [];
+  const findButton = (pattern) =>
+    buttons.find((button) => {
+      const label = [
+        button.getAttribute("aria-label"),
+        button.getAttribute("data-tooltip"),
+        text(button),
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return pattern.test(label) && !button.disabled;
+    });
   const input = [...document.querySelectorAll('input')].find((el) =>
     /your name/i.test(el.getAttribute('aria-label') || el.placeholder || '')
   );
@@ -322,14 +240,18 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  const buttons = [...document.querySelectorAll('button')];
   const pageText = text(document.body).toLowerCase();
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
   const join = ${JSON.stringify(params.autoJoin)}
-    ? buttons.find((button) => /join now|ask to join/i.test(text(button)) && !button.disabled)
+    ? findButton(/join now|ask to join/i)
     : null;
   if (join) join.click();
+  const microphoneChoice = findButton(/\\buse microphone\\b/i);
+  if (microphoneChoice) {
+    microphoneChoice.click();
+    notes.push("Accepted Meet microphone prompt with browser automation.");
+  }
   const mic = buttons.find((button) => /turn off microphone|turn on microphone|microphone/i.test(button.getAttribute('aria-label') || text(button)));
   const inCall = buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
   let manualActionReason;
@@ -343,16 +265,21 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   } else if (!inCall && /allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
     manualActionReason = "meet-permission-required";
     manualActionMessage = "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry.";
+  } else if (!inCall && !microphoneChoice && /do you want people to hear you in the meeting/i.test(pageText)) {
+    manualActionReason = "meet-audio-choice-required";
+    manualActionMessage = "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry.";
   }
   return JSON.stringify({
     clickedJoin: Boolean(join),
+    clickedMicrophoneChoice: Boolean(microphoneChoice),
     inCall,
     micMuted: mic ? /turn on microphone/i.test(mic.getAttribute('aria-label') || text(mic)) : undefined,
     manualActionRequired: Boolean(manualActionReason),
     manualActionReason,
     manualActionMessage,
     title: document.title,
-    url: pageUrl
+    url: pageUrl,
+    notes
   });
 }`;
 }
@@ -380,7 +307,7 @@ async function openMeetWithBrowserProxy(params: {
         timeoutMs: Math.min(timeoutMs, 5_000),
       }),
     );
-    tab = tabs.find((entry) => entry.url === params.url);
+    tab = tabs.find((entry) => isSameMeetUrlForReuse(entry.url, params.url));
     targetId = tab?.targetId;
     if (targetId) {
       await callBrowserProxyOnNode({
@@ -469,6 +396,96 @@ async function openMeetWithBrowserProxy(params: {
     }
   } while (Date.now() <= deadline);
   return { launched: true, browser };
+}
+
+function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
+  if (url) {
+    return isSameMeetUrlForReuse(tab.url, url);
+  }
+  if (normalizeMeetUrlForReuse(tab.url)) {
+    return true;
+  }
+  const tabUrl = tab.url ?? "";
+  return (
+    tabUrl.startsWith("https://accounts.google.com/") &&
+    /sign in|google accounts|meet/i.test(tab.title ?? "")
+  );
+}
+
+export async function recoverCurrentMeetTabOnNode(params: {
+  runtime: PluginRuntime;
+  config: GoogleMeetConfig;
+  url?: string;
+}): Promise<{
+  nodeId: string;
+  found: boolean;
+  targetId?: string;
+  tab?: BrowserTab;
+  browser?: GoogleMeetChromeHealth;
+  message: string;
+}> {
+  const nodeId = await resolveChromeNode({
+    runtime: params.runtime,
+    requestedNode: params.config.chromeNode.node,
+  });
+  const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
+  const tabs = asBrowserTabs(
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId,
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: Math.min(timeoutMs, 5_000),
+    }),
+  );
+  const tab = tabs.find((entry) => isRecoverableMeetTab(entry, params.url));
+  const targetId = tab?.targetId;
+  if (!tab || !targetId) {
+    return {
+      nodeId,
+      found: false,
+      tab,
+      message: params.url
+        ? `No existing Meet tab matched ${params.url}.`
+        : "No existing Meet tab found on the selected Chrome node.",
+    };
+  }
+  await callBrowserProxyOnNode({
+    runtime: params.runtime,
+    nodeId,
+    method: "POST",
+    path: "/tabs/focus",
+    body: { targetId },
+    timeoutMs: Math.min(timeoutMs, 5_000),
+  });
+  const evaluated = await callBrowserProxyOnNode({
+    runtime: params.runtime,
+    nodeId,
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "evaluate",
+      targetId,
+      fn: meetStatusScript({
+        guestName: params.config.chrome.guestName,
+        autoJoin: false,
+      }),
+    },
+    timeoutMs: Math.min(timeoutMs, 10_000),
+  });
+  const browser = parseMeetBrowserStatus(evaluated);
+  const manual = browser?.manualActionRequired
+    ? browser.manualActionMessage || browser.manualActionReason
+    : undefined;
+  return {
+    nodeId,
+    found: true,
+    targetId,
+    tab,
+    browser,
+    message:
+      manual ?? (browser?.inCall ? "Existing Meet tab is in-call." : "Existing Meet tab focused."),
+  };
 }
 
 export async function launchChromeMeetOnNode(params: {

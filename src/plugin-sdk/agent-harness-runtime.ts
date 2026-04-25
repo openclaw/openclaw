@@ -37,6 +37,7 @@ export type {
   AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
+  AgentToolResultMiddlewareRuntime,
   OpenClawAgentToolResult,
 } from "../plugins/agent-tool-result-middleware-types.js";
 export type {
@@ -54,6 +55,8 @@ export type {
 
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
+export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+export { emitAgentEvent } from "../infra/agent-events.js";
 export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
 export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
 export { resolveUserPath } from "../utils.js";

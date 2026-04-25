@@ -378,6 +378,42 @@ describe("setup-registry getJiti", () => {
       cliBackends: [],
       configMigrations: [],
       autoEnableProbes: [],
+      diagnostics: [
+        expect.objectContaining({
+          pluginId: "openai",
+          code: "setup-descriptor-runtime-disabled",
+        }),
+      ],
+    });
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("does not report descriptor-only diagnostics for bundled setup-api fallback paths", () => {
+    const parentDir = makeTempDir();
+    const pluginRoot = path.join(parentDir, "openai");
+    fs.mkdirSync(pluginRoot);
+    expect(fs.existsSync(path.join(process.cwd(), "extensions", "openai", "setup-api.ts"))).toBe(
+      true,
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "workspace-openai" }],
+            requiresRuntime: false,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(resolvePluginSetupRegistry({ env: {} })).toEqual({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
       diagnostics: [],
     });
     expect(mocks.createJiti).not.toHaveBeenCalled();

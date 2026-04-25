@@ -84,6 +84,30 @@ export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   error?: string;
 };
 
+export type DiagnosticMessageDeliveryKind = "text" | "media" | "edit" | "reaction" | "other";
+
+type DiagnosticMessageDeliveryBaseEvent = DiagnosticBaseEvent & {
+  channel: string;
+  sessionKey?: string;
+  deliveryKind: DiagnosticMessageDeliveryKind;
+};
+
+export type DiagnosticMessageDeliveryStartedEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.started";
+};
+
+export type DiagnosticMessageDeliveryCompletedEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.completed";
+  durationMs: number;
+  resultCount: number;
+};
+
+export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.error";
+  durationMs: number;
+  errorCategory: string;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -185,6 +209,27 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   errorCode?: string;
 };
 
+export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
+  type: "exec.process.completed";
+  sessionKey?: string;
+  target: "host" | "sandbox";
+  mode: "child" | "pty";
+  outcome: "completed" | "failed";
+  durationMs: number;
+  commandLength: number;
+  exitCode?: number;
+  exitSignal?: string;
+  timedOut?: boolean;
+  failureKind?:
+    | "shell-command-not-found"
+    | "shell-not-executable"
+    | "overall-timeout"
+    | "no-output-timeout"
+    | "signal"
+    | "aborted"
+    | "runtime-error";
+};
+
 type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
   runId: string;
   sessionKey?: string;
@@ -269,6 +314,19 @@ export type DiagnosticPayloadLargeEvent = DiagnosticBaseEvent & {
   reason?: string;
 };
 
+export type DiagnosticLogRecordEvent = DiagnosticBaseEvent & {
+  type: "log.record";
+  level: string;
+  message: string;
+  loggerName?: string;
+  loggerParents?: string[];
+  attributes?: Record<string, string | number | boolean>;
+  code?: {
+    line?: number;
+    functionName?: string;
+  };
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -276,6 +334,9 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
   | DiagnosticMessageProcessedEvent
+  | DiagnosticMessageDeliveryStartedEvent
+  | DiagnosticMessageDeliveryCompletedEvent
+  | DiagnosticMessageDeliveryErrorEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent
   | DiagnosticLaneEnqueueEvent
@@ -286,6 +347,7 @@ export type DiagnosticEventPayload =
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
+  | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
   | DiagnosticModelCallStartedEvent
@@ -293,7 +355,8 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallErrorEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
-  | DiagnosticPayloadLargeEvent;
+  | DiagnosticPayloadLargeEvent
+  | DiagnosticLogRecordEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -315,9 +378,14 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.started",
   "tool.execution.completed",
   "tool.execution.error",
+  "exec.process.completed",
+  "message.delivery.started",
+  "message.delivery.completed",
+  "message.delivery.error",
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "log.record",
 ]);
 
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
@@ -424,12 +492,23 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   dispatchDiagnosticEvent(state, enriched);
 }
 
-export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+export function onInternalDiagnosticEvent(
+  listener: (evt: DiagnosticEventPayload) => void,
+): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
   return () => {
     state.listeners.delete(listener);
   };
+}
+
+export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+  return onInternalDiagnosticEvent((event) => {
+    if (event.type === "log.record") {
+      return;
+    }
+    listener(event);
+  });
 }
 
 export function resetDiagnosticEventsForTest(): void {

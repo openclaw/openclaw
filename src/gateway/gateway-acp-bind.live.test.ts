@@ -38,7 +38,7 @@ const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.5";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
-type LiveAcpAgent = "claude" | "codex" | "gemini";
+type LiveAcpAgent = "claude" | "codex" | "gemini" | "opencode";
 
 function createSlackCurrentConversationBindingRegistry() {
   return createTestRegistry([
@@ -75,6 +75,9 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   }
   if (normalized === "codex") {
     return "codex";
+  }
+  if (normalized === "opencode") {
+    return "opencode";
   }
   return "claude";
 }
@@ -134,6 +137,13 @@ async function getFreeGatewayPort(): Promise<number> {
 
 function logLiveStep(message: string): void {
   console.info(`[live-acp-bind] ${message}`);
+}
+
+function shouldRequireBoundAssistantTranscript(liveAgent: LiveAcpAgent): boolean {
+  return (
+    liveAgent === "opencode" ||
+    isTruthyEnvValue(process.env.OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT)
+  );
 }
 
 function normalizeOpenAiModelRef(value: string): string {
@@ -632,6 +642,11 @@ describeLive("gateway live (ACP bind)", () => {
             });
           } catch {
             if (attempt === 2) {
+              if (shouldRequireBoundAssistantTranscript(liveAgent)) {
+                throw new Error(
+                  `${liveAgent} ACP bind completed, but the bound session did not emit an assistant transcript`,
+                );
+              }
               console.error(
                 `SKIP: ${liveAgent} ACP bind completed, but the bound session did not emit an assistant transcript; skipping post-bind live probes.`,
               );
@@ -760,6 +775,11 @@ describeLive("gateway live (ACP bind)", () => {
             });
           } catch {
             if (attempt === 2) {
+              if (shouldRequireBoundAssistantTranscript(liveAgent)) {
+                throw new Error(
+                  `${liveAgent} ACP bind completed, but the bound session did not emit the marker transcript`,
+                );
+              }
               console.error(
                 `SKIP: ${liveAgent} ACP bind completed, but the bound session did not emit the marker transcript; skipping remaining post-bind live probes.`,
               );
@@ -913,7 +933,7 @@ describeLive("gateway live (ACP bind)", () => {
         clearRuntimeConfigSnapshot();
         await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
         await server.close();
-        await fs.rm(tempRoot, { recursive: true, force: true });
+        await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
         if (previous.configPath === undefined) {
           delete process.env.OPENCLAW_CONFIG_PATH;
         } else {

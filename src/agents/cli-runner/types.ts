@@ -19,6 +19,7 @@ export type RunCliAgentParams = {
   workspaceDir: string;
   config?: OpenClawConfig;
   prompt: string;
+  transcriptPrompt?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -43,6 +44,12 @@ export type RunCliAgentParams = {
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
   replyOperation?: ReplyOperation;
+  /**
+   * Close any long-lived CLI live session created for this run after the run
+   * finishes. Intended for temporary helper calls that should not keep process
+   * handles alive after returning.
+   */
+  cleanupCliLiveSessionOnRunEnd?: boolean;
 };
 
 export type CliPreparedBackend = {

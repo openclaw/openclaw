@@ -752,6 +752,111 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.parallel_tool_calls).toBe(false);
   });
 
+  it("strips store from proxied openai-completions payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "openai-completions",
+        provider: "google",
+        id: "gemini-2.5-pro",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+        store: false,
+      },
+    });
+
+    expect(payload).not.toHaveProperty("store");
+  });
+
+  it("keeps store untouched for native openai-completions payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-4.1",
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-4.1",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+        store: false,
+      },
+    });
+
+    expect(payload.store).toBe(false);
+  });
+
+  it("merges extra_body into openai-completions payloads before proxy store stripping", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-2.5-pro": {
+                params: {
+                  extraBody: {
+                    google: { thinking_config: { thinking_budget: 0 } },
+                    store: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "google",
+        id: "gemini-2.5-pro",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+    });
+
+    expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
+    expect(payload).not.toHaveProperty("store");
+  });
+
+  it("warns and skips invalid extra_body params", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "google",
+        applyModelId: "gemini-2.5-pro",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "google/gemini-2.5-pro": {
+                  params: { extra_body: "not-an-object" },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "openai-completions",
+          provider: "google",
+          id: "gemini-2.5-pro",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        } as Model<"openai-completions">,
+      });
+
+      expect(payload).not.toHaveProperty("extra_body");
+      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid extra_body param: not-an-object");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "inferrs",

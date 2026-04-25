@@ -55,6 +55,12 @@ While a job is in flight, duplicate `video_generate` calls in the same session r
 
 Outside of session-backed agent runs (for example, direct tool invocations), the tool falls back to inline generation and returns the final media path in the same turn.
 
+Generated video files are saved under OpenClaw-managed media storage when the
+provider returns bytes. The default generated-video save cap follows the video
+media limit, and `agents.defaults.mediaMaxMb` raises it for larger renders.
+When a provider also returns a hosted output URL, OpenClaw can deliver that URL
+instead of failing the task if local persistence rejects an oversized file.
+
 ### Task lifecycle
 
 Each `video_generate` request moves through four states:

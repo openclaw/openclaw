@@ -114,7 +114,7 @@ This table maps common inference tasks to the corresponding infer command.
 | Describe an image file  | `openclaw infer image describe --file ./image.png --json`              | `--model` must be an image-capable `<provider/model>` |
 | Transcribe audio        | `openclaw infer audio transcribe --file ./memo.m4a --json`             | `--model` must be `<provider/model>`                  |
 | Synthesize speech       | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json` | `tts status` is gateway-oriented                      |
-| Generate a video        | `openclaw infer video generate --prompt "..." --json`                  |                                                       |
+| Generate a video        | `openclaw infer video generate --prompt "..." --json`                  | Supports provider hints such as `--resolution`        |
 | Describe a video file   | `openclaw infer video describe --file ./clip.mp4 --json`               | `--model` must be `<provider/model>`                  |
 | Search the web          | `openclaw infer web search --query "..." --json`                       |                                                       |
 | Fetch a web page        | `openclaw infer web fetch --url https://example.com --json`            |                                                       |
@@ -130,6 +130,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
+- `model run` is one-shot. MCP servers opened through the agent runtime for that command are retired after the reply for both local and `--gateway` execution, so repeated scripted invocations do not keep stdio MCP child processes alive.
 
 ## Model
 
@@ -145,6 +146,7 @@ openclaw infer model inspect --name gpt-5.5 --json
 Notes:
 
 - `model run` reuses the agent runtime so provider/model overrides behave like normal agent execution.
+- Because `model run` is intended for headless automation, it does not retain per-session bundled MCP runtimes after the command finishes.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
 
 ## Image
@@ -221,13 +223,14 @@ Use `video` for generation and description.
 
 ```bash
 openclaw infer video generate --prompt "cinematic sunset over the ocean" --json
-openclaw infer video generate --prompt "slow drone shot over a forest lake" --json
+openclaw infer video generate --prompt "slow drone shot over a forest lake" --resolution 768P --duration 6 --json
 openclaw infer video describe --file ./clip.mp4 --json
 openclaw infer video describe --file ./clip.mp4 --model openai/gpt-4.1-mini --json
 ```
 
 Notes:
 
+- `video generate` accepts `--size`, `--aspect-ratio`, `--resolution`, `--duration`, `--audio`, `--watermark`, and `--timeout-ms` and forwards them to the video-generation runtime.
 - `--model` must be `<provider/model>` for `video describe`.
 
 ## Web

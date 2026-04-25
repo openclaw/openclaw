@@ -1,9 +1,24 @@
+import fsSync from "node:fs";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import type { WebInboundMsg } from "./types.js";
+
+const hoisted = vi.hoisted(() => ({
+  runFfmpeg: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    runFfmpeg: hoisted.runFfmpeg,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -538,6 +553,45 @@ describe("deliverWebReply", () => {
     expect(msg.sendMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         audio: expect.any(Buffer),
+        ptt: true,
+        mimetype: "audio/ogg; codecs=opus",
+        caption: "cap",
+      }),
+      undefined,
+    );
+  });
+
+  it("transcodes mp3 audio media before sending a ptt voice note", async () => {
+    vi.clearAllMocks();
+    hoisted.runFfmpeg.mockImplementation(async (args: string[]) => {
+      fsSync.writeFileSync(args.at(-1) ?? "", Buffer.from("opus-output"));
+      return "";
+    });
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("mp3"),
+      contentType: "audio/mpeg",
+      kind: "audio",
+      fileName: "voice.mp3",
+    });
+
+    await deliverWebReply({
+      replyResult: { text: "cap", mediaUrl: "http://example.com/a.mp3" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(hoisted.runFfmpeg).toHaveBeenCalledWith(
+      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
+    );
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: Buffer.from("opus-output"),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
         caption: "cap",
