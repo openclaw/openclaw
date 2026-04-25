@@ -162,6 +162,25 @@ describe("session MCP runtime", () => {
     expect(activeLeases).toBe(0);
   });
 
+  it("releases a runtime lease when catalog materialization fails", async () => {
+    let activeLeases = 0;
+    const runtime = {
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      acquireLease: () => {
+        activeLeases += 1;
+        return () => {
+          activeLeases -= 1;
+        };
+      },
+      getCatalog: async () => {
+        throw new Error("catalog failed");
+      },
+    };
+
+    await expect(materializeBundleMcpToolsForRun({ runtime })).rejects.toThrow("catalog failed");
+    expect(activeLeases).toBe(0);
+  });
+
   it("reuses repeated materialization and recreates after explicit disposal", async () => {
     const created: SessionMcpRuntime[] = [];
     const disposed: string[] = [];
