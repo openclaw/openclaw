@@ -135,6 +135,12 @@ CLAWDBOT_WORKSPACE_DIR=/root/clawd
 
 GOG_KEYRING_PASSWORD=change-me-now
 XDG_CONFIG_HOME=/home/node/.clawdbot
+
+# Model provider keys (any subset; provider auto-registers when its key is set)
+# DEEPSEEK_API_KEY=sk-...      # DeepSeek V4 Pro / V4 Flash, 1M context
+# XIAOMI_API_KEY=...           # Xiaomi MiMo
+# OPENAI_API_KEY=sk-...
+# ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 Generate strong secrets:

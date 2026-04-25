@@ -8,12 +8,15 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      XIAOMI_API_KEY: ${XIAOMI_API_KEY:-}
     volumes:
       - ${CLAWDBOT_CONFIG_DIR}:/home/node/.clawdbot
       - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
     ports:
       - "${CLAWDBOT_GATEWAY_PORT:-18789}:18789"
       - "${CLAWDBOT_BRIDGE_PORT:-18790}:18790"
+      - "${CLAWDBOT_UI_PORT:-3000}:3000"
     init: true
     restart: unless-stopped
     command:
@@ -36,6 +39,8 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      XIAOMI_API_KEY: ${XIAOMI_API_KEY:-}
     volumes:
       - ${CLAWDBOT_CONFIG_DIR}:/home/node/.clawdbot
       - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
