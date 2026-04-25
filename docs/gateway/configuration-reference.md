@@ -179,7 +179,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
-  See [Plugins](/tools/plugin).
+
+See [Plugins](/tools/plugin).
 
 ---
 
