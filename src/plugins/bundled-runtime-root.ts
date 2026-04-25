@@ -3,6 +3,8 @@ import path from "node:path";
 import {
   ensureBundledPluginRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRoot,
+  resolveBundledRuntimeDependencyPackageRoot,
+  registerBundledRuntimeDependencyNodePath,
 } from "./bundled-runtime-deps.js";
 
 const bundledRuntimeDepsRetainSpecsByInstallRoot = new Map<string, readonly string[]>();
@@ -44,6 +46,11 @@ export function prepareBundledPluginRuntimeRoot(params: {
   if (path.resolve(installRoot) === path.resolve(params.pluginRoot)) {
     return { pluginRoot: params.pluginRoot, modulePath: params.modulePath };
   }
+  const packageRoot = resolveBundledRuntimeDependencyPackageRoot(params.pluginRoot);
+  if (packageRoot) {
+    registerBundledRuntimeDependencyNodePath(packageRoot);
+  }
+  registerBundledRuntimeDependencyNodePath(installRoot);
   const mirrorRoot = mirrorBundledPluginRuntimeRoot({
     pluginId: params.pluginId,
     pluginRoot: params.pluginRoot,
