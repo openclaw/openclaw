@@ -2,6 +2,8 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { saveLocalAssistantIdentity } from "./storage.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
@@ -16,6 +18,8 @@ let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
+let setChatAvatarUrl: typeof import("./app-chat.ts").setChatAvatarUrl;
+let clearChatAvatarUrl: typeof import("./app-chat.ts").clearChatAvatarUrl;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 
 async function loadChatHelpers(): Promise<void> {
@@ -24,6 +28,8 @@ async function loadChatHelpers(): Promise<void> {
     steerQueuedChatMessage,
     handleAbortChat,
     refreshChatAvatar,
+    setChatAvatarUrl,
+    clearChatAvatarUrl,
     clearPendingQueueItemsForRun,
   } = await import("./app-chat.ts"));
 }
@@ -102,7 +108,12 @@ describe("refreshChatAvatar", () => {
     await loadChatHelpers();
   });
 
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+  });
+
   afterEach(() => {
+    window.localStorage.clear();
     vi.unstubAllGlobals();
   });
 
@@ -262,6 +273,85 @@ describe("refreshChatAvatar", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).not.toHaveBeenCalled();
     expect(host.chatAvatarUrl).toBe("blob:session-avatar");
+  });
+
+  it("does not let fetched server avatars override a local assistant avatar override", async () => {
+    saveLocalAssistantIdentity({ avatar: "data:image/png;base64,bG9jYWw=" });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ avatarUrl: "/avatar/main" }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const host = makeHost({ basePath: "", sessionKey: "agent:main" });
+    await refreshChatAvatar(host);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBe("data:image/png;base64,bG9jYWw=");
+    expect(host.chatAvatarStatus).toBe("data");
+    expect(host.chatAvatarReason).toBeNull();
+  });
+
+  it("revokes fetched avatar blob URLs when the chat avatar URL is cleared", async () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = vi.fn(() => "blob:server-avatar");
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+
+    const host = makeHost({ basePath: "", sessionKey: "agent:main" });
+    setChatAvatarUrl(host, "blob:server-avatar");
+    clearChatAvatarUrl(host);
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:server-avatar");
+    expect(host.chatAvatarUrl).toBeNull();
+  });
+
+  it("ignores an in-flight server avatar when a local assistant avatar override appears", async () => {
+    const createObjectURL = vi.fn(() => "blob:server-avatar");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = createObjectURL;
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const metaRequest = createDeferred<{ avatarUrl?: string }>();
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url === "/avatar/main?meta=1") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => metaRequest.promise,
+        });
+      }
+      if (url === "/avatar/main") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["server-avatar"]),
+        });
+      }
+      throw new Error(`Unexpected avatar URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const host = makeHost({ basePath: "", sessionKey: "agent:main" });
+    const refresh = refreshChatAvatar(host);
+    saveLocalAssistantIdentity({ avatar: "data:image/png;base64,bG9jYWw=" });
+    metaRequest.resolve({ avatarUrl: "/avatar/main" });
+    await refresh;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBe("data:image/png;base64,bG9jYWw=");
+    expect(host.chatAvatarStatus).toBe("data");
   });
 
   it("keeps mounted dashboard avatar endpoints under the normalized base path", async () => {

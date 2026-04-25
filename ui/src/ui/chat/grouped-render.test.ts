@@ -6,6 +6,7 @@ import type { MessageGroup } from "../types/chat-types.ts";
 import {
   formatChatTimestampForDisplay,
   renderMessageGroup,
+  renderReadingIndicatorGroup,
   renderStreamingGroup,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
@@ -259,6 +260,17 @@ async function flushAssistantAttachmentAvailabilityChecks() {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("renderReadingIndicatorGroup", () => {
+  it("shows a small activity badge on the assistant avatar", () => {
+    const container = document.createElement("div");
+    render(renderReadingIndicatorGroup({ name: "Derfa", avatar: null }), container);
+
+    expect(container.querySelector(".chat-avatar-activity .chat-avatar.assistant")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-avatar-activity__indicator > span")).toHaveLength(3);
+    expect(container.querySelector(".chat-reading-indicator__dots")).not.toBeNull();
+  });
 });
 
 describe("grouped chat rendering", () => {

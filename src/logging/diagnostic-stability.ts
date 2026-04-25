@@ -250,6 +250,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.channel = event.channel;
       record.provider = event.provider;
       record.model = event.model;
+      record.source = event.trigger;
       record.count = event.messageCount;
       record.bytes = event.promptChars;
       record.context =

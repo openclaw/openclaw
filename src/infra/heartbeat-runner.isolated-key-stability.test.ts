@@ -201,6 +201,73 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
+  it("uses the configured isolated heartbeat base when a forced live session has no pending work", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeNamedIsolatedHeartbeatConfig(tmpDir, storePath, "main");
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const liveSessionKey = "agent:main:cloud-codex";
+      await seedSessionStore(storePath, liveSessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "telegram:170703438",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: liveSessionKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => Date.now(),
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+      expect(store["agent:main:cloud-codex:heartbeat"]).toBeUndefined();
+    });
+  });
+
+  it("consumes forced-session cron events from the forced base session while running on its isolated sibling", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeNamedIsolatedHeartbeatConfig(tmpDir, storePath, "main");
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "Relay the forced-session cron update now" });
+
+      const liveSessionKey = "agent:main:cloud-codex";
+      await seedSessionStore(storePath, liveSessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "telegram:170703438",
+      });
+      enqueueSystemEvent("Cron: forced live-session update", {
+        sessionKey: liveSessionKey,
+        contextKey: "cron:forced-live-session-update",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: liveSessionKey,
+        reason: "cron:forced-live-session-update",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => Date.now(),
+        },
+      });
+
+      expect(peekSystemEventEntries(liveSessionKey)).toEqual([]);
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        SessionKey: "agent:main:cloud-codex:heartbeat",
+        Provider: "cron-event",
+      });
+    });
+  });
+
   it("consumes base-session cron events when isolated heartbeat runs on a :heartbeat session", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
@@ -334,6 +401,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
       expect(calledCtx.Provider).toBe("exec-event");
       expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
+      expect(peekSystemEventEntries(isolatedSessionKey)).toEqual([]);
     });
   });
 

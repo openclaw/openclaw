@@ -340,6 +340,36 @@ function canTryNodeRequireBuiltModule(modulePath: string): boolean {
   );
 }
 
+function emitBundledEntryModuleLoadProfile(params: {
+  modulePath: string;
+  loadStartMs: number;
+  getJitiEndMs: number;
+}): void {
+  const endMs = performance.now();
+  // Use shared formatter — but split timing fields ourselves so we can
+  // attribute time spent in `getJiti(...)` factory creation vs the actual
+  // graph-walking `__j(modulePath)` call. Both are emitted as extras
+  // alongside the canonical `elapsedMs=<total>` field.
+  console.error(
+    formatPluginLoadProfileLine({
+      phase: "bundled-entry-module-load",
+      pluginId: "(bundled-entry)",
+      source: params.modulePath,
+      elapsedMs: endMs - params.loadStartMs,
+      // When the built-artifact fast-path resolves the module via `nodeRequire`,
+      // `getJitiEndMs` stays `0` because the `catch` block (the only place
+      // it gets stamped) never runs. Reporting `getJitiMs` /
+      // `jitiCallMs` as `0` for that path keeps the breakdown honest:
+      // `elapsedMs=` already captures the nodeRequire time, and we don't
+      // want to mis-attribute it to jiti sub-steps.
+      extras: [
+        ["getJitiMs", params.getJitiEndMs ? params.getJitiEndMs - params.loadStartMs : 0],
+        ["jitiCallMs", params.getJitiEndMs ? endMs - params.getJitiEndMs : 0],
+      ],
+    }),
+  );
+}
+
 function loadBundledEntryModuleSync(
   importMetaUrl: string,
   specifier: string,
@@ -348,6 +378,25 @@ function loadBundledEntryModuleSync(
   let modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
   const boundaryRoot = resolveEntryBoundaryRoot(importMetaUrl);
   if (options.installRuntimeDeps !== false && isBuiltBundledPluginRuntimeRoot(boundaryRoot)) {
+    if (canTryNodeRequireBuiltModule(modulePath)) {
+      const cached = loadedModuleExports.get(modulePath);
+      if (cached !== undefined) {
+        return cached;
+      }
+      const profile = shouldProfilePluginLoader();
+      const loadStartMs = profile ? performance.now() : 0;
+      try {
+        const loaded = nodeRequire(modulePath);
+        if (profile) {
+          emitBundledEntryModuleLoadProfile({ modulePath, loadStartMs, getJitiEndMs: 0 });
+        }
+        loadedModuleExports.set(modulePath, loaded);
+        return loaded;
+      } catch {
+        // If the original built artifact is ESM or references external runtime
+        // deps, fall through to the prepared runtime mirror / jiti path below.
+      }
+    }
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: path.basename(boundaryRoot),
       pluginRoot: boundaryRoot,
@@ -378,29 +427,7 @@ function loadBundledEntryModuleSync(
     loaded = jiti(modulePath);
   }
   if (profile) {
-    const endMs = performance.now();
-    // Use shared formatter — but split timing fields ourselves so we can
-    // attribute time spent in `getJiti(...)` factory creation vs the actual
-    // graph-walking `__j(modulePath)` call. Both are emitted as extras
-    // alongside the canonical `elapsedMs=<total>` field.
-    console.error(
-      formatPluginLoadProfileLine({
-        phase: "bundled-entry-module-load",
-        pluginId: "(bundled-entry)",
-        source: modulePath,
-        elapsedMs: endMs - loadStartMs,
-        // When the built-artifact fast-path resolves the module via `nodeRequire`,
-        // `getJitiEndMs` stays `0` because the `catch` block (the only place
-        // it gets stamped) never runs. Reporting `getJitiMs` /
-        // `jitiCallMs` as `0` for that path keeps the breakdown honest:
-        // `elapsedMs=` already captures the nodeRequire time, and we don't
-        // want to mis-attribute it to jiti sub-steps.
-        extras: [
-          ["getJitiMs", getJitiEndMs ? getJitiEndMs - loadStartMs : 0],
-          ["jitiCallMs", getJitiEndMs ? endMs - getJitiEndMs : 0],
-        ],
-      }),
-    );
+    emitBundledEntryModuleLoadProfile({ modulePath, loadStartMs, getJitiEndMs });
   }
   loadedModuleExports.set(modulePath, loaded);
   return loaded;

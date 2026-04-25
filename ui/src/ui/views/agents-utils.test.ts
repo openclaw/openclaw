@@ -177,6 +177,17 @@ describe("resolveChatAvatarRenderUrl", () => {
     ).toBe("blob:http://localhost/uuid-123");
   });
 
+  it("lets a local assistant image override stale fetched avatar candidates", () => {
+    expect(
+      resolveChatAvatarRenderUrl("blob:http://localhost/server-avatar", {
+        identity: {
+          avatar: "data:image/png;base64,bG9jYWw=",
+          avatarUrl: "/avatar/main",
+        },
+      }),
+    ).toBe("data:image/png;base64,bG9jYWw=");
+  });
+
   it("falls back to the config-sanitized avatar when no blob candidate is present", () => {
     expect(
       resolveChatAvatarRenderUrl(null, {
