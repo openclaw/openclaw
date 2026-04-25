@@ -400,10 +400,6 @@ export const dispatchTelegramMessage = async ({
     !accountBlockStreamingEnabled &&
     !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = streamReasoningDraft;
-  const draftReplyToMessageId =
-    replyToMode !== "off" && typeof msg.message_id === "number"
-      ? (replyQuoteMessageId ?? msg.message_id)
-      : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   // DM draft previews still duplicate briefly at materialize time.
   const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
@@ -418,7 +414,6 @@ export const dispatchTelegramMessage = async ({
           maxChars: draftMaxChars,
           thread: threadSpec,
           previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
-          replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
           onSupersededPreview:
