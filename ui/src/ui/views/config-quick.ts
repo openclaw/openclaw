@@ -631,7 +631,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
   return html`
     <div class="qs-card qs-card--personal">
       ${renderCardHeader(icons.image, "Personal")}
-      <div class="qs-card__body qs-personal-body">
+      <div class="qs-card__body">
         <div class="qs-identity-grid">
           <section class="qs-identity-card" aria-label="Your local chat identity">
             ${renderLocalUserAvatarPreview(props.userAvatar)}
@@ -639,6 +639,44 @@ function renderPersonalCard(props: QuickSettingsProps) {
               <div class="qs-identity-card__eyebrow">User</div>
               <div class="qs-identity-card__title">${LOCAL_USER_LABEL}</div>
               <div class="qs-identity-card__sub">Avatar is browser-local</div>
+              <div class="qs-identity-card__repair">
+                <label class="qs-field">
+                  <span class="qs-row__label">Avatar text / emoji</span>
+                  <input
+                    class="qs-field__input"
+                    type="text"
+                    maxlength="16"
+                    .value=${avatarText}
+                    placeholder="JD or 🦞"
+                    @input=${(e: Event) => {
+                      const value = (e.target as HTMLInputElement).value;
+                      props.onUserAvatarChange?.(value.trim() ? value : null);
+                    }}
+                  />
+                </label>
+                <div class="qs-identity-card__actions">
+                  <label class="btn btn--sm">
+                    Choose image
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      @change=${(e: Event) => handleLocalUserAvatarFileSelect(e, props)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    class="btn btn--sm btn--ghost"
+                    ?disabled=${!identity.avatar}
+                    @click=${() => {
+                      props.onUserAvatarChange?.(null);
+                    }}
+                  >
+                    Clear avatar
+                  </button>
+                </div>
+                <div class="muted">Stored in this browser only.</div>
+              </div>
             </div>
           </section>
           <section
@@ -667,34 +705,36 @@ function renderPersonalCard(props: QuickSettingsProps) {
               ${canOverrideAssistantAvatar
                 ? html`
                     <div class="qs-identity-card__repair">
-                      <label class="btn btn--sm">
-                        ${props.assistantAvatarUploadBusy
-                          ? "Saving..."
-                          : assistantAvatarOverride
-                            ? "Replace image"
-                            : "Choose image"}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          hidden
-                          ?disabled=${props.assistantAvatarUploadBusy === true}
-                          @change=${(e: Event) => handleAssistantAvatarFileSelect(e, props)}
-                        />
-                      </label>
-                      ${assistantAvatarOverride
-                        ? html`
-                            <button
-                              type="button"
-                              class="btn btn--sm btn--ghost"
-                              ?disabled=${props.assistantAvatarUploadBusy === true}
-                              @click=${() => {
-                                void props.onAssistantAvatarClearOverride?.();
-                              }}
-                            >
-                              Clear override
-                            </button>
-                          `
-                        : nothing}
+                      <div class="qs-identity-card__actions">
+                        <label class="btn btn--sm">
+                          ${props.assistantAvatarUploadBusy
+                            ? "Saving..."
+                            : assistantAvatarOverride
+                              ? "Replace image"
+                              : "Choose image"}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            hidden
+                            ?disabled=${props.assistantAvatarUploadBusy === true}
+                            @change=${(e: Event) => handleAssistantAvatarFileSelect(e, props)}
+                          />
+                        </label>
+                        ${assistantAvatarOverride
+                          ? html`
+                              <button
+                                type="button"
+                                class="btn btn--sm btn--ghost"
+                                ?disabled=${props.assistantAvatarUploadBusy === true}
+                                @click=${() => {
+                                  void props.onAssistantAvatarClearOverride?.();
+                                }}
+                              >
+                                Clear override
+                              </button>
+                            `
+                          : nothing}
+                      </div>
                       <div class="muted">
                         Stores a Control UI override. Clear it to return to IDENTITY.md.
                       </div>
@@ -708,45 +748,6 @@ function renderPersonalCard(props: QuickSettingsProps) {
                 : nothing}
             </div>
           </section>
-        </div>
-        <div class="qs-personal-form">
-          <div class="qs-row">
-            <label class="qs-field">
-              <span class="qs-row__label">Avatar text / emoji</span>
-              <input
-                class="qs-field__input"
-                type="text"
-                maxlength="16"
-                .value=${avatarText}
-                placeholder="JD or 🦞"
-                @input=${(e: Event) => {
-                  const value = (e.target as HTMLInputElement).value;
-                  props.onUserAvatarChange?.(value.trim() ? value : null);
-                }}
-              />
-            </label>
-          </div>
-          <div class="qs-personal-actions">
-            <label class="btn btn--sm">
-              Choose image
-              <input
-                type="file"
-                accept="image/*"
-                hidden
-                @change=${(e: Event) => handleLocalUserAvatarFileSelect(e, props)}
-              />
-            </label>
-            <button
-              type="button"
-              class="btn btn--sm btn--ghost"
-              ?disabled=${!identity.avatar}
-              @click=${() => {
-                props.onUserAvatarChange?.(null);
-              }}
-            >
-              Clear avatar
-            </button>
-          </div>
         </div>
       </div>
     </div>
