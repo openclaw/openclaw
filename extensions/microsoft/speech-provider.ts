@@ -59,8 +59,9 @@ function normalizeMicrosoftProviderConfig(
   const providers = asObject(rawConfig.providers);
   const rawEdge = asObject(rawConfig.edge);
   const rawMicrosoft = asObject(rawConfig.microsoft);
-  const rawProvider = asObject(providers?.microsoft);
-  const raw = { ...rawEdge, ...rawMicrosoft, ...rawProvider };
+  const rawProviderEdge = asObject(providers?.edge);
+  const rawProviderMicrosoft = asObject(providers?.microsoft);
+  const raw = { ...rawEdge, ...rawProviderEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
   const outputFormat = trimToUndefined(raw.outputFormat);
   return {
     enabled: asBoolean(raw.enabled) ?? true,

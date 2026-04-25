@@ -184,6 +184,27 @@ describe("buildMicrosoftSpeechProvider", () => {
     vi.restoreAllMocks();
   });
 
+  it("accepts legacy providers.edge voice config", () => {
+    const provider = buildMicrosoftSpeechProvider();
+
+    const resolved = provider.resolveConfig?.({
+      cfg: TEST_CFG,
+      rawConfig: {
+        provider: "edge",
+        providers: {
+          edge: {
+            voice: "en-US-AvaNeural",
+          },
+        },
+      },
+      timeoutMs: 1000,
+    });
+
+    expect(resolved).toMatchObject({
+      voice: "en-US-AvaNeural",
+    });
+  });
+
   it("switches to a Chinese voice for CJK text when no explicit voice override is set", async () => {
     const provider = buildMicrosoftSpeechProvider();
     const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
