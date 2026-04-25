@@ -175,6 +175,9 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },
+          provider: providerId,
+          capability: "audio",
+          transport: "http",
         });
       const jsonHeaders = new Headers(headers);
       jsonHeaders.set("Content-Type", "application/json");
