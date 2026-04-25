@@ -177,6 +177,10 @@ function clearPendingToolMedia(
   state.pendingToolTrustedLocalMedia = false;
 }
 
+function hasReplyMedia(payload: BlockReplyPayload): boolean {
+  return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
+}
+
 export function consumePendingToolMediaIntoReply(
   state: Pick<
     EmbeddedPiSubscribeState,
@@ -192,6 +196,10 @@ export function consumePendingToolMediaIntoReply(
     !state.pendingToolAudioAsVoice &&
     !state.pendingToolTrustedLocalMedia
   ) {
+    return payload;
+  }
+  if (hasReplyMedia(payload) && !state.pendingToolAudioAsVoice) {
+    clearPendingToolMedia(state);
     return payload;
   }
   const mergedMediaUrls = Array.from(
