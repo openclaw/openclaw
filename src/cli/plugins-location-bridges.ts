@@ -19,6 +19,7 @@ function buildBridgeFromPersistedBundledRecord(
     bundledPluginId: record.pluginId,
     pluginId: record.pluginId,
     npmSpec,
+    ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
     channelIds: record.contributions.channels,
   };
 }

@@ -7,6 +7,8 @@ export type ExternalizedBundledPluginBridge = {
   npmSpec: string;
   /** Bundled directory name, when it differs from bundledPluginId. */
   bundledDirName?: string;
+  /** Previous bundled manifest default enablement from the persisted registry. */
+  enabledByDefault?: boolean;
   /** Legacy ids that should be treated as this plugin during enablement checks. */
   legacyPluginIds?: readonly string[];
   /** Channel ids that imply this plugin is enabled when configured. */
