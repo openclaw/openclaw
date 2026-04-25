@@ -466,7 +466,7 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => allowSet.has(tool.name));
 }
 
-function shouldCreateBundleMcpRuntimeForAttempt(params: {
+export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
   toolsAllow?: string[];
