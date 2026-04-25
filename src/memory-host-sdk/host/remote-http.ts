@@ -1,4 +1,5 @@
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
+import { hasProxyEnvConfigured } from "../../infra/net/proxy-env.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../../infra/net/ssrf.js";
 
 export const buildRemoteBaseUrlPolicy = ssrfPolicyFromHttpBaseUrlAllowedHostname;
@@ -17,6 +18,9 @@ export async function withRemoteHttpResponse<T>(params: {
     init: params.init,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
+    // FIX: When env proxy is configured, skip local DNS resolution and route through the proxy
+    // This fixes remote embedding/copilot memory search failing with "fetch failed" in proxy environments
+    mode: hasProxyEnvConfigured() ? GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY : undefined,
   });
   try {
     return await params.onResponse(response);
