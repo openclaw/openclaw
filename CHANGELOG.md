@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 
 - Dashboard/Windows: open Control UI and OAuth URLs through the system URL handler without `cmd.exe` parsing or PATH-based `rundll32` lookup, and reject non-HTTP browser-open inputs. Fixes #71098. Thanks @Sanjays2402.
 - Providers/OpenAI: separate API-key and Codex sign-in onboarding groups, and avoid replaying stale OpenAI Responses reasoning blocks after a model route switch.
+- Skills: honor legacy `metadata.clawdbot` requirements and installer hints when `metadata.openclaw` is absent, so older skills no longer appear ready when required binaries are missing. Fixes #71323. Thanks @chen-zhang-cs-code.
 - Browser/config: expand `~` in `browser.executablePath` before Chromium launch, so home-relative custom browser paths no longer fail with `ENOENT`. Fixes #67264. Thanks @Quratulain-bilal.
 - Telegram/streaming: hide tool-progress status updates by default while keeping explicit `streaming.preview.toolProgress` opt-in support for edited preview messages. Fixes #71320. Thanks @neeravmakwana.
 - Gateway/sessions: copy the oversized `sessions.json` to a rotation backup before the atomic rewrite instead of renaming the live store away, so a crash during rotation keeps the existing session-to-transcript mapping authoritative. Fixes #68229. Thanks @jjjojoj.
