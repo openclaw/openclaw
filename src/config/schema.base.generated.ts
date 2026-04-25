@@ -878,7 +878,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
               avatar: {
                 type: "string",
-                maxLength: 200,
+                maxLength: 2000000,
                 title: "Assistant Avatar",
                 description:
                   "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",

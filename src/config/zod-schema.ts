@@ -457,7 +457,7 @@ export const OpenClawSchema = z
         assistant: z
           .object({
             name: z.string().max(50).optional(),
-            avatar: z.string().max(200).optional(),
+            avatar: z.string().max(2_000_000).optional(),
           })
           .strict()
           .optional(),
