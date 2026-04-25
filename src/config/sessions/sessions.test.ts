@@ -21,7 +21,13 @@ import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
-    const unsafeSessionIds = ["../etc/passwd", "a/b", "a\\b", "/abs"];
+    const unsafeSessionIds = [
+      "../etc/passwd",
+      "a/b",
+      "a\\b",
+      "/abs",
+      "sess.checkpoint.11111111-1111-4111-8111-111111111111",
+    ];
     for (const sessionId of unsafeSessionIds) {
       expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
     }

@@ -7,6 +7,7 @@ import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import {
+  isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
 } from "../../config/sessions/artifacts.js";
@@ -58,13 +59,11 @@ type SessionTranscriptStoreEntry = {
   sessionId?: unknown;
 };
 
-function isCheckpointTranscriptFileName(fileName: string): boolean {
-  return fileName.endsWith(".jsonl") && fileName.includes(".checkpoint.");
-}
-
 function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
   const fileName = path.basename(absPath);
-  return isSessionArchiveArtifactName(fileName) || isCheckpointTranscriptFileName(fileName);
+  return (
+    isSessionArchiveArtifactName(fileName) || isCompactionCheckpointTranscriptFileName(fileName)
+  );
 }
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {

@@ -643,7 +643,10 @@ describe("buildSessionEntry", () => {
 
   it("skips deleted and checkpoint transcripts for dreaming ingestion", async () => {
     const deletedPath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const checkpointPath = path.join(tmpDir, "ordinary.checkpoint.abc123.jsonl");
+    const checkpointPath = path.join(
+      tmpDir,
+      "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+    );
     const content = JSON.stringify({
       type: "message",
       message: { role: "user", content: "This should never reach the dreaming corpus." },
