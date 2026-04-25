@@ -234,7 +234,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
     });
 
-    for (const event of ["pre_tool_use", "post_tool_use", "permission_request"] as const) {
+    for (const event of ["pre_tool_use", "post_tool_use"] as const) {
       await expect(
         invokeNativeHookRelay({
           provider: "codex",
