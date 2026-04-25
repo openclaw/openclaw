@@ -34,7 +34,7 @@ function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
-function createCandidate(rootDir: string): PluginCandidate {
+function createCandidate(rootDir: string, id = "demo"): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
     "throw new Error('runtime entry should not load while migrating plugin registry');\n",
@@ -43,15 +43,15 @@ function createCandidate(rootDir: string): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
     JSON.stringify({
-      id: "demo",
-      name: "Demo",
+      id,
+      name: id,
       configSchema: { type: "object" },
-      providers: ["demo"],
+      providers: [id],
     }),
     "utf8",
   );
   return {
-    idHint: "demo",
+    idHint: id,
     source: path.join(rootDir, "index.ts"),
     rootDir,
     origin: "global",
@@ -81,6 +81,45 @@ describe("plugin registry install migration", () => {
       },
     });
     expect(readConfig).not.toHaveBeenCalled();
+  });
+
+  it("persists only plugins enabled by the central config policy", async () => {
+    const stateDir = makeTempDir();
+    const enabledDir = path.join(stateDir, "plugins", "enabled-demo");
+    const disabledDir = path.join(stateDir, "plugins", "disabled-demo");
+    fs.mkdirSync(enabledDir, { recursive: true });
+    fs.mkdirSync(disabledDir, { recursive: true });
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        candidates: [
+          createCandidate(enabledDir, "enabled-demo"),
+          createCandidate(disabledDir, "disabled-demo"),
+        ],
+        readConfig: async () => ({
+          plugins: {
+            entries: {
+              "disabled-demo": {
+                enabled: false,
+              },
+            },
+          },
+        }),
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "migrated",
+      current: {
+        plugins: [expect.objectContaining({ pluginId: "enabled-demo" })],
+      },
+    });
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      plugins: [expect.objectContaining({ pluginId: "enabled-demo" })],
+    });
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["enabled-demo"]);
   });
 
   it("supports dry-run preflight without reading config or writing the registry", async () => {
