@@ -892,6 +892,33 @@ describe("normalizeFeishuTarget", () => {
   });
 });
 
+describe("feishuPlugin.messaging.resolveDeliveryTarget", () => {
+  it("routes direct conversations to user targets", () => {
+    expect(
+      feishuPlugin.messaging?.resolveDeliveryTarget?.({
+        conversationId: "ou_123",
+      }),
+    ).toEqual({ to: "user:ou_123" });
+  });
+
+  it("routes group conversations to chat targets", () => {
+    expect(
+      feishuPlugin.messaging?.resolveDeliveryTarget?.({
+        conversationId: "oc_123",
+      }),
+    ).toEqual({ to: "chat:oc_123" });
+  });
+
+  it("routes topic conversations to parent chat plus thread id", () => {
+    expect(
+      feishuPlugin.messaging?.resolveDeliveryTarget?.({
+        conversationId: "oc_123:topic:omt_456",
+        parentConversationId: "oc_123",
+      }),
+    ).toEqual({ to: "chat:oc_123", threadId: "omt_456" });
+  });
+});
+
 describe("looksLikeFeishuId", () => {
   it("accepts provider-prefixed user targets", () => {
     expect(looksLikeFeishuId("feishu:user:ou_123")).toBe(true);

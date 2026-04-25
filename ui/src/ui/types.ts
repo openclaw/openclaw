@@ -376,6 +376,7 @@ export type AgentsFilesSetResult = {
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+export type SubagentRunState = "active" | "interrupted" | "historical";
 
 export type SessionCompactionCheckpointReason =
   | "manual"
@@ -431,6 +432,8 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   status?: SessionRunStatus;
+  subagentRunState?: SubagentRunState;
+  hasActiveSubagentRun?: boolean;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
