@@ -483,11 +483,15 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         return;
       }
       const profile = createProfiler({ pluginId: id, source: importMetaUrl });
-      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       const channelPlugin = profile("bundled-register:loadChannelPlugin", loadChannelPlugin);
       profile("bundled-register:registerChannel", () =>
         api.registerChannel({ plugin: channelPlugin as ChannelPlugin }),
       );
+      if (api.registrationMode === "discovery") {
+        profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));
+        return;
+      }
+      profile("bundled-register:setChannelRuntime", () => setChannelRuntime?.(api.runtime));
       if (api.registrationMode !== "full") {
         return;
       }

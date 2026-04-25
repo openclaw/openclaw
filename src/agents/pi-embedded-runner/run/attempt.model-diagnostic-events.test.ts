@@ -1,16 +1,21 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../../plugins/hook-runner-global.js";
+import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-helpers.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
   const events: DiagnosticEventPayload[] = [];
-  const stop = onDiagnosticEvent((event) => {
+  const stop = onInternalDiagnosticEvent((event) => {
     if (event.type.startsWith("model.call.")) {
       events.push(event);
     }
@@ -33,6 +38,11 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
 describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
+    resetGlobalHookRunner();
+  });
+
+  afterEach(() => {
+    resetGlobalHookRunner();
   });
 
   it("emits started and completed events for async streams", async () => {
@@ -96,11 +106,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   });
 
   it("emits error events when stream iteration fails", async () => {
+    const requestId = "req_provider_123";
     const stream = {
       [Symbol.asyncIterator]() {
         return {
           async next(): Promise<IteratorResult<unknown>> {
-            throw new TypeError("provider failed");
+            throw new TypeError(`provider failed [request_id=${requestId}]`);
           },
         };
       },
@@ -127,8 +138,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       type: "model.call.error",
       callId: "call-err",
       errorCategory: "TypeError",
+      upstreamRequestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/),
       durationMs: expect.any(Number),
     });
+    expect(JSON.stringify(events[1])).not.toContain(requestId);
   });
 
   it("does not mutate non-configurable provider streams", async () => {
@@ -165,6 +178,79 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       "model.call.started",
       "model.call.completed",
     ]);
+  });
+
+  it("fires frozen sanitized model-call plugin hooks", async () => {
+    const started = vi.fn();
+    const ended = vi.fn();
+    const { registry } = createHookRunnerWithRegistry([
+      { hookName: "model_call_started", handler: started },
+      { hookName: "model_call_ended", handler: ended },
+    ]);
+    initializeGlobalHookRunner(registry);
+    const secretChunk = "secret response with Bearer sk-test-secret-value";
+
+    async function* stream() {
+      yield { type: "text", text: secretChunk };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "openai",
+        model: "gpt-5.4",
+        api: "openai-responses",
+        transport: "http",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-hook",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
+    expect(started).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        callId: "call-hook",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "openai",
+        model: "gpt-5.4",
+        api: "openai-responses",
+        transport: "http",
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        modelProviderId: "openai",
+        modelId: "gpt-5.4",
+      }),
+    );
+    expect(ended).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        callId: "call-hook",
+        outcome: "completed",
+        durationMs: expect.any(Number),
+      }),
+      expect.objectContaining({ runId: "run-1" }),
+    );
+    const startedEvent = started.mock.calls[0]?.[0];
+    const startedCtx = started.mock.calls[0]?.[1];
+    expect(Object.isFrozen(startedEvent)).toBe(true);
+    expect(Object.isFrozen(startedCtx)).toBe(true);
+    expect(Object.isFrozen((startedCtx as { trace?: unknown } | undefined)?.trace)).toBe(true);
+    expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
   });
 
   it("emits error events when stream consumption stops early", async () => {

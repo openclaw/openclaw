@@ -265,6 +265,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   send chat output to, and it is disabled by `typingMode: "never"`.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
   is restored so idle expiry behaves normally.
+- Control UI and WebChat history hide heartbeat prompts and OK-only
+  acknowledgments. The underlying session transcript can still contain those
+  turns for audit/replay.
 - Detached [background tasks](/automation/tasks) can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake does not make the heartbeat run a background task.
 
 ## Visibility controls

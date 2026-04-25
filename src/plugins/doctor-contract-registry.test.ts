@@ -34,7 +34,7 @@ describe("doctor-contract-registry getJiti", () => {
     clearPluginDoctorContractRegistryCache();
   });
 
-  it("disables native jiti loading on Windows for contract-api modules", () => {
+  it("uses native jiti loading on Windows for contract-api modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "contract-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -56,7 +56,7 @@ describe("doctor-contract-registry getJiti", () => {
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "contract-api.js"));
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: false,
+        tryNative: true,
       }),
     );
   });

@@ -29,6 +29,8 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
+  PluginHookModelCallEndedEvent,
+  PluginHookModelCallStartedEvent,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
@@ -85,6 +87,8 @@ export type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
+  PluginHookModelCallEndedEvent,
+  PluginHookModelCallStartedEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookAgentEndEvent,
@@ -586,6 +590,30 @@ export function createHookRunner(
       event,
       ctx,
     );
+  }
+
+  /**
+   * Run model_call_started hook.
+   * Allows plugins to observe sanitized model-call metadata.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runModelCallStarted(
+    event: PluginHookModelCallStartedEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("model_call_started", event, ctx);
+  }
+
+  /**
+   * Run model_call_ended hook.
+   * Allows plugins to observe sanitized terminal model-call metadata.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runModelCallEnded(
+    event: PluginHookModelCallEndedEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("model_call_ended", event, ctx);
   }
 
   /**
@@ -1124,6 +1152,8 @@ export function createHookRunner(
     runBeforePromptBuild,
     runBeforeAgentStart,
     runBeforeAgentReply,
+    runModelCallStarted,
+    runModelCallEnded,
     runLlmInput,
     runLlmOutput,
     runAgentEnd,

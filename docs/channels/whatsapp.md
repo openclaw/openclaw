@@ -361,9 +361,11 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
-    - `audio/ogg` is rewritten to `audio/ogg; codecs=opus` for voice-note compatibility
+    - reply payloads preserve `audioAsVoice`; WhatsApp sends audio media as Baileys PTT voice notes
+    - non-Ogg audio, including Microsoft Edge TTS MP3/WebM output, is transcoded to Ogg/Opus before PTT delivery
+    - native Ogg/Opus audio is sent with `audio/ogg; codecs=opus` for voice-note compatibility
     - animated GIF playback is supported via `gifPlayback: true` on video sends
-    - captions are applied to the first media item when sending multi-media reply payloads
+    - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
   </Accordion>
 
@@ -380,19 +382,20 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
 WhatsApp supports native reply quoting, where outbound replies visibly quote the inbound message. Control it with `channels.whatsapp.replyToMode`.
 
-| Value    | Behavior                                                                           |
-| -------- | ---------------------------------------------------------------------------------- |
-| `"auto"` | Quote the inbound message when the provider supports it; skip quoting otherwise    |
-| `"on"`   | Always quote the inbound message; fall back to a plain send if quoting is rejected |
-| `"off"`  | Never quote; send as a plain message                                               |
+| Value       | Behavior                                                              |
+| ----------- | --------------------------------------------------------------------- |
+| `"off"`     | Never quote; send as a plain message                                  |
+| `"first"`   | Quote only the first outbound reply chunk                             |
+| `"all"`     | Quote every outbound reply chunk                                      |
+| `"batched"` | Quote queued batched replies while leaving immediate replies unquoted |
 
-Default is `"auto"`. Per-account overrides use `channels.whatsapp.accounts.<id>.replyToMode`.
+Default is `"off"`. Per-account overrides use `channels.whatsapp.accounts.<id>.replyToMode`.
 
 ```json5
 {
   channels: {
     whatsapp: {
-      replyToMode: "on",
+      replyToMode: "first",
     },
   },
 }

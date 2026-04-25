@@ -6,12 +6,10 @@ import {
 } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import { ensureOnboardingPluginInstalled } from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { clearPluginDiscoveryCache } from "./discovery.js";
 import { enablePluginInConfig } from "./enable.js";
 import {
   applyProviderAuthConfigPatch,
@@ -290,6 +288,10 @@ export async function applyAuthChoiceLoadedPluginProvider(
     choice: params.authChoice,
   });
   if (!resolved && installCatalogEntry) {
+    const [{ ensureOnboardingPluginInstalled }, { clearPluginDiscoveryCache }] = await Promise.all([
+      import("../commands/onboarding-plugin-install.js"),
+      import("./discovery.js"),
+    ]);
     const installResult = await ensureOnboardingPluginInstalled({
       cfg: nextConfig,
       entry: {

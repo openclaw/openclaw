@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -97,7 +98,7 @@ describe("handleControlUiHttpRequest", () => {
 
   async function runAvatarRequest(params: {
     url: string;
-    method: "GET" | "HEAD";
+    method: "GET" | "HEAD" | "POST";
     resolveAvatar: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
     basePath?: string;
     auth?: ResolvedGatewayAuth;
@@ -329,6 +330,47 @@ describe("handleControlUiHttpRequest", () => {
         expect(res.statusCode).toBe(200);
       },
     });
+  });
+
+  it("serves assistant media from canonical inbound media refs", async () => {
+    const stateDir = resolveStateDir();
+    const id = `ui-media-ref-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+
+    try {
+      const { res, handled } = await runAssistantMediaRequest({
+        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(`media://inbound/${id}`)}&token=test-token`,
+        method: "GET",
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      });
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("reports assistant media metadata for canonical inbound media refs", async () => {
+    const stateDir = resolveStateDir();
+    const id = `ui-media-ref-meta-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+
+    try {
+      const { res, handled, end } = await runAssistantMediaRequest({
+        url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(`media://inbound/${id}`)}&token=test-token`,
+        method: "GET",
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      });
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({ available: true });
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
   });
 
   it("rejects assistant local media outside allowed preview roots", async () => {
@@ -749,13 +791,41 @@ describe("handleControlUiHttpRequest", () => {
       headers: {
         authorization: "Bearer test-token",
       },
-      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
+      resolveAvatar: () => ({
+        kind: "remote",
+        url: "https://example.com/avatar.png",
+        source: "https://example.com/avatar.png",
+      }),
     });
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
       avatarUrl: "https://example.com/avatar.png",
+      avatarSource: "remote URL",
+      avatarStatus: "remote",
+      avatarReason: null,
+    });
+  });
+
+  it("redacts unsafe avatar source values from metadata", async () => {
+    const { res, end, handled } = await runAvatarRequest({
+      url: "/avatar/main?meta=1",
+      method: "GET",
+      resolveAvatar: () => ({
+        kind: "none",
+        reason: "outside_workspace",
+        source: "/Users/test/private/avatar.png",
+      }),
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+      avatarUrl: null,
+      avatarSource: null,
+      avatarStatus: "none",
+      avatarReason: "outside_workspace",
     });
   });
 

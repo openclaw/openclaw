@@ -125,6 +125,12 @@ config. Deny always wins over allow.
 }
 ```
 
+OpenClaw fails closed when an explicit allowlist resolves to no callable tools.
+For example, `tools.allow: ["query_db"]` only works if a loaded plugin actually
+registers `query_db`. If no built-in, plugin, or bundled MCP tool matches the
+allowlist, the run stops before the model call instead of continuing as a
+text-only run that could hallucinate tool results.
+
 ### Tool profiles
 
 `tools.profile` sets a base allowlist before `allow`/`deny` is applied.
@@ -136,6 +142,12 @@ Per-agent override: `agents.list[].tools.profile`.
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
+
+`coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
+but not the full browser-control tool. Browser automation can drive real
+sessions and logged-in profiles, so add it explicitly with
+`tools.alsoAllow: ["browser"]` or a per-agent
+`agents.list[].tools.alsoAllow: ["browser"]`.
 
 The `coding` and `messaging` profiles also allow configured bundle MCP tools
 under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you

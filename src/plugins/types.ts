@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { ExtensionFactory, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -27,6 +27,10 @@ import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
@@ -153,6 +157,7 @@ export type {
   AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
+  AgentToolResultMiddlewareRuntime,
   OpenClawAgentToolResult,
 } from "./agent-tool-result-middleware-types.js";
 export type {
@@ -1970,6 +1975,11 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  internalDiagnostics?: {
+    onEvent: (
+      listener: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void,
+    ) => () => void;
+  };
 };
 
 /** Background service registered by a plugin during `register(api)`. */
@@ -2000,7 +2010,25 @@ export type OpenClawPluginDefinition = {
 
 export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPluginApi) => void);
 
-export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
+/**
+ * Public label exposed to plugin `register(api)` calls.
+ *
+ * Keep this as a compatibility signal for plugin authors. Loader internals
+ * should derive explicit capability booleans from the mode instead of branching
+ * on raw strings throughout the code path.
+ *
+ * - `full`: live runtime activation; long-lived side effects may start.
+ * - `discovery`: read-only capability discovery; skip sockets/workers/clients.
+ * - `setup-only`: lightweight channel setup entry only.
+ * - `setup-runtime`: setup flow that also needs the runtime channel entry.
+ * - `cli-metadata`: CLI command metadata collection.
+ */
+export type PluginRegistrationMode =
+  | "full"
+  | "discovery"
+  | "setup-only"
+  | "setup-runtime"
+  | "cli-metadata";
 
 export type PluginConfigMigration = (config: OpenClawConfig) =>
   | {
@@ -2133,16 +2161,15 @@ export type OpenClawPluginApi = {
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
   /**
-   * Register a Pi embedded extension factory for OpenClaw embedded runs.
-   *
-   * @deprecated This is a bundled compatibility seam. New tool-result transforms
-   * should use `registerAgentToolResultMiddleware(...)` and declare
-   * `contracts.agentToolResultMiddleware` for the targeted harnesses.
+   * Register a Codex app-server extension factory for Codex harness tool-result
+   * middleware. Only bundled plugins may use this seam, and
+   * `contracts.embeddedExtensionFactories` must include `"codex-app-server"`.
    */
-  registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
-  /** Register a Codex app-server extension factory for Codex harness tool-result middleware. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"codex-app-server"`. */
   registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
-  /** Register harness-neutral tool-result middleware. Declare `contracts.agentToolResultMiddleware` for every targeted harness. */
+  /**
+   * Register runtime-neutral tool-result middleware. Declare
+   * `contracts.agentToolResultMiddleware` for every targeted runtime.
+   */
   registerAgentToolResultMiddleware: (
     handler: AgentToolResultMiddleware,
     options?: AgentToolResultMiddlewareOptions,

@@ -5,15 +5,12 @@ import { describe, expect, it } from "vitest";
 import {
   resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
+  type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
 import { maybeRepairBundledPluginRuntimeDeps } from "./doctor-bundled-plugin-runtime-deps.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-type InstalledRuntimeDeps = Array<{
-  installRoot: string;
-  missingSpecs: string[];
-  installSpecs: string[];
-}>;
+type InstalledRuntimeDeps = BundledRuntimeDepsInstallParams[];
 
 function writeJson(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -47,6 +44,14 @@ function writeDefaultEnabledBundledChannelPlugin(
 
 function createInstalledRuntimeDeps(): InstalledRuntimeDeps {
   return [];
+}
+
+function readRetainedRuntimeDepsManifest(installRoot: string): string[] {
+  const manifestPath = path.join(installRoot, ".openclaw-runtime-deps.json");
+  const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { specs?: unknown };
+  return Array.isArray(parsed.specs)
+    ? parsed.specs.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 function createNonInteractivePrompter(
@@ -122,7 +127,7 @@ describe("doctor bundled plugin runtime deps", () => {
     const result = scanBundledPluginRuntimeDeps({ packageRoot: root });
     const missing = result.missing.map((dep) => `${dep.name}@${dep.version}`);
 
-    expect(missing).toEqual(["@scope/dep-two@2.0.0", "dep-opt@3.0.0"]);
+    expect(missing).toEqual(["@scope/dep-two@2.0.0", "dep-one@1.0.0", "dep-opt@3.0.0"]);
     expect(result.conflicts).toHaveLength(1);
     expect(result.conflicts[0]?.name).toBe("dep-conflict");
     expect(result.conflicts[0]?.versions).toEqual(["1.0.0", "2.0.0"]);
@@ -300,13 +305,16 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     });
 
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root);
     expect(installed).toEqual([
       {
-        installRoot: root,
+        installRoot,
         missingSpecs: ["grammy@1.37.0"],
         installSpecs: ["grammy@1.37.0"],
       },
     ]);
+    expect(installRoot).not.toBe(root);
+    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
   });
 
   it("repairs Feishu runtime deps from preserved source config", async () => {
@@ -329,13 +337,15 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     });
 
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root);
     expect(installed).toEqual([
       {
-        installRoot: root,
+        installRoot,
         missingSpecs: ["@larksuiteoapi/node-sdk@^1.61.0"],
         installSpecs: ["@larksuiteoapi/node-sdk@^1.61.0"],
       },
     ]);
+    expect(installRoot).not.toBe(root);
   });
 
   it("repairs missing deps into an external stage dir when configured", async () => {
@@ -369,16 +379,17 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     ]);
     expect(installRoot).toContain(stageDir);
+    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["@slack/web-api@7.15.1"]);
   });
 
-  it("retains configured bundled deps when repairing a subset", async () => {
+  it("retains already staged bundled deps when repairing a subset", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
     writeBundledChannelPlugin(root, "slack", { "@slack/web-api": "7.15.1" });
-    writeJson(path.join(root, "node_modules", "@slack", "web-api", "package.json"), {
-      name: "@slack/web-api",
-      version: "7.15.1",
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root);
+    writeJson(path.join(installRoot, ".openclaw-runtime-deps.json"), {
+      specs: ["@slack/web-api@7.15.1"],
     });
     const installed = createInstalledRuntimeDeps();
 
@@ -401,10 +412,15 @@ describe("doctor bundled plugin runtime deps", () => {
 
     expect(installed).toEqual([
       {
-        installRoot: root,
+        installRoot,
         missingSpecs: ["grammy@1.37.0"],
-        installSpecs: ["grammy@1.37.0"],
+        installSpecs: ["@slack/web-api@7.15.1", "grammy@1.37.0"],
       },
+    ]);
+    expect(installRoot).not.toBe(root);
+    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual([
+      "@slack/web-api@7.15.1",
+      "grammy@1.37.0",
     ]);
   });
 });

@@ -184,13 +184,17 @@ export function collectSbomRiskReport(params = {}) {
       return left.importer.localeCompare(right.importer);
     });
 
-  const rootDependencyNames = new Set(rootDependencies.map((dependency) => dependency.name));
+  const workspaceDependencyNames = new Set(
+    Object.values(lockfile.importers ?? {}).flatMap((record) =>
+      normalizeDependencies(record).map((dependency) => dependency.name),
+    ),
+  );
   const ownershipGaps = rootDependencies
     .filter((dependency) => !ownershipFor(dependencyOwnership, dependency.name))
     .map((dependency) => dependency.name)
     .toSorted(compareStrings);
   const staleOwnershipRecords = Object.keys(dependencyOwnership.dependencies ?? {})
-    .filter((name) => !rootDependencyNames.has(name))
+    .filter((name) => !workspaceDependencyNames.has(name))
     .toSorted(compareStrings);
   const ownershipWarnings = rootDependencyRows
     .filter(

@@ -53,6 +53,14 @@
   },
   "redirects": [
     {
+      "source": "/help/gpt54-codex-agentic-parity",
+      "destination": "/help/gpt55-codex-agentic-parity"
+    },
+    {
+      "source": "/help/gpt54-codex-agentic-parity-maintainers",
+      "destination": "/help/gpt55-codex-agentic-parity-maintainers"
+    },
+    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
@@ -1085,6 +1093,7 @@
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
+                  "concepts/agent-runtimes",
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
@@ -1164,6 +1173,7 @@
                       "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
+                      "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
                   },
@@ -1647,8 +1657,8 @@
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
                   "concepts/timezone",
-                  "help/gpt54-codex-agentic-parity",
-                  "help/gpt54-codex-agentic-parity-maintainers"
+                  "help/gpt55-codex-agentic-parity",
+                  "help/gpt55-codex-agentic-parity-maintainers"
                 ]
               },
               {

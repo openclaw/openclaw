@@ -77,6 +77,19 @@ gateway-backed session transcript, so they are the source of truth.
 
 Details: [Session management](/concepts/session).
 
+## Tool result metadata
+
+Tool result `content` is the model-visible result. Tool result `details` is
+runtime metadata for UI rendering, diagnostics, media delivery, and plugins.
+
+OpenClaw keeps that boundary explicit:
+
+- `toolResult.details` is stripped before provider replay and compaction input.
+- Persisted session transcripts keep only bounded `details`; oversized metadata
+  is replaced with a compact summary marked `persistedDetailsTruncated: true`.
+- Plugins and tools should put text the model must read in `content`, not only
+  in `details`.
+
 ## Inbound bodies and history context
 
 OpenClaw separates the **prompt body** from the **command body**:
@@ -154,6 +167,8 @@ Details: [Configuration](/gateway/config-agents#messages) and channel docs.
 ## Silent replies
 
 The exact silent token `NO_REPLY` / `no_reply` means “do not deliver a user-visible reply”.
+When a turn also has pending tool media, such as generated TTS audio, OpenClaw
+strips the silent text but still delivers the media attachment.
 OpenClaw resolves that behavior by conversation type:
 
 - Direct conversations disallow silence by default and rewrite a bare silent

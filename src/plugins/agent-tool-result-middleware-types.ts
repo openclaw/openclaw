@@ -2,7 +2,11 @@ import type { AgentToolResult as PiAgentToolResult } from "@mariozechner/pi-agen
 
 export type OpenClawAgentToolResult<TResult = unknown> = PiAgentToolResult<TResult>;
 
-export type AgentToolResultMiddlewareHarness = "pi" | "codex-app-server";
+export type AgentToolResultMiddlewareRuntime = "pi" | "codex";
+/** @deprecated Use AgentToolResultMiddlewareRuntime. */
+export type AgentToolResultMiddlewareHarness =
+  | AgentToolResultMiddlewareRuntime
+  | "codex-app-server";
 
 export type AgentToolResultMiddlewareEvent = {
   threadId?: string;
@@ -16,7 +20,9 @@ export type AgentToolResultMiddlewareEvent = {
 };
 
 export type AgentToolResultMiddlewareContext = {
-  harness: AgentToolResultMiddlewareHarness;
+  runtime: AgentToolResultMiddlewareRuntime;
+  /** @deprecated Use runtime. */
+  harness?: AgentToolResultMiddlewareRuntime;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -33,5 +39,7 @@ export type AgentToolResultMiddleware = (
 ) => Promise<AgentToolResultMiddlewareResult | void> | AgentToolResultMiddlewareResult | void;
 
 export type AgentToolResultMiddlewareOptions = {
+  runtimes?: AgentToolResultMiddlewareRuntime[];
+  /** @deprecated Use runtimes. */
   harnesses?: AgentToolResultMiddlewareHarness[];
 };

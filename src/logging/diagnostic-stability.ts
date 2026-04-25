@@ -17,17 +17,24 @@ export type DiagnosticStabilityEventRecord = {
   channel?: string;
   pluginId?: string;
   source?: string;
+  target?: string;
   surface?: string;
   action?: string;
   reason?: string;
   outcome?: string;
+  mode?: string;
   level?: string;
   detector?: string;
+  deliveryKind?: string;
   toolName?: string;
   pairedToolName?: string;
   provider?: string;
   model?: string;
   durationMs?: number;
+  resultCount?: number;
+  commandLength?: number;
+  exitCode?: number;
+  timedOut?: boolean;
   costUsd?: number;
   count?: number;
   bytes?: number;
@@ -199,6 +206,24 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = event.outcome;
       assignReasonCode(record, event.reason);
       break;
+    case "message.delivery.started":
+      record.channel = event.channel;
+      record.deliveryKind = event.deliveryKind;
+      break;
+    case "message.delivery.completed":
+      record.channel = event.channel;
+      record.deliveryKind = event.deliveryKind;
+      record.durationMs = event.durationMs;
+      record.resultCount = event.resultCount;
+      record.outcome = "completed";
+      break;
+    case "message.delivery.error":
+      record.channel = event.channel;
+      record.deliveryKind = event.deliveryKind;
+      record.durationMs = event.durationMs;
+      record.outcome = "error";
+      assignReasonCode(record, event.errorCategory);
+      break;
     case "session.state":
       record.outcome = event.state;
       assignReasonCode(record, event.reason);
@@ -220,6 +245,14 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "run.attempt":
       record.count = event.attempt;
+      break;
+    case "context.assembled":
+      record.channel = event.channel;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.count = event.messageCount;
+      record.context =
+        event.contextTokenBudget !== undefined ? { limit: event.contextTokenBudget } : undefined;
       break;
     case "diagnostic.heartbeat":
       record.webhooks = { ...event.webhooks };
@@ -246,6 +279,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.toolName = event.toolName;
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
+      break;
+    case "exec.process.completed":
+      record.target = event.target;
+      record.mode = event.mode;
+      record.outcome = event.outcome;
+      record.durationMs = event.durationMs;
+      record.commandLength = event.commandLength;
+      record.exitCode = event.exitCode;
+      record.timedOut = event.timedOut;
+      assignReasonCode(record, event.failureKind);
       break;
     case "run.started":
       record.provider = event.provider;
@@ -274,6 +317,17 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.model = event.model;
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
+      break;
+    case "context.assembled":
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      record.count = event.messageCount;
+      record.bytes = event.promptChars;
+      break;
+    case "log.record":
+      record.level = event.level;
+      record.source = event.loggerName;
       break;
     case "diagnostic.memory.sample":
       record.memory = copyMemory(event.memory);

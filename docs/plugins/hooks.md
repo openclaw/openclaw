@@ -68,6 +68,7 @@ observation-only.
 
 **Conversation observation**
 
+- `model_call_started` / `model_call_ended` — observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` — observe provider input (system prompt, prompt, history)
 - `llm_output` — observe provider output
 
@@ -146,6 +147,21 @@ Rules:
 - `onResolution` receives the resolved approval decision — `allow-once`,
   `allow-always`, `deny`, `timeout`, or `cancelled`.
 
+### Tool result persistence
+
+Tool results can include structured `details` for UI rendering, diagnostics,
+media routing, or plugin-owned metadata. Treat `details` as runtime metadata,
+not prompt content:
+
+- OpenClaw strips `toolResult.details` before provider replay and compaction
+  input so metadata does not become model context.
+- Persisted session entries keep only bounded `details`. Oversized details are
+  replaced with a compact summary and `persistedDetailsTruncated: true`.
+- `tool_result_persist` and `before_message_write` run before the final
+  persistence cap. Hooks should still keep returned `details` small and avoid
+  placing prompt-relevant text only in `details`; put model-visible tool output
+  in `content`.
+
 ## Prompt and model hooks
 
 Use the phase-specific hooks for new plugins:
@@ -161,6 +177,13 @@ so your plugin does not depend on a legacy combined phase.
 
 `before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
 identify the active run. The same value is also available on `ctx.runId`.
+
+Use `model_call_started` and `model_call_ended` for provider-call telemetry
+that should not receive raw prompts, history, responses, headers, request
+bodies, or provider request IDs. These hooks include stable metadata such as
+`runId`, `callId`, `provider`, `model`, optional `api`/`transport`, terminal
+`durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
+bounded provider request-id hash.
 
 Non-bundled plugins that need `llm_input`, `llm_output`, or `agent_end` must set:
 
@@ -189,6 +212,11 @@ Use message hooks for channel-level routing and delivery policy:
   `senderId`, optional run/session correlation, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
+
+For audio-only TTS replies, `content` may contain the hidden spoken transcript
+even when the channel payload has no visible text/caption. Rewriting that
+`content` updates the hook-visible transcript only; it is not rendered as a
+media caption.
 
 Message hook contexts expose stable correlation fields when available:
 `ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,

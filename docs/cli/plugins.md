@@ -31,6 +31,8 @@ openclaw plugins inspect --all
 openclaw plugins info <id>
 openclaw plugins enable <id>
 openclaw plugins disable <id>
+openclaw plugins registry
+openclaw plugins registry --refresh
 openclaw plugins uninstall <id>
 openclaw plugins doctor
 openclaw plugins update <id-or-npm-spec>
@@ -195,18 +197,20 @@ openclaw plugins list --verbose
 openclaw plugins list --json
 ```
 
-Use `--enabled` to show only loaded plugins. Use `--verbose` to switch from the
+Use `--enabled` to show only enabled plugins. Use `--verbose` to switch from the
 table view to per-plugin detail lines with source/origin/version/activation
 metadata. Use `--json` for machine-readable inventory plus registry
 diagnostics.
 
-`plugins list` runs discovery from the current CLI environment and config. It is
-useful for checking whether a plugin is enabled/loadable, but it is not a live
-runtime probe of an already-running Gateway process. After changing plugin code,
-enablement, hook policy, or `plugins.load.paths`, restart the Gateway that
-serves the channel before expecting new `register(api)` code or hooks to run.
-For remote/container deployments, verify you are restarting the actual
-`openclaw gateway run` child, not only a wrapper process.
+`plugins list` reads the persisted local plugin registry first, with a
+manifest-only derived fallback when the registry is missing or invalid. It is
+useful for checking whether a plugin is installed, enabled, and visible to cold
+startup planning, but it is not a live runtime probe of an already-running
+Gateway process. After changing plugin code, enablement, hook policy, or
+`plugins.load.paths`, restart the Gateway that serves the channel before
+expecting new `register(api)` code or hooks to run. For remote/container
+deployments, verify you are restarting the actual `openclaw gateway run` child,
+not only a wrapper process.
 
 For runtime hook debugging:
 
@@ -227,7 +231,19 @@ openclaw plugins install -l ./my-plugin
 source path instead of copying over a managed install target.
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
-`plugins.installs` while keeping the default behavior unpinned.
+the managed install ledger while keeping the default behavior unpinned.
+
+### Install Ledger
+
+Plugin install metadata is machine-managed state, not user config. New installs
+and updates write it to `plugins/installs.json` under the active OpenClaw state
+directory. The file includes a do-not-edit warning and is used by
+`openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
+
+Legacy `plugins.installs` entries in `openclaw.json` remain readable as a
+deprecated compatibility fallback. When install/update/uninstall paths rewrite
+plugin install state, OpenClaw writes the ledger file and removes
+`plugins.installs` from the persisted config payload.
 
 ### Uninstall
 
@@ -237,8 +253,9 @@ openclaw plugins uninstall <id> --dry-run
 openclaw plugins uninstall <id> --keep-files
 ```
 
-`uninstall` removes plugin records from `plugins.entries`, `plugins.installs`,
-the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
+`uninstall` removes plugin records from `plugins.entries`, the managed install
+ledger, the plugin allowlist, and linked `plugins.load.paths` entries when
+applicable.
 For active memory plugins, the memory slot resets to `memory-core`.
 
 By default, uninstall also removes the plugin install directory under the active
@@ -257,8 +274,8 @@ openclaw plugins update @openclaw/voice-call@beta
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
-Updates apply to tracked installs in `plugins.installs` and tracked hook-pack
-installs in `hooks.internal.installs`.
+Updates apply to tracked plugin installs in the managed install ledger and
+tracked hook-pack installs in `hooks.internal.installs`.
 
 When you pass a plugin id, OpenClaw reuses the recorded install spec for that
 plugin. That means previously stored dist-tags such as `@beta` and exact pinned
@@ -332,6 +349,29 @@ detected.`
 For module-shape failures such as missing `register`/`activate` exports, rerun
 with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in
 the diagnostic output.
+
+### Registry
+
+```bash
+openclaw plugins registry
+openclaw plugins registry --refresh
+openclaw plugins registry --json
+```
+
+The local plugin registry is OpenClaw's persisted cold read model for installed
+plugin identity, enablement, source metadata, and contribution ownership.
+Normal startup, provider owner lookup, channel setup classification, and plugin
+inventory can read it without importing plugin runtime modules.
+
+Use `plugins registry` to inspect whether the persisted registry is present,
+current, or stale. Use `--refresh` to rebuild it from the durable install
+ledger, config policy, and manifest/package metadata. This is a repair path, not
+a runtime activation path.
+
+`OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY=1` is a deprecated break-glass
+compatibility switch for registry read failures. Prefer `plugins registry
+--refresh` or `openclaw doctor --fix`; the env fallback is only for emergency
+startup recovery while the migration rolls out.
 
 ### Marketplace
 

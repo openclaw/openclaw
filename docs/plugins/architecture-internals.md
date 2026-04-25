@@ -71,7 +71,9 @@ or fallback behavior without changing runtime loading semantics.
 
 Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
 `setup.cliBackends` to narrow candidate plugins before it falls back to
-`setup-api` for plugins that still need setup-time runtime hooks. Explicit
+`setup-api` for plugins that still need setup-time runtime hooks. Provider
+setup flow uses manifest `providerAuthChoices` first, then falls back to
+runtime wizard choices and install-catalog choices for compatibility. Explicit
 `setup.requiresRuntime: false` is a descriptor-only cutoff; omitted
 `requiresRuntime` keeps the legacy setup-api fallback for compatibility. If more
 than one discovered plugin claims the same normalized setup provider or CLI
@@ -909,13 +911,15 @@ Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for
 compatibility, but they surface source-plane warnings so the catalog can move
 toward pinned, integrity-checked installs without breaking existing plugins.
-When onboarding installs from a local catalog path, it records a
-`plugins.installs` entry with `source: "path"` and a workspace-relative
+When onboarding installs from a local catalog path, it records a managed plugin
+install ledger entry with `source: "path"` and a workspace-relative
 `sourcePath` when possible. The absolute operational load path stays in
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface.
+surface. Legacy `plugins.installs` config entries are still read as a
+compatibility fallback while the state-managed `plugins/installs.json` ledger
+becomes the install source of truth.
 
 ## Context engine plugins
 

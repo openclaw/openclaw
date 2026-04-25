@@ -49,7 +49,6 @@ export type BuildPluginApiParams = {
       | "registerContextEngine"
       | "registerCompactionProvider"
       | "registerAgentHarness"
-      | "registerEmbeddedExtensionFactory"
       | "registerCodexAppServerExtensionFactory"
       | "registerAgentToolResultMiddleware"
       | "registerDetachedTaskRuntime"
@@ -105,8 +104,6 @@ const noopRegisterCommand: OpenClawPluginApi["registerCommand"] = () => {};
 const noopRegisterContextEngine: OpenClawPluginApi["registerContextEngine"] = () => {};
 const noopRegisterCompactionProvider: OpenClawPluginApi["registerCompactionProvider"] = () => {};
 const noopRegisterAgentHarness: OpenClawPluginApi["registerAgentHarness"] = () => {};
-const noopRegisterEmbeddedExtensionFactory: OpenClawPluginApi["registerEmbeddedExtensionFactory"] =
-  () => {};
 const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCodexAppServerExtensionFactory"] =
   () => {};
 const noopRegisterAgentToolResultMiddleware: OpenClawPluginApi["registerAgentToolResultMiddleware"] =
@@ -180,8 +177,6 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerCompactionProvider:
       handlers.registerCompactionProvider ?? noopRegisterCompactionProvider,
     registerAgentHarness: handlers.registerAgentHarness ?? noopRegisterAgentHarness,
-    registerEmbeddedExtensionFactory:
-      handlers.registerEmbeddedExtensionFactory ?? noopRegisterEmbeddedExtensionFactory,
     registerCodexAppServerExtensionFactory:
       handlers.registerCodexAppServerExtensionFactory ?? noopRegisterCodexAppServerExtensionFactory,
     registerAgentToolResultMiddleware:

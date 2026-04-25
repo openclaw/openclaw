@@ -206,7 +206,7 @@ const path = require("node:path");
 const mockPort = Number(process.argv[2]);
 const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
 const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
-const modelRef = "openai/gpt-5.4";
+const modelRef = "openai/gpt-5.5";
 const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 cfg.models = {
@@ -222,8 +222,8 @@ cfg.models = {
       request: { ...(cfg.models?.providers?.openai?.request || {}), allowPrivateNetwork: true },
       models: [
         {
-          id: "gpt-5.4",
-          name: "gpt-5.4",
+          id: "gpt-5.5",
+          name: "gpt-5.5",
           api: "openai-responses",
           reasoning: false,
           input: ["text", "image"],

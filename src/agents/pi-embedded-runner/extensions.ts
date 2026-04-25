@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listEmbeddedExtensionFactories } from "../../plugins/embedded-extension-factory.js";
+import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -34,13 +35,21 @@ function recordFromUnknown(value: unknown): Record<string, unknown> {
 }
 
 function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
-  const runner = createAgentToolResultMiddlewareRunner({ harness: "pi" });
+  const handlers = listAgentToolResultMiddlewares("pi");
+  const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, handlers);
   return (pi) => {
     pi.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
+      if (handlers.length === 0) {
+        return undefined;
+      }
       const event = recordFromUnknown(rawEvent) as PiToolResultEvent;
       if (!event.toolName) {
         return undefined;
       }
+      const toolCallId =
+        typeof event.toolCallId === "string" && event.toolCallId.trim()
+          ? event.toolCallId
+          : `pi-${randomUUID()}`;
       const content = Array.isArray(event.content) ? event.content : [];
       const current = {
         content,
@@ -49,16 +58,13 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
       const result = await runner.applyToolResultMiddleware({
         threadId: event.threadId,
         turnId: event.turnId,
-        toolCallId: event.toolCallId ?? event.toolName,
+        toolCallId,
         toolName: event.toolName,
         args: recordFromUnknown(event.input),
         cwd: ctx.cwd,
         isError: event.isError,
         result: current,
       });
-      if (result === current) {
-        return undefined;
-      }
       return {
         content: result.content,
         details: result.details,
@@ -156,7 +162,7 @@ export function buildEmbeddedExtensionFactories(params: {
       identifierPolicy: compactionCfg?.identifierPolicy,
       identifierInstructions: compactionCfg?.identifierInstructions,
       customInstructions: compactionCfg?.customInstructions,
-      qualityGuardEnabled: qualityGuardCfg?.enabled ?? false,
+      qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
@@ -169,7 +175,6 @@ export function buildEmbeddedExtensionFactories(params: {
     factories.push(pruningFactory);
   }
   factories.push(buildAgentToolResultMiddlewareFactory());
-  factories.push(...listEmbeddedExtensionFactories());
   return factories;
 }
 
