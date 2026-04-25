@@ -1189,7 +1189,8 @@
                       "plugins/sdk-testing",
                       "plugins/manifest",
                       "plugins/architecture",
-                      "plugins/architecture-internals"
+                      "plugins/architecture-internals",
+                      "plugins/plan-mode-plugin-host-hooks"
                     ]
                   }
                 ]
