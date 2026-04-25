@@ -91,8 +91,8 @@ Docs: https://docs.openclaw.ai
   loaded, and make `/acp doctor` call out `plugins.allow` blocking bundled
   `acpx`. Thanks @vincentkoc.
 - Media delivery: avoid sending generated image attachments twice when the
-  assistant reply already includes explicit `MEDIA:` lines for the same turn.
-  Thanks @pashpashpash.
+  assistant reply already includes explicit `MEDIA:` lines for the same turn,
+  and reject unsafe remote `MEDIA:` URLs before delivery. Thanks @pashpashpash.
 - Agents/subagents: keep queued subagent announces session-only when the
   requester has no external channel target, avoiding ambiguous multi-channel
   delivery failures. Fixes #59201. Thanks @larrylhollan.
