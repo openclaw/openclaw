@@ -79,6 +79,9 @@ Docs: https://docs.openclaw.ai
 - ACP/sessions_spawn: reject normal OpenClaw config agent ids when callers
   explicitly request `runtime="acp"`, while allowing agents configured with
   `runtime.type="acp"` to resolve to their ACP harness id. Fixes #63914.
+- ACP/models: document that non-Codex ACP model overrides require adapter
+  support for ACP `models` plus `session/set_model`, so unsupported harnesses
+  fail clearly instead of silently falling back to their defaults.
 - Plugins/Voice Call: treat missing provider credentials as setup-incomplete
   during Gateway startup and log the missing keys as a warning instead of a
   runtime startup error, while keeping explicit command/tool errors when used. Thanks
