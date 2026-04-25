@@ -507,11 +507,15 @@ export function createGatewayTool(opts?: {
           ...gatewayOpts,
           timeoutMs: updateTimeoutMs,
         };
+        // Forward `continuationMessage` so the post-update restart can resume
+        // an agent turn the same way the `restart` action does. (#71178)
+        const continuationMessage = normalizeOptionalString(params.continuationMessage);
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
           note,
           restartDelayMs,
           timeoutMs: updateTimeoutMs,
+          ...(continuationMessage ? { continuationMessage } : {}),
         });
         return jsonResult({ ok: true, result });
       }

@@ -60,6 +60,12 @@ export const UpdateRunParamsSchema = Type.Object(
     note: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    // When the caller is an agent that still owes the user a reply, this
+    // message is journaled into the restart-continuation queue so the agent
+    // can resume after the post-update gateway restart and tell the user
+    // what to verify or report. Mirrors `restart` action's continuation
+    // contract. (#71178)
+    continuationMessage: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

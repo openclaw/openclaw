@@ -3,6 +3,7 @@ import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import {
+  buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -41,6 +42,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       threadId: requestedThreadId,
       note,
       restartDelayMs,
+      continuationMessage,
     } = parseRestartRequestParams(params);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
       extractDeliveryInfo(sessionKey);
@@ -99,6 +101,17 @@ export const updateHandlers: GatewayRequestHandlers = {
       };
     }
 
+    // Mirror the `restart` action's continuation contract: when the caller is
+    // an agent that still owes the user a reply, build a continuation entry
+    // so the post-update gateway boot can resume the agent turn instead of
+    // silently dropping it. Only build a continuation when the update itself
+    // succeeded; on update failure we'll skip the restart (see below) and a
+    // continuation would never run anyway. (#71178)
+    const continuation =
+      result.status === "ok"
+        ? buildRestartSuccessContinuation({ sessionKey, continuationMessage })
+        : null;
+
     const payload: RestartSentinelPayload = {
       kind: "update",
       status: result.status,
@@ -107,6 +120,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext,
       threadId,
       message: note ?? null,
+      continuation,
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
         mode: result.mode,

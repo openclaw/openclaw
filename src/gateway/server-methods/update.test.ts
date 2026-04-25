@@ -167,7 +167,12 @@ describe("update.run sentinel deliveryContext", () => {
       to: "webchat:user-123",
       accountId: "default",
     });
-    expect(capturedPayload!.continuation).toBeUndefined();
+    // With sessionKey present, the post-update restart now journals a default
+    // agentTurn continuation so the agent can resume after boot. (#71178)
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agentTurn",
+      message: expect.stringContaining("OpenClaw restarted successfully"),
+    });
   });
 
   it("omits deliveryContext when no sessionKey is provided", async () => {
@@ -178,7 +183,8 @@ describe("update.run sentinel deliveryContext", () => {
     expect(capturedPayload).toBeDefined();
     expect(capturedPayload!.deliveryContext).toBeUndefined();
     expect(capturedPayload!.threadId).toBeUndefined();
-    expect(capturedPayload!.continuation).toBeUndefined();
+    // No sessionKey → no agent turn to resume → no continuation. (#71178)
+    expect(capturedPayload!.continuation).toBeNull();
   });
 
   it("includes threadId in sentinel payload for threaded sessions", async () => {
@@ -193,7 +199,22 @@ describe("update.run sentinel deliveryContext", () => {
       accountId: "workspace-1",
     });
     expect(capturedPayload!.threadId).toBe("1234567890.123456");
-    expect(capturedPayload!.continuation).toBeUndefined();
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agentTurn",
+      message: expect.stringContaining("OpenClaw restarted successfully"),
+    });
+  });
+
+  it("uses an explicit continuationMessage when provided so agents can scope the post-restart resume (#71178)", async () => {
+    capturedPayload = undefined;
+    await invokeUpdateRun({
+      sessionKey: "agent:main:webchat:dm:user-123",
+      continuationMessage: "Verify the new build still passes the user's earlier ask about X",
+    });
+    expect(capturedPayload!.continuation).toEqual({
+      kind: "agentTurn",
+      message: "Verify the new build still passes the user's earlier ask about X",
+    });
   });
 });
 
@@ -242,7 +263,22 @@ describe("update.run restart scheduling", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
-    expect(capturedPayload?.continuation).toBeUndefined();
+    // No continuation on failed update — without a restart, a continuation
+    // would never run anyway. (#71178)
+    expect(capturedPayload?.continuation).toBeNull();
+  });
+
+  it("does not journal a continuation when the update fails even with sessionKey provided (#71178)", async () => {
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "error",
+      mode: "git",
+      reason: "build-failed",
+      steps: [],
+      durationMs: 100,
+    });
+    capturedPayload = undefined;
+    await invokeUpdateRun({ sessionKey: "agent:main:webchat:dm:user-123" });
+    expect(capturedPayload?.continuation).toBeNull();
   });
 
   it.each([
