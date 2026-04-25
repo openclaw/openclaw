@@ -1,7 +1,10 @@
+import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import {
+  handleReset,
   normalizeGatewayTokenInput,
   openUrl,
   probeGatewayReachable,
@@ -43,6 +46,44 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+describe("handleReset", () => {
+  it("uses active profile paths for destructive reset targets", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
+    const profileStateDir = path.join(homeDir, ".openclaw-work");
+    const defaultStateDir = path.join(homeDir, ".openclaw");
+    const profileConfigPath = path.join(profileStateDir, "openclaw.json");
+    const profileCredentialsDir = path.join(profileStateDir, "credentials");
+    const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
+    const workspaceDir = path.join(profileStateDir, "workspace");
+    const defaultCredentialsDir = path.join(defaultStateDir, "credentials");
+
+    fs.mkdirSync(profileCredentialsDir, { recursive: true });
+    fs.mkdirSync(profileSessionsDir, { recursive: true });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.mkdirSync(defaultCredentialsDir, { recursive: true });
+    fs.writeFileSync(profileConfigPath, "{}\n");
+
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_STATE_DIR", profileStateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", profileConfigPath);
+
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    await handleReset("full", workspaceDir, runtime);
+
+    const trashedPaths = mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv[1]);
+    expect(trashedPaths).toEqual([
+      profileConfigPath,
+      profileCredentialsDir,
+      profileSessionsDir,
+      workspaceDir,
+    ]);
+    expect(trashedPaths).not.toContain(defaultCredentialsDir);
+  });
 });
 
 describe("openUrl", () => {
