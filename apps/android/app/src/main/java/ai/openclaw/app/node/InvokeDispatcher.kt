@@ -8,6 +8,7 @@ import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
+import ai.openclaw.app.protocol.OpenClawHttpCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
@@ -67,6 +68,7 @@ class InvokeDispatcher(
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
   private val callLogHandler: CallLogHandler,
+  internal val httpHandler: HttpHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
@@ -81,6 +83,7 @@ class InvokeDispatcher(
   private val onCanvasA2uiReset: () -> Unit,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
+  private val httpEnabled: () -> Boolean,
 ) {
   suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     val spec =
@@ -209,6 +212,9 @@ class InvokeDispatcher(
       // CallLog command
       OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
 
+      // HTTP command
+      OpenClawHttpCommand.Request.rawValue -> httpHandler.handleHttpRequest(paramsJson)
+
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()
       "debug.logs" -> debugHandler.handleLogs()
@@ -322,6 +328,15 @@ class InvokeDispatcher(
           GatewaySession.InvokeResult.error(
             code = "CALL_LOG_UNAVAILABLE",
             message = "CALL_LOG_UNAVAILABLE: call log not available on this build",
+          )
+        }
+      InvokeCommandAvailability.HttpEnabled ->
+        if (httpEnabled()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "HTTP_DISABLED",
+            message = "HTTP_DISABLED: enable HTTP Access in Settings",
           )
         }
       InvokeCommandAvailability.DebugBuild ->

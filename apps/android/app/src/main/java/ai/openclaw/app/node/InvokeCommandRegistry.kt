@@ -8,6 +8,7 @@ import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
+import ai.openclaw.app.protocol.OpenClawHttpCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
@@ -26,6 +27,7 @@ data class NodeRuntimeFlags(
   val motionActivityAvailable: Boolean,
   val motionPedometerAvailable: Boolean,
   val debugBuild: Boolean,
+  val httpEnabled: Boolean,
 )
 
 enum class InvokeCommandAvailability {
@@ -39,6 +41,7 @@ enum class InvokeCommandAvailability {
   MotionActivityAvailable,
   MotionPedometerAvailable,
   DebugBuild,
+  HttpEnabled,
 }
 
 enum class NodeCapabilityAvailability {
@@ -49,6 +52,7 @@ enum class NodeCapabilityAvailability {
   CallLogAvailable,
   VoiceWakeEnabled,
   MotionAvailable,
+  HttpEnabled,
 }
 
 data class NodeCapabilitySpec(
@@ -96,6 +100,7 @@ object InvokeCommandRegistry {
         name = OpenClawCapability.CallLog.rawValue,
         availability = NodeCapabilityAvailability.CallLogAvailable,
       ),
+      NodeCapabilitySpec(name = OpenClawCapability.Http.rawValue, availability = NodeCapabilityAvailability.HttpEnabled),
     )
 
   val all: List<InvokeCommandSpec> =
@@ -208,6 +213,10 @@ object InvokeCommandRegistry {
         availability = InvokeCommandAvailability.CallLogAvailable,
       ),
       InvokeCommandSpec(
+        name = OpenClawHttpCommand.Request.rawValue,
+        availability = InvokeCommandAvailability.HttpEnabled,
+      ),
+      InvokeCommandSpec(
         name = "debug.logs",
         availability = InvokeCommandAvailability.DebugBuild,
       ),
@@ -232,6 +241,7 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.CallLogAvailable -> flags.callLogAvailable
           NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
+          NodeCapabilityAvailability.HttpEnabled -> flags.httpEnabled
         }
       }
       .map { it.name }
@@ -250,6 +260,7 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.CallLogAvailable -> flags.callLogAvailable
           InvokeCommandAvailability.MotionActivityAvailable -> flags.motionActivityAvailable
           InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable
+          InvokeCommandAvailability.HttpEnabled -> flags.httpEnabled
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild
         }
       }

@@ -5,6 +5,7 @@ export const NODE_SYSTEM_RUN_COMMANDS = [
 ] as const;
 
 export const NODE_SYSTEM_NOTIFY_COMMAND = "system.notify";
+export const NODE_HTTP_REQUEST_COMMAND = "http.request";
 export const NODE_BROWSER_PROXY_COMMAND = "browser.proxy";
 
 export const NODE_EXEC_APPROVALS_COMMANDS = [

@@ -253,6 +253,7 @@ class InvokeDispatcherTest {
         ),
       debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
+      httpHandler = HttpHandler(),
       isForeground = { true },
       cameraEnabled = { cameraEnabled },
       locationEnabled = { locationEnabled },
@@ -267,6 +268,7 @@ class InvokeDispatcherTest {
       onCanvasA2uiReset = {},
       motionActivityAvailable = { motionActivityAvailable },
       motionPedometerAvailable = { motionPedometerAvailable },
+      httpEnabled = { true },
     )
   }
 

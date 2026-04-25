@@ -92,6 +92,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val notificationForwardingQuietEnd by viewModel.notificationForwardingQuietEnd.collectAsState()
   val notificationForwardingMaxEventsPerMinute by viewModel.notificationForwardingMaxEventsPerMinute.collectAsState()
   val notificationForwardingSessionKey by viewModel.notificationForwardingSessionKey.collectAsState()
+  val httpAccessEnabled by viewModel.httpAccessEnabled.collectAsState()
 
   var notificationQuietStartDraft by remember(notificationForwardingQuietStart) {
     mutableStateOf(notificationForwardingQuietStart)
@@ -1106,6 +1107,19 @@ fun SettingsSheet(viewModel: MainViewModel) {
               },
             )
           }
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("HTTP Access", style = mobileHeadline) },
+            supportingContent = { Text("Allow gateway to make HTTP requests via this device.", style = mobileCallout) },
+            trailingContent = {
+              Switch(
+                checked = httpAccessEnabled,
+                onCheckedChange = viewModel::setHttpAccessEnabled,
+              )
+            },
+          )
         }
       }
 
