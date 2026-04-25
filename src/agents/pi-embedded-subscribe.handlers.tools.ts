@@ -189,6 +189,14 @@ function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
   return { added, modified, deleted };
 }
 
+function shouldSuppressStructuredMediaToolOutput(params: {
+  toolName: string;
+  isToolError: boolean;
+  hasStructuredMedia: boolean;
+}): boolean {
+  return params.toolName === "tts" && !params.isToolError && params.hasStructuredMedia;
+}
+
 function buildPatchSummaryText(summary: ApplyPatchSummary): string {
   const parts: string[] = [];
   if (summary.added.length > 0) {
@@ -443,7 +451,7 @@ async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
-  const hasStructuredMedia =
+  const hasStructuredMedia = Boolean(
     result &&
     typeof result === "object" &&
     (result as { details?: unknown }).details &&
@@ -451,7 +459,8 @@ async function emitToolResultOutput(params: {
     !Array.isArray((result as { details?: unknown }).details) &&
     typeof ((result as { details?: { media?: unknown } }).details?.media ?? undefined) ===
       "object" &&
-    !Array.isArray((result as { details?: { media?: unknown } }).details?.media);
+    !Array.isArray((result as { details?: { media?: unknown } }).details?.media),
+  );
   const approvalPending = readExecApprovalPendingDetails(result);
   let emittedToolOutputMediaUrls: string[] = [];
   if (!isToolError && approvalPending) {
@@ -512,7 +521,8 @@ async function emitToolResultOutput(params: {
 
   const outputText = extractToolResultText(sanitizedResult);
   const shouldEmitOutput =
-    ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText });
+    !shouldSuppressStructuredMediaToolOutput({ toolName, isToolError, hasStructuredMedia }) &&
+    (ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText }));
   if (shouldEmitOutput) {
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, result);

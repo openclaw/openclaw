@@ -230,7 +230,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
-  it("still queues structured media when verbose is full", async () => {
+  it("queues TTS structured media without leaking spoken text when verbose is full", async () => {
     const ctx = createMockContext({
       shouldEmitToolOutput: true,
       onToolResult: vi.fn(),
@@ -253,12 +253,12 @@ describe("handleToolExecutionEnd media emission", () => {
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.emitToolOutput).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
 
-  it("does not queue a duplicate voice copy when emitted tool output already sent the same audio", async () => {
+  it("queues one voice copy when TTS output also contains a legacy media directive", async () => {
     const ctx = createMockContext({
       shouldEmitToolOutput: true,
       onToolResult: vi.fn(),
@@ -281,9 +281,9 @@ describe("handleToolExecutionEnd media emission", () => {
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
-    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+    expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
 
   async function handleVerboseGeneratedImage(toolResultFormat: "plain" | "markdown") {
