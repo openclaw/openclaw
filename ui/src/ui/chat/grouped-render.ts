@@ -20,7 +20,10 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../user-identity.ts";
-import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
+import {
+  assistantAvatarFallbackUrl,
+  isRenderableControlUiAvatarUrl,
+} from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -685,6 +688,7 @@ function renderAvatar(
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
+  const assistantFallbackAvatar = assistantAvatarFallbackUrl(basePath ?? "");
   const userName = resolveLocalUserName(user);
   const userAvatarUrl = resolveLocalUserAvatarUrl(user);
   const userAvatarText = resolveLocalUserAvatarText(user);
@@ -749,7 +753,7 @@ function renderAvatar(
       if (authToken?.trim() && assistantAvatar.startsWith("/")) {
         return html`<img
           class="chat-avatar ${className} chat-avatar--logo"
-          src="${agentLogoUrl(basePath ?? "")}"
+          src="${assistantFallbackAvatar}"
           alt="${assistantName}"
         />`;
       }
@@ -766,17 +770,15 @@ function renderAvatar(
     }
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
-      src="${agentLogoUrl(basePath ?? "")}"
+      src="${assistantFallbackAvatar}"
       alt="${assistantName}"
     />`;
   }
 
-  /* Assistant with no custom avatar: use logo when basePath available */
-  if (normalized === "assistant" && basePath) {
-    const logoUrl = agentLogoUrl(basePath);
+  if (normalized === "assistant") {
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
-      src="${logoUrl}"
+      src="${assistantFallbackAvatar}"
       alt="${assistantName}"
     />`;
   }

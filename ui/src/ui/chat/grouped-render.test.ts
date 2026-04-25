@@ -27,6 +27,7 @@ vi.mock("../icons.ts", () => ({
 }));
 
 vi.mock("../views/agents-utils.ts", () => ({
+  assistantAvatarFallbackUrl: () => "/openclaw-molty.png",
   agentLogoUrl: () => "/openclaw-logo.svg",
   isRenderableControlUiAvatarUrl: (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
@@ -216,7 +217,21 @@ describe("grouped chat rendering", () => {
     );
 
     const img = container.querySelector("img.chat-avatar");
-    expect(img?.getAttribute("src")).toBe("/openclaw-logo.svg");
+    expect(img?.getAttribute("src")).toBe("/openclaw-molty.png");
+  });
+
+  it("uses the Molty png as the default assistant transcript avatar", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "hello",
+      timestamp: 1000,
+    });
+
+    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.getAttribute("src")).toBe("/openclaw-molty.png");
   });
 
   it("positions delete confirm by message side", () => {
@@ -279,7 +294,7 @@ describe("grouped chat rendering", () => {
     };
 
     const remoteAvatar = renderAvatar("https://example.com/avatar.png");
-    expect(remoteAvatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
+    expect(remoteAvatar?.getAttribute("src")).toBe("/openclaw-molty.png");
 
     const blobAvatar = renderAvatar("blob:managed-image");
     expect(blobAvatar?.tagName).toBe("IMG");

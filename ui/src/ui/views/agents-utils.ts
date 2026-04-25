@@ -245,6 +245,11 @@ export function agentLogoUrl(basePath: string): string {
   return base ? `${base}/favicon.svg` : "favicon.svg";
 }
 
+export function assistantAvatarFallbackUrl(basePath: string): string {
+  const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
+  return base ? `${base}/apple-touch-icon.png` : "apple-touch-icon.png";
+}
+
 function isLikelyEmoji(value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
