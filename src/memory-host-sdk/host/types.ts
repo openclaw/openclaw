@@ -5,6 +5,8 @@ export type MemorySearchResult = {
   startLine: number;
   endLine: number;
   score: number;
+  vectorScore?: number;
+  textScore?: number;
   snippet: string;
   source: MemorySource;
   citation?: string;
