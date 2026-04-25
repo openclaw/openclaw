@@ -2,6 +2,7 @@ name: openclaw-codeql-javascript-typescript
 
 paths:
   - src
+  - extensions
   - ui/src
   - skills
 
