@@ -786,10 +786,16 @@ const prompter = {
     }
     return initialValue ?? true;
   },
-  select: async ({ message }) => {
+  select: async ({ message, options }) => {
     if (message === "Select a channel") {
       channelSelectCount += 1;
       return channelSelectCount === 1 ? "whatsapp" : "__done__";
+    }
+    if (message === "Install WhatsApp plugin?") {
+      if (!options?.some((option) => option.value === "local")) {
+        throw new Error(`missing bundled local install option: ${JSON.stringify(options)}`);
+      }
+      return "local";
     }
     if (message === "WhatsApp phone setup") {
       return "separate";
