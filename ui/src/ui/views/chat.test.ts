@@ -5,6 +5,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../ui-types.ts";
 import { cleanupChatModuleState, renderChat, type ChatProps } from "./chat.ts";
 
+vi.mock("../markdown.ts", () => ({
+  toSanitizedMarkdownHtml: (value: string) => value,
+}));
+
+vi.mock("../icons.ts", () => ({
+  icons: new Proxy(
+    {},
+    {
+      get: () => "",
+    },
+  ),
+}));
+
+vi.mock("../tool-display.ts", () => ({
+  formatToolDetail: () => undefined,
+  resolveToolDisplay: ({ name }: { name: string }) => ({
+    name,
+    label: name,
+    icon: "zap",
+  }),
+}));
+
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   return {
     sessionKey: "agent:main:main",
