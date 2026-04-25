@@ -1,3 +1,6 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   Browser,
@@ -31,7 +34,9 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -79,6 +84,7 @@ type PageState = {
   armIdUpload: number;
   armIdDialog: number;
   armIdDownload: number;
+  downloadWaiterDepth: number;
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
    * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
@@ -121,6 +127,12 @@ const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function buildManagedDownloadPath(fileName: string): string {
+  const id = crypto.randomUUID();
+  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
+  return path.join(DEFAULT_DOWNLOAD_DIR, `${id}-${safeName}`);
 }
 
 function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
@@ -334,6 +346,7 @@ export function ensurePageState(page: Page): PageState {
     armIdUpload: 0,
     armIdDialog: 0,
     armIdDownload: 0,
+    downloadWaiterDepth: 0,
   };
   pageStates.set(page, state);
 
@@ -402,6 +415,30 @@ export function ensurePageState(page: Page): PageState {
       rec.failureText = req.failure()?.errorText;
       rec.ok = false;
     });
+    page.on(
+      "download",
+      (download: {
+        suggestedFilename?: () => string;
+        saveAs?: (outPath: string) => Promise<void>;
+        path?: () => Promise<string>;
+      }) => {
+        if (state.downloadWaiterDepth > 0) {
+          return;
+        }
+        const suggested = sanitizeUntrustedFileName(
+          download.suggestedFilename?.() || "download.bin",
+          "download.bin",
+        );
+        const managedPath = buildManagedDownloadPath(suggested);
+        const managedSave = (async () => {
+          await fs.mkdir(DEFAULT_DOWNLOAD_DIR, { recursive: true });
+          await download.saveAs?.(managedPath);
+          return managedPath;
+        })();
+        managedSave.catch(() => {});
+        download.path = async () => await managedSave;
+      },
+    );
     page.on("close", () => {
       pageStates.delete(page);
       observedPages.delete(page);
