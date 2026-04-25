@@ -873,7 +873,10 @@ export function renderApp(state: AppViewState) {
     customThemeImportUrl: state.customThemeImportUrl,
     customThemeImportBusy: state.customThemeImportBusy,
     customThemeImportMessage: state.customThemeImportMessage,
+    customThemeImportExpanded: state.customThemeImportExpanded,
+    customThemeImportFocusToken: state.customThemeImportFocusToken,
     onCustomThemeImportUrlChange: (next) => state.setCustomThemeImportUrl(next),
+    onOpenCustomThemeImport: () => state.openCustomThemeImport(),
     onImportCustomTheme: () => void state.importCustomTheme(),
     onClearCustomTheme: () => state.clearCustomTheme(),
     borderRadius: state.settings.borderRadius,
@@ -1020,6 +1023,15 @@ export function renderApp(state: AppViewState) {
             customThemeLabel: state.settings.customTheme?.label ?? null,
             borderRadius: state.settings.borderRadius,
             setTheme: (theme, context) => state.setTheme(theme, context),
+            onOpenCustomThemeImport: () => {
+              state.setTab("appearance");
+              state.appearanceFormMode = "form";
+              state.appearanceSearchQuery = "";
+              state.appearanceActiveSection = "__appearance__";
+              state.appearanceActiveSubsection = null;
+              state.openCustomThemeImport();
+              requestHostUpdate?.();
+            },
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
             userName: state.userName ?? null,

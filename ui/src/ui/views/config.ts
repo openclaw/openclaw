@@ -68,9 +68,12 @@ export type ConfigProps = {
   customThemeImportUrl: string;
   customThemeImportBusy: boolean;
   customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
+  customThemeImportExpanded?: boolean;
+  customThemeImportFocusToken?: number;
   onCustomThemeImportUrlChange: (next: string) => void;
   onImportCustomTheme: () => void;
   onClearCustomTheme: () => void;
+  onOpenCustomThemeImport?: () => void;
   borderRadius: number;
   setBorderRadius: (value: number) => void;
   gatewayUrl: string;
@@ -582,7 +585,6 @@ type ThemeOption = {
   label: string;
   description: string;
   icon: TemplateResult;
-  disabled?: boolean;
 };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
@@ -590,7 +592,36 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
 ];
 
+function focusCustomThemeImportInput() {
+  const schedule =
+    typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 0);
+  schedule(() => {
+    const input = globalThis.document?.querySelector<HTMLInputElement>(
+      "[data-custom-theme-import-input]",
+    );
+    if (!input) {
+      return;
+    }
+    if (typeof input.scrollIntoView === "function") {
+      input.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+    input.focus();
+    input.select();
+  });
+}
+
 function renderAppearanceSection(props: ConfigProps) {
+  const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
+  if (
+    showCustomThemeImport &&
+    props.customThemeImportFocusToken != null &&
+    props.customThemeImportFocusToken !== cvs.lastCustomThemeImportFocusToken
+  ) {
+    cvs.lastCustomThemeImportFocusToken = props.customThemeImportFocusToken;
+    focusCustomThemeImportInput();
+  }
   const themeOptions: ThemeOption[] = [
     ...BUILTIN_THEME_OPTIONS,
     {
@@ -598,9 +629,8 @@ function renderAppearanceSection(props: ConfigProps) {
       label: "Custom",
       description: props.hasCustomTheme
         ? `Imported from tweakcn${props.customThemeLabel ? `: ${props.customThemeLabel}` : ""}`
-        : "Import a tweakcn theme to enable this slot",
+        : "Open the tweakcn importer for this browser-local slot",
       icon: icons.spark,
-      disabled: !props.hasCustomTheme,
     },
   ];
   return html`
@@ -614,11 +644,14 @@ function renderAppearanceSection(props: ConfigProps) {
               <button
                 class="settings-theme-card ${opt.id === props.theme
                   ? "settings-theme-card--active"
-                  : ""} ${opt.disabled ? "settings-theme-card--disabled" : ""}"
-                ?disabled=${opt.disabled}
+                  : ""}"
                 title=${opt.description}
                 @click=${(e: Event) => {
-                  if (!opt.disabled && opt.id !== props.theme) {
+                  if (opt.id === "custom" && !props.hasCustomTheme) {
+                    props.onOpenCustomThemeImport?.();
+                    return;
+                  }
+                  if (opt.id !== props.theme) {
                     const context: ThemeTransitionContext = {
                       element: (e.currentTarget as HTMLElement) ?? undefined,
                     };
@@ -637,68 +670,80 @@ function renderAppearanceSection(props: ConfigProps) {
             `,
           )}
         </div>
-        <div class="settings-theme-import">
-          <div class="settings-theme-import__copy">
-            <div class="settings-theme-import__title">Import from tweakcn</div>
-            <p class="settings-theme-import__hint">
-              Paste a tweakcn share link. The import stays in this browser only and replaces the
-              current custom slot.
-            </p>
-          </div>
-          <label class="settings-theme-import__field">
-            <span class="settings-theme-import__label">tweakcn link</span>
-            <input
-              class="settings-theme-import__input"
-              type="url"
-              placeholder="https://tweakcn.com/themes/..."
-              .value=${props.customThemeImportUrl}
-              @input=${(e: Event) =>
-                props.onCustomThemeImportUrlChange((e.currentTarget as HTMLInputElement).value)}
-            />
-          </label>
-          <div class="settings-theme-import__actions">
-            <button
-              class="btn btn--sm primary"
-              ?disabled=${props.customThemeImportBusy ||
-              props.customThemeImportUrl.trim().length === 0}
-              @click=${props.onImportCustomTheme}
-            >
-              ${props.customThemeImportBusy
-                ? "Importing…"
-                : props.hasCustomTheme
-                  ? "Replace custom theme"
-                  : "Import custom theme"}
-            </button>
-            ${props.hasCustomTheme
-              ? html`
-                  <button class="btn btn--sm danger" @click=${props.onClearCustomTheme}>
-                    Clear custom theme
-                  </button>
-                `
-              : nothing}
-          </div>
-          ${props.hasCustomTheme
-            ? html`
-                <div class="settings-theme-import__meta">
-                  <span class="settings-theme-import__meta-label">Loaded</span>
-                  <span class="settings-theme-import__meta-value"
-                    >${props.customThemeLabel ?? "Custom"} ·
-                    ${props.customThemeSourceUrl ?? "tweakcn"}</span
+        ${showCustomThemeImport
+          ? html`
+              <div class="settings-theme-import">
+                <div class="settings-theme-import__copy">
+                  <div class="settings-theme-import__title">Import from tweakcn</div>
+                  <p class="settings-theme-import__hint">
+                    Paste a tweakcn share link. The import stays in this browser only and replaces
+                    the current custom slot.
+                  </p>
+                </div>
+                <label class="settings-theme-import__field">
+                  <span class="settings-theme-import__label">tweakcn link</span>
+                  <input
+                    class="settings-theme-import__input"
+                    data-custom-theme-import-input
+                    type="url"
+                    placeholder="https://tweakcn.com/themes/..."
+                    .value=${props.customThemeImportUrl}
+                    @input=${(e: Event) =>
+                      props.onCustomThemeImportUrlChange(
+                        (e.currentTarget as HTMLInputElement).value,
+                      )}
+                  />
+                </label>
+                <div class="settings-theme-import__actions">
+                  <button
+                    class="btn btn--sm primary"
+                    ?disabled=${props.customThemeImportBusy ||
+                    props.customThemeImportUrl.trim().length === 0}
+                    @click=${props.onImportCustomTheme}
                   >
+                    ${props.customThemeImportBusy
+                      ? "Importing…"
+                      : props.hasCustomTheme
+                        ? "Replace custom theme"
+                        : "Import custom theme"}
+                  </button>
+                  ${props.hasCustomTheme
+                    ? html`
+                        <button class="btn btn--sm danger" @click=${props.onClearCustomTheme}>
+                          Clear custom theme
+                        </button>
+                      `
+                    : nothing}
                 </div>
-              `
-            : nothing}
-          ${props.customThemeImportMessage
-            ? html`
-                <div
-                  class="settings-theme-import__message settings-theme-import__message--${props
-                    .customThemeImportMessage.kind}"
-                >
-                  ${props.customThemeImportMessage.text}
-                </div>
-              `
-            : nothing}
-        </div>
+                ${props.hasCustomTheme
+                  ? html`
+                      <div class="settings-theme-import__meta">
+                        <span class="settings-theme-import__meta-label">Loaded</span>
+                        <span class="settings-theme-import__meta-value"
+                          >${props.customThemeLabel ?? "Custom"} ·
+                          ${props.customThemeSourceUrl ?? "tweakcn"}</span
+                        >
+                      </div>
+                    `
+                  : nothing}
+                ${props.customThemeImportMessage
+                  ? html`
+                      <div
+                        class="settings-theme-import__message settings-theme-import__message--${props
+                          .customThemeImportMessage.kind}"
+                      >
+                        ${props.customThemeImportMessage.text}
+                      </div>
+                    `
+                  : nothing}
+              </div>
+            `
+          : html`
+              <p class="settings-theme-import__inline-hint">
+                Click <strong>Custom</strong> to import a tweakcn theme into this browser-local
+                slot.
+              </p>
+            `}
       </div>
 
       <div class="settings-appearance__section">
@@ -760,6 +805,7 @@ interface ConfigEphemeralState {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
+  lastCustomThemeImportFocusToken: number | null;
 }
 
 function createConfigEphemeralState(): ConfigEphemeralState {
@@ -768,6 +814,7 @@ function createConfigEphemeralState(): ConfigEphemeralState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
+    lastCustomThemeImportFocusToken: null,
   };
 }
 

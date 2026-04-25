@@ -49,9 +49,12 @@ describe("config view", () => {
     customThemeImportUrl: "",
     customThemeImportBusy: false,
     customThemeImportMessage: null,
+    customThemeImportExpanded: false,
+    customThemeImportFocusToken: 0,
     onCustomThemeImportUrlChange: vi.fn(),
     onImportCustomTheme: vi.fn(),
     onClearCustomTheme: vi.fn(),
+    onOpenCustomThemeImport: vi.fn(),
     borderRadius: 50,
     setBorderRadius: vi.fn(),
     gatewayUrl: "",
@@ -512,21 +515,40 @@ describe("config view", () => {
     expect(onFormPatch).toHaveBeenCalledWith(["gateway", "mode"], "local");
   });
 
-  it("disables the custom theme card until a tweakcn import exists", () => {
+  it("opens the tweakcn importer when custom is clicked without an imported theme", () => {
+    const onOpenCustomThemeImport = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
+      onOpenCustomThemeImport,
     });
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Custom",
     );
+
+    expect(customButton?.disabled).toBe(false);
+    expect(normalizedText(container)).toContain("Click Custom to import a tweakcn theme");
+
+    customButton?.click();
+
+    expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the tweakcn importer once the custom slot is opened", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      customThemeImportExpanded: true,
+      customThemeImportFocusToken: 1,
+    });
+
     const importButton = Array.from(container.querySelectorAll("button")).find((btn) =>
       btn.textContent?.includes("Import custom theme"),
     );
 
-    expect(customButton?.disabled).toBe(true);
     expect(importButton?.disabled).toBe(true);
+    expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
   });
 
   it("shows custom theme actions once a tweakcn import exists", () => {

@@ -630,6 +630,17 @@
   color: var(--muted);
 }
 
+.settings-theme-import__inline-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.settings-theme-import__inline-hint strong {
+  color: var(--text);
+}
+
 .settings-theme-import__field {
   display: grid;
   gap: 6px;

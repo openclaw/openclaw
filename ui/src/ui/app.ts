@@ -159,6 +159,8 @@ export class OpenClawApp extends LitElement {
   @state() customThemeImportUrl = "";
   @state() customThemeImportBusy = false;
   @state() customThemeImportMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() customThemeImportExpanded = false;
+  @state() customThemeImportFocusToken = 0;
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
@@ -683,10 +685,16 @@ export class OpenClawApp extends LitElement {
     }
   }
 
+  openCustomThemeImport() {
+    this.customThemeImportExpanded = true;
+    this.customThemeImportFocusToken += 1;
+  }
+
   async importCustomTheme() {
     if (this.customThemeImportBusy) {
       return;
     }
+    this.customThemeImportExpanded = true;
     this.customThemeImportBusy = true;
     this.customThemeImportMessage = null;
     try {
@@ -712,6 +720,7 @@ export class OpenClawApp extends LitElement {
 
   clearCustomTheme() {
     const nextTheme = this.theme === "custom" ? "claw" : this.theme;
+    this.customThemeImportExpanded = true;
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
       ...this.settings,
       theme: nextTheme,
