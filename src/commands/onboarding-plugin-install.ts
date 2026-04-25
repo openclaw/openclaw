@@ -11,6 +11,7 @@ import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable
 import {
   loadPluginInstallRecords,
   recordPluginInstallInRecords,
+  withoutPluginInstallRecords,
   writePersistedPluginInstallLedger,
 } from "../plugins/install-ledger-store.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
@@ -166,7 +167,7 @@ async function recordLocalPluginInstall(params: {
     cfg: params.cfg,
     install,
   });
-  return recordPluginInstall(params.cfg, install);
+  return withoutPluginInstallRecords(recordPluginInstall(params.cfg, install));
 }
 
 function resolveLocalPath(params: {
@@ -574,7 +575,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       cfg: next,
       install,
     });
-    next = recordPluginInstall(next, install);
+    next = withoutPluginInstallRecords(recordPluginInstall(next, install));
     return {
       cfg: next,
       installed: true,
