@@ -9,8 +9,8 @@ describe("normalizeStaticProviderModelId", () => {
   });
 
   it("does not double-prefix already prefixed models", () => {
-    expect(normalizeStaticProviderModelId("nvidia", "moonshotai/kimi-k2.5")).toBe(
-      "moonshotai/kimi-k2.5",
+    expect(normalizeStaticProviderModelId("nvidia", "nvidia/nemotron-3-super-120b-a12b")).toBe(
+      "nvidia/nemotron-3-super-120b-a12b",
     );
   });
 });
