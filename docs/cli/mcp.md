@@ -376,6 +376,9 @@ Important behavior:
 - embedded Pi exposes configured MCP tools in normal `coding` and `messaging`
   tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]`
   disables them explicitly
+- session-scoped bundled MCP runtimes are reaped after `mcp.sessionIdleTtlMs`
+  milliseconds of idle time (default 10 minutes; set `0` to disable) and
+  one-shot embedded runs clean them up at run end
 
 ## Saved MCP server definitions
 

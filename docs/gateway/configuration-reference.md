@@ -51,6 +51,44 @@ Tool policy, experimental toggles, provider-backed tool config, and custom
 provider / base-URL setup moved to a dedicated page — see
 [Configuration — tools and custom providers](/gateway/config-tools).
 
+## MCP
+
+OpenClaw-managed MCP server definitions live under `mcp.servers` and are
+consumed by embedded Pi and other runtime adapters. The `openclaw mcp list`,
+`show`, `set`, and `unset` commands manage this block without connecting to the
+target server during config edits.
+
+```json5
+{
+  mcp: {
+    // Optional. Default: 600000 ms (10 minutes). Set 0 to disable idle eviction.
+    sessionIdleTtlMs: 600000,
+    servers: {
+      docs: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-fetch"],
+      },
+      remote: {
+        url: "https://example.com/mcp",
+        transport: "streamable-http", // streamable-http | sse
+        headers: {
+          Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
+        },
+      },
+    },
+  },
+}
+```
+
+- `mcp.servers`: named stdio or remote MCP server definitions for runtimes that
+  expose configured MCP tools.
+- `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
+  One-shot embedded runs request run-end cleanup; this TTL is the backstop for
+  long-lived sessions and future callers.
+
+See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
+[CLI backends](/gateway/cli-backends#bundle-mcp-overlays) for runtime behavior.
+
 ## Skills
 
 ```json5
