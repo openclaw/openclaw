@@ -424,6 +424,7 @@ export async function startGatewayPostAttachRuntime(
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
+    getChannelRuntimeSnapshot?: () => { channelAccounts: unknown; channels: unknown };
     logHooks: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -505,6 +506,31 @@ export async function startGatewayPostAttachRuntime(
         params.onPluginServices?.(result.pluginServices);
         params.onSidecarsReady?.();
         params.startupTrace?.mark("sidecars.ready");
+
+        try {
+          if (params.getChannelRuntimeSnapshot) {
+            const [{ summarizeChannelStartup }] = await Promise.all([
+              import("./channel-startup-summary.js"),
+            ]);
+            const summary = summarizeChannelStartup({
+              snapshot: params.getChannelRuntimeSnapshot() as any,
+            });
+            const elapsed =
+              typeof params.startupStartedAt === "number"
+                ? `${((Date.now() - params.startupStartedAt) / 1000).toFixed(1)}s`
+                : null;
+            params.log.info(
+              elapsed
+                ? `sidecars settled (${elapsed}): ${summary.summaryLine}`
+                : `sidecars settled: ${summary.summaryLine}`,
+            );
+          } else {
+            params.log.info("sidecars settled");
+          }
+        } catch (err) {
+          params.log.warn(`sidecars settled summary failed: ${String(err)}`);
+        }
+
         return result;
       });
 
