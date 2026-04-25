@@ -39,17 +39,15 @@ function matchesProviderId(provider: ThinkingProviderPlugin, providerId: string)
   return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
 }
 
-function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlugin | undefined {
+function listActiveThinkingProviders(providerId: string): ThinkingProviderPlugin[] {
   const state = (
     globalThis as typeof globalThis & { [PLUGIN_REGISTRY_STATE]?: ThinkingRegistryState }
   )[PLUGIN_REGISTRY_STATE];
-  const activeProvider = state?.activeRegistry?.providers?.find((entry) => {
-    return matchesProviderId(entry.provider, providerId);
-  })?.provider;
-  if (activeProvider) {
-    return activeProvider;
-  }
-  return undefined;
+  return (
+    state?.activeRegistry?.providers
+      ?.filter((entry) => matchesProviderId(entry.provider, providerId))
+      .map((entry) => entry.provider) ?? []
+  );
 }
 
 type ThinkingHookParams<TContext> = {
@@ -60,25 +58,47 @@ type ThinkingHookParams<TContext> = {
 export function resolveProviderBinaryThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
-  return resolveActiveThinkingProvider(params.provider)?.isBinaryThinking?.(params.context);
+  for (const provider of listActiveThinkingProviders(params.provider)) {
+    const result = provider.isBinaryThinking?.(params.context);
+    if (result !== undefined) {
+      return result;
+    }
+  }
+  return undefined;
 }
 
 export function resolveProviderXHighThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
-  return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
+  for (const provider of listActiveThinkingProviders(params.provider)) {
+    const result = provider.supportsXHighThinking?.(params.context);
+    if (result !== undefined) {
+      return result;
+    }
+  }
+  return undefined;
 }
 
 export function resolveProviderThinkingProfile(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
 ) {
-  return resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(params.context);
+  for (const provider of listActiveThinkingProviders(params.provider)) {
+    const result = provider.resolveThinkingProfile?.(params.context);
+    if (result !== undefined && result !== null) {
+      return result;
+    }
+  }
+  return undefined;
 }
 
 export function resolveProviderDefaultThinkingLevel(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
 ) {
-  return resolveActiveThinkingProvider(params.provider)?.resolveDefaultThinkingLevel?.(
-    params.context,
-  );
+  for (const provider of listActiveThinkingProviders(params.provider)) {
+    const result = provider.resolveDefaultThinkingLevel?.(params.context);
+    if (result !== undefined && result !== null) {
+      return result;
+    }
+  }
+  return undefined;
 }

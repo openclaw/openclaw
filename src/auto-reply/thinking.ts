@@ -42,6 +42,22 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 
+const KNOWN_XHIGH_PROVIDER_IDS = new Set(["openai", "openai-codex", "codex", "github-copilot"]);
+const KNOWN_XHIGH_MODEL_IDS = [
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.3-codex",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2",
+  "gpt-5.2-pro",
+  "gpt-5.2-codex",
+  "gpt-5.1-codex",
+] as const;
+
 export type ThinkingLevelOption = {
   id: ThinkLevel;
   label: string;
@@ -130,6 +146,19 @@ function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
   profile.levels = profile.levels.toSorted((a, b) => a.rank - b.rank);
 }
 
+function matchesKnownXHighThinkingModel(provider?: string, modelId?: string): boolean {
+  if (!provider || !KNOWN_XHIGH_PROVIDER_IDS.has(provider)) {
+    return false;
+  }
+  const normalizedModelId = normalizeOptionalLowercaseString(modelId);
+  if (!normalizedModelId) {
+    return false;
+  }
+  return KNOWN_XHIGH_MODEL_IDS.some(
+    (candidate) => normalizedModelId === candidate || normalizedModelId.startsWith(`${candidate}-`),
+  );
+}
+
 export function resolveThinkingProfile(params: {
   provider?: string | null;
   model?: string | null;
@@ -178,7 +207,8 @@ export function resolveThinkingProfile(params: {
     resolveProviderXHighThinking({
       provider: context.normalizedProvider,
       context: policyContext,
-    }) === true
+    }) === true ||
+    matchesKnownXHighThinkingModel(context.normalizedProvider, policyContext.modelId)
   ) {
     appendProfileLevel(profile, "xhigh");
   }

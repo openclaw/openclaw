@@ -139,6 +139,38 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("session defaults prefer configured agent thinking default", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "test",
+      source: "test",
+      provider: {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "off" }, { id: "medium" }, { id: "high" }],
+          defaultLevel: "off",
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const defaults = getSessionDefaults({
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "high",
+        },
+        list: [{ id: "main", default: true, thinkingDefault: "xhigh" }],
+      },
+    } as OpenClawConfig);
+
+    expect(defaults.thinkingDefault).toBe("xhigh");
+    expect(defaults.thinkingLevels).toContainEqual({ id: "xhigh", label: "xhigh" });
+    expect(defaults.thinkingOptions).toContain("xhigh");
+  });
+
   test("classifySessionKey respects chat type + prefixes", () => {
     expect(classifySessionKey("global")).toBe("global");
     expect(classifySessionKey("unknown")).toBe("unknown");
@@ -905,6 +937,37 @@ describe("listSessionsFromStore selected model display", () => {
 
     expect(result.sessions[0]?.modelProvider).toBe("anthropic");
     expect(result.sessions[0]?.model).toBe("claude-opus-4-6");
+  });
+
+  test("shows configured thinking default for inherited session rows", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.5" },
+          thinkingDefault: "medium",
+        },
+        list: [{ id: "main", default: true, thinkingDefault: "xhigh" }],
+      },
+    } as OpenClawConfig;
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai-codex",
+          model: "gpt-5.5",
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.thinkingLevel).toBeUndefined();
+    expect(result.sessions[0]?.thinkingDefault).toBe("xhigh");
+    expect(result.sessions[0]?.thinkingLevels).toContainEqual({ id: "xhigh", label: "xhigh" });
+    expect(result.sessions[0]?.thinkingOptions).toContain("xhigh");
   });
 });
 

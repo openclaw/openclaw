@@ -122,6 +122,13 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
   });
 
+  it("includes xhigh for known GPT-5 models without provider hooks", () => {
+    expect(listThinkingLevels("openai-codex", "gpt-5.5")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.5")).toContain("xhigh");
+    expect(listThinkingLevels("codex", "gpt-5.5")).toContain("xhigh");
+    expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
+  });
+
   it("excludes xhigh for non-codex models", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
   });

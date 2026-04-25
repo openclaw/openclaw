@@ -33,6 +33,7 @@ import {
 } from "../agents/subagent-run-liveness.js";
 import {
   listThinkingLevelOptions,
+  normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
@@ -1048,18 +1049,58 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
-  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model);
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const configuredThinkingDefault = resolveConfiguredThinkingDefault(cfg, defaultAgentId);
+  const thinkingLevels = includeThinkingLevelOptions(
+    listThinkingLevelOptions(resolved.provider, resolved.model),
+    configuredThinkingDefault,
+  );
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
-      provider: resolved.provider,
-      model: resolved.model,
-    }),
+    thinkingDefault:
+      configuredThinkingDefault ??
+      resolveThinkingDefaultForModel({
+        provider: resolved.provider,
+        model: resolved.model,
+      }),
   };
+}
+
+function resolveConfiguredThinkingDefault(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): string | undefined {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const agentDefault = cfg.agents?.list?.find(
+    (entry) => normalizeAgentId(entry?.id) === normalizedAgentId,
+  )?.thinkingDefault;
+  return agentDefault ?? cfg.agents?.defaults?.thinkingDefault;
+}
+
+function includeThinkingLevelOptions(
+  levels: ReturnType<typeof listThinkingLevelOptions>,
+  ...rawLevels: Array<string | undefined>
+): ReturnType<typeof listThinkingLevelOptions> {
+  const options = [...levels];
+  for (const raw of rawLevels) {
+    const level = normalizeThinkLevel(raw);
+    if (!level) {
+      continue;
+    }
+    const exists = options.some((option) => {
+      const id = normalizeThinkLevel(option.id);
+      const label = normalizeThinkLevel(option.label);
+      return id === level || label === level;
+    });
+    if (!exists) {
+      options.push({ id: level, label: level });
+    }
+  }
+  return options;
 }
 
 export function resolveSessionModelRef(
@@ -1401,7 +1442,17 @@ export function buildGatewaySessionRow(params: {
   const rowModel = selectedModel?.model ?? model;
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
+  const thinkingDefault =
+    resolveConfiguredThinkingDefault(cfg, sessionAgentId) ??
+    resolveThinkingDefaultForModel({
+      provider: thinkingProvider,
+      model: thinkingModel,
+    });
+  const thinkingLevels = includeThinkingLevelOptions(
+    listThinkingLevelOptions(thinkingProvider, thinkingModel),
+    thinkingDefault,
+    entry?.thinkingLevel,
+  );
 
   return {
     key,
@@ -1429,10 +1480,7 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
-      provider: thinkingProvider,
-      model: thinkingModel,
-    }),
+    thinkingDefault,
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
