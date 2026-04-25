@@ -18,7 +18,7 @@ describe("config-quick styles", () => {
 
   it("includes the stacked quick-settings density layout", () => {
     expect(css).toContain(".qs-stack");
-    expect(css).toContain(".qs-stack--wide");
+    expect(css).toContain(".qs-personal-body");
     expect(css).toContain("grid-template-columns: repeat(3, minmax(0, 1fr));");
     expect(css).toContain("grid-template-columns: repeat(2, minmax(0, 1fr));");
     expect(css).toContain("@media (max-width: 760px)");
