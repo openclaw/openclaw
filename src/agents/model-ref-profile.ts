@@ -32,7 +32,7 @@ export function splitTrailingAuthProfile(raw: string): {
   //
   // If an auth profile is needed, it can still be specified as a second suffix:
   //   lmstudio/foo@q8_0@work
-  if (/^(?:q\d+(?:_[a-z0-9]+)*|i(?:q\d+(?:_[a-z0-9]+)*)?|\d+bit)(?:@|$)/i.test(suffixAfterDelimiter())) {
+  if (/^(?:q\d+(?:_[a-z0-9]+)*|iq\d+(?:_[a-z0-9]+)*|\d+bit)(?:@|$)/i.test(suffixAfterDelimiter())) {
     const nextDelimiter = trimmed.indexOf("@", profileDelimiter + 1);
     if (nextDelimiter < 0) {
       return { model: trimmed };
