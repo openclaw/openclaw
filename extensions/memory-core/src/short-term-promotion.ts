@@ -874,6 +874,43 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
 
+async function shortTermRecallSourceExists(params: {
+  workspaceDir: string;
+  entry: Pick<ShortTermRecallEntry, "path">;
+}): Promise<boolean> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return false;
+  }
+  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
+    try {
+      const stat = await fs.stat(sourcePath);
+      if (stat.isFile()) {
+        return true;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+}
+
+export async function filterLiveShortTermRecallEntries(params: {
+  workspaceDir: string;
+  entries: ShortTermRecallEntry[];
+}): Promise<ShortTermRecallEntry[]> {
+  const live: ShortTermRecallEntry[] = [];
+  for (const entry of params.entries) {
+    if (await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry })) {
+      live.push(entry);
+    }
+  }
+  return live;
+}
+
 export async function recordShortTermRecalls(params: {
   workspaceDir?: string;
   query: string;
