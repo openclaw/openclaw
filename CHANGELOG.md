@@ -82,6 +82,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI-compatible: treat singular MLX-style `finish_reason: "tool_call"` as tool use instead of a provider error. Fixes #61499.
 - Providers/ElevenLabs: omit the MP3-only `Accept` header for PCM telephony synthesis, so Voice Call requests for `pcm_22050` no longer receive MP3 audio. Fixes #67340. Thanks @marcchabot.
 - Providers/Microsoft TTS: honor legacy `messages.tts.providers.edge` voice settings after normalizing Edge TTS to the Microsoft provider. Fixes #64153.
+- macOS Talk Mode: retry failed local ElevenLabs stream playback through gateway `talk.speak` before falling back to the system voice, so configured ElevenLabs voices still play when streaming playback fails. Fixes #65662.
 - Plugins/Voice Call: reap stale pre-answer calls by default, honor configured TTS timeouts for Twilio media-stream playback, and fail empty telephony audio instead of completing as silence. Fixes #42071; supersedes #60957. Thanks @Ryce and @sliekens.
 - Plugins/Voice Call: terminate expired restored call sessions with the provider and restart restored max-duration timers with only the remaining duration, preventing stale outbound retry loops after Gateway restarts. Fixes #48739. Thanks @mira-solari.
 - Plugins/Voice Call: start provider STT after Telnyx outbound conversation greetings and pass configured Telnyx voice IDs through to the speak action. Fixes #56091. Thanks @Roshan.
