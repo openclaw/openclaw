@@ -324,6 +324,11 @@ function resolveBundledPluginPackageRoot(pluginRoot: string): string | null {
   return path.dirname(buildDir);
 }
 
+function isPackagedBundledPluginRoot(pluginRoot: string): boolean {
+  const packageRoot = resolveBundledPluginPackageRoot(pluginRoot);
+  return Boolean(packageRoot && !isSourceCheckoutRoot(packageRoot));
+}
+
 function createRuntimeDepsCacheKey(pluginId: string, specs: readonly string[]): string {
   return createHash("sha256")
     .update(pluginId)
@@ -369,6 +374,25 @@ function writeRetainedRuntimeDepsManifest(installRoot: string, specs: readonly s
 
 function removeRetainedRuntimeDepsManifest(installRoot: string): void {
   fs.rmSync(path.join(installRoot, RETAINED_RUNTIME_DEPS_MANIFEST), { force: true });
+}
+
+function collectAlreadyStagedBundledRuntimeDepSpecs(params: {
+  pluginRoot: string;
+  installRoot: string;
+}): string[] {
+  const packageRoot = resolveBundledPluginPackageRoot(params.pluginRoot);
+  if (!packageRoot) {
+    return [];
+  }
+  const extensionsDir = path.join(packageRoot, "dist", "extensions");
+  if (!fs.existsSync(extensionsDir)) {
+    return [];
+  }
+  const { deps } = collectBundledPluginRuntimeDeps({ extensionsDir });
+  return deps
+    .filter((dep) => hasDependencySentinel([params.installRoot], dep))
+    .map((dep) => `${dep.name}@${dep.version}`)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function shouldPersistRetainedRuntimeDepsManifest(params: {
@@ -861,22 +885,19 @@ export function resolveBundledRuntimeDependencyPackageInstallRoot(
   options: { env?: NodeJS.ProcessEnv; forceExternal?: boolean } = {},
 ): string {
   const env = options.env ?? process.env;
+  const externalRoot = resolveExternalBundledRuntimeDepsInstallRoot({
+    pluginRoot: path.join(packageRoot, "dist", "extensions", "__package__"),
+    env,
+  });
   if (
     options.forceExternal ||
     env.OPENCLAW_PLUGIN_STAGE_DIR?.trim() ||
-    env.STATE_DIRECTORY?.trim()
+    env.STATE_DIRECTORY?.trim() ||
+    !isSourceCheckoutRoot(packageRoot)
   ) {
-    return resolveExternalBundledRuntimeDepsInstallRoot({
-      pluginRoot: path.join(packageRoot, "dist", "extensions", "__package__"),
-      env,
-    });
+    return externalRoot;
   }
-  return isWritableDirectory(packageRoot)
-    ? packageRoot
-    : resolveExternalBundledRuntimeDepsInstallRoot({
-        pluginRoot: path.join(packageRoot, "dist", "extensions", "__package__"),
-        env,
-      });
+  return isWritableDirectory(packageRoot) ? packageRoot : externalRoot;
 }
 
 export function resolveBundledRuntimeDependencyInstallRoot(
@@ -884,16 +905,16 @@ export function resolveBundledRuntimeDependencyInstallRoot(
   options: { env?: NodeJS.ProcessEnv; forceExternal?: boolean } = {},
 ): string {
   const env = options.env ?? process.env;
+  const externalRoot = resolveExternalBundledRuntimeDepsInstallRoot({ pluginRoot, env });
   if (
     options.forceExternal ||
     env.OPENCLAW_PLUGIN_STAGE_DIR?.trim() ||
-    env.STATE_DIRECTORY?.trim()
+    env.STATE_DIRECTORY?.trim() ||
+    isPackagedBundledPluginRoot(pluginRoot)
   ) {
-    return resolveExternalBundledRuntimeDepsInstallRoot({ pluginRoot, env });
+    return externalRoot;
   }
-  return isWritableDirectory(pluginRoot)
-    ? pluginRoot
-    : resolveExternalBundledRuntimeDepsInstallRoot({ pluginRoot, env });
+  return isWritableDirectory(pluginRoot) ? pluginRoot : externalRoot;
 }
 
 export function resolveBundledRuntimeDependencyInstallRootInfo(
@@ -1000,6 +1021,36 @@ export function installBundledRuntimeDeps(params: {
   }
 }
 
+export function repairBundledRuntimeDepsInstallRoot(params: {
+  installRoot: string;
+  missingSpecs: string[];
+  installSpecs: string[];
+  env: NodeJS.ProcessEnv;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
+}): { installSpecs: string[] } {
+  return withBundledRuntimeDepsInstallRootLock(params.installRoot, () => {
+    const retainedManifestSpecs = readRetainedRuntimeDepsManifest(params.installRoot);
+    const installSpecs = [...new Set([...retainedManifestSpecs, ...params.installSpecs])].toSorted(
+      (left, right) => left.localeCompare(right),
+    );
+    const install =
+      params.installDeps ??
+      ((installParams) =>
+        installBundledRuntimeDeps({
+          installRoot: installParams.installRoot,
+          missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
+          env: params.env,
+        }));
+    install({
+      installRoot: params.installRoot,
+      missingSpecs: params.missingSpecs,
+      installSpecs,
+    });
+    writeRetainedRuntimeDepsManifest(params.installRoot, installSpecs);
+    return { installSpecs };
+  });
+}
+
 export function ensureBundledPluginRuntimeDeps(params: {
   pluginId: string;
   pluginRoot: string;
@@ -1043,19 +1094,33 @@ export function ensureBundledPluginRuntimeDeps(params: {
     const dependencySpecs = deps
       .map((dep) => `${dep.name}@${dep.version}`)
       .toSorted((left, right) => left.localeCompare(right));
+    const retainedManifestSpecs = persistRetainedManifest
+      ? readRetainedRuntimeDepsManifest(installRoot)
+      : [];
+    const alreadyStagedSpecs = persistRetainedManifest
+      ? collectAlreadyStagedBundledRuntimeDepSpecs({
+          pluginRoot: params.pluginRoot,
+          installRoot,
+        })
+      : [];
+    const installSpecs = [
+      ...new Set([
+        ...(params.retainSpecs ?? []),
+        ...retainedManifestSpecs,
+        ...alreadyStagedSpecs,
+        ...dependencySpecs,
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right));
     const missingSpecs = deps
       .filter((dep) => !hasDependencySentinel([installRoot], dep))
       .map((dep) => `${dep.name}@${dep.version}`)
       .toSorted((left, right) => left.localeCompare(right));
     if (missingSpecs.length === 0) {
+      if (persistRetainedManifest && installSpecs.length > 0) {
+        writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
+      }
       return { installedSpecs: [], retainSpecs: [] };
     }
-    const retainedManifestSpecs = persistRetainedManifest
-      ? readRetainedRuntimeDepsManifest(installRoot)
-      : [];
-    const installSpecs = [
-      ...new Set([...(params.retainSpecs ?? []), ...retainedManifestSpecs, ...dependencySpecs]),
-    ].toSorted((left, right) => left.localeCompare(right));
     const cacheDir = resolveSourceCheckoutRuntimeDepsCacheDir({
       pluginId: params.pluginId,
       pluginRoot: params.pluginRoot,
