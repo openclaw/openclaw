@@ -1,5 +1,7 @@
 # 🦞 OpenClaw — Personal AI Assistant
 
+**Languages**: English (this page) · **[简体中文](README.zh-CN.md)**
+
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.svg">
