@@ -24,6 +24,7 @@ const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
+  FEISHU_PROBE_REQUEST_TIMEOUT_MS: 10_000,
 }));
 
 vi.mock("./client.js", () => ({

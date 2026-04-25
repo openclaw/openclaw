@@ -15,6 +15,7 @@ import {
 } from "./events.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
@@ -463,7 +464,7 @@ export async function startGatewayPostAttachRuntime(
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
-    getChannelRuntimeSnapshot?: () => { channelAccounts: unknown; channels: unknown };
+    getChannelRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
     logHooks: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -560,7 +561,7 @@ export async function startGatewayPostAttachRuntime(
               import("./channel-startup-summary.js"),
             ]);
             const summary = summarizeChannelStartup({
-              snapshot: params.getChannelRuntimeSnapshot() as any,
+              snapshot: params.getChannelRuntimeSnapshot(),
             });
             const elapsed =
               typeof params.startupStartedAt === "number"
