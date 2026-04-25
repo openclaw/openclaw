@@ -168,6 +168,32 @@ describe("browser config", () => {
     expect(resolved.executablePath).toBeUndefined();
   });
 
+  it("expands a bare ~ executablePath to the OS home directory", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~",
+    });
+
+    expect(resolved.executablePath).toBe(path.resolve(os.homedir()));
+  });
+
+  it("expands a Windows-style ~\\ executablePath to the OS home directory", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~\\AppData\\Local\\Chromium\\chrome.exe",
+    });
+
+    expect(resolved.executablePath).toBe(
+      path.resolve(os.homedir(), "AppData/Local/Chromium/chrome.exe"),
+    );
+  });
+
+  it("does not expand executablePath values where ~ is not the home prefix", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/opt/~chromium/chrome",
+    });
+
+    expect(resolved.executablePath).toBe("/opt/~chromium/chrome");
+  });
+
   it("normalizes invalid browser tab cleanup numbers to defaults", () => {
     const resolved = resolveBrowserConfig({
       tabCleanup: {
