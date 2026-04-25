@@ -184,6 +184,22 @@ function assignGenAiModelCallAttrs(
   attrs["gen_ai.operation.name"] = genAiOperationName(evt.api);
 }
 
+function addUpstreamRequestIdSpanEvent(
+  span: { addEvent?: (name: string, attributes?: Record<string, string>) => void },
+  upstreamRequestIdHash: string | undefined,
+): void {
+  if (!upstreamRequestIdHash) {
+    return;
+  }
+  const boundedHash = lowCardinalityAttr(upstreamRequestIdHash);
+  if (boundedHash === "unknown") {
+    return;
+  }
+  span.addEvent?.("openclaw.provider.request", {
+    "openclaw.upstreamRequestIdHash": boundedHash,
+  });
+}
+
 function clampOtelLogText(value: string, maxChars: number): string {
   return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
 }
@@ -1148,6 +1164,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
           endTimeMs: evt.ts,
         });
+        addUpstreamRequestIdSpanEvent(span, evt.upstreamRequestIdHash);
         span.end(evt.ts);
       };
 
@@ -1184,6 +1201,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
           endTimeMs: evt.ts,
         });
+        addUpstreamRequestIdSpanEvent(span, evt.upstreamRequestIdHash);
         span.setStatus({
           code: SpanStatusCode.ERROR,
           message: redactSensitiveText(evt.errorCategory),

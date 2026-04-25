@@ -5,12 +5,14 @@ const telemetryState = vi.hoisted(() => {
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
   const spans: Array<{
     name: string;
+    addEvent: ReturnType<typeof vi.fn>;
     end: ReturnType<typeof vi.fn>;
     setStatus: ReturnType<typeof vi.fn>;
   }> = [];
   const tracer = {
     startSpan: vi.fn((name: string, _opts?: unknown, _ctx?: unknown) => {
       const span = {
+        addEvent: vi.fn(),
         end: vi.fn(),
         setStatus: vi.fn(),
       };
@@ -942,6 +944,48 @@ describe("diagnostics-otel service", () => {
       }),
       startTime: expect.any(Number),
     });
+    await service.stop?.(ctx);
+  });
+
+  test("records upstream request id hashes as model call span events only", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.error",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "openai-responses",
+      durationMs: 40,
+      errorCategory: "ProviderError",
+      upstreamRequestIdHash: "sha256:123456abcdef",
+    });
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    expect(modelCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.upstreamRequestIdHash": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    const span = telemetryState.spans.find((candidate) => candidate.name === "openclaw.model.call");
+    expect(span?.addEvent).toHaveBeenCalledWith("openclaw.provider.request", {
+      "openclaw.upstreamRequestIdHash": "sha256:123456abcdef",
+    });
+    expect(
+      telemetryState.histograms.get("openclaw.model_call.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      40,
+      expect.not.objectContaining({
+        "openclaw.upstreamRequestIdHash": expect.anything(),
+      }),
+    );
     await service.stop?.(ctx);
   });
 

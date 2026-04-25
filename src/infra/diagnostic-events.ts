@@ -262,6 +262,7 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
+  upstreamRequestIdHash?: string;
 };
 
 export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {

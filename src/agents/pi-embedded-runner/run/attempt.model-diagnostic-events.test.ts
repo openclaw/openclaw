@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
@@ -10,7 +10,7 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagn
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
   const events: DiagnosticEventPayload[] = [];
-  const stop = onDiagnosticEvent((event) => {
+  const stop = onInternalDiagnosticEvent((event) => {
     if (event.type.startsWith("model.call.")) {
       events.push(event);
     }
@@ -96,11 +96,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   });
 
   it("emits error events when stream iteration fails", async () => {
+    const requestId = "req_provider_123";
     const stream = {
       [Symbol.asyncIterator]() {
         return {
           async next(): Promise<IteratorResult<unknown>> {
-            throw new TypeError("provider failed");
+            throw new TypeError(`provider failed [request_id=${requestId}]`);
           },
         };
       },
@@ -127,8 +128,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       type: "model.call.error",
       callId: "call-err",
       errorCategory: "TypeError",
+      upstreamRequestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/),
       durationMs: expect.any(Number),
     });
+    expect(JSON.stringify(events[1])).not.toContain(requestId);
   });
 
   it("does not mutate non-configurable provider streams", async () => {

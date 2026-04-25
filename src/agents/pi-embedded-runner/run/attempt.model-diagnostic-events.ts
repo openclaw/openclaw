@@ -1,5 +1,8 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { diagnosticErrorCategory } from "../../../infra/diagnostic-error-metadata.js";
+import {
+  diagnosticErrorCategory,
+  diagnosticProviderRequestIdHash,
+} from "../../../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
@@ -27,6 +30,10 @@ type ModelCallDiagnosticContext = {
 type ModelCallEventBase = Omit<
   Extract<DiagnosticEventInput, { type: "model.call.started" }>,
   "type"
+>;
+type ModelCallErrorFields = Pick<
+  Extract<DiagnosticEventInput, { type: "model.call.error" }>,
+  "errorCategory" | "upstreamRequestIdHash"
 >;
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
@@ -72,6 +79,14 @@ function baseModelCallEvent(
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
     trace,
+  };
+}
+
+function modelCallErrorFields(err: unknown): ModelCallErrorFields {
+  const upstreamRequestIdHash = diagnosticProviderRequestIdHash(err);
+  return {
+    errorCategory: diagnosticErrorCategory(err),
+    ...(upstreamRequestIdHash ? { upstreamRequestIdHash } : {}),
   };
 }
 
@@ -133,7 +148,7 @@ async function* observeModelCallIterator<T>(
       type: "model.call.error",
       ...eventBase,
       durationMs: Date.now() - startedAt,
-      errorCategory: diagnosticErrorCategory(err),
+      ...modelCallErrorFields(err),
     });
     throw err;
   } finally {
@@ -226,7 +241,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
               type: "model.call.error",
               ...eventBase,
               durationMs: Date.now() - startedAt,
-              errorCategory: diagnosticErrorCategory(err),
+              ...modelCallErrorFields(err),
             });
             throw err;
           },
@@ -238,7 +253,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
         type: "model.call.error",
         ...eventBase,
         durationMs: Date.now() - startedAt,
-        errorCategory: diagnosticErrorCategory(err),
+        ...modelCallErrorFields(err),
       });
       throw err;
     }
