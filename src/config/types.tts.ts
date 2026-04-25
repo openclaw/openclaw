@@ -37,15 +37,6 @@ export type TtsPersonaPromptConfig = {
   constraints?: string[];
 };
 
-export type TtsPersonaRewriteConfig = {
-  enabled?: boolean;
-  model?: string;
-  preserveMeaning?: boolean;
-  compressForSpeech?: boolean;
-  inCharacter?: boolean;
-  maxChars?: number;
-};
-
 export type TtsPersonaConfig = {
   label?: string;
   description?: string;
@@ -53,7 +44,6 @@ export type TtsPersonaConfig = {
   provider?: TtsProvider;
   fallbackPolicy?: TtsPersonaFallbackPolicy;
   prompt?: TtsPersonaPromptConfig;
-  rewrite?: TtsPersonaRewriteConfig;
   /** Provider-specific persona bindings keyed by speech provider id. */
   providers?: TtsProviderConfigMap;
 };

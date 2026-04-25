@@ -19189,32 +19189,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
                     },
-                    rewrite: {
-                      type: "object",
-                      properties: {
-                        enabled: {
-                          type: "boolean",
-                        },
-                        model: {
-                          type: "string",
-                        },
-                        preserveMeaning: {
-                          type: "boolean",
-                        },
-                        compressForSpeech: {
-                          type: "boolean",
-                        },
-                        inCharacter: {
-                          type: "boolean",
-                        },
-                        maxChars: {
-                          type: "integer",
-                          minimum: 1,
-                          maximum: 9007199254740991,
-                        },
-                      },
-                      additionalProperties: false,
-                    },
                     providers: {
                       type: "object",
                       propertyNames: {

@@ -508,16 +508,6 @@ const TtsPersonaPromptSchema = z
     constraints: z.array(z.string()).optional(),
   })
   .strict();
-const TtsPersonaRewriteSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    model: z.string().optional(),
-    preserveMeaning: z.boolean().optional(),
-    compressForSpeech: z.boolean().optional(),
-    inCharacter: z.boolean().optional(),
-    maxChars: z.number().int().min(1).optional(),
-  })
-  .strict();
 const TtsPersonaSchema = z
   .object({
     label: z.string().optional(),
@@ -527,7 +517,6 @@ const TtsPersonaSchema = z
       .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
       .optional(),
     prompt: TtsPersonaPromptSchema.optional(),
-    rewrite: TtsPersonaRewriteSchema.optional(),
     providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
   })
   .strict();
