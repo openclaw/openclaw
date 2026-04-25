@@ -154,7 +154,7 @@ describe("installed plugin index", () => {
 
     expect(index).toMatchObject({
       version: 1,
-      generatedAt: "2026-04-25T12:00:00.000Z",
+      generatedAtMs: 1777118400000,
       plugins: [
         {
           pluginId: "demo",
@@ -162,7 +162,6 @@ describe("installed plugin index", () => {
           packageVersion: "1.2.3",
           origin: "global",
           rootDir: fixture.rootDir,
-          enabled: true,
           packageInstall: {
             defaultChoice: "npm",
             npm: {
@@ -221,7 +220,6 @@ describe("installed plugin index", () => {
     const record = getInstalledPluginRecord(index, "demo");
     expect(record).toMatchObject({
       pluginId: "demo",
-      enabled: true,
     });
     expect(record?.installRecord).toBeUndefined();
     expect(isInstalledPluginEnabled(index, "demo")).toBe(true);
@@ -249,17 +247,27 @@ describe("installed plugin index", () => {
     });
 
     expect(listInstalledPluginRecords(index).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-    expect(listEnabledInstalledPluginRecords(index)).toEqual([]);
+    const config = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: false,
+          },
+        },
+      },
+    };
+    expect(listEnabledInstalledPluginRecords(index, config)).toEqual([]);
     expect(getInstalledPluginRecord(index, "demo")).toMatchObject({
       pluginId: "demo",
-      enabled: false,
     });
-    expect(isInstalledPluginEnabled(index, "demo")).toBe(false);
-    expect(listInstalledPluginContributionIds(index, "providers")).toEqual([]);
+    expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
+    expect(listInstalledPluginContributionIds(index, "providers", { config })).toEqual([]);
     expect(
       listInstalledPluginContributionIds(index, "providers", { includeDisabled: true }),
     ).toEqual(["demo"]);
-    expect(resolveInstalledPluginContributionOwners(index, "providers", "demo")).toEqual([]);
+    expect(
+      resolveInstalledPluginContributionOwners(index, "providers", "demo", { config }),
+    ).toEqual([]);
     expect(
       resolveInstalledPluginContributionOwners(index, "providers", "demo", {
         includeDisabled: true,
@@ -517,7 +525,17 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expect(index.plugins[0]?.enabled).toBe(false);
+    expect(
+      isInstalledPluginEnabled(index, "demo", {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+    ).toBe(false);
     expect(index.plugins[0]?.contributions.providers).toEqual(["demo"]);
   });
 

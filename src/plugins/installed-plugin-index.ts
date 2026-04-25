@@ -91,7 +91,7 @@ export type InstalledPluginIndexRecord = {
   packageJsonHash?: string;
   rootDir: string;
   origin: PluginManifestRecord["origin"];
-  enabled: boolean;
+  enabledByDefault?: boolean;
   contributions: InstalledPluginIndexContributions;
   compat: readonly PluginCompatCode[];
 };
@@ -100,7 +100,8 @@ export type InstalledPluginIndex = {
   version: typeof INSTALLED_PLUGIN_INDEX_VERSION;
   hostContractVersion: string;
   compatRegistryVersion: string;
-  generatedAt: string;
+  policyHash: string;
+  generatedAtMs: number;
   refreshReason?: InstalledPluginIndexRefreshReason;
   plugins: readonly InstalledPluginIndexRecord[];
   diagnostics: readonly PluginDiagnostic[];
@@ -321,6 +322,40 @@ function resolveCompatRegistryVersion(): string {
   );
 }
 
+function resolvePolicyHash(config: OpenClawConfig | undefined): string {
+  const normalized = normalizePluginsConfigWithResolver(config?.plugins);
+  const channelPolicy: Record<string, boolean> = {};
+  const channels = config?.channels;
+  if (channels && typeof channels === "object" && !Array.isArray(channels)) {
+    for (const [channelId, value] of Object.entries(channels)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const enabled = (value as Record<string, unknown>).enabled;
+        if (typeof enabled === "boolean") {
+          channelPolicy[channelId] = enabled;
+        }
+      }
+    }
+  }
+  return hashJson({
+    plugins: {
+      enabled: normalized.enabled,
+      allow: normalized.allow,
+      deny: normalized.deny,
+      slots: normalized.slots,
+      entries: Object.fromEntries(
+        Object.entries(normalized.entries)
+          .flatMap(([pluginId, entry]) =>
+            typeof entry.enabled === "boolean" ? [[pluginId, entry.enabled] as const] : [],
+          )
+          .toSorted(([left], [right]) => left.localeCompare(right)),
+      ),
+    },
+    channels: Object.fromEntries(
+      Object.entries(channelPolicy).toSorted(([left], [right]) => left.localeCompare(right)),
+    ),
+  });
+}
+
 function resolveRegistry(params: LoadInstalledPluginIndexParams): {
   registry: PluginManifestRegistry;
   candidates: readonly PluginCandidate[];
@@ -365,9 +400,8 @@ function buildInstalledPluginIndex(
   const env = params.env ?? process.env;
   const { candidates, registry } = resolveRegistry(params);
   const candidateByRootDir = buildCandidateLookup(candidates);
-  const normalizedConfig = normalizePluginsConfigWithResolver(params.config?.plugins);
   const diagnostics: PluginDiagnostic[] = [...registry.diagnostics];
-  const generatedAt = (params.now?.() ?? new Date()).toISOString();
+  const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateByRootDir.get(record.rootDir);
     const packageJsonPath = resolvePackageJsonPath(candidate);
@@ -388,24 +422,18 @@ function buildInstalledPluginIndex(
           required: false,
         })
       : undefined;
-    const enabled = resolveEffectiveEnableState({
-      id: record.id,
-      origin: record.origin,
-      config: normalizedConfig,
-      rootConfig: params.config,
-      enabledByDefault: record.enabledByDefault,
-    }).enabled;
-
     const indexRecord: InstalledPluginIndexRecord = {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
       rootDir: record.rootDir,
       origin: record.origin,
-      enabled,
       contributions: buildContributions(record),
       compat: collectCompatCodes(record),
     };
+    if (record.enabledByDefault === true) {
+      indexRecord.enabledByDefault = true;
+    }
     if (candidate?.packageName) {
       indexRecord.packageName = candidate.packageName;
     }
@@ -432,7 +460,8 @@ function buildInstalledPluginIndex(
     version: INSTALLED_PLUGIN_INDEX_VERSION,
     hostContractVersion: resolveCompatibilityHostVersion(env),
     compatRegistryVersion: resolveCompatRegistryVersion(),
-    generatedAt,
+    policyHash: resolvePolicyHash(params.config),
+    generatedAtMs,
     ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
     plugins,
     diagnostics,
@@ -459,8 +488,19 @@ export function listInstalledPluginRecords(
 
 export function listEnabledInstalledPluginRecords(
   index: InstalledPluginIndex,
+  config?: OpenClawConfig,
 ): readonly InstalledPluginIndexRecord[] {
-  return index.plugins.filter((plugin) => plugin.enabled);
+  const normalizedConfig = normalizePluginsConfigWithResolver(config?.plugins);
+  return index.plugins.filter(
+    (plugin) =>
+      resolveEffectiveEnableState({
+        id: plugin.pluginId,
+        origin: plugin.origin,
+        config: normalizedConfig,
+        rootConfig: config,
+        enabledByDefault: plugin.enabledByDefault,
+      }).enabled,
+  );
 }
 
 export function getInstalledPluginRecord(
@@ -470,21 +510,38 @@ export function getInstalledPluginRecord(
   return index.plugins.find((plugin) => plugin.pluginId === pluginId);
 }
 
-export function isInstalledPluginEnabled(index: InstalledPluginIndex, pluginId: string): boolean {
-  return getInstalledPluginRecord(index, pluginId)?.enabled === true;
+export function isInstalledPluginEnabled(
+  index: InstalledPluginIndex,
+  pluginId: string,
+  config?: OpenClawConfig,
+): boolean {
+  const record = getInstalledPluginRecord(index, pluginId);
+  if (!record) {
+    return false;
+  }
+  const normalizedConfig = normalizePluginsConfigWithResolver(config?.plugins);
+  return resolveEffectiveEnableState({
+    id: record.pluginId,
+    origin: record.origin,
+    config: normalizedConfig,
+    rootConfig: config,
+    enabledByDefault: record.enabledByDefault,
+  }).enabled;
 }
 
 function resolveContributionRecordSet(
   index: InstalledPluginIndex,
-  options: { includeDisabled?: boolean },
+  options: { includeDisabled?: boolean; config?: OpenClawConfig },
 ): readonly InstalledPluginIndexRecord[] {
-  return options.includeDisabled ? index.plugins : listEnabledInstalledPluginRecords(index);
+  return options.includeDisabled
+    ? index.plugins
+    : listEnabledInstalledPluginRecords(index, options.config);
 }
 
 export function listInstalledPluginContributionIds(
   index: InstalledPluginIndex,
   contribution: InstalledPluginContributionKey,
-  options: { includeDisabled?: boolean } = {},
+  options: { includeDisabled?: boolean; config?: OpenClawConfig } = {},
 ): readonly string[] {
   return sortUnique(
     resolveContributionRecordSet(index, options).flatMap(
@@ -497,7 +554,7 @@ export function resolveInstalledPluginContributionOwners(
   index: InstalledPluginIndex,
   contribution: InstalledPluginContributionKey,
   matches: string | ((contributionId: string) => boolean),
-  options: { includeDisabled?: boolean } = {},
+  options: { includeDisabled?: boolean; config?: OpenClawConfig } = {},
 ): readonly string[] {
   const matcher =
     typeof matches === "string" ? (contributionId: string) => contributionId === matches : matches;
@@ -598,6 +655,9 @@ export function diffInstalledPluginIndexInvalidationReasons(
   if (previous.compatRegistryVersion !== current.compatRegistryVersion) {
     reasons.add("compat-registry-changed");
   }
+  if (previous.policyHash !== current.policyHash) {
+    reasons.add("policy-changed");
+  }
 
   const previousByPluginId = new Map(previous.plugins.map((plugin) => [plugin.pluginId, plugin]));
   const currentByPluginId = new Map(current.plugins.map((plugin) => [plugin.pluginId, plugin]));
@@ -613,9 +673,6 @@ export function diffInstalledPluginIndexInvalidationReasons(
       previousPlugin.installRecordHash !== currentPlugin.installRecordHash
     ) {
       reasons.add("source-changed");
-    }
-    if (previousPlugin.enabled !== currentPlugin.enabled) {
-      reasons.add("policy-changed");
     }
     if (previousPlugin.manifestHash !== currentPlugin.manifestHash) {
       reasons.add("stale-manifest");

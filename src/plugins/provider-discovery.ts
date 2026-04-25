@@ -62,6 +62,7 @@ export function resolveInstalledPluginProviderContributionIds(
       index,
       contribution: "providers",
       includeDisabled: params.includeDisabled,
+      config: params.config,
     }),
   );
 }

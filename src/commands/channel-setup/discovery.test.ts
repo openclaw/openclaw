@@ -93,6 +93,7 @@ describe("listManifestInstalledChannelIds", () => {
         diagnostics: [],
       },
       contribution: "channels",
+      config: autoEnabledConfig,
     });
     expect(installedIds).toEqual(new Set(["slack"]));
   });

@@ -41,6 +41,7 @@ function collectMatchingContributionOwners(
   index: PluginRegistrySnapshot,
   contribution: "providers" | "cliBackends",
   providerFilter: string,
+  cfg: OpenClawConfig,
   options: { includeDisabled?: boolean } = {},
 ): string[] {
   if (contribution === "providers") {
@@ -49,6 +50,7 @@ function collectMatchingContributionOwners(
         index,
         providerId: providerFilter,
         includeDisabled: options.includeDisabled,
+        config: cfg,
       }),
     ];
   }
@@ -58,6 +60,7 @@ function collectMatchingContributionOwners(
       contribution: "cliBackends",
       matches: (contributionId) => normalizeProviderId(contributionId) === providerFilter,
       includeDisabled: options.includeDisabled,
+      config: cfg,
     }),
   ];
 }
@@ -72,17 +75,17 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
     env: params.env,
   });
   const pluginIds = [
-    ...collectMatchingContributionOwners(index, "providers", params.providerFilter),
-    ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter),
+    ...collectMatchingContributionOwners(index, "providers", params.providerFilter, params.cfg),
+    ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, params.cfg),
   ];
   if (pluginIds.length > 0) {
     return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
   }
   const disabledPluginIds = [
-    ...collectMatchingContributionOwners(index, "providers", params.providerFilter, {
+    ...collectMatchingContributionOwners(index, "providers", params.providerFilter, params.cfg, {
       includeDisabled: true,
     }),
-    ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, {
+    ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, params.cfg, {
       includeDisabled: true,
     }),
   ];

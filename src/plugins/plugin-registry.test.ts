@@ -97,7 +97,6 @@ describe("plugin registry facade", () => {
     expect(listPluginRecords({ index }).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
     expect(getPluginRecord({ index, pluginId: "demo" })).toMatchObject({
       pluginId: "demo",
-      enabled: true,
     });
     expect(isPluginEnabled({ index, pluginId: "demo" })).toBe(true);
     expect(listPluginContributionIds({ index, contribution: "providers" })).toEqual(["demo"]);
@@ -133,12 +132,21 @@ describe("plugin registry facade", () => {
 
     expect(getPluginRecord({ index, pluginId: "demo" })).toMatchObject({
       pluginId: "demo",
-      enabled: false,
     });
-    expect(resolveProviderOwners({ index, providerId: "demo" })).toEqual([]);
-    expect(resolveProviderOwners({ index, providerId: "demo", includeDisabled: true })).toEqual([
-      "demo",
-    ]);
+    const config = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: false,
+          },
+        },
+      },
+    };
+    expect(isPluginEnabled({ index, pluginId: "demo", config })).toBe(false);
+    expect(resolveProviderOwners({ index, providerId: "demo", config })).toEqual([]);
+    expect(
+      resolveProviderOwners({ index, providerId: "demo", config, includeDisabled: true }),
+    ).toEqual(["demo"]);
   });
 
   it("exposes explicit persisted registry inspect and refresh operations", async () => {
