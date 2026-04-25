@@ -378,7 +378,7 @@ describe("subagent registry seam flow", () => {
 
     const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
       mocks.onAgentEvent.mock.calls.length - 1
-    ] as
+    ] as unknown as
       | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
       | undefined;
     const lifecycleHandler = lastOnAgentEventCall?.[0];

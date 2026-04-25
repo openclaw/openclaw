@@ -18,7 +18,7 @@ export type AssistantReplySnapshot = {
 };
 
 export type AgentWaitResult = {
-  status: "ok" | "timeout" | "error" | "pending" | "interrupted";
+  status: "ok" | "timeout" | "error" | "pending";
   error?: string;
   startedAt?: number;
   endedAt?: number;
@@ -165,11 +165,7 @@ export async function waitForAgentRun(params: {
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
-      status: error.includes("gateway timeout")
-        ? "timeout"
-        : isRecoverableAgentWaitError(error)
-          ? "interrupted"
-          : "error",
+      status: error.includes("gateway timeout") ? "timeout" : "error",
       error,
     };
   }

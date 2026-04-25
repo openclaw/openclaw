@@ -252,8 +252,8 @@ export async function waitForAgentJob(params: {
       snapshot: AgentRunSnapshot,
       delayMs: number,
     ) => {
-      const clearTimer = kind === "error" ? clearPendingErrorTimer : clearPendingTimeoutTimer;
-      clearTimer();
+      clearPendingErrorTimer();
+      clearPendingTimeoutTimer();
       const effectiveDelay = Math.max(1, Math.min(Math.floor(delayMs), 2_147_483_647));
       const timerRef = setTimeout(() => {
         const latest = ignoreCachedSnapshot ? undefined : getCachedAgentRun(runId);

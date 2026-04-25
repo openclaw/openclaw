@@ -124,6 +124,74 @@ describe("waitForAgentJob", () => {
     expect(snapshot?.endedAt).toBe(700);
   });
 
+  it("lets a later aborted timeout replace a pending lifecycle error", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-error-then-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 800 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 800, endedAt: 900, error: "transient error" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 800, endedAt: 1_000, aborted: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await waitPromise;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.status).toBe("timeout");
+      expect(snapshot?.startedAt).toBe(800);
+      expect(snapshot?.endedAt).toBe(1_000);
+      expect(snapshot?.error).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a later lifecycle error replace a pending aborted timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-then-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_100, endedAt: 1_200, aborted: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 1_100, endedAt: 1_300, error: "final error" },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await waitPromise;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.status).toBe("error");
+      expect(snapshot?.startedAt).toBe(1_100);
+      expect(snapshot?.endedAt).toBe(1_300);
+      expect(snapshot?.error).toBe("final error");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("can ignore cached snapshots and wait for fresh lifecycle events", async () => {
     const runId = `run-ignore-cache-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     emitAgentEvent({

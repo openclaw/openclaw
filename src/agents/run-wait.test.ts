@@ -152,13 +152,13 @@ describe("waitForAgentRun", () => {
     });
   });
 
-  it("maps transport-close wait failures to interrupted status", async () => {
+  it("keeps transport-close wait failures as errors for generic callers", async () => {
     callGatewayMock.mockRejectedValue(new Error("gateway closed (1006): transport close"));
 
     const result = await waitForAgentRun({ runId: "run-interrupted", timeoutMs: 500 });
 
     expect(result).toEqual({
-      status: "interrupted",
+      status: "error",
       error: "gateway closed (1006): transport close",
     });
     expect(isRecoverableAgentWaitError(result.error)).toBe(true);

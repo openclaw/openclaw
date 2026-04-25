@@ -81,7 +81,7 @@ function buildRecoveryProgressPrompt(params: {
     params.task.length > maxTaskLen ? `${params.task.slice(0, maxTaskLen)}...` : params.task;
   return (
     `A spawned subagent task was interrupted by a gateway restart or connection loss. ` +
-    `Automatic recovery is already in progress for \"${taskLabel}\" ` +
+    `Automatic recovery is already in progress for "${taskLabel}" ` +
     `(retry ${params.attemptNumber}/${params.maxAttempts}). ` +
     `Send one brief update now in your normal voice: say the task was interrupted, ` +
     `you are automatically resuming/retrying it, and you will report back when it either continues or truly fails. ` +

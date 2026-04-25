@@ -116,15 +116,12 @@ export function createSubagentRunManager(params: {
       if (wait.status === "pending") {
         return;
       }
-      if (wait.status === "interrupted") {
-        const recoverable = isRecoverableAgentWaitError(wait.error);
-        if (recoverable) {
-          log.info("subagent wait interrupted; scheduling recovery", {
-            runId,
-            childSessionKey: expectedEntry?.childSessionKey ?? entry?.childSessionKey,
-            error: wait.error,
-          });
-        }
+      if (wait.status === "error" && isRecoverableAgentWaitError(wait.error)) {
+        log.info("subagent wait interrupted; scheduling recovery", {
+          runId,
+          childSessionKey: expectedEntry?.childSessionKey ?? entry?.childSessionKey,
+          error: wait.error,
+        });
         params.scheduleOrphanRecovery({ delayMs: 1_000 });
         const scheduledEntry = entry;
         setTimeout(() => {
