@@ -177,6 +177,21 @@ function genAiOperationName(
   return "chat";
 }
 
+function positiveFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function assignPositiveNumberAttr(
+  attrs: Record<string, string | number>,
+  key: string,
+  value: number | undefined,
+): void {
+  const normalized = positiveFiniteNumber(value);
+  if (normalized !== undefined) {
+    attrs[key] = normalized;
+  }
+}
+
 function assignGenAiModelCallAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: ModelCallLifecycleDiagnosticEvent,
@@ -933,6 +948,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (!tracesEnabled) {
           return;
         }
+        const genAiInputTokens =
+          usage.promptTokens ??
+          (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
         const spanAttrs: Record<string, string | number> = {
           ...attrs,
           "openclaw.tokens.input": usage.input ?? 0,
@@ -941,6 +959,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
         };
+        assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
+        assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
+        assignPositiveNumberAttr(
+          spanAttrs,
+          "gen_ai.usage.cache_read.input_tokens",
+          usage.cacheRead,
+        );
+        assignPositiveNumberAttr(
+          spanAttrs,
+          "gen_ai.usage.cache_creation.input_tokens",
+          usage.cacheWrite,
+        );
 
         const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs, {
           parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),

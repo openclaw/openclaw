@@ -740,6 +740,53 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports GenAI usage attributes on model usage spans without diagnostic identifiers", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      provider: "anthropic",
+      model: "claude-sonnet-4.6",
+      usage: {
+        input: 100,
+        output: 40,
+        cacheRead: 30,
+        cacheWrite: 20,
+        promptTokens: 150,
+        total: 190,
+      },
+      durationMs: 25,
+    });
+    await flushDiagnosticEvents();
+
+    const modelUsageCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.usage",
+    );
+    expect(modelUsageCall?.[1]).toMatchObject({
+      attributes: {
+        "gen_ai.usage.input_tokens": 150,
+        "gen_ai.usage.output_tokens": 40,
+        "gen_ai.usage.cache_read.input_tokens": 30,
+        "gen_ai.usage.cache_creation.input_tokens": 20,
+      },
+    });
+    expect(modelUsageCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.sessionKey": expect.anything(),
+        "openclaw.sessionId": expect.anything(),
+        "gen_ai.input.messages": expect.anything(),
+        "gen_ai.output.messages": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(JSON.stringify(modelUsageCall)).not.toContain("session-key");
+    await service.stop?.(ctx);
+  });
+
   test("exports GenAI client operation duration histogram without diagnostic identifiers", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
