@@ -206,7 +206,7 @@ export function getProviderEnvVars(
   providerId: string,
   params?: ProviderEnvVarLookupParams,
 ): string[] {
-  const providerEnvVars = resolveProviderEnvVars(params);
+  const providerEnvVars = params ? resolveProviderEnvVars(params) : PROVIDER_ENV_VARS;
   const envVars = Object.hasOwn(providerEnvVars, providerId)
     ? providerEnvVars[providerId]
     : undefined;
