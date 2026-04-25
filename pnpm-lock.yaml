@@ -84,9 +84,6 @@ importers:
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
-      express:
-        specifier: ^5.2.1
-        version: 5.2.1
       file-type:
         specifier: 22.0.1
         version: 22.0.1
@@ -333,7 +330,7 @@ importers:
         specifier: ^14.0.3
         version: 14.0.3
       express:
-        specifier: ^5.2.1
+        specifier: 5.2.1
         version: 5.2.1
       playwright-core:
         specifier: 1.59.1
@@ -893,7 +890,7 @@ importers:
   extensions/msteams:
     dependencies:
       '@azure/identity':
-        specifier: ^4.13.1
+        specifier: 4.13.1
         version: 4.13.1
       '@microsoft/teams.api':
         specifier: 2.0.8
@@ -902,13 +899,13 @@ importers:
         specifier: 2.0.8
         version: 2.0.8
       express:
-        specifier: ^5.2.1
+        specifier: 5.2.1
         version: 5.2.1
       jsonwebtoken:
-        specifier: ^9.0.3
+        specifier: 9.0.3
         version: 9.0.3
       jwks-rsa:
-        specifier: ^4.0.1
+        specifier: 4.0.1
         version: 4.0.1
       typebox:
         specifier: 1.1.31
