@@ -96,19 +96,18 @@ methods:
 
 ### Infrastructure
 
-| Method                                          | What it registers                       |
-| ----------------------------------------------- | --------------------------------------- |
-| `api.registerHook(events, handler, opts?)`      | Event hook                              |
-| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                   |
-| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                      |
-| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser      |
-| `api.registerCli(registrar, opts?)`             | CLI subcommand                          |
-| `api.registerService(service)`                  | Background service                      |
-| `api.registerInteractiveHandler(registration)`  | Interactive handler                     |
-| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware          |
-| `api.registerEmbeddedExtensionFactory(factory)` | Deprecated PI extension factory         |
-| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section |
-| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus      |
+| Method                                         | What it registers                       |
+| ---------------------------------------------- | --------------------------------------- |
+| `api.registerHook(events, handler, opts?)`     | Event hook                              |
+| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
+| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
+| `api.registerGatewayDiscoveryService(service)` | Local Gateway discovery advertiser      |
+| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
+| `api.registerService(service)`                 | Background service                      |
+| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
+| `api.registerAgentToolResultMiddleware(...)`   | Runtime tool-result middleware          |
+| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
+| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
 <Note>
   Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
@@ -126,14 +125,8 @@ methods:
 Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
 targeted runtime, for example `["pi", "codex"]`. External plugins
 cannot register this middleware; keep normal OpenClaw plugin hooks for work
-that does not need pre-model tool-result timing.
-</Accordion>
-
-<Accordion title="Legacy Pi extension factories">
-  `api.registerEmbeddedExtensionFactory(...)` is deprecated. It remains a
-  compatibility seam for bundled plugins that still need direct Pi
-  embedded-runner events. New tool-result transforms should use
-  `api.registerAgentToolResultMiddleware(...)` instead.
+that does not need pre-model tool-result timing. The old Pi-only embedded
+extension factory registration path has been removed.
 </Accordion>
 
 ### Gateway discovery registration

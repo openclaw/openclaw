@@ -431,7 +431,7 @@ Each list is optional:
 
 | Field                            | Type       | What it means                                                         |
 | -------------------------------- | ---------- | --------------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Deprecated embedded extension factory ids.                            |
+| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`. |
 | `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for. |
 | `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.       |
 | `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                 |
@@ -445,12 +445,12 @@ Each list is optional:
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                             |
 | `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks.        |
 
-`contracts.embeddedExtensionFactories` is retained for bundled compatibility
-code that still needs direct Pi embedded-runner events. New bundled
-tool-result transforms should declare `contracts.agentToolResultMiddleware`
-and register with `api.registerAgentToolResultMiddleware(...)` instead.
-External plugins cannot register tool-result middleware because the seam can
-rewrite high-trust tool output before the model sees it.
+`contracts.embeddedExtensionFactories` is retained for bundled Codex
+app-server-only extension factories. Bundled tool-result transforms should
+declare `contracts.agentToolResultMiddleware` and register with
+`api.registerAgentToolResultMiddleware(...)` instead. External plugins cannot
+register tool-result middleware because the seam can rewrite high-trust tool
+output before the model sees it.
 
 Provider plugins that implement `resolveExternalAuthProfiles` should declare
 `contracts.externalAuthProviders`. Plugins without the declaration still run
