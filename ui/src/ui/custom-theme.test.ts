@@ -72,13 +72,26 @@ function createImportedTheme() {
 
 function createResponse(
   body: string,
-  options: { headers?: HeadersInit; status?: number; url?: string } = {},
+  options: {
+    body?: ReadableStream<Uint8Array> | null;
+    headers?: HeadersInit;
+    status?: number;
+    url?: string;
+  } = {},
 ) {
   return {
     ok: (options.status ?? 200) >= 200 && (options.status ?? 200) < 300,
     status: options.status ?? 200,
     headers: new Headers(options.headers),
-    body: null,
+    body:
+      options.body === undefined
+        ? new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(body));
+              controller.close();
+            },
+          })
+        : options.body,
     text: vi.fn(async () => body),
     url: options.url ?? "",
   } as unknown as Response;
@@ -142,6 +155,16 @@ describe("custom theme import helpers", () => {
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z", fetchImpl),
     ).rejects.toThrow("too large");
+  });
+
+  it("rejects tweakcn theme responses without a bounded body stream", async () => {
+    const response = createResponse(JSON.stringify(createTweakcnPayload()), { body: null });
+    const fetchImpl = vi.fn(async () => response) as unknown as typeof fetch;
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z", fetchImpl),
+    ).rejects.toThrow("unreadable theme payload");
+    expect(response.text).not.toHaveBeenCalled();
   });
 
   it("rejects redirected tweakcn import responses", async () => {

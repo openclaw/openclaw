@@ -480,36 +480,32 @@ async function readResponseTextWithLimit(response: Response): Promise<string> {
     throw new Error("tweakcn theme payload is too large.");
   }
 
-  if (response.body) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let bytes = 0;
-    let text = "";
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) {
-          break;
-        }
-        bytes += chunk.value.byteLength;
-        if (bytes > MAX_TWEAKCN_THEME_BYTES) {
-          await reader.cancel().catch(() => undefined);
-          throw new Error("tweakcn theme payload is too large.");
-        }
-        text += decoder.decode(chunk.value, { stream: true });
-      }
-      text += decoder.decode();
-      return text;
-    } finally {
-      reader.releaseLock();
-    }
+  if (!response.body) {
+    throw new Error("tweakcn returned an unreadable theme payload.");
   }
 
-  const text = await response.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_TWEAKCN_THEME_BYTES) {
-    throw new Error("tweakcn theme payload is too large.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      bytes += chunk.value.byteLength;
+      if (bytes > MAX_TWEAKCN_THEME_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("tweakcn theme payload is too large.");
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+    return text;
+  } finally {
+    reader.releaseLock();
   }
-  return text;
 }
 
 async function readJsonResponseWithLimit(response: Response): Promise<unknown> {
