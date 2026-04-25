@@ -757,6 +757,24 @@ describe("Codex app-server approval bridge", () => {
         },
       },
     });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["decline"] },
+        "approved-once",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["decline"] },
+        "approved-session",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
     expect(buildApprovalResponse("item/fileChange/requestApproval", undefined, "denied")).toEqual({
       decision: "decline",
     });
