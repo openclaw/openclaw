@@ -43,7 +43,7 @@ describeLive("google plugin live", () => {
     const speechProvider = requireRegisteredProvider(speechProviders, "google");
     const mediaProvider = requireRegisteredProvider(mediaProviders, "google");
 
-    const phrase = "Testing Google audio transcription with OpenClaw.";
+    const phrase = "Testing Google audio transcription with pineapple.";
     const audioFile = await speechProvider.synthesize({
       text: phrase,
       cfg: { plugins: { enabled: true } } as never,
@@ -62,7 +62,7 @@ describeLive("google plugin live", () => {
 
     const normalized = normalizeTranscriptForMatch(transcript?.text ?? "");
     expect(normalized).toContain("google");
-    expect(normalized).toContain("openclaw");
+    expect(normalized).toContain("pineapple");
   }, 180_000);
 
   it("runs Gemini web search through the registered provider tool", async () => {
