@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,

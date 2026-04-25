@@ -27,6 +27,11 @@ const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+const CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS = 10_000;
+const DEFAULT_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS = 5_000;
+const MIN_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS = 250;
+const MAX_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS = 30_000;
+const BACKGROUND_WEBHOOK_CLEANUP_TIMEOUT_MS = 10_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -47,6 +52,22 @@ const waitForGracefulStop = async (stop: () => Promise<void>) => {
   }
 };
 
+const telegramApiTimeoutSignal = (timeoutMs: number): TelegramApiAbortSignal =>
+  AbortSignal.timeout(timeoutMs) as unknown as TelegramApiAbortSignal;
+
+const resolveWebhookCleanupStartupBudgetMs = (envValue: string | undefined): number => {
+  if (!envValue) {
+    return DEFAULT_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS;
+  }
+  const raw = Number(envValue);
+  if (!Number.isFinite(raw)) {
+    return DEFAULT_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS;
+  }
+  return Math.min(
+    MAX_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS,
+    Math.max(MIN_WEBHOOK_CLEANUP_STARTUP_BUDGET_MS, Math.floor(raw)),
+  );
+};
 const resolvePollingStallThresholdMs = (value: number | undefined): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_POLL_STALL_THRESHOLD_MS;
@@ -80,6 +101,7 @@ type TelegramPollingSessionOpts = {
 export class TelegramPollingSession {
   #restartAttempts = 0;
   #webhookCleared = false;
+  #webhookCleanupBackgroundStarted = false;
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
@@ -203,23 +225,98 @@ export class TelegramPollingSession {
     if (this.#webhookCleared) {
       return "ready";
     }
+    const startupBudgetMs = resolveWebhookCleanupStartupBudgetMs(
+      process.env.OPENCLAW_TELEGRAM_STARTUP_WEBHOOK_CLEANUP_BUDGET_MS,
+    );
     try {
       await withTelegramApiErrorLogging({
         operation: "deleteWebhook",
         runtime: this.opts.runtime,
-        fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
+        fn: () =>
+          (bot.api.deleteWebhook as any)(
+            { drop_pending_updates: false },
+            telegramApiTimeoutSignal(startupBudgetMs),
+          ),
       });
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
-      const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
-        err,
-        "Telegram webhook cleanup failed",
-      );
-      return shouldRetry ? "retry" : "exit";
+      if (this.opts.abortSignal?.aborted) {
+        return "exit";
+      }
+      if (isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+        const errMsg = formatErrorMessage(err);
+
+        // If deleteWebhook fails, try a quick getWebhookInfo check. If the URL
+        // is already empty, then we are effectively clean and can continue.
+        try {
+          const info = await (bot.api.getWebhookInfo as any)(
+            telegramApiTimeoutSignal(startupBudgetMs),
+          );
+          if (!info.url) {
+            this.#webhookCleared = true;
+            return "ready";
+          }
+        } catch {
+          // Ignore secondary check errors; proceed to background retry.
+        }
+
+        this.opts.log(
+          `Telegram webhook cleanup degraded (budget=${formatDurationPrecise(startupBudgetMs)}): ${errMsg}; continuing startup.`,
+        );
+        this.#startWebhookCleanupBackgroundRetry(bot);
+        return "ready";
+      }
+      throw err;
     }
   }
 
+  #startWebhookCleanupBackgroundRetry(bot: TelegramBot) {
+    if (this.#webhookCleanupBackgroundStarted || this.opts.abortSignal?.aborted) {
+      return;
+    }
+    this.#webhookCleanupBackgroundStarted = true;
+    setTimeout(() => {
+      if (this.opts.abortSignal?.aborted || this.#webhookCleared) {
+        return;
+      }
+      void withTelegramApiErrorLogging({
+        operation: "deleteWebhook",
+        runtime: this.opts.runtime,
+        fn: () =>
+          (bot.api.deleteWebhook as any)(
+            { drop_pending_updates: false },
+            telegramApiTimeoutSignal(BACKGROUND_WEBHOOK_CLEANUP_TIMEOUT_MS),
+          ),
+      })
+        .then(() => {
+          this.#webhookCleared = true;
+          this.opts.log("Telegram webhook cleanup recovered in background.");
+        })
+        .catch((err) => {
+          // Non-fatal: we will retry on the next restart cycle.
+          this.#webhookCleanupBackgroundStarted = false;
+          this.opts.log(
+            `Telegram webhook cleanup background retry failed: ${formatErrorMessage(err)}`,
+          );
+        });
+    }, 1_000);
+  }
+
+  async #confirmPersistedOffset(bot: TelegramBot): Promise<void> {
+    const lastUpdateId = this.opts.getLastUpdateId();
+    if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
+      return;
+    }
+    try {
+      await bot.api.getUpdates(
+        { offset: lastUpdateId + 1, limit: 1, timeout: 0 },
+        telegramApiTimeoutSignal(CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS),
+      );
+    } catch {
+      // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
+    }
+  }
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     const liveness = new TelegramPollingLivenessTracker({
       onPollSuccess: (finishedAt) => this.#status.notePollSuccess(finishedAt),
