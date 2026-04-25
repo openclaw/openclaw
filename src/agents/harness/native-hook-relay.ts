@@ -122,6 +122,7 @@ const MAX_NATIVE_HOOK_RELAY_HISTORY_ARRAY_ITEMS = 50;
 const MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS = 50;
 const MAX_PERMISSION_FALLBACK_KEYS = 200;
 const MAX_PERMISSION_FALLBACK_KEY_CHARS = 240;
+const MAX_PERMISSION_FINGERPRINT_SORT_KEYS = 200;
 const MAX_APPROVAL_TITLE_LENGTH = 80;
 const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
@@ -435,12 +436,6 @@ async function runNativeHookRelayPermissionRequest(params: {
     toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
     ...(params.registration.signal ? { signal: params.registration.signal } : {}),
   };
-  if (!consumeNativeHookRelayPermissionBudget(params.registration.relayId)) {
-    log.warn(
-      `native hook permission approval rate limit exceeded; deferring to provider approval path: relay=${params.registration.relayId} run=${params.registration.runId}`,
-    );
-    return params.adapter.renderNoopResponse(params.invocation.event);
-  }
   const approvalKey = nativeHookRelayPermissionApprovalKey({
     registration: params.registration,
     request,
@@ -448,7 +443,8 @@ async function runNativeHookRelayPermissionRequest(params: {
   const pendingApproval = pendingPermissionApprovals.get(approvalKey);
   try {
     const decision = await (pendingApproval ??
-      startNativeHookRelayPermissionApproval({
+      startNativeHookRelayPermissionApprovalWithBudget({
+        registration: params.registration,
         approvalKey,
         request,
       }));
@@ -468,10 +464,17 @@ async function runNativeHookRelayPermissionRequest(params: {
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
-async function startNativeHookRelayPermissionApproval(params: {
+async function startNativeHookRelayPermissionApprovalWithBudget(params: {
+  registration: NativeHookRelayRegistration;
   approvalKey: string;
   request: NativeHookRelayPermissionApprovalRequest;
 }): Promise<NativeHookRelayPermissionApprovalResult> {
+  if (!consumeNativeHookRelayPermissionBudget(params.registration.relayId)) {
+    log.warn(
+      `native hook permission approval rate limit exceeded; deferring to provider approval path: relay=${params.registration.relayId} run=${params.registration.runId}`,
+    );
+    return "defer";
+  }
   const approval = nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
     pendingPermissionApprovals.delete(params.approvalKey);
   });
@@ -557,14 +560,27 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
     return;
   }
   hash.update("{");
-  for (const key in value) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
-      continue;
-    }
+  const { keys, truncated } = readBoundedOwnKeys(value, MAX_PERMISSION_FINGERPRINT_SORT_KEYS);
+  for (const key of keys) {
     hash.update(JSON.stringify(key));
     hash.update(":");
     updateJsonHash(hash, value[key]);
     hash.update(",");
+  }
+  if (truncated) {
+    // Keep ordinary objects order-independent without sorting a broad native
+    // hook payload. The tail remains content-sensitive in traversal order.
+    const sortedKeySet = new Set(keys);
+    hash.update("#object-tail:");
+    for (const key in value) {
+      if (!Object.prototype.hasOwnProperty.call(value, key) || sortedKeySet.has(key)) {
+        continue;
+      }
+      hash.update(JSON.stringify(key));
+      hash.update(":");
+      updateJsonHash(hash, value[key]);
+      hash.update(",");
+    }
   }
   hash.update("}");
 }
