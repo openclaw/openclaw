@@ -11,7 +11,7 @@ describe("model catalog normalization", () => {
     const catalog = normalizeModelCatalog(
       {
         providers: {
-          openai: {
+          OpenAI: {
             baseUrl: "https://api.openai.com/v1",
             api: "openai-responses",
             headers: {
@@ -71,8 +71,8 @@ describe("model catalog normalization", () => {
           },
         },
         aliases: {
-          "azure-openai-responses": {
-            provider: "openai",
+          "Azure-OpenAI-Responses": {
+            provider: "OpenAI",
             api: "azure-openai-responses",
           },
           "anthropic-alias": {
@@ -81,18 +81,18 @@ describe("model catalog normalization", () => {
         },
         suppressions: [
           {
-            provider: "azure-openai-responses",
+            provider: "Azure-OpenAI-Responses",
             model: "gpt-5.3-codex-spark",
             reason: "not available",
           },
         ],
         discovery: {
-          openai: "static",
+          OpenAI: "static",
           anthropic: "static",
           bad: "unknown",
         },
       },
-      { ownedProviders: new Set(["openai"]) },
+      { ownedProviders: new Set(["OpenAI"]) },
     );
 
     expect(catalog).toEqual({

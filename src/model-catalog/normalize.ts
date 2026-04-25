@@ -30,11 +30,20 @@ const MODEL_CATALOG_APIS = new Set<string>(MODEL_APIS);
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
 
-export type { NormalizedModelCatalogRow } from "./types.js";
-
 function normalizeSafeRecordKey(value: unknown): string {
   const key = normalizeOptionalString(value) ?? "";
   return key && !isBlockedObjectKey(key) ? key : "";
+}
+
+function normalizeOwnedProviderSet(providers: ReadonlySet<string>): ReadonlySet<string> {
+  const normalized = new Set<string>();
+  for (const provider of providers) {
+    const providerId = normalizeModelCatalogProviderId(provider);
+    if (providerId) {
+      normalized.add(providerId);
+    }
+  }
+  return normalized;
 }
 
 function normalizeStringMap(value: unknown): Record<string, string> | undefined {
@@ -295,7 +304,7 @@ function normalizeModelCatalogProviders(
   }
   const providers: Record<string, ModelCatalogProvider> = {};
   for (const [rawProviderId, rawProvider] of Object.entries(value)) {
-    const providerId = normalizeSafeRecordKey(rawProviderId);
+    const providerId = normalizeModelCatalogProviderId(rawProviderId);
     if (!providerId || !ownedProviders.has(providerId)) {
       continue;
     }
@@ -316,11 +325,13 @@ function normalizeModelCatalogAliases(
   }
   const aliases: Record<string, ModelCatalogAlias> = {};
   for (const [rawAlias, rawTarget] of Object.entries(value)) {
-    const alias = normalizeSafeRecordKey(rawAlias);
+    const alias = normalizeModelCatalogProviderId(rawAlias);
     if (!alias || !isRecord(rawTarget)) {
       continue;
     }
-    const provider = normalizeOptionalString(rawTarget.provider) ?? "";
+    const provider = normalizeModelCatalogProviderId(
+      normalizeOptionalString(rawTarget.provider) ?? "",
+    );
     if (!provider || !ownedProviders.has(provider)) {
       continue;
     }
@@ -344,7 +355,7 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
     if (!isRecord(entry)) {
       continue;
     }
-    const provider = normalizeOptionalString(entry.provider) ?? "";
+    const provider = normalizeModelCatalogProviderId(normalizeOptionalString(entry.provider) ?? "");
     const model = normalizeOptionalString(entry.model) ?? "";
     if (!provider || !model) {
       continue;
@@ -368,7 +379,7 @@ function normalizeModelCatalogDiscovery(
   }
   const discovery: Record<string, ModelCatalogDiscovery> = {};
   for (const [rawProviderId, rawMode] of Object.entries(value)) {
-    const providerId = normalizeSafeRecordKey(rawProviderId);
+    const providerId = normalizeModelCatalogProviderId(rawProviderId);
     const mode = normalizeOptionalString(rawMode) ?? "";
     if (providerId && ownedProviders.has(providerId) && MODEL_CATALOG_DISCOVERY_MODES.has(mode)) {
       discovery[providerId] = mode as ModelCatalogDiscovery;
@@ -384,10 +395,11 @@ export function normalizeModelCatalog(
   if (!isRecord(value)) {
     return undefined;
   }
-  const providers = normalizeModelCatalogProviders(value.providers, params.ownedProviders);
-  const aliases = normalizeModelCatalogAliases(value.aliases, params.ownedProviders);
+  const ownedProviders = normalizeOwnedProviderSet(params.ownedProviders);
+  const providers = normalizeModelCatalogProviders(value.providers, ownedProviders);
+  const aliases = normalizeModelCatalogAliases(value.aliases, ownedProviders);
   const suppressions = normalizeModelCatalogSuppressions(value.suppressions);
-  const discovery = normalizeModelCatalogDiscovery(value.discovery, params.ownedProviders);
+  const discovery = normalizeModelCatalogDiscovery(value.discovery, ownedProviders);
   const catalog = {
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
