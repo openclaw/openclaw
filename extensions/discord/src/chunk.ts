@@ -78,30 +78,45 @@ function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
 }
 
 function findBreakIndex(window: string): number {
-  let whitespaceIdx = -1;
-  let cjkPunctuationIdx = -1;
-  let cjkCharIdx = -1;
+  // Walk the window once, recording each codepoint with its code-unit start
+  // and end offsets. Iterating via `for...of` (or `[...window]`) yields full
+  // codepoints, so CJK Ext-B / Ext-C surrogate pairs are scanned as one
+  // character instead of two lone surrogates.
+  type Entry = { ch: string; startCu: number; endCu: number };
+  const entries: Entry[] = [];
+  {
+    let cu = 0;
+    for (const ch of window) {
+      const start = cu;
+      cu += ch.length;
+      entries.push({ ch, startCu: start, endCu: cu });
+    }
+  }
 
-  for (let i = window.length - 1; i >= 0; i--) {
-    const ch = window[i];
-    if (whitespaceIdx < 0 && /\s/.test(ch)) {
-      whitespaceIdx = i;
+  const minProgress = window.length * 0.2;
+  let whitespaceCu = -1;
+  let cjkPunctuationCu = -1;
+  let cjkCharEndCu = -1;
+
+  for (let k = entries.length - 1; k >= 0; k--) {
+    const { ch, startCu, endCu } = entries[k];
+    if (whitespaceCu < 0 && /\s/.test(ch)) {
+      whitespaceCu = startCu;
       break;
     }
-    if (cjkPunctuationIdx < 0 && CJK_PUNCTUATION_RE.test(ch)) {
-      if (i + 1 > window.length * 0.2) cjkPunctuationIdx = i;
+    if (cjkPunctuationCu < 0 && CJK_PUNCTUATION_RE.test(ch)) {
+      // Include the punctuation INSIDE the preceding chunk: split index = endCu.
+      if (endCu > minProgress) cjkPunctuationCu = endCu;
     }
-    if (cjkCharIdx < 0 && CJK_CHAR_RE.test(ch)) {
-      if (i + 1 > window.length * 0.2) cjkCharIdx = i + 1;
+    if (cjkCharEndCu < 0 && CJK_CHAR_RE.test(ch)) {
+      if (endCu > minProgress) cjkCharEndCu = endCu;
     }
-    if (cjkPunctuationIdx >= 0 && cjkCharIdx >= 0) break;
+    if (cjkPunctuationCu >= 0 && cjkCharEndCu >= 0) break;
   }
 
-  if (whitespaceIdx > 0) return whitespaceIdx;
-  if (cjkPunctuationIdx > 0 && cjkPunctuationIdx + 1 <= window.length) {
-    return cjkPunctuationIdx + 1;
-  }
-  if (cjkCharIdx > 0 && cjkCharIdx <= window.length) return cjkCharIdx;
+  if (whitespaceCu > 0) return whitespaceCu;
+  if (cjkPunctuationCu > 0 && cjkPunctuationCu <= window.length) return cjkPunctuationCu;
+  if (cjkCharEndCu > 0 && cjkCharEndCu <= window.length) return cjkCharEndCu;
   return -1;
 }
 

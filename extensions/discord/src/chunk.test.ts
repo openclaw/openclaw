@@ -146,6 +146,18 @@ describe("splitLongLine — CJK boundaries", () => {
     expect(chunks.every((chunk) => /^[漢]+$/.test(chunk))).toBe(true);
   });
 
+  it("does not split CJK Ext-B surrogate pairs at chunk boundaries", () => {
+    const text = "𠀀".repeat(51);
+
+    const chunks = chunkDiscordText(text, { maxChars: 100, maxLines: 50 });
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.every((chunk) => chunk.length <= 100)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length % 2 === 0)).toBe(true);
+    expect(chunks.every((chunk) => Array.from(chunk).every((ch) => ch.length === 2))).toBe(true);
+  });
+
   it("prefers CJK terminal punctuation over a later CJK character boundary", () => {
     const text = `${"漢".repeat(80)}。${"字".repeat(70)}`;
 
