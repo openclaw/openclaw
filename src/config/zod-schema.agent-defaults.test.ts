@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./validation.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
@@ -117,12 +118,26 @@ describe("agent defaults schema", () => {
     expect(() => AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 0 } })).toThrow();
   });
 
-  it("accepts per-agent contextTokens override", () => {
-    const agent = AgentEntrySchema.parse({
-      id: "ops",
-      contextTokens: 1_048_576,
+  it("preserves per-agent contextTokens through config validation", () => {
+    const result = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "ops",
+            contextTokens: 1_048_576,
+          },
+        ],
+      },
     });
-    expect(agent.contextTokens).toBe(1_048_576);
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: {
+        agents: {
+          list: [{ contextTokens: 1_048_576 }],
+        },
+      },
+    });
   });
 
   it("rejects non-positive contextTokens on agent entries and defaults", () => {
