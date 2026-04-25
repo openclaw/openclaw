@@ -1141,6 +1141,38 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
+  it("uses runtime web fetch discovery when the managed plugin install ledger is populated", async () => {
+    loadPluginInstallRecordsSyncMock.mockReturnValue({
+      "external-fetch": {
+        source: "npm",
+        spec: "@openclaw/external-fetch",
+      },
+    });
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
+    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledAllowlistCompat: true,
+      }),
+    );
+  });
+
   it("uses env fallback for unresolved web fetch provider SecretRef when active", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
