@@ -12,3 +12,4 @@ export {
   type ResolvedBrowserProfile,
   type ResolvedBrowserTabCleanupConfig,
 } from "./src/browser/config.js";
+export { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./src/browser/constants.js";
