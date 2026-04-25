@@ -14,10 +14,17 @@ const MINIMAX_SEARCH_KEY =
   process.env.MINIMAX_CODING_API_KEY?.trim() ||
   MINIMAX_API_KEY ||
   "";
+const MINIMAX_TTS_TOKEN_PLAN_KEY =
+  process.env.MINIMAX_OAUTH_TOKEN?.trim() ||
+  process.env.MINIMAX_CODE_PLAN_KEY?.trim() ||
+  process.env.MINIMAX_CODING_API_KEY?.trim() ||
+  "";
 const describeLive =
   isLiveTestEnabled() && MINIMAX_SEARCH_KEY.length > 0 ? describe : describe.skip;
 const describeTtsLive =
   isLiveTestEnabled() && MINIMAX_API_KEY.length > 0 ? describe : describe.skip;
+const describeTokenPlanTtsLive =
+  isLiveTestEnabled() && MINIMAX_TTS_TOKEN_PLAN_KEY.length > 0 ? describe : describe.skip;
 
 const registerMinimaxPlugin = () =>
   registerProviderPlugin({
@@ -75,5 +82,33 @@ describeTtsLive("minimax tts live", () => {
     expect(voiceNote.fileExtension).toBe(".opus");
     expect(voiceNote.voiceCompatible).toBe(true);
     expect(voiceNote.audioBuffer.byteLength).toBeGreaterThan(512);
+  }, 120_000);
+});
+
+describeTokenPlanTtsLive("minimax token plan tts live", () => {
+  it("synthesizes TTS with Token Plan auth without MINIMAX_API_KEY", async () => {
+    const savedApiKey = process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
+    try {
+      const provider = buildMinimaxSpeechProvider();
+
+      const audioFile = await provider.synthesize({
+        text: "OpenClaw MiniMax Token Plan text to speech integration test OK.",
+        cfg: { plugins: { enabled: true } } as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 90_000,
+      });
+
+      expect(audioFile.outputFormat).toBe("mp3");
+      expect(audioFile.fileExtension).toBe(".mp3");
+      expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
+    } finally {
+      if (savedApiKey === undefined) {
+        delete process.env.MINIMAX_API_KEY;
+      } else {
+        process.env.MINIMAX_API_KEY = savedApiKey;
+      }
+    }
   }, 120_000);
 });
