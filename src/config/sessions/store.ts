@@ -688,16 +688,18 @@ export async function clearSessionPluginDebugEntries(params: {
   sessionKey?: string;
   inMemoryEntry?: SessionEntry;
   inMemoryStore?: Record<string, SessionEntry>;
-}): Promise<void> {
+}): Promise<SessionEntry | undefined> {
   const { storePath, sessionKey, inMemoryEntry, inMemoryStore } = params;
+  let nextInMemoryEntry = inMemoryEntry;
   if (inMemoryEntry?.pluginDebugEntries) {
-    delete inMemoryEntry.pluginDebugEntries;
+    nextInMemoryEntry = { ...inMemoryEntry };
+    delete nextInMemoryEntry.pluginDebugEntries;
     if (inMemoryStore && sessionKey) {
-      inMemoryStore[sessionKey] = inMemoryEntry;
+      inMemoryStore[sessionKey] = nextInMemoryEntry;
     }
   }
   if (!storePath || !sessionKey) {
-    return;
+    return nextInMemoryEntry;
   }
   await updateSessionStoreEntry({
     storePath,
@@ -710,6 +712,7 @@ export async function clearSessionPluginDebugEntries(params: {
       return { pluginDebugEntries: undefined };
     },
   });
+  return nextInMemoryEntry;
 }
 
 export async function recordSessionMetaFromInbound(params: {

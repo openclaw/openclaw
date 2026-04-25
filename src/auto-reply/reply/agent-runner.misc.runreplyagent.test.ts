@@ -1048,10 +1048,12 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const clearPluginDebugSpy = vi
       .spyOn(sessionTypesModule, "clearSessionPluginDebugEntries")
       .mockImplementationOnce(async ({ inMemoryEntry, inMemoryStore, sessionKey }) => {
+        let nextInMemoryEntry = inMemoryEntry;
         if (inMemoryEntry?.pluginDebugEntries) {
-          delete inMemoryEntry.pluginDebugEntries;
+          nextInMemoryEntry = { ...inMemoryEntry };
+          delete nextInMemoryEntry.pluginDebugEntries;
           if (inMemoryStore && sessionKey) {
-            inMemoryStore[sessionKey] = inMemoryEntry;
+            inMemoryStore[sessionKey] = nextInMemoryEntry;
           }
         }
         throw new Error("session lock timeout");

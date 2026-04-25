@@ -1114,16 +1114,24 @@ export async function runReplyAgent(params: {
     // a prior turn's status line (e.g. active-memory timeout) would stick in the
     // store and be re-emitted on every subsequent reply.
     try {
-      await clearSessionPluginDebugEntries({
-        storePath,
-        sessionKey,
-        inMemoryEntry: activeSessionEntry,
-        inMemoryStore: activeSessionStore,
-      });
+      activeSessionEntry =
+        (await clearSessionPluginDebugEntries({
+          storePath,
+          sessionKey,
+          inMemoryEntry: activeSessionEntry,
+          inMemoryStore: activeSessionStore,
+        })) ?? activeSessionEntry;
     } catch (error) {
       // If the persisted clear fails, prefer hiding plugin debug output for
       // this turn over risking replay of stale lines from disk.
       suppressPluginDebugEntriesForTurn = true;
+      if (activeSessionEntry?.pluginDebugEntries) {
+        activeSessionEntry = { ...activeSessionEntry };
+        delete activeSessionEntry.pluginDebugEntries;
+        if (activeSessionStore && sessionKey) {
+          activeSessionStore[sessionKey] = activeSessionEntry;
+        }
+      }
       defaultRuntime.error("Failed to clear stale session plugin debug entries", error);
     }
 
