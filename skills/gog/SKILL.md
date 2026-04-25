@@ -57,6 +57,8 @@ Common commands
 - Sheets metadata: `gog sheets metadata <sheetId> --json`
 - Docs export: `gog docs export <docId> --format txt --out /tmp/doc.txt`
 - Docs cat: `gog docs cat <docId>`
+- Docs write markdown: `gog docs write <docId> --markdown-file ./notes.md`
+- Docs find/replace: `gog docs edit <docId> "Old text" "New text"`
 - Tasks list tasklists: `gog tasks lists list --json`
 - Tasks create tasklist: `gog tasks lists create "Sprint Inbox" --json`
 - Tasks list: `gog tasks list <tasklistId> --json`
@@ -123,6 +125,6 @@ Notes
 - Set `GOG_ACCOUNT=you@gmail.com` to avoid repeating `--account`.
 - For scripting, prefer `--json` plus `--no-input`.
 - Sheets values can be passed via `--values-json` (recommended) or as inline rows.
-- Docs supports export/cat/copy. In-place edits require a Docs API client (not in gog).
+- Docs also supports native create/copy/write/edit/find-replace/clear flows; use `gog docs --help` to inspect the full command set.
 - Confirm before sending mail or creating events.
 - `gog gmail search` returns one row per thread; use `gog gmail messages search` when you need every individual email returned separately.
