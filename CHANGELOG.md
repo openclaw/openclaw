@@ -25,9 +25,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/TTS: preserve legacy `[[audio_as_voice]]` hints on trusted tool-result
-  `MEDIA:` payloads so generated audio still delivers as a voice note. (#46535)
-  Thanks @azade-c.
+- Agents/TTS: preserve `[[audio_as_voice]]` directives on trusted text
+  tool-result `MEDIA:` payloads so generated audio still delivers as a voice
+  note. (#46535) Thanks @azade-c.
 - Agents/TTS: keep queued tool media when an assistant ends with `NO_REPLY` on
   non-block delivery paths, so media-only generated audio replies still send.
   (#60025) Thanks @bradlind1.

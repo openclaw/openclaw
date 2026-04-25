@@ -51,7 +51,7 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
-  it("extracts audioAsVoice from legacy MEDIA text", () => {
+  it("extracts audioAsVoice from text MEDIA directives", () => {
     expect(
       extractToolResultMediaArtifact({
         content: [
@@ -64,7 +64,7 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
-  it("keeps legacy audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
+  it("keeps audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
     expect(
       extractToolResultMediaArtifact({
         content: [

@@ -165,7 +165,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/screenshot.png"]);
   });
 
-  it("preserves legacy audio_as_voice when queuing trusted MEDIA tool output", async () => {
+  it("preserves audio_as_voice when queuing trusted text MEDIA tool output", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({
       shouldEmitToolOutput: false,
@@ -245,7 +245,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/file.png"]);
   });
 
-  it("does NOT queue legacy MEDIA paths when verbose is full", async () => {
+  it("does NOT queue text MEDIA paths when verbose is full", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult });
 
