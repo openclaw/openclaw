@@ -679,6 +679,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Dependencies: refresh workspace package pins and lockfile entries for AWS SDK,
+  Anthropic SDK, ACP SDK, Matrix crypto, TypeBox, Vite, tsdown, Slack Bolt,
+  CopilotKit AIMock, and related bundled plugin packages. Thanks @steipete.
 - Gateway/env: import each missing expected login-shell env var independently,
   so an existing gateway token no longer prevents `env.shellEnv` from loading
   plugin credentials such as `TWILIO_*` from `.profile`. Thanks @steipete.

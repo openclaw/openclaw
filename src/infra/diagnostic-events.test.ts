@@ -181,8 +181,9 @@ describe("diagnostic-events", () => {
     });
 
     vi.resetModules();
-    const specifier = new URL("./diagnostic-events.ts", import.meta.url).href;
-    const duplicateModule = (await import(specifier)) as typeof import("./diagnostic-events.js");
+    const duplicateModule = (await import(
+      /* @vite-ignore */ new URL("./diagnostic-events.ts?duplicate", import.meta.url).href
+    )) as typeof import("./diagnostic-events.js");
     duplicateModule.emitDiagnosticEvent({
       type: "message.queued",
       source: "plugin",
