@@ -3,10 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import type { GoogleMeetConfig } from "./config.js";
 
-type SetupCheck = {
+export type SetupCheck = {
   id: string;
   ok: boolean;
   message: string;
+};
+
+export type GoogleMeetSetupStatus = {
+  ok: boolean;
+  checks: SetupCheck[];
 };
 
 function resolveUserPath(input: string): string {
@@ -173,6 +178,17 @@ export function getGoogleMeetSetupStatus(
 
   return {
     ok: checks.every((check) => check.ok),
+    checks,
+  };
+}
+
+export function addGoogleMeetSetupCheck(
+  status: GoogleMeetSetupStatus,
+  check: SetupCheck,
+): GoogleMeetSetupStatus {
+  const checks = [...status.checks, check];
+  return {
+    ok: checks.every((item) => item.ok),
     checks,
   };
 }

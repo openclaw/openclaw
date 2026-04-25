@@ -95,7 +95,7 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   return parsed;
 }
 
-function writeSetupStatus(status: ReturnType<GoogleMeetRuntime["setupStatus"]>): void {
+function writeSetupStatus(status: Awaited<ReturnType<GoogleMeetRuntime["setupStatus"]>>): void {
   writeStdoutLine("Google Meet setup: %s", status.ok ? "OK" : "needs attention");
   for (const check of status.checks) {
     writeStdoutLine("[%s] %s: %s", check.ok ? "ok" : "fail", check.id, check.message);
@@ -485,7 +485,7 @@ export function registerGoogleMeetCli(params: {
     .option("--json", "Print JSON output", false)
     .action(async (options: SetupOptions) => {
       const rt = await params.ensureRuntime();
-      const status = rt.setupStatus();
+      const status = await rt.setupStatus();
       if (options.json) {
         writeStdoutJson(status);
         return;
