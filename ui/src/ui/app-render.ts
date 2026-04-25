@@ -135,11 +135,7 @@ import {
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { getPresetById, type ConfigPresetId } from "./views/config-presets.ts";
-import {
-  renderQuickSettings,
-  type QuickSettingsChannel,
-  type QuickSettingsApiKey,
-} from "./views/config-quick.ts";
+import { renderQuickSettings, type QuickSettingsChannel } from "./views/config-quick.ts";
 import { renderConfig, type ConfigProps } from "./views/config.ts";
 import {
   renderCronQuickCreate,
