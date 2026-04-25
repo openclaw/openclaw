@@ -16,9 +16,11 @@ Docs: https://docs.openclaw.ai
 - Memory-core/hybrid search: expose raw `vectorScore` and `textScore` alongside the combined `score` on hybrid memory search results, so callers can inspect vector-versus-text retrieval contribution before temporal decay or MMR reordering. Fixes #68166. (#68286) Thanks @ajfonthemove.
 - Providers/Xiaomi: add MiMo TTS as a bundled speech provider with MP3/WAV output and voice-note Opus transcoding. Fixes #52376. (#55614) Thanks @zoujiejun.
 - Providers/ElevenLabs: include `eleven_v3` in the bundled TTS model catalog so model selection surfaces can offer ElevenLabs v3. (#68321) Thanks @itsuzef.
+- Providers/Local CLI TTS: add a bundled local command speech provider with file/stdout input, voice-note Opus conversion, and telephony PCM output. (#56239) Thanks @solar2ain.
 
 ### Fixes
 
+- Memory-host SDK: use trusted env-proxy mode for remote embedding and batch HTTP calls only when Undici will proxy that target, preserving SSRF DNS pinning for `ALL_PROXY`-only and `NO_PROXY` bypass cases. Fixes #52162. (#71506) Thanks @DhtIsCoding.
 - Gateway/dashboard: render Control UI and WebSocket links with `https://`/`wss://` when `gateway.tls.enabled=true`, including `openclaw gateway status`. Fixes #71494. (#71499) Thanks @deepkilo.
 - Agents/OpenAI-compatible: default proxy/local completions tool requests to `tool_choice: "auto"` when tools are present, so providers enter native tool-calling mode instead of replying with plain-text tool directives. (#71472) Thanks @Speed-maker.
 - OpenAI image generation: use `gpt-5.5` for the Codex OAuth responses transport instead of the retired `gpt-5.4` model, fixing 500s from ChatGPT Codex image generation. Fixes #71513. Thanks @baolongl.
@@ -33,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Cron: tolerate malformed legacy job rows in startup, main-session system-event payloads, and human-readable `cron list` output so missing `state`, `payload.text`, or display fields no longer crash the scheduler or CLI. Fixes #66016, #65916, #64137, #57872, #59968, #63813, #52804, and #43163. (#71509) Thanks @vincentkoc.
 - CLI/models: make `openclaw models scan` fall back to public OpenRouter free-model metadata when no `OPENROUTER_API_KEY` is configured, avoid config secret resolution for explicit `--no-probe` scans, and apply the scan timeout to the OpenRouter catalog request.
 - Feishu: keep streaming cards to one live card per turn, flush throttled card edits after meaningful text boundaries, and skip exact block/partial repeats so tool-heavy replies do not duplicate card output. Thanks @allan0509.
+- Feishu: finish the streaming-card duplicate closeout by stripping leaked reasoning tags, preserving cross-block partial snapshots, enabling topic-thread streaming cards, omitting the generic `main` card header, surfacing transient tool/compaction status, and cleaning streaming state after close failures. Thanks @sesame437, @Vicky-v7, @maoku-family, @Pengxiao-Wang, and @Maple778.
 - Heartbeat: clamp oversized scheduler delays through the shared safe timer helper, preventing `every` values over Node's timeout cap from becoming a 1 ms crash loop. Fixes #71414. (#71478) Thanks @hclsys.
 - Control UI/chat: collapse assistant token/model context details behind an explicit Context disclosure and show full dates in message footers, making historical transcript timing clear without noisy default metadata. (#71337) Thanks @BunsDev.
 - OpenAI/Codex OAuth: explain `unsupported_country_region_territory` token-exchange failures with a proxy/region hint instead of surfacing a generic OAuth error. Fixes #51175. (#71501) Thanks @vincentkoc and @wulala-xjj.
@@ -57,6 +60,9 @@ Docs: https://docs.openclaw.ai
 - GitHub Copilot: preserve encrypted Responses reasoning item IDs during replay so Copilot can validate encrypted reasoning payloads across requests. (#71448) Thanks @a410979729-sys.
 - Agents/replies: recover final-answer text when streamed assistant chunks contain only whitespace, preventing completed turns from surfacing as empty-payload errors. Fixes #71454. (#71467) Thanks @Sanjays2402.
 - Feishu/TTS: transcode voice-intent MP3 and other audio replies to Ogg/Opus before sending native Feishu audio bubbles, while keeping ordinary MP3 attachments as files. Fixes #61249 and #37868. Thanks @sg1416-zg and @ycjlb2023-peteryi.
+- WhatsApp/TTS: transcode MP3/WebM audio, including Microsoft Edge TTS output, to Ogg/Opus before sending PTT voice notes.
+- QQBot/TTS: honor plain `audioAsVoice` replies by synthesizing TTS to native QQ voice messages, and mark inbound voice-only messages as audio media without exposing raw voice paths to generic media context.
+- Providers/SenseAudio: add bundled SenseAudio batch audio transcription through `tools.media.audio` with `SENSEAUDIO_API_KEY` auth. (#66943) Thanks @Fl0rencess720.
 - Providers/MiniMax: let TTS use MiniMax portal OAuth and Token Plan credentials before falling back to `MINIMAX_API_KEY`, and include current TTS HD model ids. Fixes #55017. Thanks @zx15210404690-hash.
 - Telegram/webhook: acknowledge validated webhook updates before running bot middleware, keeping slow agent turns from tripping Telegram delivery retries while preserving per-chat processing lanes. Fixes #71392. Thanks @joelforsberg46-source.
 - MCP: retire one-shot embedded bundled MCP runtimes at run end, skip bundle-MCP startup when a runtime tool allowlist cannot reach bundle-MCP tools, and add `mcp.sessionIdleTtlMs` idle eviction for leaked session runtimes. Fixes #71106, #71110, #70389, and #70808.
@@ -65,6 +71,7 @@ Docs: https://docs.openclaw.ai
 - Agents/tool-result pruning: harden the tool-result character estimator and context-pruning loops against malformed `{ type: "text" }` blocks created by void or undefined tool handler results, serializing non-string text payloads for size accounting so they cannot bypass trimming as zero-sized. Fixes #34979. (#51267) Thanks @cgdusek, @alvinttang, and @coffeexcoin.
 - Daemon/service-env: add Nix Home Manager profile bin directories to generated gateway service PATHs on macOS and Linux, honoring `NIX_PROFILES` right-to-left precedence and falling back to `~/.nix-profile/bin` when unset. Fixes #44402. (#59935) Thanks @jerome-benoit.
 - Agents/heartbeat: stop injecting the heartbeat system prompt into non-heartbeat runs, preventing ordinary user replies from being suppressed as `HEARTBEAT_OK` acknowledgments. Fixes #69079. (#69278) Thanks @stainlu.
+- Active Memory: keep silent recall sub-agent billing/auth failures out of shared auth-profile cooldown state, so a Claude CLI extra-usage rejection cannot disable normal Claude-backed turns. Fixes #71284. (#71539) Thanks @vishutdhar and @obviyus.
 
 ## 2026.4.25 (Unreleased)
 

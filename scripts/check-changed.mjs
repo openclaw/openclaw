@@ -7,7 +7,10 @@ import {
 } from "./changed-lanes.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
-import { resolveLocalHeavyCheckEnv } from "./lib/local-heavy-check-runtime.mjs";
+import {
+  acquireLocalHeavyCheckLockSync,
+  resolveLocalHeavyCheckEnv,
+} from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 import { isCiLikeEnv } from "./lib/vitest-local-scheduling.mjs";
@@ -17,8 +20,18 @@ export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "600000";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 
-export function createChangedCheckVitestEnv(baseEnv = process.env) {
+export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
+  return {
+    ...resolvedBaseEnv,
+    OPENCLAW_OXLINT_SKIP_LOCK: "1",
+    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+    OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+  };
+}
+
+export function createChangedCheckVitestEnv(baseEnv = process.env) {
+  const resolvedBaseEnv = createChangedCheckChildEnv(baseEnv);
   const env = {
     ...resolvedBaseEnv,
     [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]:
@@ -48,7 +61,7 @@ export function createChangedCheckVitestEnv(baseEnv = process.env) {
 
 export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
-  const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
+  const baseEnv = createChangedCheckChildEnv(options.env ?? process.env);
   const add = (name, args, env) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
       commands.push({ name, args, ...(env ? { env } : {}) });
@@ -164,79 +177,92 @@ export function createChangedCheckPlan(result, options = {}) {
 
 export async function runChangedCheck(result, options = {}) {
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
-  const plan = createChangedCheckPlan(result, { ...options, env: baseEnv });
-  printPlan(result, plan, options);
+  const childEnv = createChangedCheckChildEnv(baseEnv);
+  const plan = createChangedCheckPlan(result, { ...options, env: childEnv });
+  const releaseLock = options.dryRun
+    ? () => {}
+    : acquireLocalHeavyCheckLockSync({
+        cwd: process.cwd(),
+        env: baseEnv,
+        toolName: "check:changed",
+      });
 
-  if (options.dryRun) {
+  try {
+    printPlan(result, plan, options);
+
+    if (options.dryRun) {
+      return 0;
+    }
+
+    const timings = [];
+    for (const command of plan.commands) {
+      const status = await runPnpm(command, timings);
+      if (status !== 0) {
+        printSummary(timings, options);
+        return status;
+      }
+    }
+
+    if (plan.runFullTests) {
+      const status = await runPnpm(
+        { name: "tests all", args: ["test"], env: createChangedCheckVitestEnv(childEnv) },
+        timings,
+      );
+      if (status !== 0) {
+        printSummary(timings, options);
+        return status;
+      }
+    } else if (plan.runChangedTestsBroad) {
+      const testArgs = options.explicitPaths
+        ? ["test"]
+        : ["test", "--changed", options.base ?? "origin/main"];
+      const status = await runPnpm(
+        {
+          name: options.explicitPaths ? "tests all" : "tests changed broad",
+          args: testArgs,
+          env: createChangedCheckVitestEnv(childEnv),
+        },
+        timings,
+      );
+      if (status !== 0) {
+        printSummary(timings, options);
+        return status;
+      }
+    } else if (plan.testTargets.length > 0) {
+      const status = await runPnpm(
+        {
+          name: "tests changed",
+          args: ["test", ...plan.testTargets],
+          env: createChangedCheckVitestEnv(childEnv),
+        },
+        timings,
+      );
+      if (status !== 0) {
+        printSummary(timings, options);
+        return status;
+      }
+    }
+
+    if (plan.runExtensionTests) {
+      const status = await runPnpm(
+        {
+          name: "tests extensions",
+          args: ["test:extensions"],
+          env: createChangedCheckVitestEnv(childEnv),
+        },
+        timings,
+      );
+      if (status !== 0) {
+        printSummary(timings, options);
+        return status;
+      }
+    }
+
+    printSummary(timings, options);
     return 0;
+  } finally {
+    releaseLock();
   }
-
-  const timings = [];
-  for (const command of plan.commands) {
-    const status = await runPnpm(command, timings);
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  }
-
-  if (plan.runFullTests) {
-    const status = await runPnpm(
-      { name: "tests all", args: ["test"], env: createChangedCheckVitestEnv() },
-      timings,
-    );
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  } else if (plan.runChangedTestsBroad) {
-    const testArgs = options.explicitPaths
-      ? ["test"]
-      : ["test", "--changed", options.base ?? "origin/main"];
-    const status = await runPnpm(
-      {
-        name: options.explicitPaths ? "tests all" : "tests changed broad",
-        args: testArgs,
-        env: createChangedCheckVitestEnv(),
-      },
-      timings,
-    );
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  } else if (plan.testTargets.length > 0) {
-    const status = await runPnpm(
-      {
-        name: "tests changed",
-        args: ["test", ...plan.testTargets],
-        env: createChangedCheckVitestEnv(),
-      },
-      timings,
-    );
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  }
-
-  if (plan.runExtensionTests) {
-    const status = await runPnpm(
-      {
-        name: "tests extensions",
-        args: ["test:extensions"],
-        env: createChangedCheckVitestEnv(),
-      },
-      timings,
-    );
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  }
-
-  printSummary(timings, options);
-  return 0;
 }
 
 function sameArgs(left, right) {

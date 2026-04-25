@@ -254,6 +254,7 @@ export async function buildInboundContext(
       localMediaTypes.push(t);
     }
   }
+  const voiceMediaTypes = [...uniqueVoicePaths, ...uniqueVoiceUrls].map(() => "audio/wav");
 
   return {
     event,
@@ -279,6 +280,7 @@ export async function buildInboundContext(
     uniqueVoicePaths,
     uniqueVoiceUrls,
     uniqueVoiceAsrReferTexts,
+    voiceMediaTypes,
     hasAsrReferFallback,
     voiceTranscriptSources,
     replyTo,
@@ -342,6 +344,7 @@ function buildBlockedInboundContext(params: {
     uniqueVoicePaths: [],
     uniqueVoiceUrls: [],
     uniqueVoiceAsrReferTexts: [],
+    voiceMediaTypes: [],
     hasAsrReferFallback: false,
     voiceTranscriptSources: [],
     replyTo: undefined,

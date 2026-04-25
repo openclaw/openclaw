@@ -1685,6 +1685,7 @@ async function runRecallSubagent(params: {
       thinkLevel: params.config.thinking,
       reasoningLevel: "off",
       silentExpected: true,
+      authProfileFailurePolicy: "local",
       cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
     });
