@@ -740,6 +740,63 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports GenAI client operation duration histogram without diagnostic identifiers", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      sessionKey: "session-key",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "openai-completions",
+      durationMs: 250,
+    });
+    emitDiagnosticEvent({
+      type: "model.call.error",
+      runId: "run-1",
+      callId: "call-2",
+      sessionKey: "session-key",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      api: "google-generative-ai",
+      durationMs: 1250,
+      errorCategory: "TimeoutError",
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.meter.createHistogram).toHaveBeenCalledWith(
+      "gen_ai.client.operation.duration",
+      expect.objectContaining({
+        unit: "s",
+        advice: {
+          explicitBucketBoundaries: expect.arrayContaining([0.01, 0.32, 2.56, 81.92]),
+        },
+      }),
+    );
+    const genAiOperationDuration = telemetryState.histograms.get(
+      "gen_ai.client.operation.duration",
+    );
+    expect(genAiOperationDuration?.record).toHaveBeenCalledTimes(2);
+    expect(genAiOperationDuration?.record).toHaveBeenCalledWith(0.25, {
+      "gen_ai.operation.name": "text_completion",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-5.4",
+    });
+    expect(genAiOperationDuration?.record).toHaveBeenCalledWith(1.25, {
+      "gen_ai.operation.name": "generate_content",
+      "gen_ai.provider.name": "google",
+      "gen_ai.request.model": "gemini-2.5-flash",
+      "error.type": "TimeoutError",
+    });
+    expect(JSON.stringify(genAiOperationDuration?.record.mock.calls)).not.toContain("session-key");
+    expect(JSON.stringify(genAiOperationDuration?.record.mock.calls)).not.toContain("run-1");
+    await service.stop?.(ctx);
+  });
+
   test("exports run, model call, and tool execution lifecycle spans", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
