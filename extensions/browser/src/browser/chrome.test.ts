@@ -11,6 +11,7 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./chrome.executables.js";
 import {
+  clearStaleChromeSingletonLocks,
   decorateOpenClawProfile,
   diagnoseChromeCdp,
   ensureProfileCleanExit,
@@ -211,6 +212,55 @@ describe("browser chrome profile decoration", () => {
     const prefs = await readJson(path.join(userDataDir, "Default", "Preferences"));
     const profile = prefs.profile as Record<string, unknown>;
     expect(profile.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+  });
+
+  it("clears stale singleton artifacts when the lock points at another host", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
+    await fsp.writeFile(path.join(userDataDir, "SingletonSocket"), "socket");
+    await fsp.symlink("remote-host-535", path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, "local-host")).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(false);
+  });
+
+  it("clears stale singleton artifacts when the lock PID is dead on the current host", async () => {
+    const userDataDir = await createUserDataDir();
+    const deadPid = 2147483646;
+    await fsp.symlink(`${os.hostname()}-${deadPid}`, path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+  });
+
+  it("keeps singleton artifacts when the lock points at a current-host live process", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.symlink(`${os.hostname()}-${process.pid}`, path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
+    expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+  });
+
+  it("keeps singleton artifacts when the lock PID exists but cannot be signaled", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.symlink(`${os.hostname()}-12345`, path.join(userDataDir, "SingletonLock"));
+    const err = new Error("operation not permitted") as NodeJS.ErrnoException;
+    err.code = "EPERM";
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+      if (pid === 12345 && signal === 0) {
+        throw err;
+      }
+      return true;
+    }) as typeof process.kill);
+
+    try {
+      expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
+      expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 });
 
