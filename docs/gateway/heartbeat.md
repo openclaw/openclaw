@@ -220,6 +220,8 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 
 - `every`: heartbeat interval (duration string; default unit = minutes).
 - `model`: optional model override for heartbeat runs (`provider/model`).
+  - When `model` is not set, or uses the same provider as `agents.defaults.model.primary`, the standard fallback chain applies.
+  - **When `model` is set to a model on a different provider**, the configured fallback chain does not apply unless the override model is itself listed in `agents.defaults.model.fallbacks` — if that model fails (e.g. due to rate limits), the heartbeat errors out without trying other models. Prefer a model with generous rate limits to reduce failure risk.
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as cron `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.

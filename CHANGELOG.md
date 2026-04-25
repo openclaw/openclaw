@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.4.24 (Unreleased)
 
+- Docs/heartbeat: clarify `heartbeat.model` fallback behavior: the fallback chain is skipped only when `heartbeat.model` uses a different provider than the primary and is not itself listed in the configured fallbacks; same-provider overrides and no-override runs follow the standard fallback chain. (#40875)
+
 ### Breaking
 
 - Plugin SDK/tool-result transforms: remove the Pi-only `api.registerEmbeddedExtensionFactory(...)` compatibility path. Bundled tool-result rewrites must use `api.registerAgentToolResultMiddleware(...)` with `contracts.agentToolResultMiddleware` declaring the targeted harnesses, so transforms run consistently across Pi and Codex app-server dynamic tools. Thanks @vincentkoc.
