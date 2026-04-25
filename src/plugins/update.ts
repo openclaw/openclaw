@@ -222,6 +222,10 @@ function pathEndsWithSegment(params: {
   return Boolean(value && segment && (value === segment || value.endsWith(`/${segment}`)));
 }
 
+function bundledExtensionPathSegment(bundledDirName: string): string {
+  return ["extensions", bundledDirName].join("/");
+}
+
 function isBridgeBundledPathRecord(params: {
   bridge: ExternalizedBundledPluginBridge;
   bundledLocalPath?: string;
@@ -242,12 +246,12 @@ function isBridgeBundledPathRecord(params: {
   return (
     pathEndsWithSegment({
       value: params.record.sourcePath,
-      segment: `extensions/${bundledDirName}`,
+      segment: bundledExtensionPathSegment(bundledDirName),
       env: params.env,
     }) ||
     pathEndsWithSegment({
       value: params.record.installPath,
-      segment: `extensions/${bundledDirName}`,
+      segment: bundledExtensionPathSegment(bundledDirName),
       env: params.env,
     })
   );
@@ -262,7 +266,7 @@ function removeBridgeBundledLoadPaths(params: {
   params.loadPaths.removeMatching((entry) =>
     pathEndsWithSegment({
       value: entry,
-      segment: `extensions/${bundledDirName}`,
+      segment: bundledExtensionPathSegment(bundledDirName),
       env: params.env,
     }),
   );
@@ -896,9 +900,6 @@ export async function syncPluginsForUpdateChannel(params: {
           installs = next.plugins?.installs ?? {};
           changed = true;
         }
-        if (bundledInfo?.localPath) {
-          loadHelpers.removePath(bundledInfo.localPath);
-        }
         removeBridgeBundledLoadPaths({ bridge, loadPaths: loadHelpers, env });
         continue;
       }
@@ -907,7 +908,7 @@ export async function syncPluginsForUpdateChannel(params: {
         existing &&
         !isBridgeBundledPathRecord({
           bridge,
-          bundledLocalPath: bundledInfo?.localPath,
+          bundledLocalPath: undefined,
           record: existing.record,
           env,
         })
@@ -947,9 +948,6 @@ export async function syncPluginsForUpdateChannel(params: {
         ...buildNpmResolutionInstallFields(result.npmResolution),
       });
       installs = next.plugins?.installs ?? {};
-      if (bundledInfo?.localPath) {
-        loadHelpers.removePath(bundledInfo.localPath);
-      }
       if (existing?.record.sourcePath) {
         loadHelpers.removePath(existing.record.sourcePath);
       }
