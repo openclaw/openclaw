@@ -25,6 +25,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
+  isGoogleGemini25ThinkingBudgetModel,
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
   resolveGoogleGemini3ThinkingLevel,
@@ -238,6 +239,10 @@ function getGoogleThinkingBudget(
   return undefined;
 }
 
+function isAdaptiveReasoningLevel(value: unknown): value is "adaptive" {
+  return value === "adaptive";
+}
+
 function resolveGoogleThinkingConfig(
   model: GoogleTransportModel,
   options: GoogleTransportOptions | undefined,
@@ -267,6 +272,17 @@ function resolveGoogleThinkingConfig(
   }
   if (!options?.reasoning) {
     return getDisabledThinkingConfig(model.id);
+  }
+  if (isAdaptiveReasoningLevel(options.reasoning)) {
+    if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
+      return { includeThoughts: true };
+    }
+    if (isGoogleGemini25ThinkingBudgetModel(model.id)) {
+      return normalizeGoogleThinkingConfig(model.id, {
+        includeThoughts: true,
+        thinkingBudget: -1,
+      });
+    }
   }
   if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
     return {
