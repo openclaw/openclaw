@@ -74,6 +74,9 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/trace: report live context usage from the current prompt snapshot
   instead of provider turn totals, avoiding false near-full context spikes on
   cached or tool-heavy runs.
+- Providers/Google: honor `models.providers.google.request.allowPrivateNetwork`
+  for Gemini TTS and telephony TTS, matching Google image generation and media
+  understanding. (#71723) Thanks @ro-hansolo.
 - Plugins/Bonjour: stop the gateway from crash-looping on `CIAO PROBING CANCELLED` when the mDNS watchdog cancels a stuck probe. Restores the rejection-handler wiring dropped during the bonjour plugin migration and shares unhandled-rejection state across module instances so plugin-staged copies of `openclaw/plugin-sdk/runtime` register into the same handler set the host consults. Especially affects Docker on macOS, where mDNS probing reliably hits the watchdog. Thanks @troyhitch.
 - Google Meet: report pinned Chrome nodes as offline or missing capabilities in
   setup/join diagnostics, keep inaccessible nodes out of auto-selection, and
