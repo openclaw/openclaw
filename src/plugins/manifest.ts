@@ -50,8 +50,8 @@ export type PluginManifestModelCatalogStatus = "available" | "preview" | "deprec
 export type PluginManifestModelCatalogTieredCost = {
   input: number;
   output: number;
-  cacheRead?: number;
-  cacheWrite?: number;
+  cacheRead: number;
+  cacheWrite: number;
   range: [number, number] | [number];
 };
 
@@ -432,9 +432,9 @@ function normalizeStringMap(value: unknown): Record<string, string> | undefined 
   const normalized: Record<string, string> = {};
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeSafeRecordKey(rawKey);
-    const value = normalizeOptionalString(rawValue) ?? "";
-    if (key && value) {
-      normalized[key] = value;
+    const strValue = normalizeOptionalString(rawValue) ?? "";
+    if (key && strValue) {
+      normalized[key] = strValue;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -728,15 +728,17 @@ function normalizeModelCatalogTieredCost(
     ) {
       continue;
     }
-    const rangeValues = entry.range
-      .map((rangeValue) => normalizeModelCatalogNumber(rangeValue))
-      .filter((rangeValue): rangeValue is number => rangeValue !== undefined);
+    if (entry.range.length < 1 || entry.range.length > 2) {
+      continue;
+    }
+    const rangeValues = entry.range.map((rangeValue) => normalizeModelCatalogNumber(rangeValue));
+    if (rangeValues.some((rangeValue) => rangeValue === undefined)) {
+      continue;
+    }
     const range =
       rangeValues.length === 1
         ? ([rangeValues[0]] as [number])
-        : rangeValues.length >= 2
-          ? ([rangeValues[0], rangeValues[1]] as [number, number])
-          : undefined;
+        : ([rangeValues[0], rangeValues[1]] as [number, number]);
     if (!range) {
       continue;
     }
@@ -807,6 +809,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
 
   const stringListFields = [
     "visibleReasoningDetailTypes",
+    "supportedReasoningEfforts",
     "unsupportedToolSchemaKeywords",
   ] as const;
   for (const field of stringListFields) {
