@@ -6490,6 +6490,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   exclusiveMinimum: 0,
                                   maximum: 9007199254740991,
                                 },
+                                model: {
+                                  type: "string",
+                                  enum: ["exponential", "weibull"],
+                                },
+                                weibullShape: {
+                                  type: "number",
+                                  minimum: 0.1,
+                                  maximum: 5,
+                                },
                               },
                               additionalProperties: false,
                             },
@@ -6869,24 +6878,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             },
                             {
                               type: "object",
-                              properties: {
-                                enabled: {
-                                  type: "boolean",
-                                },
-                                halfLifeDays: {
-                                  type: "integer",
-                                  exclusiveMinimum: 0,
-                                  maximum: 9007199254740991,
-                                },
-                                model: {
-                                  type: "string",
-                                  enum: ["exponential", "weibull"],
-                                },
-                                weibullShape: {
-                                  type: "number",
-                                  minimum: 0.1,
-                                  maximum: 5,
-                                },
+                              propertyNames: {
+                                type: "string",
                               },
                               additionalProperties: {},
                             },

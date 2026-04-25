@@ -10,8 +10,8 @@ import path from "node:path";
  *
  * - "weibull": stretched-exponential form
  *   `multiplier = exp(-ln2 * (t / halfLife)^β)`.
- *   β = 1 degenerates to the exponential curve. β > 1 drops faster in the
- *   early window and plateaus in the long tail, which matches human
+ *   β = 1 degenerates to the exponential curve. β > 1 retains more before
+ *   half-life and decays faster after it, which matches human
  *   forgetting curves (Averell & Heathcote 2011) more closely and is the
  *   shape requested by the community in openclaw/openclaw#57307 and #65679.
  *
@@ -31,8 +31,8 @@ export type TemporalDecayConfig = {
   /**
    * Weibull shape parameter β. Only consulted when `model === "weibull"`.
    * - β = 1  → identical to exponential
-   * - β > 1  → faster early decay, slower long tail (recommended: 1.5)
-   * - β < 1  → slower early decay, faster long tail
+   * - β > 1  → slower early decay (retains more before half-life), faster long tail (recommended: 1.5)
+   * - β < 1  → faster early decay, slower long tail
    * Non-finite or non-positive values fall back to the default. The effective
    * value is clamped to [WEIBULL_SHAPE_MIN, WEIBULL_SHAPE_MAX] to avoid
    * numerical pathologies (e.g. underflow / overflow in Math.pow).
