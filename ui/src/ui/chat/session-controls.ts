@@ -6,7 +6,6 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
-import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { parseAgentSessionKey } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
@@ -71,6 +70,7 @@ export function renderChatSessionSelect(
 }
 
 async function refreshSessionOptions(state: AppViewState) {
+  const { loadSessions } = await import("../controllers/sessions.ts");
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,

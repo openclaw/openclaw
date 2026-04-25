@@ -5,6 +5,7 @@ import {
   buildAgentContext,
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
+  resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -119,6 +120,15 @@ describe("assistantAvatarFallbackUrl", () => {
   it("uses the bundled Molty png for assistant profile fallbacks", () => {
     expect(assistantAvatarFallbackUrl("/ui")).toBe("/ui/apple-touch-icon.png");
     expect(assistantAvatarFallbackUrl("")).toBe("apple-touch-icon.png");
+  });
+});
+
+describe("resolveAssistantTextAvatar", () => {
+  it("rejects unsafe invisible controls in assistant text avatars", () => {
+    expect(resolveAssistantTextAvatar("VC")).toBe("VC");
+    expect(resolveAssistantTextAvatar("\u{1F43E}")).toBe("\u{1F43E}");
+    expect(resolveAssistantTextAvatar("V\u202eC")).toBeNull();
+    expect(resolveAssistantTextAvatar("V\u200bC")).toBeNull();
   });
 });
 
