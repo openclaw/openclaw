@@ -344,4 +344,31 @@ describe("Google speech provider", () => {
       expect.objectContaining({ allowPrivateNetwork: true }),
     );
   });
+
+  it("honors configured private-network opt-in for Google telephony TTS", async () => {
+    installGoogleTtsFetchMock();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+      providerConfig: { apiKey: "google-test-key" },
+      timeoutMs: 12_345,
+    });
+
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
+  });
 });
