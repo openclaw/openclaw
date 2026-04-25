@@ -457,4 +457,100 @@ describe("buildStatusReply subagent summary", () => {
       expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
     });
   });
+
+  it("shows the persisted runtime model as the current model when no override is set", async () => {
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-runtime-model",
+        updatedAt: 0,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "whatsapp",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-6");
+    expect(normalized).not.toContain("Last runtime:");
+  });
+
+  it("keeps the selected model visible while a live switch is still pending", async () => {
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-live-switch",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+        liveModelSwitchPending: true,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "whatsapp",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.4");
+    expect(normalized).toContain("Last runtime: anthropic/claude-opus-4-6");
+  });
+
+  it("keeps fallback state visible instead of collapsing to the active fallback model", async () => {
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-fallback",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1-mini",
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+        fallbackNoticeSelectedModel: "openai/gpt-4.1-mini",
+        fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
+        fallbackNoticeReason: "rate limit",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "whatsapp",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
+    expect(normalized).not.toContain("Model: anthropic/claude-haiku-4-5");
+  });
 });

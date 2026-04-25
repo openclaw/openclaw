@@ -31,6 +31,7 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../../tasks/task-status.js";
+import { resolveActiveFallbackState } from "../fallback-state.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
@@ -175,27 +176,47 @@ export async function buildStatusText(params: {
     selectedModel: model,
     sessionEntry,
   });
+  const hasSessionModelOverride = Boolean(
+    sessionEntry?.providerOverride?.trim() || sessionEntry?.modelOverride?.trim(),
+  );
+  const fallbackState = resolveActiveFallbackState({
+    selectedModelRef: modelRefs.selected.label || "unknown",
+    activeModelRef: modelRefs.active.label || "unknown",
+    state: sessionEntry,
+  });
+  const shouldUseActiveModelForStatus =
+    Boolean(sessionEntry?.model?.trim()) &&
+    !hasSessionModelOverride &&
+    !sessionEntry?.liveModelSwitchPending &&
+    !fallbackState.active;
+  const statusProvider = shouldUseActiveModelForStatus ? modelRefs.active.provider : provider;
+  const statusModel = shouldUseActiveModelForStatus ? modelRefs.active.model : model;
   const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
     : resolveModelAuthLabel({
-        provider,
+        provider: statusProvider,
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
-    : modelRefs.activeDiffers
-      ? resolveModelAuthLabel({
-          provider: modelRefs.active.provider,
-          cfg,
-          sessionEntry,
-          agentDir: statusAgentDir,
-        })
-      : selectedModelAuth;
+    : shouldUseActiveModelForStatus
+      ? selectedModelAuth
+      : modelRefs.activeDiffers
+        ? resolveModelAuthLabel({
+            provider: modelRefs.active.provider,
+            cfg,
+            sessionEntry,
+            agentDir: statusAgentDir,
+          })
+        : selectedModelAuth;
+  const currentModelProvider = fallbackState.active ? modelRefs.active.provider : statusProvider;
+  const currentModelId = fallbackState.active ? modelRefs.active.model : statusModel;
+  const currentModelAuth = fallbackState.active ? activeModelAuth : selectedModelAuth;
   const currentUsageProvider = (() => {
     try {
-      return resolveUsageProviderId(provider);
+      return resolveUsageProviderId(currentModelProvider);
     } catch {
       return undefined;
     }
@@ -205,7 +226,7 @@ export async function buildStatusText(params: {
     currentUsageProvider &&
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
-      selectedModelAuth,
+      selectedModelAuth: currentModelAuth,
     })
   ) {
     try {
@@ -293,8 +314,8 @@ export async function buildStatusText(params: {
     resolvedFastMode ??
     resolveFastModeState({
       cfg,
-      provider,
-      model,
+      provider: currentModelProvider,
+      model: currentModelId,
       agentId: statusAgentId,
       sessionEntry,
     }).enabled;
@@ -304,7 +325,7 @@ export async function buildStatusText(params: {
       ...agentDefaults,
       model: {
         ...toAgentModelListLike(agentDefaults.model),
-        primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
+        primary: params.primaryModelLabelOverride ?? `${statusProvider}/${statusModel}`,
       },
       ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
       thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
