@@ -240,7 +240,7 @@ describe("buildMinimaxSpeechProvider", () => {
 
       expect(result.outputFormat).toBe("mp3");
       expect(result.fileExtension).toBe(".mp3");
-      expect(result.voiceCompatible).toBe(false);
+      expect(result.voiceCompatible).toBe(true);
       expect(result.audioBuffer.toString()).toBe("fake-audio-data");
 
       expect(mockFetch).toHaveBeenCalledOnce();
