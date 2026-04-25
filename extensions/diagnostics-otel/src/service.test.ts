@@ -1100,6 +1100,82 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports diagnostic memory samples and pressure without session identifiers", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "diagnostic.memory.sample",
+      uptimeMs: 1234,
+      memory: {
+        rssBytes: 100,
+        heapUsedBytes: 40,
+        heapTotalBytes: 80,
+        externalBytes: 10,
+        arrayBuffersBytes: 5,
+      },
+    });
+    emitDiagnosticEvent({
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "rss_growth",
+      thresholdBytes: 512,
+      rssGrowthBytes: 256,
+      windowMs: 60_000,
+      memory: {
+        rssBytes: 200,
+        heapUsedBytes: 50,
+        heapTotalBytes: 90,
+        externalBytes: 20,
+        arrayBuffersBytes: 6,
+      },
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.histograms.get("openclaw.memory.rss_bytes")?.record).toHaveBeenCalledWith(
+      100,
+      {},
+    );
+    expect(telemetryState.histograms.get("openclaw.memory.rss_bytes")?.record).toHaveBeenCalledWith(
+      200,
+      {
+        "openclaw.memory.level": "critical",
+        "openclaw.memory.reason": "rss_growth",
+      },
+    );
+    expect(telemetryState.counters.get("openclaw.memory.pressure")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.memory.level": "critical",
+      "openclaw.memory.reason": "rss_growth",
+    });
+    const pressureCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.memory.pressure",
+    );
+    expect(pressureCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.memory.level": "critical",
+        "openclaw.memory.reason": "rss_growth",
+        "openclaw.memory.rss_bytes": 200,
+        "openclaw.memory.heap_used_bytes": 50,
+        "openclaw.memory.heap_total_bytes": 90,
+        "openclaw.memory.external_bytes": 20,
+        "openclaw.memory.array_buffers_bytes": 6,
+        "openclaw.memory.threshold_bytes": 512,
+        "openclaw.memory.rss_growth_bytes": 256,
+        "openclaw.memory.window_ms": 60_000,
+      },
+    });
+    const pressureSpan = telemetryState.spans.find(
+      (span) => span.name === "openclaw.memory.pressure",
+    );
+    expect(pressureSpan?.setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "rss_growth",
+    });
+    expect(JSON.stringify(pressureCall)).not.toContain("session");
+    await service.stop?.(ctx);
+  });
+
   test("parents trusted diagnostic lifecycle spans from explicit parent ids", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });

@@ -676,6 +676,33 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "ms",
         description: "Exec process duration",
       });
+      const memoryRssHistogram = meter.createHistogram("openclaw.memory.rss_bytes", {
+        unit: "By",
+        description: "Resident set size reported by diagnostic memory samples",
+      });
+      const memoryHeapUsedHistogram = meter.createHistogram("openclaw.memory.heap_used_bytes", {
+        unit: "By",
+        description: "Heap used bytes reported by diagnostic memory samples",
+      });
+      const memoryHeapTotalHistogram = meter.createHistogram("openclaw.memory.heap_total_bytes", {
+        unit: "By",
+        description: "Heap total bytes reported by diagnostic memory samples",
+      });
+      const memoryExternalHistogram = meter.createHistogram("openclaw.memory.external_bytes", {
+        unit: "By",
+        description: "External memory bytes reported by diagnostic memory samples",
+      });
+      const memoryArrayBuffersHistogram = meter.createHistogram(
+        "openclaw.memory.array_buffers_bytes",
+        {
+          unit: "By",
+          description: "ArrayBuffer bytes reported by diagnostic memory samples",
+        },
+      );
+      const memoryPressureCounter = meter.createCounter("openclaw.memory.pressure", {
+        unit: "1",
+        description: "Diagnostic memory pressure events",
+      });
 
       let recordLogRecord:
         | ((
@@ -1126,6 +1153,65 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordMemoryUsageMetrics = (
+        evt: Extract<
+          DiagnosticEventPayload,
+          { type: "diagnostic.memory.sample" | "diagnostic.memory.pressure" }
+        >,
+        attrs: Record<string, string> = {},
+      ) => {
+        memoryRssHistogram.record(evt.memory.rssBytes, attrs);
+        memoryHeapUsedHistogram.record(evt.memory.heapUsedBytes, attrs);
+        memoryHeapTotalHistogram.record(evt.memory.heapTotalBytes, attrs);
+        memoryExternalHistogram.record(evt.memory.externalBytes, attrs);
+        memoryArrayBuffersHistogram.record(evt.memory.arrayBuffersBytes, attrs);
+      };
+
+      const recordMemorySample = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>,
+      ) => {
+        recordMemoryUsageMetrics(evt);
+      };
+
+      const recordMemoryPressure = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.pressure" }>,
+      ) => {
+        const attrs = {
+          "openclaw.memory.level": evt.level,
+          "openclaw.memory.reason": evt.reason,
+        };
+        memoryPressureCounter.add(1, attrs);
+        recordMemoryUsageMetrics(evt, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          ...attrs,
+          "openclaw.memory.rss_bytes": evt.memory.rssBytes,
+          "openclaw.memory.heap_used_bytes": evt.memory.heapUsedBytes,
+          "openclaw.memory.heap_total_bytes": evt.memory.heapTotalBytes,
+          "openclaw.memory.external_bytes": evt.memory.externalBytes,
+          "openclaw.memory.array_buffers_bytes": evt.memory.arrayBuffersBytes,
+          ...(evt.thresholdBytes !== undefined
+            ? { "openclaw.memory.threshold_bytes": evt.thresholdBytes }
+            : {}),
+          ...(evt.rssGrowthBytes !== undefined
+            ? { "openclaw.memory.rss_growth_bytes": evt.rssGrowthBytes }
+            : {}),
+          ...(evt.windowMs !== undefined ? { "openclaw.memory.window_ms": evt.windowMs } : {}),
+        };
+        const span = spanWithDuration("openclaw.memory.pressure", spanAttrs, 0, {
+          endTimeMs: evt.ts,
+        });
+        if (evt.level === "critical") {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: evt.reason,
+          });
+        }
+        span.end(evt.ts);
+      };
+
       const recordRunCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
         metadata: DiagnosticEventMetadata,
@@ -1470,11 +1556,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "tool.loop":
               recordToolLoop(evt);
               return;
+            case "diagnostic.memory.sample":
+              recordMemorySample(evt);
+              return;
+            case "diagnostic.memory.pressure":
+              recordMemoryPressure(evt);
+              return;
             case "tool.execution.started":
             case "run.started":
             case "model.call.started":
-            case "diagnostic.memory.sample":
-            case "diagnostic.memory.pressure":
             case "payload.large":
               return;
           }
