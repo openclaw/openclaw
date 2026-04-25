@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   bootstrapCode: 1,
   kickstartError: "",
+  kickstartCode: 1,
   kickstartFailuresRemaining: 0,
   disableError: "",
   disableCode: 1,
@@ -178,7 +179,7 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "kickstart") {
       if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
         state.kickstartFailuresRemaining -= 1;
-        return { stdout: "", stderr: state.kickstartError, code: 1 };
+        return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
       }
       state.serviceLoaded = true;
       state.serviceRunning = true;
@@ -210,6 +211,18 @@ vi.mock("node:fs/promises", async () => {
       }
       throw new Error(`ENOENT: no such file or directory, access '${key}'`);
     }),
+    readFile: vi.fn(
+      async (p: string, encoding?: BufferEncoding | { encoding?: BufferEncoding }) => {
+        const key = p;
+        const data = state.files.get(key);
+        if (data === undefined) {
+          throw new Error(`ENOENT: no such file or directory, read '${key}'`);
+        }
+        const requestedEncoding =
+          typeof encoding === "string" ? encoding : (encoding?.encoding ?? undefined);
+        return requestedEncoding ? data : Buffer.from(data);
+      },
+    ),
     mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
       const key = p;
       state.dirs.add(key);
@@ -262,6 +275,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.kickstartError = "";
+  state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
   state.disableError = "";
   state.disableCode = 1;
