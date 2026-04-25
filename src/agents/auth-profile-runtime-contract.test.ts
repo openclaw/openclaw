@@ -115,6 +115,7 @@ async function runAuthContractAttempt(params: {
   authProfileProvider: string;
   authProfileOverride: string;
   cfg?: OpenClawConfig;
+  sessionHasHistory?: boolean;
 }) {
   const cfg = params.cfg ?? ({} as OpenClawConfig);
   const sessionEntry: SessionEntry = {
@@ -154,7 +155,7 @@ async function runAuthContractAttempt(params: {
     authProfileProvider: params.authProfileProvider,
     sessionStore,
     storePath: params.storePath,
-    sessionHasHistory: false,
+    sessionHasHistory: params.sessionHasHistory ?? false,
   });
 
   return {
@@ -393,6 +394,33 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
           defaults: {
             embeddedHarness: { runtime: "codex", fallback: "none" },
           },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      agentHarnessId: "codex",
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    });
+  });
+
+  it("preserves configured Codex harness when a skeleton session entry is considered history", async () => {
+    await runAuthContractAttempt({
+      tmpDir,
+      storePath,
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      sessionHasHistory: true,
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              embeddedHarness: { runtime: "codex", fallback: "none" },
+            },
+          ],
         },
       } as OpenClawConfig,
     });
