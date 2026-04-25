@@ -716,12 +716,13 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
-  it("passes model override into ACP session initialization", async () => {
+  it("passes model and thinking overrides into ACP session initialization", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
         agentId: "codex",
         model: "openai-codex/gpt-5.4",
+        thinking: "high",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -735,6 +736,7 @@ describe("spawnAcpDirect", () => {
         agent: "codex",
         runtimeOptions: {
           model: "openai-codex/gpt-5.4",
+          thinking: "high",
         },
       }),
     );

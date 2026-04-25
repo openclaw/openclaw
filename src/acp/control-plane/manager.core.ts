@@ -316,6 +316,8 @@ export class AcpSessionManager {
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       });
       const requestedCwd = initialRuntimeOptions.cwd;
+      const requestedModel = initialRuntimeOptions.model;
+      const requestedThinking = initialRuntimeOptions.thinking;
       this.enforceConcurrentSessionLimit({
         cfg: input.cfg,
         sessionKey,
@@ -327,6 +329,8 @@ export class AcpSessionManager {
             agent,
             mode: input.mode,
             resumeSessionId: input.resumeSessionId,
+            ...(requestedModel ? { model: requestedModel } : {}),
+            ...(requestedThinking ? { thinking: requestedThinking } : {}),
             cwd: requestedCwd,
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -1378,6 +1382,8 @@ export class AcpSessionManager {
     const mode = params.meta.mode;
     const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
     const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
+    const model = normalizeText(runtimeOptions.model);
+    const thinking = normalizeText(runtimeOptions.thinking);
     const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
     const cached = this.getCachedRuntimeState(params.sessionKey);
     if (cached) {
@@ -1434,6 +1440,8 @@ export class AcpSessionManager {
             agent,
             mode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
+            ...(model ? { model } : {}),
+            ...(thinking ? { thinking } : {}),
             cwd,
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
