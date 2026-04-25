@@ -1,10 +1,9 @@
-export type CoreCliCommandDescriptor = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
-};
+import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
+import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
-export const CORE_CLI_COMMAND_DESCRIPTORS = [
+export type CoreCliCommandDescriptor = NamedCommandDescriptor;
+
+const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "setup",
     description: "Initialize local config and agent workspace",
@@ -57,8 +56,8 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
-    name: "memory",
-    description: "Search and reindex memory files",
+    name: "mcp",
+    description: "Manage OpenClaw MCP config and channel bridge",
     hasSubcommands: true,
   },
   {
@@ -87,18 +86,22 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
-    name: "browser",
-    description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
+    name: "tasks",
+    description: "Inspect durable background task state",
     hasSubcommands: true,
   },
-] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;
+] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
+
+export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;
 
 export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
-  return CORE_CLI_COMMAND_DESCRIPTORS;
+  return coreCliCommandCatalog.getDescriptors();
+}
+
+export function getCoreCliCommandNames(): string[] {
+  return coreCliCommandCatalog.getNames();
 }
 
 export function getCoreCliCommandsWithSubcommands(): string[] {
-  return CORE_CLI_COMMAND_DESCRIPTORS.filter((command) => command.hasSubcommands).map(
-    (command) => command.name,
-  );
+  return coreCliCommandCatalog.getCommandsWithSubcommands();
 }

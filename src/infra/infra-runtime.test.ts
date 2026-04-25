@@ -1,5 +1,6 @@
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   __testing,
   consumeGatewaySigusr1RestartAuthorization,
@@ -88,6 +89,168 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(1);
         const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
         expect(sigusr1Emits.length).toBe(1);
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("runs restart preparation only when the scheduled restart emits", async () => {
+      const beforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          emitHooks: { beforeEmit },
+        });
+
+        await vi.advanceTimersByTimeAsync(999);
+        expect(beforeEmit).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("uses the latest preparation hook when scheduled restarts coalesce", async () => {
+      const firstBeforeEmit = vi.fn(async () => {});
+      const latestBeforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        const first = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "first",
+          emitHooks: { beforeEmit: firstBeforeEmit },
+        });
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "second",
+          emitHooks: { beforeEmit: latestBeforeEmit },
+        });
+
+        expect(first.coalesced).toBe(false);
+        expect(second.coalesced).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(firstBeforeEmit).not.toHaveBeenCalled();
+        expect(latestBeforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("keeps existing preparation hook when a hookless restart coalesces", async () => {
+      const beforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          emitHooks: { beforeEmit },
+        });
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "hookless",
+        });
+
+        expect(second.coalesced).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("keeps restart requests coalesced while preparation is in flight", async () => {
+      let releaseFirstPrep: () => void = () => {};
+      const firstRollback = vi.fn(async () => {});
+      const firstBeforeEmit = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstPrep = resolve;
+          }),
+      );
+      const latestBeforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "first",
+          emitHooks: {
+            beforeEmit: firstBeforeEmit,
+            afterEmitRejected: firstRollback,
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(firstBeforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "second",
+          emitHooks: { beforeEmit: latestBeforeEmit },
+        });
+        expect(second.coalesced).toBe(true);
+
+        releaseFirstPrep();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(firstRollback).toHaveBeenCalledTimes(1);
+        expect(latestBeforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("rolls back prepared restart state when emission is rejected", async () => {
+      const beforeEmit = vi.fn(async () => {});
+      const afterEmitRejected = vi.fn(async () => {});
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        throw new Error("no signal");
+      });
+
+      scheduleGatewaySigusr1Restart({
+        delayMs: 0,
+        emitHooks: { beforeEmit, afterEmitRejected },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(beforeEmit).toHaveBeenCalledTimes(1);
+      expect(afterEmitRejected).toHaveBeenCalledTimes(1);
+    });
+
+    it("still emits restart when preparation fails", async () => {
+      const beforeEmit = vi.fn(async () => {
+        throw new Error("state dir readonly");
+      });
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          emitHooks: { beforeEmit },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -217,24 +380,15 @@ describe("infra runtime", () => {
 
   describe("tailnet address detection", () => {
     it("detects tailscale IPv4 and IPv6 addresses", () => {
-      vi.spyOn(os, "networkInterfaces").mockReturnValue({
-        lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true, netmask: "" }],
-        utun9: [
-          {
-            address: "100.123.224.76",
-            family: "IPv4",
-            internal: false,
-            netmask: "",
-          },
-          {
-            address: "fd7a:115c:a1e0::8801:e04c",
-            family: "IPv6",
-            internal: false,
-            netmask: "",
-          },
-        ],
-        // oxlint-disable-next-line typescript/no-explicit-any
-      } as any);
+      vi.spyOn(os, "networkInterfaces").mockReturnValue(
+        makeNetworkInterfacesSnapshot({
+          lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+          utun9: [
+            { address: "100.123.224.76", family: "IPv4" },
+            { address: "fd7a:115c:a1e0::8801:e04c", family: "IPv6" },
+          ],
+        }),
+      );
 
       const out = listTailnetAddresses();
       expect(out.ipv4).toEqual(["100.123.224.76"]);

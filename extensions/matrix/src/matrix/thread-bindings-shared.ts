@@ -1,7 +1,8 @@
 import type {
   BindingTargetKind,
   SessionBindingRecord,
-} from "openclaw/plugin-sdk/conversation-runtime";
+} from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 export type MatrixThreadBindingTargetKind = "subagent" | "acp";
 
@@ -39,6 +40,7 @@ export type MatrixThreadBindingManager = {
     targetSessionKey: string;
     maxAgeMs: number;
   }) => MatrixThreadBindingRecord[];
+  persist: () => Promise<void>;
   stop: () => void;
 };
 
@@ -74,32 +76,7 @@ export function resolveEffectiveBindingExpiry(params: {
   expiresAt?: number;
   reason?: "idle-expired" | "max-age-expired";
 } {
-  const idleTimeoutMs =
-    typeof params.record.idleTimeoutMs === "number"
-      ? Math.max(0, Math.floor(params.record.idleTimeoutMs))
-      : params.defaultIdleTimeoutMs;
-  const maxAgeMs =
-    typeof params.record.maxAgeMs === "number"
-      ? Math.max(0, Math.floor(params.record.maxAgeMs))
-      : params.defaultMaxAgeMs;
-  const inactivityExpiresAt =
-    idleTimeoutMs > 0
-      ? Math.max(params.record.lastActivityAt, params.record.boundAt) + idleTimeoutMs
-      : undefined;
-  const maxAgeExpiresAt = maxAgeMs > 0 ? params.record.boundAt + maxAgeMs : undefined;
-
-  if (inactivityExpiresAt != null && maxAgeExpiresAt != null) {
-    return inactivityExpiresAt <= maxAgeExpiresAt
-      ? { expiresAt: inactivityExpiresAt, reason: "idle-expired" }
-      : { expiresAt: maxAgeExpiresAt, reason: "max-age-expired" };
-  }
-  if (inactivityExpiresAt != null) {
-    return { expiresAt: inactivityExpiresAt, reason: "idle-expired" };
-  }
-  if (maxAgeExpiresAt != null) {
-    return { expiresAt: maxAgeExpiresAt, reason: "max-age-expired" };
-  }
-  return {};
+  return resolveThreadBindingLifecycle(params);
 }
 
 export function toSessionBindingRecord(
@@ -157,6 +134,10 @@ export function listBindingsForAccount(accountId: string): MatrixThreadBindingRe
   return [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()].filter(
     (entry) => entry.accountId === accountId,
   );
+}
+
+export function listAllBindings(): MatrixThreadBindingRecord[] {
+  return [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()];
 }
 
 export function getMatrixThreadBindingManagerEntry(

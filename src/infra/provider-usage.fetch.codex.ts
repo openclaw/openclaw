@@ -4,15 +4,18 @@ import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.
 
 type CodexUsageResponse = {
   rate_limit?: {
+    limit_reached?: boolean;
     primary_window?: {
       limit_window_seconds?: number;
       used_percent?: number;
       reset_at?: number;
+      reset_after_seconds?: number;
     };
     secondary_window?: {
       limit_window_seconds?: number;
       used_percent?: number;
       reset_at?: number;
+      reset_after_seconds?: number;
     };
   };
   plan_type?: string;
@@ -107,7 +110,7 @@ export async function fetchCodexUsage(
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : parseFloat(data.credits.balance) || 0;
+        : Number.parseFloat(data.credits.balance) || 0;
     plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
   }
 

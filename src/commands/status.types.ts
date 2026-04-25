@@ -1,4 +1,6 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { TaskAuditSummary } from "../tasks/task-registry.audit.js";
+import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
 export type SessionStatus = {
   agentId?: string;
@@ -10,6 +12,7 @@ export type SessionStatus = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   systemSent?: boolean;
@@ -48,6 +51,8 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  tasks: TaskRegistrySummary;
+  taskAudit: TaskAuditSummary;
   sessions: {
     paths: string[];
     count: number;

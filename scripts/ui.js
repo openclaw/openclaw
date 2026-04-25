@@ -16,7 +16,7 @@ function usage() {
   // keep this tiny; it's invoked from npm scripts too
   process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
-
+// eslint-disable-next-line no-unused-vars
 function which(cmd) {
   try {
     const key = process.platform === "win32" ? "Path" : "PATH";

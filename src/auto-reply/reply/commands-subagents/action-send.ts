@@ -1,7 +1,7 @@
 import {
   sendControlledSubagentMessage,
   steerControlledSubagentRun,
-} from "../../../agents/subagent-control.js";
+} from "../commands-subagents-control.runtime.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
@@ -32,9 +32,6 @@ export async function handleSubagentsSendAction(
   const targetResolution = resolveSubagentEntryForToken(runs, target);
   if ("reply" in targetResolution) {
     return targetResolution.reply;
-  }
-  if (steerRequested && targetResolution.entry.endedAt) {
-    return stopWithText(`${formatRunLabel(targetResolution.entry)} is already finished.`);
   }
 
   const controller = resolveCommandSubagentController(params, ctx.requesterKey);
@@ -74,6 +71,9 @@ export async function handleSubagentsSendAction(
   }
   if (result.status === "forbidden") {
     return stopWithText(`⚠️ ${result.error ?? "send failed"}`);
+  }
+  if (result.status === "done") {
+    return stopWithText(result.text);
   }
   return stopWithText(
     result.replyText ??

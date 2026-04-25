@@ -1,8 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledPluginRootAt } from "../../test/helpers/bundled-plugin-paths.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { PluginNpmIntegrityDriftParams } from "./install.js";
+
+const APP_ROOT = "/app";
+
+function appBundledPluginRoot(pluginId: string): string {
+  return bundledPluginRootAt(APP_ROOT, pluginId);
+}
 
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
+const installPluginFromClawHubMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
+const runCommandWithTimeoutMock = vi.fn();
+const tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpecMock(...args),
@@ -16,272 +31,695 @@ vi.mock("./marketplace.js", () => ({
   installPluginFromMarketplace: (...args: unknown[]) => installPluginFromMarketplaceMock(...args),
 }));
 
+vi.mock("./clawhub.js", () => ({
+  installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
+}));
+
 vi.mock("./bundled-sources.js", () => ({
   resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSourcesMock(...args),
 }));
 
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+}));
+
 const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } = await import("./update.js");
+
+function createSuccessfulNpmUpdateResult(params?: {
+  pluginId?: string;
+  targetDir?: string;
+  version?: string;
+  npmResolution?: {
+    name: string;
+    version: string;
+    resolvedSpec: string;
+  };
+}) {
+  return {
+    ok: true,
+    pluginId: params?.pluginId ?? "opik-openclaw",
+    targetDir: params?.targetDir ?? "/tmp/opik-openclaw",
+    version: params?.version ?? "0.2.6",
+    extensions: ["index.ts"],
+    ...(params?.npmResolution ? { npmResolution: params.npmResolution } : {}),
+  };
+}
+
+function createNpmInstallConfig(params: {
+  pluginId: string;
+  spec: string;
+  installPath: string;
+  integrity?: string;
+  resolvedName?: string;
+  resolvedSpec?: string;
+}) {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "npm" as const,
+          spec: params.spec,
+          installPath: params.installPath,
+          ...(params.integrity ? { integrity: params.integrity } : {}),
+          ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+          ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
+        },
+      },
+    },
+  };
+}
+
+function createMarketplaceInstallConfig(params: {
+  pluginId: string;
+  installPath: string;
+  marketplaceSource: string;
+  marketplacePlugin: string;
+  marketplaceName?: string;
+}): OpenClawConfig {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "marketplace" as const,
+          installPath: params.installPath,
+          marketplaceSource: params.marketplaceSource,
+          marketplacePlugin: params.marketplacePlugin,
+          ...(params.marketplaceName ? { marketplaceName: params.marketplaceName } : {}),
+        },
+      },
+    },
+  };
+}
+
+function createClawHubInstallConfig(params: {
+  pluginId: string;
+  installPath: string;
+  clawhubUrl: string;
+  clawhubPackage: string;
+  clawhubFamily: "bundle-plugin" | "code-plugin";
+  clawhubChannel: "community" | "official" | "private";
+}): OpenClawConfig {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "clawhub" as const,
+          spec: `clawhub:${params.clawhubPackage}`,
+          installPath: params.installPath,
+          clawhubUrl: params.clawhubUrl,
+          clawhubPackage: params.clawhubPackage,
+          clawhubFamily: params.clawhubFamily,
+          clawhubChannel: params.clawhubChannel,
+        },
+      },
+    },
+  };
+}
+
+function createBundledPathInstallConfig(params: {
+  loadPaths: string[];
+  installPath: string;
+  sourcePath?: string;
+  spec?: string;
+}): OpenClawConfig {
+  return {
+    plugins: {
+      load: { paths: params.loadPaths },
+      installs: {
+        feishu: {
+          source: "path",
+          sourcePath: params.sourcePath ?? appBundledPluginRoot("feishu"),
+          installPath: params.installPath,
+          ...(params.spec ? { spec: params.spec } : {}),
+        },
+      },
+    },
+  };
+}
+
+function createCodexAppServerInstallConfig(params: {
+  spec: string;
+  resolvedName?: string;
+  resolvedSpec?: string;
+}) {
+  return {
+    plugins: {
+      installs: {
+        "openclaw-codex-app-server": {
+          source: "npm" as const,
+          spec: params.spec,
+          installPath: "/tmp/openclaw-codex-app-server",
+          ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+          ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
+        },
+      },
+    },
+  };
+}
+
+function createInstalledPackageDir(params: { name?: string; version: string }): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-test-"));
+  tempDirs.push(dir);
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: params.name ?? "test-plugin", version: params.version }, null, 2),
+  );
+  return dir;
+}
+
+function mockNpmViewMetadata(params: {
+  name: string;
+  version: string;
+  integrity?: string;
+  shasum?: string;
+}) {
+  runCommandWithTimeoutMock.mockResolvedValueOnce({
+    code: 0,
+    stdout: JSON.stringify({
+      name: params.name,
+      version: params.version,
+      ...(params.integrity ? { "dist.integrity": params.integrity } : {}),
+      ...(params.shasum ? { "dist.shasum": params.shasum } : {}),
+    }),
+    stderr: "",
+  });
+}
+
+function expectNpmUpdateCall(params: {
+  spec: string;
+  expectedIntegrity?: string;
+  expectedPluginId?: string;
+}) {
+  expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      spec: params.spec,
+      expectedIntegrity: params.expectedIntegrity,
+      ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
+    }),
+  );
+}
+
+function createBundledSource(params?: { pluginId?: string; localPath?: string; npmSpec?: string }) {
+  const pluginId = params?.pluginId ?? "feishu";
+  return {
+    pluginId,
+    localPath: params?.localPath ?? appBundledPluginRoot(pluginId),
+    npmSpec: params?.npmSpec ?? `@openclaw/${pluginId}`,
+  };
+}
+
+function mockBundledSources(...sources: ReturnType<typeof createBundledSource>[]) {
+  resolveBundledPluginSourcesMock.mockReturnValue(
+    new Map(sources.map((source) => [source.pluginId, source])),
+  );
+}
+
+function expectBundledPathInstall(params: {
+  install: Record<string, unknown> | undefined;
+  sourcePath: string;
+  installPath: string;
+  spec?: string;
+}) {
+  expect(params.install).toMatchObject({
+    source: "path",
+    sourcePath: params.sourcePath,
+    installPath: params.installPath,
+    ...(params.spec ? { spec: params.spec } : {}),
+  });
+}
+
+function expectCodexAppServerInstallState(params: {
+  result: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
+  spec: string;
+  version: string;
+  resolvedSpec?: string;
+}) {
+  expect(params.result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
+    source: "npm",
+    spec: params.spec,
+    installPath: "/tmp/openclaw-codex-app-server",
+    version: params.version,
+    ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
+  });
+}
 
 describe("updateNpmInstalledPlugins", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromMarketplaceMock.mockReset();
+    installPluginFromClawHubMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
+    runCommandWithTimeoutMock.mockReset();
   });
 
-  it("skips integrity drift checks for unpinned npm specs during dry-run updates", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "opik-openclaw",
-      targetDir: "/tmp/opik-openclaw",
-      version: "0.2.6",
-      extensions: ["index.ts"],
-    });
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-    await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "opik-openclaw": {
-              source: "npm",
-              spec: "@opik/opik-openclaw",
-              integrity: "sha512-old",
-              installPath: "/tmp/opik-openclaw",
-            },
-          },
-        },
-      },
+  it.each([
+    {
+      name: "skips integrity drift checks for unpinned npm specs during dry-run updates",
+      config: createNpmInstallConfig({
+        pluginId: "opik-openclaw",
+        spec: "@opik/opik-openclaw",
+        integrity: "sha512-old",
+        installPath: "/tmp/opik-openclaw",
+      }),
       pluginIds: ["opik-openclaw"],
       dryRun: true,
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expectedCall: {
         spec: "@opik/opik-openclaw",
         expectedIntegrity: undefined,
-      }),
-    );
-  });
-
-  it("keeps integrity drift checks for exact-version npm specs during dry-run updates", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "opik-openclaw",
-      targetDir: "/tmp/opik-openclaw",
-      version: "0.2.6",
-      extensions: ["index.ts"],
-    });
-
-    await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "opik-openclaw": {
-              source: "npm",
-              spec: "@opik/opik-openclaw@0.2.5",
-              integrity: "sha512-old",
-              installPath: "/tmp/opik-openclaw",
-            },
-          },
-        },
       },
+    },
+    {
+      name: "keeps integrity drift checks for exact-version npm specs during dry-run updates",
+      config: createNpmInstallConfig({
+        pluginId: "opik-openclaw",
+        spec: "@opik/opik-openclaw@0.2.5",
+        integrity: "sha512-old",
+        installPath: "/tmp/opik-openclaw",
+      }),
       pluginIds: ["opik-openclaw"],
       dryRun: true,
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expectedCall: {
         spec: "@opik/opik-openclaw@0.2.5",
         expectedIntegrity: "sha512-old",
+      },
+    },
+    {
+      name: "skips recorded integrity checks when an explicit npm version override changes the spec",
+      config: createNpmInstallConfig({
+        pluginId: "openclaw-codex-app-server",
+        spec: "openclaw-codex-app-server@0.2.0-beta.3",
+        integrity: "sha512-old",
+        installPath: "/tmp/openclaw-codex-app-server",
       }),
-    );
-  });
-
-  it("formats package-not-found updates with a stable message", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      code: "npm_package_not_found",
-      error: "Package not found on npm: @openclaw/missing.",
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            missing: {
-              source: "npm",
-              spec: "@openclaw/missing",
-              installPath: "/tmp/missing",
-            },
-          },
-        },
-      },
-      pluginIds: ["missing"],
-      dryRun: true,
-    });
-
-    expect(result.outcomes).toEqual([
-      {
-        pluginId: "missing",
-        status: "error",
-        message: "Failed to check missing: npm package not found for @openclaw/missing.",
-      },
-    ]);
-  });
-
-  it("falls back to raw installer error for unknown error codes", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      code: "invalid_npm_spec",
-      error: "unsupported npm spec: github:evil/evil",
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            bad: {
-              source: "npm",
-              spec: "github:evil/evil",
-              installPath: "/tmp/bad",
-            },
-          },
-        },
-      },
-      pluginIds: ["bad"],
-      dryRun: true,
-    });
-
-    expect(result.outcomes).toEqual([
-      {
-        pluginId: "bad",
-        status: "error",
-        message: "Failed to check bad: unsupported npm spec: github:evil/evil",
-      },
-    ]);
-  });
-
-  it("reuses a recorded npm dist-tag spec for id-based updates", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "openclaw-codex-app-server",
-      targetDir: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-      extensions: ["index.ts"],
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "openclaw-codex-app-server": {
-              source: "npm",
-              spec: "openclaw-codex-app-server@beta",
-              installPath: "/tmp/openclaw-codex-app-server",
-              resolvedName: "openclaw-codex-app-server",
-              resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.3",
-            },
-          },
-        },
-      },
-      pluginIds: ["openclaw-codex-app-server"],
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server@beta",
-        expectedPluginId: "openclaw-codex-app-server",
-      }),
-    );
-    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
-      source: "npm",
-      spec: "openclaw-codex-app-server@beta",
-      installPath: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-    });
-  });
-
-  it("uses and persists an explicit npm spec override during updates", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "openclaw-codex-app-server",
-      targetDir: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-      extensions: ["index.ts"],
-      npmResolution: {
-        name: "openclaw-codex-app-server",
-        version: "0.2.0-beta.4",
-        resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
-      },
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "openclaw-codex-app-server": {
-              source: "npm",
-              spec: "openclaw-codex-app-server",
-              installPath: "/tmp/openclaw-codex-app-server",
-            },
-          },
-        },
-      },
-      pluginIds: ["openclaw-codex-app-server"],
-      specOverrides: {
-        "openclaw-codex-app-server": "openclaw-codex-app-server@beta",
-      },
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server@beta",
-        expectedPluginId: "openclaw-codex-app-server",
-      }),
-    );
-    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
-      source: "npm",
-      spec: "openclaw-codex-app-server@beta",
-      installPath: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-      resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
-    });
-  });
-
-  it("skips recorded integrity checks when an explicit npm version override changes the spec", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "openclaw-codex-app-server",
-      targetDir: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-      extensions: ["index.ts"],
-    });
-
-    await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "openclaw-codex-app-server": {
-              source: "npm",
-              spec: "openclaw-codex-app-server@0.2.0-beta.3",
-              integrity: "sha512-old",
-              installPath: "/tmp/openclaw-codex-app-server",
-            },
-          },
-        },
-      },
       pluginIds: ["openclaw-codex-app-server"],
       specOverrides: {
         "openclaw-codex-app-server": "openclaw-codex-app-server@0.2.0-beta.4",
       },
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      installerResult: createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+      }),
+      expectedCall: {
         spec: "openclaw-codex-app-server@0.2.0-beta.4",
         expectedIntegrity: undefined,
+      },
+    },
+  ] as const)(
+    "$name",
+    async ({ config, pluginIds, dryRun, specOverrides, installerResult, expectedCall }) => {
+      installPluginFromNpmSpecMock.mockResolvedValue(
+        installerResult ?? createSuccessfulNpmUpdateResult(),
+      );
+
+      await updateNpmInstalledPlugins({
+        config,
+        pluginIds: [...pluginIds],
+        ...(dryRun ? { dryRun: true } : {}),
+        ...(specOverrides ? { specOverrides } : {}),
+      });
+
+      expectNpmUpdateCall(expectedCall);
+    },
+  );
+
+  it("skips npm reinstall and config rewrite when the installed artifact is unchanged", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+    const config: OpenClawConfig = {
+      plugins: {
+        installs: {
+          "lossless-claw": {
+            source: "npm",
+            spec: "@martian-engineering/lossless-claw",
+            installPath,
+            resolvedName: "@martian-engineering/lossless-claw",
+            resolvedVersion: "0.9.0",
+            resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+            integrity: "sha512-same",
+            shasum: "same",
+          },
+        },
+      },
+    };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["lossless-claw"],
+    });
+
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [
+        "npm",
+        "view",
+        "@martian-engineering/lossless-claw",
+        "name",
+        "version",
+        "dist.integrity",
+        "dist.shasum",
+        "--json",
+      ],
+      expect.any(Object),
+    );
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "unchanged",
+        currentVersion: "0.9.0",
+        nextVersion: "0.9.0",
+        message: "lossless-claw is up to date (0.9.0).",
+      },
+    ]);
+  });
+
+  it("falls through to npm reinstall when the recorded integrity differs", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-new",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.0",
+        npmResolution: {
+          name: "@martian-engineering/lossless-claw",
+          version: "0.9.0",
+          resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        },
       }),
     );
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "lossless-claw": {
+              source: "npm",
+              spec: "@martian-engineering/lossless-claw",
+              installPath,
+              resolvedName: "@martian-engineering/lossless-claw",
+              resolvedVersion: "0.9.0",
+              resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+              integrity: "sha512-old",
+            },
+          },
+        },
+      },
+      pluginIds: ["lossless-claw"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(result.changed).toBe(true);
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "lossless-claw",
+      status: "unchanged",
+      currentVersion: "0.9.0",
+      nextVersion: "0.9.0",
+    });
+  });
+
+  it("falls through to npm reinstall when metadata probing fails", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry timeout",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.0",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw",
+        installPath,
+      }),
+      pluginIds: ["lossless-claw"],
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "Could not check lossless-claw before update; falling back to installer path: npm view failed: registry timeout",
+    );
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockImplementation(
+      async (params: {
+        spec: string;
+        onIntegrityDrift?: (drift: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+      }) => {
+        const proceed = await params.onIntegrityDrift?.({
+          spec: params.spec,
+          expectedIntegrity: "sha512-old",
+          actualIntegrity: "sha512-new",
+          resolution: {
+            integrity: "sha512-new",
+            resolvedSpec: "@opik/opik-openclaw@0.2.5",
+            version: "0.2.5",
+          },
+        });
+        if (proceed === false) {
+          return {
+            ok: false,
+            error: "aborted: npm package integrity drift detected for @opik/opik-openclaw@0.2.5",
+          };
+        }
+        return createSuccessfulNpmUpdateResult();
+      },
+    );
+
+    const config = createNpmInstallConfig({
+      pluginId: "opik-openclaw",
+      spec: "@opik/opik-openclaw@0.2.5",
+      integrity: "sha512-old",
+      installPath: "/tmp/opik-openclaw",
+    });
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["opik-openclaw"],
+      logger: { warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      'Integrity drift for "opik-openclaw" (@opik/opik-openclaw@0.2.5): expected sha512-old, got sha512-new',
+    );
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "opik-openclaw",
+        status: "error",
+        message:
+          "Failed to update opik-openclaw: aborted: npm package integrity drift detected for @opik/opik-openclaw@0.2.5",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "formats package-not-found updates with a stable message",
+      installerResult: {
+        ok: false,
+        code: "npm_package_not_found",
+        error: "Package not found on npm: @openclaw/missing.",
+      },
+      config: createNpmInstallConfig({
+        pluginId: "missing",
+        spec: "@openclaw/missing",
+        installPath: "/tmp/missing",
+      }),
+      pluginId: "missing",
+      expectedMessage: "Failed to check missing: npm package not found for @openclaw/missing.",
+    },
+    {
+      name: "falls back to raw installer error for unknown error codes",
+      installerResult: {
+        ok: false,
+        code: "invalid_npm_spec",
+        error: "unsupported npm spec: github:evil/evil",
+      },
+      config: createNpmInstallConfig({
+        pluginId: "bad",
+        spec: "github:evil/evil",
+        installPath: "/tmp/bad",
+      }),
+      pluginId: "bad",
+      expectedMessage: "Failed to check bad: unsupported npm spec: github:evil/evil",
+    },
+  ] as const)("$name", async ({ installerResult, config, pluginId, expectedMessage }) => {
+    installPluginFromNpmSpecMock.mockResolvedValue(installerResult);
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: [pluginId],
+      dryRun: true,
+    });
+
+    expect(result.outcomes).toEqual([
+      {
+        pluginId,
+        status: "error",
+        message: expectedMessage,
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "reuses a recorded npm dist-tag spec for id-based updates",
+      installerResult: {
+        ok: true,
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+        extensions: ["index.ts"],
+      },
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server@beta",
+        resolvedName: "openclaw-codex-app-server",
+        resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.3",
+      }),
+      expectedSpec: "openclaw-codex-app-server@beta",
+      expectedVersion: "0.2.0-beta.4",
+    },
+    {
+      name: "uses and persists an explicit npm spec override during updates",
+      installerResult: {
+        ok: true,
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+        extensions: ["index.ts"],
+        npmResolution: {
+          name: "openclaw-codex-app-server",
+          version: "0.2.0-beta.4",
+          resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+        },
+      },
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      specOverrides: {
+        "openclaw-codex-app-server": "openclaw-codex-app-server@beta",
+      },
+      expectedSpec: "openclaw-codex-app-server@beta",
+      expectedVersion: "0.2.0-beta.4",
+      expectedResolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+    },
+  ] as const)(
+    "$name",
+    async ({
+      installerResult,
+      config,
+      specOverrides,
+      expectedSpec,
+      expectedVersion,
+      expectedResolvedSpec,
+    }) => {
+      installPluginFromNpmSpecMock.mockResolvedValue(installerResult);
+
+      const result = await updateNpmInstalledPlugins({
+        config,
+        pluginIds: ["openclaw-codex-app-server"],
+        ...(specOverrides ? { specOverrides } : {}),
+      });
+
+      expectNpmUpdateCall({
+        spec: expectedSpec,
+        expectedPluginId: "openclaw-codex-app-server",
+      });
+      expectCodexAppServerInstallState({
+        result,
+        spec: expectedSpec,
+        version: expectedVersion,
+        ...(expectedResolvedSpec ? { resolvedSpec: expectedResolvedSpec } : {}),
+      });
+    },
+  );
+
+  it("updates ClawHub-installed plugins via recorded package metadata", async () => {
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/demo",
+      version: "1.2.4",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        integrity: "sha256-next",
+        resolvedAt: "2026-03-22T00:00:00.000Z",
+      },
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+      pluginIds: ["demo"],
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo",
+        baseUrl: "https://clawhub.ai",
+        expectedPluginId: "demo",
+        mode: "update",
+      }),
+    );
+    expect(result.config.plugins?.installs?.demo).toMatchObject({
+      source: "clawhub",
+      spec: "clawhub:demo",
+      installPath: "/tmp/demo",
+      version: "1.2.4",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+      integrity: "sha256-next",
+    });
   });
 
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
@@ -352,18 +790,12 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "claude-bundle": {
-              source: "marketplace",
-              marketplaceSource: "vincentkoc/claude-marketplace",
-              marketplacePlugin: "claude-bundle",
-              installPath: "/tmp/claude-bundle",
-            },
-          },
-        },
-      },
+      config: createMarketplaceInstallConfig({
+        pluginId: "claude-bundle",
+        installPath: "/tmp/claude-bundle",
+        marketplaceSource: "vincentkoc/claude-marketplace",
+        marketplacePlugin: "claude-bundle",
+      }),
       pluginIds: ["claude-bundle"],
       dryRun: true,
     });
@@ -400,19 +832,13 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "claude-bundle": {
-              source: "marketplace",
-              marketplaceName: "Vincent's Claude Plugins",
-              marketplaceSource: "vincentkoc/claude-marketplace",
-              marketplacePlugin: "claude-bundle",
-              installPath: "/tmp/claude-bundle",
-            },
-          },
-        },
-      },
+      config: createMarketplaceInstallConfig({
+        pluginId: "claude-bundle",
+        installPath: "/tmp/claude-bundle",
+        marketplaceName: "Vincent's Claude Plugins",
+        marketplaceSource: "vincentkoc/claude-marketplace",
+        marketplacePlugin: "claude-bundle",
+      }),
       pluginIds: ["claude-bundle"],
     });
 
@@ -426,6 +852,32 @@ describe("updateNpmInstalledPlugins", () => {
       marketplacePlugin: "claude-bundle",
     });
   });
+
+  it("forwards dangerous force unsafe install to plugin update installers", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server@beta",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      dangerouslyForceUnsafeInstall: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+        dangerouslyForceUnsafeInstall: true,
+        expectedPluginId: "openclaw-codex-app-server",
+      }),
+    );
+  });
 });
 
 describe("syncPluginsForUpdateChannel", () => {
@@ -434,85 +886,51 @@ describe("syncPluginsForUpdateChannel", () => {
     resolveBundledPluginSourcesMock.mockReset();
   });
 
-  it("keeps bundled path installs on beta without reinstalling from npm", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "feishu",
-          {
-            pluginId: "feishu",
-            localPath: "/app/extensions/feishu",
-            npmSpec: "@openclaw/feishu",
-          },
-        ],
-      ]),
-    );
+  it.each([
+    {
+      name: "keeps bundled path installs on beta without reinstalling from npm",
+      config: createBundledPathInstallConfig({
+        loadPaths: [appBundledPluginRoot("feishu")],
+        installPath: appBundledPluginRoot("feishu"),
+        spec: "@openclaw/feishu",
+      }),
+      expectedChanged: false,
+      expectedLoadPaths: [appBundledPluginRoot("feishu")],
+      expectedInstallPath: appBundledPluginRoot("feishu"),
+    },
+    {
+      name: "repairs bundled install metadata when the load path is re-added",
+      config: createBundledPathInstallConfig({
+        loadPaths: [],
+        installPath: "/tmp/old-feishu",
+        spec: "@openclaw/feishu",
+      }),
+      expectedChanged: true,
+      expectedLoadPaths: [appBundledPluginRoot("feishu")],
+      expectedInstallPath: appBundledPluginRoot("feishu"),
+    },
+  ] as const)(
+    "$name",
+    async ({ config, expectedChanged, expectedLoadPaths, expectedInstallPath }) => {
+      mockBundledSources(createBundledSource());
 
-    const result = await syncPluginsForUpdateChannel({
-      channel: "beta",
-      config: {
-        plugins: {
-          load: { paths: ["/app/extensions/feishu"] },
-          installs: {
-            feishu: {
-              source: "path",
-              sourcePath: "/app/extensions/feishu",
-              installPath: "/app/extensions/feishu",
-              spec: "@openclaw/feishu",
-            },
-          },
-        },
-      },
-    });
+      const result = await syncPluginsForUpdateChannel({
+        channel: "beta",
+        config,
+      });
 
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expect(result.summary.switchedToNpm).toEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual(["/app/extensions/feishu"]);
-    expect(result.config.plugins?.installs?.feishu?.source).toBe("path");
-  });
-
-  it("repairs bundled install metadata when the load path is re-added", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "feishu",
-          {
-            pluginId: "feishu",
-            localPath: "/app/extensions/feishu",
-            npmSpec: "@openclaw/feishu",
-          },
-        ],
-      ]),
-    );
-
-    const result = await syncPluginsForUpdateChannel({
-      channel: "beta",
-      config: {
-        plugins: {
-          load: { paths: [] },
-          installs: {
-            feishu: {
-              source: "path",
-              sourcePath: "/app/extensions/feishu",
-              installPath: "/tmp/old-feishu",
-              spec: "@openclaw/feishu",
-            },
-          },
-        },
-      },
-    });
-
-    expect(result.changed).toBe(true);
-    expect(result.config.plugins?.load?.paths).toEqual(["/app/extensions/feishu"]);
-    expect(result.config.plugins?.installs?.feishu).toMatchObject({
-      source: "path",
-      sourcePath: "/app/extensions/feishu",
-      installPath: "/app/extensions/feishu",
-      spec: "@openclaw/feishu",
-    });
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-  });
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(result.changed).toBe(expectedChanged);
+      expect(result.summary.switchedToNpm).toEqual([]);
+      expect(result.config.plugins?.load?.paths).toEqual(expectedLoadPaths);
+      expectBundledPathInstall({
+        install: result.config.plugins?.installs?.feishu,
+        sourcePath: appBundledPluginRoot("feishu"),
+        installPath: expectedInstallPath,
+        spec: "@openclaw/feishu",
+      });
+    },
+  );
 
   it("forwards an explicit env to bundled plugin source resolution", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
@@ -533,17 +951,10 @@ describe("syncPluginsForUpdateChannel", () => {
 
   it("uses the provided env when matching bundled load and install paths", async () => {
     const bundledHome = "/tmp/openclaw-home";
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "feishu",
-          {
-            pluginId: "feishu",
-            localPath: `${bundledHome}/plugins/feishu`,
-            npmSpec: "@openclaw/feishu",
-          },
-        ],
-      ]),
+    mockBundledSources(
+      createBundledSource({
+        localPath: `${bundledHome}/plugins/feishu`,
+      }),
     );
 
     const previousHome = process.env.HOME;
@@ -573,8 +984,8 @@ describe("syncPluginsForUpdateChannel", () => {
 
       expect(result.changed).toBe(false);
       expect(result.config.plugins?.load?.paths).toEqual(["~/plugins/feishu"]);
-      expect(result.config.plugins?.installs?.feishu).toMatchObject({
-        source: "path",
+      expectBundledPathInstall({
+        install: result.config.plugins?.installs?.feishu,
         sourcePath: "~/plugins/feishu",
         installPath: "~/plugins/feishu",
       });

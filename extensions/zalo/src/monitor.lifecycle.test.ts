@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
@@ -9,8 +10,8 @@ const deleteWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }))
 const getUpdatesMock = vi.fn(() => new Promise(() => {}));
 const setWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
 
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
+vi.mock("./api.js", async () => {
+  const actual = await vi.importActual<typeof import("./api.js")>("./api.js");
   return {
     ...actual,
     deleteWebhook: deleteWebhookMock,
@@ -28,10 +29,6 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-async function waitForPollingLoopStart(): Promise<void> {
-  await vi.waitFor(() => expect(getUpdatesMock).toHaveBeenCalledTimes(1));
-}
-
 const TEST_ACCOUNT = {
   accountId: "default",
   config: {},
@@ -39,11 +36,11 @@ const TEST_ACCOUNT = {
 
 const TEST_CONFIG = {} as OpenClawConfig;
 
-function createLifecycleRuntime() {
-  return {
-    log: vi.fn<(message: string) => void>(),
-    error: vi.fn<(message: string) => void>(),
-  };
+async function settleLifecycleWork(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) {
+    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 async function startLifecycleMonitor(
@@ -55,7 +52,7 @@ async function startLifecycleMonitor(
 ) {
   const { monitorZaloProvider } = await import("./monitor.js");
   const abort = new AbortController();
-  const runtime = createLifecycleRuntime();
+  const runtime = createRuntimeEnv();
   const run = monitorZaloProvider({
     token: "test-token",
     account: TEST_ACCOUNT,
@@ -80,7 +77,8 @@ describe("monitorZaloProvider lifecycle", () => {
       settled = true;
     });
 
-    await waitForPollingLoopStart();
+    await settleLifecycleWork();
+    expect(getUpdatesMock).toHaveBeenCalledTimes(1);
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).not.toHaveBeenCalled();
@@ -104,7 +102,8 @@ describe("monitorZaloProvider lifecycle", () => {
 
     const { abort, runtime, run } = await startLifecycleMonitor();
 
-    await waitForPollingLoopStart();
+    await settleLifecycleWork();
+    expect(getUpdatesMock).toHaveBeenCalledTimes(1);
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).toHaveBeenCalledTimes(1);
@@ -122,7 +121,8 @@ describe("monitorZaloProvider lifecycle", () => {
 
     const { abort, runtime, run } = await startLifecycleMonitor();
 
-    await waitForPollingLoopStart();
+    await settleLifecycleWork();
+    expect(getUpdatesMock).toHaveBeenCalledTimes(1);
 
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).not.toHaveBeenCalled();
@@ -139,10 +139,24 @@ describe("monitorZaloProvider lifecycle", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
 
+    let resolveSetWebhookCalled: (() => void) | undefined;
+    const setWebhookCalled = new Promise<void>((resolve) => {
+      resolveSetWebhookCalled = resolve;
+    });
+    setWebhookMock.mockImplementationOnce(async () => {
+      resolveSetWebhookCalled?.();
+      return { ok: true, result: { url: "" } };
+    });
+
+    let resolveDeleteWebhookCalled: (() => void) | undefined;
+    const deleteWebhookCalled = new Promise<void>((resolve) => {
+      resolveDeleteWebhookCalled = resolve;
+    });
     let resolveDeleteWebhook: (() => void) | undefined;
     deleteWebhookMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
+          resolveDeleteWebhookCalled?.();
           resolveDeleteWebhook = () => resolve({ ok: true, result: { url: "" } });
         }),
     );
@@ -157,15 +171,18 @@ describe("monitorZaloProvider lifecycle", () => {
       settled = true;
     });
 
-    await vi.waitFor(() => expect(setWebhookMock).toHaveBeenCalledTimes(1));
-    expect(registry.httpRoutes).toHaveLength(1);
+    await setWebhookCalled;
+    await settleLifecycleWork();
+    expect(setWebhookMock).toHaveBeenCalledTimes(1);
+    expect(registry.httpRoutes).toHaveLength(2);
 
     abort.abort();
 
-    await vi.waitFor(() => expect(deleteWebhookMock).toHaveBeenCalledTimes(1));
+    await deleteWebhookCalled;
+    expect(deleteWebhookMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).toHaveBeenCalledWith("test-token", undefined, 5000);
     expect(settled).toBe(false);
-    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes).toHaveLength(2);
 
     resolveDeleteWebhook?.();
     await monitoredRun;

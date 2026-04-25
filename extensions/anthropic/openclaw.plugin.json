@@ -1,19 +1,38 @@
 {
   "id": "anthropic",
+  "enabledByDefault": true,
   "providers": ["anthropic"],
+  "modelSupport": {
+    "modelPrefixes": ["claude-"]
+  },
+  "cliBackends": ["claude-cli"],
+  "syntheticAuthRefs": ["claude-cli"],
   "providerAuthEnvVars": {
     "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
   },
   "providerAuthChoices": [
     {
       "provider": "anthropic",
-      "method": "setup-token",
-      "choiceId": "token",
-      "choiceLabel": "Anthropic token (paste setup-token)",
-      "choiceHint": "Run `claude setup-token` elsewhere, then paste the token here",
+      "method": "cli",
+      "choiceId": "anthropic-cli",
+      "deprecatedChoiceIds": ["claude-cli"],
+      "choiceLabel": "Anthropic Claude CLI",
+      "choiceHint": "Reuse a local Claude CLI login on this host",
+      "assistantPriority": -20,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "setup-token + API key"
+      "groupHint": "Claude CLI + API key"
+    },
+    {
+      "provider": "anthropic",
+      "method": "setup-token",
+      "choiceId": "setup-token",
+      "choiceLabel": "Anthropic setup-token",
+      "choiceHint": "Manual token path",
+      "assistantPriority": 40,
+      "groupId": "anthropic",
+      "groupLabel": "Anthropic",
+      "groupHint": "Claude CLI + API key + token"
     },
     {
       "provider": "anthropic",
@@ -22,13 +41,28 @@
       "choiceLabel": "Anthropic API key",
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "setup-token + API key",
+      "groupHint": "Claude CLI + API key",
       "optionKey": "anthropicApiKey",
       "cliFlag": "--anthropic-api-key",
       "cliOption": "--anthropic-api-key <key>",
       "cliDescription": "Anthropic API key"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["anthropic"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "anthropic": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "claude-opus-4-7"
+      },
+      "autoPriority": {
+        "image": 20
+      },
+      "nativeDocumentInputs": ["pdf"]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

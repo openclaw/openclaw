@@ -3,24 +3,82 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
-import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import {
+  __testing as sessionMcpTesting,
+  getOrCreateSessionMcpRuntime,
+} from "../../agents/pi-bundle-mcp-tools.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   __testing as sessionBindingTesting,
+  getSessionBindingService,
   registerSessionBindingAdapter,
 } from "../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
-import { applyResetModelOverride } from "./session-reset-model.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
-// Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
-vi.mock("../../agents/session-write-lock.js", () => ({
-  acquireSessionWriteLock: async () => ({ release: async () => {} }),
+const sessionForkMocks = vi.hoisted(() => ({
+  forkSessionFromParent: vi.fn(),
+  nextSessionId: 0,
 }));
+const channelSummaryMocks = vi.hoisted(() => ({
+  buildChannelSummary: vi.fn(async () => [] as string[]),
+}));
+
+type ForkSessionParamsForTest = {
+  parentEntry: SessionEntry;
+  sessionsDir: string;
+};
+
+vi.mock("./session-fork.js", () => ({
+  forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
+    sessionForkMocks.forkSessionFromParent(...args),
+  resolveParentForkMaxTokens: (cfg: { session?: { parentForkMaxTokens?: unknown } }) => {
+    const configured = cfg.session?.parentForkMaxTokens;
+    return typeof configured === "number" && Number.isFinite(configured) && configured >= 0
+      ? Math.floor(configured)
+      : 100_000;
+  },
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => null,
+}));
+
+vi.mock("../../infra/channel-summary.js", () => ({
+  buildChannelSummary: channelSummaryMocks.buildChannelSummary,
+}));
+
+// Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
+vi.mock("../../agents/session-write-lock.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
+    "../../agents/session-write-lock.js",
+  );
+  return {
+    ...actual,
+    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(
+      ({
+        timeoutMs,
+        graceMs = 2 * 60 * 1000,
+        minMs = 5 * 60 * 1000,
+      }: {
+        timeoutMs: number;
+        graceMs?: number;
+        minMs?: number;
+      }) => Math.max(minMs, timeoutMs + graceMs),
+    ),
+  };
+});
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -54,6 +112,7 @@ async function makeStorePath(prefix: string): Promise<string> {
 }
 
 const createStorePath = makeStorePath;
+const TEST_NATIVE_MODEL_PROFILE_ID = "openai-codex:secondary@example.test";
 
 async function writeSessionStoreFast(
   storePath: string,
@@ -63,6 +122,161 @@ async function writeSessionStoreFast(
   await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 }
 
+function setMinimalCurrentConversationBindingRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => candidate?.trim())
+                .find((candidate) => candidate && candidate.length > 0);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "signal",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "signal", label: "Signal" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => candidate?.trim().replace(/^signal:/i, ""))
+                .find((candidate) => candidate && candidate.length > 0);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "googlechat",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "googlechat", label: "Google Chat" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => candidate?.trim().replace(/^googlechat:/i, ""))
+                .map((candidate) => candidate?.replace(/^spaces:/i, "spaces/"))
+                .find((candidate) => candidate && candidate.length > 0);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+    ]),
+  );
+}
+
+function registerCurrentConversationBindingAdapterForTest(params: {
+  channel: "slack" | "signal" | "googlechat";
+  accountId: string;
+}): void {
+  const bindings: Array<{
+    bindingId: string;
+    targetSessionKey: string;
+    targetKind: "session" | "subagent";
+    conversation: {
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+    };
+    status: "active";
+    boundAt: number;
+    metadata?: Record<string, unknown>;
+  }> = [];
+  registerSessionBindingAdapter({
+    channel: params.channel,
+    accountId: params.accountId,
+    capabilities: { placements: ["current"] },
+    bind: async (input) => {
+      const record = {
+        bindingId: `${input.conversation.channel}:${input.conversation.accountId}:${input.conversation.conversationId}`,
+        targetSessionKey: input.targetSessionKey,
+        targetKind: input.targetKind,
+        conversation: input.conversation,
+        status: "active" as const,
+        boundAt: Date.now(),
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      };
+      bindings.push(record);
+      return record;
+    },
+    listBySession: (targetSessionKey) =>
+      bindings.filter((binding) => binding.targetSessionKey === targetSessionKey),
+    resolveByConversation: (ref) =>
+      bindings.find(
+        (binding) =>
+          binding.conversation.channel === ref.channel &&
+          binding.conversation.accountId === ref.accountId &&
+          binding.conversation.conversationId === ref.conversationId,
+      ) ?? null,
+  });
+}
+
+beforeEach(() => {
+  channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  sessionForkMocks.nextSessionId = 0;
+  sessionForkMocks.forkSessionFromParent
+    .mockReset()
+    .mockImplementation(async ({ parentEntry, sessionsDir }: ForkSessionParamsForTest) => {
+      if (!parentEntry.sessionFile) {
+        return null;
+      }
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
+      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+          parentSession: parentEntry.sessionFile,
+        })}\n`,
+        "utf-8",
+      );
+      return { sessionId, sessionFile: await fs.realpath(sessionFile) };
+    });
+});
+afterEach(async () => {
+  await sessionMcpTesting.resetSessionMcpRuntimeManager();
+});
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -135,9 +349,12 @@ describe("initSessionState thread forking", () => {
     if (!newSessionFile) {
       throw new Error("Missing session file for forked thread");
     }
-    const [headerLine] = (await fs.readFile(newSessionFile, "utf-8"))
+    const headerLine = (await fs.readFile(newSessionFile, "utf-8"))
       .split(/\r?\n/)
-      .filter((line) => line.trim().length > 0);
+      .find((line) => line.trim().length > 0);
+    if (!headerLine) {
+      throw new Error("Missing session header");
+    }
     const parsedHeader = JSON.parse(headerLine) as {
       parentSession?: string;
     };
@@ -366,7 +583,10 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.sessionFile).toBeTruthy();
     const forkedContent = await fs.readFile(result.sessionEntry.sessionFile ?? "", "utf-8");
-    const [headerLine] = forkedContent.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    const headerLine = forkedContent.split(/\r?\n/).find((line) => line.trim().length > 0);
+    if (!headerLine) {
+      throw new Error("Missing session header");
+    }
     const parsedHeader = JSON.parse(headerLine) as { parentSession?: string };
     const expectedParentSession = await fs.realpath(parentSessionFile);
     const actualParentSession = parsedHeader.parentSession
@@ -398,6 +618,35 @@ describe("initSessionState thread forking", () => {
     expect(path.basename(sessionFile ?? "")).toBe(
       `${result.sessionEntry.sessionId}-topic-456.jsonl`,
     );
+  });
+
+  it("records topic-specific session files from SessionKey when MessageThreadId is absent", async () => {
+    const root = await makeCaseDir("openclaw-topic-session-key-");
+    const storePath = path.join(root, "sessions.json");
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+    try {
+      const result = await initSessionState({
+        ctx: {
+          Body: "Hello topic",
+          SessionKey: "agent:main:telegram:group:123:topic:456",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      const sessionFile = result.sessionEntry.sessionFile;
+      expect(sessionFile).toBeTruthy();
+      expect(path.basename(sessionFile ?? "")).toBe(
+        `${result.sessionEntry.sessionId}-topic-456.jsonl`,
+      );
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 });
 
@@ -461,7 +710,7 @@ describe("initSessionState RawBody", () => {
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
   });
 
-  it("does not rotate local session state for /new on bound ACP sessions", async () => {
+  it("rotates local session state for /new on bound ACP sessions", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-");
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
@@ -512,12 +761,12 @@ describe("initSessionState RawBody", () => {
       commandAuthorized: true,
     });
 
-    expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(result.isNewSession).toBe(false);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(true);
   });
 
-  it("does not rotate local session state for ACP /new when conversation IDs are unavailable", async () => {
+  it("rotates local session state for ACP /new when no matching conversation binding exists", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-no-conversation-");
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
@@ -557,9 +806,9 @@ describe("initSessionState RawBody", () => {
       commandAuthorized: true,
     });
 
-    expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(result.isNewSession).toBe(false);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(true);
   });
 
   it("keeps custom reset triggers working on bound ACP sessions", async () => {
@@ -808,6 +1057,53 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("prefers native command target sessions over bound slash sessions", async () => {
+    const storePath = await createStorePath("native-command-target-session-");
+    const boundSlashSessionKey = "slack:slash:123";
+    const targetSessionKey = "agent:main:main";
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    setMinimalCurrentConversationBindingRegistryForTests();
+    registerCurrentConversationBindingAdapterForTest({
+      channel: "slack",
+      accountId: "default",
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: boundSlashSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "channel:ops",
+      },
+      placement: "current",
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: `/model openai-codex/gpt-5.4@${TEST_NATIVE_MODEL_PROFILE_ID}`,
+        CommandBody: `/model openai-codex/gpt-5.4@${TEST_NATIVE_MODEL_PROFILE_ID}`,
+        Provider: "slack",
+        Surface: "slack",
+        AccountId: "default",
+        SenderId: "U123",
+        From: "slack:U123",
+        To: "channel:ops",
+        OriginatingTo: "channel:ops",
+        SessionKey: boundSlashSessionKey,
+        CommandSource: "native",
+        CommandTargetSessionKey: targetSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe(targetSessionKey);
+    expect(result.sessionCtx.SessionKey).toBe(targetSessionKey);
+  });
+
   it("uses the default per-agent sessions store when config store is unset", async () => {
     const root = await makeCaseDir("openclaw-session-store-default-");
     const stateDir = path.join(root, ".openclaw");
@@ -847,6 +1143,88 @@ describe("initSessionState RawBody", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it.each([
+    {
+      name: "Slack DM",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        From: "slack:user:U123",
+        To: "user:U123",
+        OriginatingTo: "user:U123",
+        SenderId: "U123",
+        ChatType: "direct",
+      },
+    },
+    {
+      name: "Signal DM",
+      conversation: {
+        channel: "signal",
+        accountId: "default",
+        conversationId: "+15550001111",
+      },
+      ctx: {
+        Provider: "signal",
+        Surface: "signal",
+        From: "signal:+15550001111",
+        To: "+15550001111",
+        OriginatingTo: "signal:+15550001111",
+        SenderId: "+15550001111",
+        ChatType: "direct",
+      },
+    },
+    {
+      name: "Google Chat room",
+      conversation: {
+        channel: "googlechat",
+        accountId: "default",
+        conversationId: "spaces/AAAAAAA",
+      },
+      ctx: {
+        Provider: "googlechat",
+        Surface: "googlechat",
+        From: "googlechat:users/123",
+        To: "spaces/AAAAAAA",
+        OriginatingTo: "googlechat:spaces/AAAAAAA",
+        SenderId: "users/123",
+        ChatType: "group",
+      },
+    },
+  ])("routes generic current-conversation bindings for $name", async ({ conversation, ctx }) => {
+    setMinimalCurrentConversationBindingRegistryForTests();
+    registerCurrentConversationBindingAdapterForTest({
+      channel: conversation.channel as "slack" | "signal" | "googlechat",
+      accountId: "default",
+    });
+    const storePath = await createStorePath("openclaw-generic-current-binding-");
+    const boundSessionKey = `agent:codex:acp:binding:${conversation.channel}:default:test`;
+
+    await getSessionBindingService().bind({
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation,
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello",
+        SessionKey: `agent:main:${conversation.channel}:seed`,
+        ...ctx,
+      },
+      cfg: {
+        session: { store: storePath },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe(boundSessionKey);
   });
 });
 
@@ -948,6 +1326,168 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("keeps the existing stale session for /reset soft", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-soft-stale-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:soft-stale";
+    const existingSessionId = "soft-stale-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset soft",
+        RawBody: "/reset soft",
+        CommandBody: "/reset soft",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
+  });
+
+  it("keeps the existing stale session for /reset: soft", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-soft-colon-stale-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:soft-colon-stale";
+    const existingSessionId = "soft-colon-stale-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset: soft",
+        RawBody: "/reset: soft",
+        CommandBody: "/reset: soft",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
+  });
+
+  it("keeps the existing stale session for multiline /reset soft tails", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-soft-multiline-stale-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:soft-multiline-stale";
+    const existingSessionId = "soft-multiline-stale-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset soft\nre-read persona files",
+        RawBody: "/reset soft\nre-read persona files",
+        CommandBody: "/reset soft\nre-read persona files",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
+  });
+
+  it("does not preserve a stale session for unauthorized /reset soft", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-soft-stale-unauthorized-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:soft-stale-unauthorized";
+    const existingSessionId = "soft-stale-unauthorized-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset soft",
+        RawBody: "/reset soft",
+        CommandBody: "/reset soft",
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: false,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
   });
 
   it("uses per-type overrides for thread sessions", async () => {
@@ -1162,7 +1702,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
         senderName: "Other",
         senderE164: "+1555123456",
         senderId: "123@lid",
-        expectedIsNewSession: false,
+        expectedIsNewSession: true,
       },
     ] as const;
 
@@ -1206,6 +1746,48 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       }
     }
   });
+
+  it("starts a fresh session when a scoped WhatsApp group entry only contains activation state", async () => {
+    const sessionKey =
+      "agent:main:whatsapp:group:120363406150318674@g.us:thread:whatsapp-account-work";
+    const storePath = await createStorePath("openclaw-group-activation-backfill-");
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        groupActivation: "always",
+      },
+    });
+    const cfg = makeCfg({
+      storePath,
+      allowFrom: ["+41796666864"],
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello without mention",
+        RawBody: "hello without mention",
+        CommandBody: "hello without mention",
+        From: "120363406150318674@g.us",
+        To: "+41779241027",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SenderName: "Peschiño",
+        SenderE164: "+41796666864",
+        SenderId: "41796666864:0@s.whatsapp.net",
+      },
+      cfg,
+      commandAuthorized: false,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    expect(result.sessionEntry.groupActivation).toBe("always");
+    expect(result.sessionEntry.sessionId).toBe(result.sessionId);
+    expect(typeof result.sessionEntry.updatedAt).toBe("number");
+  });
 });
 
 describe("initSessionState reset triggers in Slack channels", () => {
@@ -1223,6 +1805,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
   }
 
   it("supports mention-prefixed Slack reset commands and preserves args", async () => {
+    setMinimalCurrentConversationBindingRegistryForTests();
     const existingSessionId = "existing-session-123";
     const sessionKey = "agent:main:slack:channel:c2";
     const body = "<@U123> /new take notes";
@@ -1240,6 +1823,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
       ctx: {
         Body: body,
         RawBody: body,
+        BodyForCommands: "/new take notes",
         CommandBody: body,
         From: "slack:channel:C1",
         To: "channel:C1",
@@ -1249,6 +1833,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
         Surface: "slack",
         SenderId: "U123",
         SenderName: "Owner",
+        WasMentioned: true,
       },
       cfg,
       commandAuthorized: true,
@@ -1258,101 +1843,6 @@ describe("initSessionState reset triggers in Slack channels", () => {
     expect(result.resetTriggered).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
     expect(result.bodyStripped).toBe("take notes");
-  });
-});
-
-describe("applyResetModelOverride", () => {
-  it("selects a model hint and strips it from the body", async () => {
-    const cfg = {} as OpenClawConfig;
-    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry: SessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
-    const sessionCtx = { BodyStripped: "minimax summarize" };
-    const ctx = { ChatType: "direct" };
-
-    await applyResetModelOverride({
-      cfg,
-      resetTriggered: true,
-      bodyStripped: "minimax summarize",
-      sessionCtx,
-      ctx,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:dm:1",
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex,
-    });
-
-    expect(sessionEntry.providerOverride).toBe("minimax");
-    expect(sessionEntry.modelOverride).toBe("m2.7");
-    expect(sessionCtx.BodyStripped).toBe("summarize");
-  });
-
-  it("clears auth profile overrides when reset applies a model", async () => {
-    const cfg = {} as OpenClawConfig;
-    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry: SessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      authProfileOverride: "anthropic:default",
-      authProfileOverrideSource: "user",
-      authProfileOverrideCompactionCount: 2,
-    };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
-    const sessionCtx = { BodyStripped: "minimax summarize" };
-    const ctx = { ChatType: "direct" };
-
-    await applyResetModelOverride({
-      cfg,
-      resetTriggered: true,
-      bodyStripped: "minimax summarize",
-      sessionCtx,
-      ctx,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:dm:1",
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex,
-    });
-
-    expect(sessionEntry.authProfileOverride).toBeUndefined();
-    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
-    expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
-  });
-
-  it("skips when resetTriggered is false", async () => {
-    const cfg = {} as OpenClawConfig;
-    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-    const sessionEntry: SessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    };
-    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
-    const sessionCtx = { BodyStripped: "minimax summarize" };
-    const ctx = { ChatType: "direct" };
-
-    await applyResetModelOverride({
-      cfg,
-      resetTriggered: false,
-      bodyStripped: "minimax summarize",
-      sessionCtx,
-      ctx,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:dm:1",
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex,
-    });
-
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(sessionEntry.modelOverride).toBeUndefined();
-    expect(sessionCtx.BodyStripped).toBe("minimax summarize");
   });
 });
 
@@ -1438,6 +1928,14 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       authProfileOverride: "20251001",
       authProfileOverrideSource: "user",
       authProfileOverrideCompactionCount: 2,
+      cliSessionIds: { "claude-cli": "cli-session-123" },
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "cli-session-123",
+          authProfileId: "anthropic:default",
+        },
+      },
+      claudeCliSessionId: "cli-session-123",
     } as const;
     const cases = [
       {
@@ -1481,22 +1979,265 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry, testCase.name).toMatchObject(overrides);
+      expect(result.sessionEntry, testCase.name).toMatchObject({
+        providerOverride: overrides.providerOverride,
+        modelOverride: overrides.modelOverride,
+        authProfileOverride: overrides.authProfileOverride,
+        authProfileOverrideSource: overrides.authProfileOverrideSource,
+        authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
+      });
+      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
+      expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
+      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].cliSessionIds).toBeUndefined();
+      expect(stored[sessionKey].cliSessionBindings).toBeUndefined();
+      expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
     }
+  });
+
+  it("clears auto-sourced model/provider/auth overrides on /new and /reset (#69301)", async () => {
+    const storePath = await createStorePath("openclaw-reset-auto-overrides-");
+    const sessionKey = "agent:main:telegram:direct:6761477233";
+    const existingSessionId = "existing-session-auto-overrides";
+    const autoOverrides = {
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 1,
+      verboseLevel: "on",
+    } as const;
+    const cases = [
+      { name: "new clears auto-sourced overrides", body: "/new" },
+      { name: "reset clears auto-sourced overrides", body: "/reset" },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...autoOverrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "6761477233",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideSource, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideSource, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBeUndefined();
+      // Unrelated behavior overrides still carry across the reset.
+      expect(result.sessionEntry.verboseLevel, testCase.name).toBe(autoOverrides.verboseLevel);
+    }
+  });
+
+  it("preserves spawned session ownership metadata across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-spawned-metadata-");
+    const sessionKey = "subagent:owned-child";
+    const existingSessionId = "existing-session-owned-child";
+    const overrides = {
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/child-workspace",
+      parentSessionKey: "agent:main:main",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      displayName: "Ops Child",
+    } as const;
+    const cases = [
+      { name: "new preserves spawned session ownership metadata", body: "/new" },
+      { name: "reset preserves spawned session ownership metadata", body: "/reset" },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-owned-child",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry).toMatchObject(overrides);
+    }
+  });
+
+  it("requires operator.admin when Provider is internal even if Surface carries external metadata", async () => {
+    const storePath = await createStorePath("openclaw-internal-reset-provider-authoritative-");
+    const sessionKey = "agent:main:telegram:dm:provider-authoritative";
+    const existingSessionId = "existing-session-provider-authoritative";
+
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {},
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        Provider: "webchat",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        GatewayClientScopes: ["operator.write"],
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("keeps the existing session for /reset soft", async () => {
+    const storePath = await createStorePath("openclaw-soft-reset-session-");
+    const sessionKey = "agent:main:telegram:dm:user-soft-reset";
+    const existingSessionId = "existing-session-soft-reset";
+
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        cliSessionIds: { "claude-cli": "cli-session-1" },
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "cli-session-1",
+            extraSystemPromptHash: "prompt-hash",
+          },
+        },
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset soft",
+        RawBody: "/reset soft",
+        CommandBody: "/reset soft",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("keeps the existing session for /reset newline soft", async () => {
+    const storePath = await createStorePath("openclaw-reset-newline-soft-");
+    const sessionKey = "agent:main:telegram:dm:user-reset-newline-soft";
+    const existingSessionId = "existing-session-reset-newline-soft";
+
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {},
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset \nsoft",
+        RawBody: "/reset \nsoft",
+        CommandBody: "/reset \nsoft",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("archives the old session store entry on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";
     const existingSessionId = "existing-session-archive";
+    const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
     await seedSessionStoreWithOverrides({
       storePath,
       sessionKey,
       sessionId: existingSessionId,
       overrides: { verboseLevel: "on" },
     });
-    const sessionUtils = await import("../../gateway/session-utils.fs.js");
-    const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
+    await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
 
     const cfg = {
       session: { store: storePath, idleMinutes: 999 },
@@ -1520,14 +2261,11 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(archiveSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: existingSessionId,
-        storePath,
-        reason: "reset",
-      }),
+    expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+    const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+      entry.startsWith(`${existingSessionId}.jsonl.reset.`),
     );
-    archiveSpy.mockRestore();
+    expect(archived).toHaveLength(1);
   });
 
   it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
@@ -1541,6 +2279,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       const storePath = await createStorePath("openclaw-stale-archive-");
       const sessionKey = "agent:main:telegram:dm:archive-stale-user";
       const existingSessionId = "stale-session-to-be-archived";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
 
       await writeSessionStoreFast(storePath, {
         [sessionKey]: {
@@ -1548,9 +2287,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
         },
       });
-
-      const sessionUtils = await import("../../gateway/session-utils.fs.js");
-      const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
 
       const cfg = { session: { store: storePath } } as OpenClawConfig;
       const result = await initSessionState({
@@ -1572,17 +2309,166 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
       expect(result.sessionId).not.toBe(existingSessionId);
-      expect(archiveSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId: existingSessionId,
-          storePath,
-          reason: "reset",
-        }),
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
-      archiveSpy.mockRestore();
+      expect(archived).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps provider-owned CLI sessions on implicit daily reset boundaries", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-cli-implicit-reset-");
+      const sessionKey = "agent:main:telegram:dm:claude-cli-user";
+      const existingSessionId = "provider-owned-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const cliBinding = {
+        sessionId: "claude-session-1",
+        authProfileId: "anthropic:claude-cli",
+        mcpResumeHash: "mcp-resume-hash",
+      };
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-6",
+          cliSessionBindings: {
+            "claude-cli": cliBinding,
+          },
+          cliSessionIds: {
+            "claude-cli": cliBinding.sessionId,
+          },
+          claudeCliSessionId: cliBinding.sessionId,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "claude-cli-user",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual(cliBinding);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors explicit reset policies for provider-owned CLI sessions", async () => {
+    const storePath = await createStorePath("openclaw-cli-explicit-reset-");
+    const sessionKey = "agent:main:telegram:dm:claude-cli-explicit-user";
+    const existingSessionId = "provider-owned-explicit-session";
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "idle", idleMinutes: 1 },
+      },
+    } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now() - 5 * 60_000,
+        modelProvider: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-session-explicit",
+          },
+        },
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "claude-cli-explicit-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
+  });
+
+  it("disposes the previous bundle MCP runtime on session rollover", async () => {
+    const storePath = await createStorePath("openclaw-stale-runtime-dispose-");
+    const sessionKey = "agent:main:telegram:dm:runtime-stale-user";
+    const existingSessionId = "stale-runtime-session";
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "idle", idleMinutes: 1 },
+      },
+    } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now() - 5 * 60_000,
+      },
+    });
+
+    await getOrCreateSessionMcpRuntime({
+      sessionId: existingSessionId,
+      sessionKey,
+      workspaceDir: path.dirname(storePath),
+      cfg,
+    });
+
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(existingSessionId);
+
+    await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "user-stale-runtime",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(existingSessionId);
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
@@ -1638,6 +2524,24 @@ describe("drainFormattedSystemEvents", () => {
     } finally {
       resetSystemEventsForTest();
       vi.useRealTimers();
+    }
+  });
+
+  it("keeps channel summary lines prefixed as trusted system output on new main sessions", async () => {
+    channelSummaryMocks.buildChannelSummary.mockResolvedValue([
+      "WhatsApp: linked\n  - default (line one\nline two)",
+    ]);
+
+    const result = await drainFormattedSystemEvents({
+      cfg: { channels: {} } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      isMainSession: true,
+      isNewSession: true,
+    });
+
+    expect(result).toContain("System: WhatsApp: linked");
+    for (const line of result!.split("\n")) {
+      expect(line).toMatch(/^System:/);
     }
   });
 });
@@ -1760,6 +2664,42 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
+  it("treats CLI usage as a fresh context snapshot when requested", async () => {
+    const storePath = await createStorePath("openclaw-usage-cli-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
+      usageIsContextSnapshot: true,
+      providerUsed: "claude-cli",
+      cliSessionBinding: {
+        sessionId: "cli-session-1",
+        authProfileId: "anthropic:default",
+        extraSystemPromptHash: "prompt-hash",
+        mcpConfigHash: "mcp-hash",
+      },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(32_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
+    expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:default",
+      extraSystemPromptHash: "prompt-hash",
+      mcpConfigHash: "mcp-hash",
+    });
+  });
+
   it("persists totalTokens from promptTokens when usage is unavailable", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
@@ -1811,7 +2751,7 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("accumulates estimatedCostUsd across persisted usage updates", async () => {
+  it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
     const storePath = await createStorePath("openclaw-usage-cost-");
     const sessionKey = "main";
     await seedSessionStore({
@@ -1820,33 +2760,36 @@ describe("persistSessionUsageUpdate", () => {
       entry: {
         sessionId: "s1",
         updatedAt: Date.now(),
-        estimatedCostUsd: 0.0015,
       },
     });
 
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
+                contextWindow: 200_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    // First persist: 2000 input + 500 output + 1000 cacheRead + 200 cacheWrite tokens
+    // Cost = (2000*1.25 + 500*10 + 1000*0.125 + 200*0.5) / 1e6 = $0.007725
     await persistSessionUsageUpdate({
       storePath,
       sessionKey,
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                {
-                  id: "gpt-5.4",
-                  name: "GPT 5.4",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
-                  contextWindow: 200_000,
-                  maxTokens: 8_192,
-                },
-              ],
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
+      cfg,
       usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
       lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
       providerUsed: "openai",
@@ -1854,8 +2797,26 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].estimatedCostUsd).toBeCloseTo(0.009225, 8);
+    const stored1 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored1[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
+
+    // Second persist with SAME cumulative usage (e.g., heartbeat or redundant persist)
+    // Before fix: cost would accumulate to $0.0155 (2x)
+    // After fix: cost stays $0.00775 (snapshotted)
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      cfg,
+      usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
+      lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
+      providerUsed: "openai",
+      modelUsed: "gpt-5.4",
+      contextTokensUsed: 200_000,
+    });
+
+    const stored2 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    // Cost should still be $0.007725, NOT $0.01545
+    expect(stored2[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
   });
 
   it("persists zero estimatedCostUsd for free priced models", async () => {
@@ -2058,6 +3019,159 @@ describe("initSessionState dmScope delivery migration", () => {
 });
 
 describe("initSessionState internal channel routing preservation", () => {
+  it("clears stale thread routing on non-thread system-event sessions", async () => {
+    const storePath = await createStorePath("system-event-clears-stale-thread-");
+    const sessionKey = "agent:main:mattermost:channel:chan1";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-system-event-stale-thread",
+        updatedAt: Date.now(),
+        lastChannel: "mattermost",
+        lastTo: "channel:CHAN1",
+        lastAccountId: "default",
+        lastThreadId: "stale-root",
+        deliveryContext: {
+          channel: "mattermost",
+          to: "channel:CHAN1",
+          accountId: "default",
+          threadId: "stale-root",
+        },
+        origin: {
+          provider: "mattermost",
+          to: "channel:CHAN1",
+          accountId: "default",
+          threadId: "stale-root",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "heartbeat tick",
+        SessionKey: sessionKey,
+        Provider: "heartbeat",
+        From: "heartbeat",
+        To: "heartbeat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("mattermost");
+    expect(result.sessionEntry.lastTo).toBe("channel:CHAN1");
+    expect(result.sessionEntry.lastThreadId).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext).toEqual({
+      channel: "mattermost",
+      to: "channel:CHAN1",
+      accountId: "default",
+    });
+    expect(result.sessionEntry.origin).toEqual({
+      provider: "mattermost",
+      to: "channel:CHAN1",
+      accountId: "default",
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
+    expect(persisted[sessionKey]?.deliveryContext).toEqual({
+      channel: "mattermost",
+      to: "channel:CHAN1",
+      accountId: "default",
+    });
+    expect(persisted[sessionKey]?.origin).toEqual({
+      provider: "mattermost",
+      to: "channel:CHAN1",
+      accountId: "default",
+    });
+  });
+
+  it("does not synthesize heartbeat routing on a session with no external route", async () => {
+    const storePath = await createStorePath("system-event-no-route-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-system-event-no-route",
+        updatedAt: Date.now(),
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "HEARTBEAT_OK",
+        SessionKey: sessionKey,
+        Provider: "heartbeat",
+        From: "heartbeat",
+        To: "heartbeat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBeUndefined();
+    expect(result.sessionEntry.lastTo).toBeUndefined();
+    expect(result.sessionEntry.deliveryContext).toBeUndefined();
+    expect(result.sessionEntry.origin).toBeUndefined();
+  });
+
+  it("preserves the existing user route when a heartbeat targets a different chat on the shared session", async () => {
+    const storePath = await createStorePath("system-event-preserve-user-route-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-system-event-shared",
+        updatedAt: Date.now(),
+        lastChannel: "feishu",
+        lastTo: "user:ou_sender_1",
+        deliveryContext: {
+          channel: "feishu",
+          to: "user:ou_sender_1",
+          accountId: "default",
+        },
+        origin: {
+          provider: "feishu",
+          from: "user:ou_sender_1",
+          to: "user:ou_sender_1",
+          accountId: "default",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "heartbeat tick",
+        SessionKey: sessionKey,
+        Provider: "heartbeat",
+        From: "chat:oc_group_chat",
+        To: "chat:oc_group_chat",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "chat:oc_group_chat",
+        AccountId: "default",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("feishu");
+    expect(result.sessionEntry.lastTo).toBe("user:ou_sender_1");
+    expect(result.sessionEntry.deliveryContext).toEqual({
+      channel: "feishu",
+      to: "user:ou_sender_1",
+      accountId: "default",
+    });
+    expect(result.sessionEntry.origin).toEqual({
+      provider: "feishu",
+      from: "user:ou_sender_1",
+      to: "user:ou_sender_1",
+      accountId: "default",
+    });
+  });
+
   it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", async () => {
     const storePath = await createStorePath("preserve-external-channel-");
     const sessionKey = "agent:main:telegram:group:12345";
@@ -2322,5 +3436,31 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastTo).toBe("+15555550123");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
     expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
+  });
+
+  it("uses the configured default account for persisted routing when AccountId is omitted", async () => {
+    const storePath = await createStorePath("default-account-routing-context-");
+    const cfg = {
+      session: { store: storePath },
+      channels: {
+        discord: {
+          defaultAccount: "work",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:discord:channel:24680",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastAccountId).toBe("work");
+    expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });

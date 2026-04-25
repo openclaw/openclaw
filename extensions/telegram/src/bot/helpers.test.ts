@@ -1,15 +1,18 @@
-import type { Message } from "grammy/types";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildTelegramRoutingTarget,
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
   expandTextLinks,
   getTelegramTextParts,
   hasBotMention,
+  isBinaryContent,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
+  resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
+  resetTelegramForumFlagCacheForTest,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -31,6 +34,80 @@ describe("resolveTelegramForumThreadId", () => {
   });
 });
 
+describe("resolveTelegramForumFlag", () => {
+  beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
+  });
+
+  it("keeps explicit forum metadata when Telegram already provides it", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: false }));
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100123,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: true,
+        getChat,
+      }),
+    ).resolves.toBe(true);
+    expect(getChat).not.toHaveBeenCalled();
+  });
+
+  it("falls back to getChat for supergroups when is_forum is omitted", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100789,
+        chatType: "supergroup",
+        isGroup: true,
+        getChat,
+      }),
+    ).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledWith(-100789);
+  });
+
+  it("reuses resolved forum metadata for later supergroup updates", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100456,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes cached forum metadata from explicit Telegram updates", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100654,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag({ ...params, isForum: false })).resolves.toBe(false);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(false);
+    expect(getChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false when forum lookup is unavailable", async () => {
+    const getChat = vi.fn(async () => {
+      throw new Error("lookup failed");
+    });
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100999,
+        chatType: "supergroup",
+        isGroup: true,
+        getChat,
+      }),
+    ).resolves.toBe(false);
+  });
+});
+
 describe("buildTelegramThreadParams", () => {
   it.each([
     { input: { id: 1, scope: "forum" as const }, expected: undefined },
@@ -45,6 +122,31 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
+  });
+});
+
+describe("buildTelegramRoutingTarget", () => {
+  it.each([
+    {
+      name: "keeps General forum topic chat-scoped",
+      chatId: -100123,
+      thread: { id: 1, scope: "forum" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "includes real forum topic ids",
+      chatId: -100123,
+      thread: { id: 42, scope: "forum" as const },
+      expected: "telegram:-100123:topic:42",
+    },
+    {
+      name: "falls back to bare chat when thread is missing",
+      chatId: -100123,
+      thread: null,
+      expected: "telegram:-100123",
+    },
+  ])("$name", ({ chatId, thread, expected }) => {
+    expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
   });
 });
 
@@ -94,7 +196,6 @@ describe("normalizeForwardedContext", () => {
         sender_user: { first_name: "Ada", last_name: "Lovelace", username: "ada", id: 42 },
         date: 123,
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Ada Lovelace (@ada)");
@@ -108,7 +209,6 @@ describe("normalizeForwardedContext", () => {
   it("handles hidden forward_origin names", () => {
     const ctx = normalizeForwardedContext({
       forward_origin: { type: "hidden_user", sender_user_name: "Hidden Name", date: 456 },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Hidden Name");
@@ -131,7 +231,6 @@ describe("normalizeForwardedContext", () => {
         author_signature: "Editor",
         message_id: 42,
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Tech News (Editor)");
@@ -157,7 +256,6 @@ describe("normalizeForwardedContext", () => {
         date: 600,
         author_signature: "Admin",
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Discussion Group (Admin)");
@@ -178,7 +276,6 @@ describe("normalizeForwardedContext", () => {
         author_signature: "New Sig",
         message_id: 1,
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.fromSignature).toBe("New Sig");
@@ -194,7 +291,6 @@ describe("normalizeForwardedContext", () => {
         author_signature: "   ",
         message_id: 1,
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.fromSignature).toBeUndefined();
@@ -209,7 +305,6 @@ describe("normalizeForwardedContext", () => {
         date: 900,
         message_id: 1,
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("News");
@@ -220,10 +315,11 @@ describe("normalizeForwardedContext", () => {
 
 describe("describeReplyTarget", () => {
   it("returns null when no reply_to_message", () => {
-    const result = describeReplyTarget(
-      // oxlint-disable-next-line typescript/no-explicit-any
-      { message_id: 1, date: 1000, chat: { id: 1, type: "private" } } as any,
-    );
+    const result = describeReplyTarget({
+      message_id: 1,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+    } as any);
     expect(result).toBeNull();
   });
 
@@ -239,12 +335,105 @@ describe("describeReplyTarget", () => {
         text: "Original message",
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(result).not.toBeNull();
     expect(result?.body).toBe("Original message");
     expect(result?.sender).toBe("Alice");
     expect(result?.id).toBe("1");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("handles non-string reply text gracefully (issue #27201)", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        // Simulate edge case where text is an unexpected non-string value
+        text: { some: "object" },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+    expect(result).toBeNull();
+  });
+
+  it("falls back to caption when reply text is malformed", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        text: { some: "object" },
+        caption: "Caption body",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+    expect(result?.body).toBe("Caption body");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("drops binary reply captions with no safe fallback", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        caption: "PK\x00\x03\x04binary",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+    expect(result?.id).toBe("1");
+    expect(result?.sender).toBe("Alice");
+    expect(result?.body).toBeUndefined();
+  });
+
+  it("falls back to reply text when quote text is binary", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      quote: {
+        text: "\x00\x01\x02binary quote",
+      },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        text: "Original message",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+    expect(result?.body).toBe("Original message");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("falls back to external reply text when external quote text is binary", () => {
+    const result = describeReplyTarget({
+      message_id: 5,
+      date: 1300,
+      chat: { id: 1, type: "private" },
+      text: "Comment on forwarded message",
+      external_reply: {
+        message_id: 4,
+        date: 1200,
+        chat: { id: 1, type: "private" },
+        text: "Forwarded from elsewhere",
+        quote: {
+          text: "PK\x00\x03\x04binary quote",
+        },
+        from: { id: 123, first_name: "Eve", is_bot: false },
+      },
+    } as any);
+    expect(result?.body).toBe("Forwarded from elsewhere");
     expect(result?.kind).toBe("reply");
   });
 
@@ -274,7 +463,6 @@ describe("describeReplyTarget", () => {
           date: 500,
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(result).not.toBeNull();
     expect(result?.body).toBe("This is the forwarded content");
@@ -306,7 +494,6 @@ describe("describeReplyTarget", () => {
           author_signature: "Editor",
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(result).not.toBeNull();
     expect(result?.forwardedFrom).toBeDefined();
@@ -338,7 +525,6 @@ describe("describeReplyTarget", () => {
           date: 700,
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(result).not.toBeNull();
     expect(result?.id).toBe("4");
@@ -346,6 +532,67 @@ describe("describeReplyTarget", () => {
     expect(result?.forwardedFrom?.fromType).toBe("user");
     expect(result?.forwardedFrom?.fromId).toBe("123");
     expect(result?.forwardedFrom?.date).toBe(700);
+  });
+});
+
+describe("isBinaryContent", () => {
+  it("returns false for normal user text", () => {
+    expect(isBinaryContent("Hello, world!")).toBe(false);
+  });
+
+  it("returns false for text with common whitespace (tabs, newlines)", () => {
+    expect(isBinaryContent("line one\nline two\ttab")).toBe(false);
+  });
+
+  it("returns true for string containing null bytes", () => {
+    expect(isBinaryContent("PK\x00\x03\x04")).toBe(true);
+  });
+
+  it("returns true for typical binary file header bytes", () => {
+    const mobiBinarySnippet = "\x00\x00\x00\x01BOOKMOBI\x00\x00\x02\x0E";
+    expect(isBinaryContent(mobiBinarySnippet)).toBe(true);
+  });
+
+  it("returns false for empty string", () => {
+    expect(isBinaryContent("")).toBe(false);
+  });
+});
+
+describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
+  it("strips binary caption content to prevent token explosion", () => {
+    const binaryCaption = "PK\x03\x04\x14\x00\x08binary-ebook-data";
+    const result = getTelegramTextParts({
+      caption: binaryCaption,
+      caption_entities: [{ type: "mention", offset: 0, length: 5 }],
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("");
+    expect(result.entities).toEqual([]);
+  });
+
+  it("preserves normal caption text", () => {
+    const result = getTelegramTextParts({
+      caption: "Here is my document",
+      caption_entities: [],
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("Here is my document");
+  });
+
+  it("strips binary content in msg.text as well", () => {
+    const result = getTelegramTextParts({
+      text: "\x00\x01\x02 binary junk",
+      entities: [{ type: "bold", offset: 0, length: 3 }],
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("");
+    expect(result.entities).toEqual([]);
   });
 });
 
@@ -358,7 +605,6 @@ describe("hasBotMention", () => {
         chat: { id: 1, type: "private" },
         date: 1,
         message_id: 1,
-        // oxlint-disable-next-line typescript/no-explicit-any
       } as any),
     ).toEqual({
       text: "@gaian hello",
@@ -372,7 +618,6 @@ describe("hasBotMention", () => {
         {
           text: "@gaian what is the group id?",
           chat: { id: 1, type: "supergroup" },
-          // oxlint-disable-next-line typescript/no-explicit-any
         } as any,
         "gaian",
       ),
@@ -385,7 +630,6 @@ describe("hasBotMention", () => {
         {
           text: "@GaianChat_Bot what is the group id?",
           chat: { id: 1, type: "supergroup" },
-          // oxlint-disable-next-line typescript/no-explicit-any
         } as any,
         "gaian",
       ),
@@ -399,7 +643,6 @@ describe("hasBotMention", () => {
           text: "@GaianChat_Bot hi @gaian",
           entities: [{ type: "mention", offset: 18, length: 6 }],
           chat: { id: 1, type: "supergroup" },
-          // oxlint-disable-next-line typescript/no-explicit-any
         } as any,
         "gaian",
       ),
@@ -412,7 +655,6 @@ describe("hasBotMention", () => {
         {
           text: "@gaian, what's up?",
           chat: { id: 1, type: "supergroup" },
-          // oxlint-disable-next-line typescript/no-explicit-any
         } as any,
         "gaian",
       ),
@@ -425,7 +667,6 @@ describe("hasBotMention", () => {
         {
           text: "@gaian how are you",
           chat: { id: 1, type: "supergroup" },
-          // oxlint-disable-next-line typescript/no-explicit-any
         } as any,
         "gaian",
       ),
@@ -438,7 +679,6 @@ describe("hasBotMention", () => {
         {
           text: "@gaianchat_bot hello",
           chat: { id: 1, type: "supergroup" },
-          // oxlint-disable-next-line typescript/no-explicit-any
         } as any,
         "gaian",
       ),
@@ -451,7 +691,6 @@ describe("hasBotMention", () => {
         {
           text: "@gaianbot do something",
           chat: { id: 1, type: "supergroup" },
-          // oxlint-disable-next-line typescript/no-explicit-any
         } as any,
         "gaian",
       ),

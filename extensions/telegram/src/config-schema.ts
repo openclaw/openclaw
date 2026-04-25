@@ -1,3 +1,6 @@
-import { buildChannelConfigSchema, TelegramConfigSchema } from "openclaw/plugin-sdk/telegram-core";
+import { buildChannelConfigSchema, TelegramConfigSchema } from "../config-api.js";
+import { telegramChannelConfigUiHints } from "./config-ui-hints.js";
 
-export const TelegramChannelConfigSchema = buildChannelConfigSchema(TelegramConfigSchema);
+export const TelegramChannelConfigSchema = buildChannelConfigSchema(TelegramConfigSchema, {
+  uiHints: telegramChannelConfigUiHints,
+});

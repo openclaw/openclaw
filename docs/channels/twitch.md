@@ -5,13 +5,15 @@ read_when:
 title: "Twitch"
 ---
 
-# Twitch (plugin)
-
 Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot account) to receive and send messages in channels.
 
-## Plugin required
+## Bundled plugin
 
-Twitch ships as a plugin and is not bundled with the core install.
+Twitch ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Twitch, install
+it manually:
 
 Install via CLI (npm registry):
 
@@ -22,24 +24,27 @@ openclaw plugins install @openclaw/twitch
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/twitch
+openclaw plugins install ./path/to/local/twitch-plugin
 ```
 
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Create a dedicated Twitch account for the bot (or use an existing account).
-2. Generate credentials: [Twitch Token Generator](https://twitchtokengenerator.com/)
+1. Ensure the Twitch plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
+2. Create a dedicated Twitch account for the bot (or use an existing account).
+3. Generate credentials: [Twitch Token Generator](https://twitchtokengenerator.com/)
    - Select **Bot Token**
    - Verify scopes `chat:read` and `chat:write` are selected
    - Copy the **Client ID** and **Access Token**
-3. Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/)
-4. Configure the token:
+4. Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/)
+5. Configure the token:
    - Env: `OPENCLAW_TWITCH_ACCESS_TOKEN=...` (default account only)
    - Or config: `channels.twitch.accessToken`
    - If both are set, config takes precedence (env fallback is default-account only).
-5. Start the gateway.
+6. Start the gateway.
 
 **⚠️ Important:** Add access control (`allowFrom` or `allowedRoles`) to prevent unauthorized users from triggering the bot. `requireMention` defaults to `true`.
 
@@ -377,3 +382,11 @@ Example:
 - **500 characters** per message (auto-chunked at word boundaries)
 - Markdown is stripped before chunking
 - No rate limiting (uses Twitch's built-in rate limits)
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

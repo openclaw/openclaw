@@ -1,4 +1,6 @@
 import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isRecord } from "../utils.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
 // Read-only status commands project a safe subset of account fields into snapshots
@@ -14,22 +16,6 @@ const CREDENTIAL_STATUS_KEYS = [
 ] as const;
 
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function readTrimmedString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
   return typeof record[key] === "boolean" ? record[key] : undefined;
@@ -60,7 +46,7 @@ function readCredentialStatus(record: Record<string, unknown>, key: CredentialSt
 }
 
 export function resolveConfiguredFromCredentialStatuses(account: unknown): boolean | undefined {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return undefined;
   }
@@ -82,7 +68,7 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
   account: unknown,
   requiredKeys: CredentialStatusKey[],
 ): boolean | undefined {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return undefined;
   }
@@ -101,7 +87,7 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
 }
 
 export function hasConfiguredUnavailableCredentialStatus(account: unknown): boolean {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return false;
   }
@@ -111,14 +97,13 @@ export function hasConfiguredUnavailableCredentialStatus(account: unknown): bool
 }
 
 export function hasResolvedCredentialValue(account: unknown): boolean {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return false;
   }
   return (
     ["token", "botToken", "appToken", "signingSecret", "userToken"].some((key) => {
-      const value = record[key];
-      return typeof value === "string" && value.trim().length > 0;
+      return normalizeOptionalString(record[key]) !== undefined;
     }) || CREDENTIAL_STATUS_KEYS.some((key) => readCredentialStatus(record, key) === "available")
   );
 }
@@ -137,24 +122,20 @@ export function projectCredentialSnapshotFields(
   | "signingSecretStatus"
   | "userTokenStatus"
 > {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return {};
   }
+  const tokenSource = normalizeOptionalString(record.tokenSource);
+  const botTokenSource = normalizeOptionalString(record.botTokenSource);
+  const appTokenSource = normalizeOptionalString(record.appTokenSource);
+  const signingSecretSource = normalizeOptionalString(record.signingSecretSource);
 
   return {
-    ...(readTrimmedString(record, "tokenSource")
-      ? { tokenSource: readTrimmedString(record, "tokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "botTokenSource")
-      ? { botTokenSource: readTrimmedString(record, "botTokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "appTokenSource")
-      ? { appTokenSource: readTrimmedString(record, "appTokenSource") }
-      : {}),
-    ...(readTrimmedString(record, "signingSecretSource")
-      ? { signingSecretSource: readTrimmedString(record, "signingSecretSource") }
-      : {}),
+    ...(tokenSource ? { tokenSource } : {}),
+    ...(botTokenSource ? { botTokenSource } : {}),
+    ...(appTokenSource ? { appTokenSource } : {}),
+    ...(signingSecretSource ? { signingSecretSource } : {}),
     ...(readCredentialStatus(record, "tokenStatus")
       ? { tokenStatus: readCredentialStatus(record, "tokenStatus") }
       : {}),
@@ -176,13 +157,20 @@ export function projectCredentialSnapshotFields(
 export function projectSafeChannelAccountSnapshotFields(
   account: unknown,
 ): Partial<ChannelAccountSnapshot> {
-  const record = asRecord(account);
+  const record = isRecord(account) ? account : null;
   if (!record) {
     return {};
   }
+  const name = normalizeOptionalString(record.name);
+  const healthState = normalizeOptionalString(record.healthState);
+  const mode = normalizeOptionalString(record.mode);
+  const dmPolicy = normalizeOptionalString(record.dmPolicy);
+  const baseUrl = normalizeOptionalString(record.baseUrl);
+  const cliPath = normalizeOptionalString(record.cliPath);
+  const dbPath = normalizeOptionalString(record.dbPath);
 
   return {
-    ...(readTrimmedString(record, "name") ? { name: readTrimmedString(record, "name") } : {}),
+    ...(name ? { name } : {}),
     ...(readBoolean(record, "linked") !== undefined
       ? { linked: readBoolean(record, "linked") }
       : {}),
@@ -195,24 +183,25 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readNumber(record, "reconnectAttempts") !== undefined
       ? { reconnectAttempts: readNumber(record, "reconnectAttempts") }
       : {}),
-    ...(readTrimmedString(record, "mode") ? { mode: readTrimmedString(record, "mode") } : {}),
-    ...(readTrimmedString(record, "dmPolicy")
-      ? { dmPolicy: readTrimmedString(record, "dmPolicy") }
+    ...(readNumber(record, "lastInboundAt") !== undefined
+      ? { lastInboundAt: readNumber(record, "lastInboundAt") }
       : {}),
+    ...(readNumber(record, "lastTransportActivityAt") !== undefined
+      ? { lastTransportActivityAt: readNumber(record, "lastTransportActivityAt") }
+      : {}),
+    ...(healthState ? { healthState } : {}),
+    ...(mode ? { mode } : {}),
+    ...(dmPolicy ? { dmPolicy } : {}),
     ...(readStringArray(record, "allowFrom")
       ? { allowFrom: readStringArray(record, "allowFrom") }
       : {}),
     ...projectCredentialSnapshotFields(account),
-    ...(readTrimmedString(record, "baseUrl")
-      ? { baseUrl: stripUrlUserInfo(readTrimmedString(record, "baseUrl")!) }
-      : {}),
+    ...(baseUrl ? { baseUrl: stripUrlUserInfo(baseUrl) } : {}),
     ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
       ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }
       : {}),
-    ...(readTrimmedString(record, "cliPath")
-      ? { cliPath: readTrimmedString(record, "cliPath") }
-      : {}),
-    ...(readTrimmedString(record, "dbPath") ? { dbPath: readTrimmedString(record, "dbPath") } : {}),
+    ...(cliPath ? { cliPath } : {}),
+    ...(dbPath ? { dbPath } : {}),
     ...(readNumber(record, "port") !== undefined ? { port: readNumber(record, "port") } : {}),
   };
 }

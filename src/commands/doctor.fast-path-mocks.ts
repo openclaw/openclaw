@@ -12,6 +12,10 @@ vi.mock("./doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-claude-cli.js", () => ({
+  noteClaudeCliHealth: vi.fn(),
+}));
+
 vi.mock("./doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
 }));
@@ -22,11 +26,12 @@ vi.mock("./doctor-gateway-health.js", () => ({
 }));
 
 vi.mock("./doctor-memory-search.js", () => ({
+  maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-platform-notes.js", () => ({
-  noteDeprecatedLegacyEnvVars: vi.fn(),
   noteStartupOptimizationHints: vi.fn(),
   noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),

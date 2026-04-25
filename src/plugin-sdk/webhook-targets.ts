@@ -19,6 +19,8 @@ export type RegisterWebhookTargetOptions<T extends { path: string }> = {
 
 type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[0];
 
+export { registerPluginHttpRoute };
+
 export type RegisterWebhookPluginRouteOptions = Omit<
   RegisterPluginHttpRouteParams,
   "path" | "fallbackPath"
@@ -236,7 +238,7 @@ export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
   ambiguousMessage?: string;
 }): Promise<T | null> {
   const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
-    Boolean(await params.isMatch(target)),
+    params.isMatch(target),
   );
   return resolveWebhookTargetMatchOrReject(params, match);
 }

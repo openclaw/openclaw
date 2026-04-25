@@ -1,7 +1,6 @@
 import type { Bot } from "grammy";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -28,7 +27,7 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
-vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
 
@@ -50,6 +49,10 @@ vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   InputFile: class {
     constructor(
       public buffer: Buffer,
@@ -166,7 +169,7 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",
     );
-    messageHookRunner.runMessageSending.mockResolvedValue({ content: "" });
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "   " });
 
     const runtime = createRuntime(false);
     const sendMessage = vi.fn();
@@ -180,7 +183,7 @@ describe("deliverReplies", () => {
 
     expect(sendMessage).not.toHaveBeenCalled();
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false, content: "" }),
+      expect.objectContaining({ success: false, content: "   " }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
     );
   });
@@ -290,6 +293,56 @@ describe("deliverReplies", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
+  it("rewrites exact NO_REPLY for direct Telegram sessions", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:direct:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+  });
+
+  it("uses the policy session key for exact NO_REPLY policy", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 121, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:slash:123",
+      policySessionKey: "agent:test:telegram:direct:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+  });
+
+  it("suppresses exact NO_REPLY for group Telegram sessions", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:group:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("emits internal message:sent with success=false on delivery failure", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockRejectedValue(new Error("network error"));
@@ -343,6 +396,36 @@ describe("deliverReplies", () => {
         metadata: expect.objectContaining({
           channel: "telegram",
           mediaUrls: ["https://example.com/photo.jpg"],
+        }),
+      }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
+  it("passes shared routing fields to message_sending hooks", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "caption", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        content: "caption",
+        replyToId: 500,
+        threadId: 42,
+        metadata: expect.objectContaining({
+          channel: "telegram",
+          threadId: 42,
         }),
       }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
@@ -596,7 +679,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("throws when formatted and plain fallback text are both empty", async () => {
+  it("skips whitespace-only text replies without calling Telegram", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
@@ -611,7 +694,7 @@ describe("deliverReplies", () => {
         replyToMode: "off",
         textLimit: 4000,
       }),
-    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    ).resolves.toEqual({ delivered: false });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -636,6 +719,7 @@ describe("deliverReplies", () => {
       expect.any(String),
       expect.objectContaining({
         reply_to_message_id: 500,
+        allow_sending_without_reply: true,
       }),
     );
     expect(sendMessage).toHaveBeenCalledWith(
@@ -744,6 +828,7 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[0][2]).toEqual(
       expect.objectContaining({
         reply_to_message_id: 77,
+        allow_sending_without_reply: true,
         reply_markup: {
           inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
         },
@@ -799,7 +884,10 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // First chunk should have reply_to_message_id
     expect(sendMessage.mock.calls[0][2]).toEqual(
-      expect.objectContaining({ reply_to_message_id: 700 }),
+      expect.objectContaining({
+        reply_to_message_id: 700,
+        allow_sending_without_reply: true,
+      }),
     );
     // Second chunk should NOT have reply_to_message_id
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
@@ -826,7 +914,12 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // Both chunks should have reply_to_message_id
     for (const call of sendMessage.mock.calls) {
-      expect(call[2]).toEqual(expect.objectContaining({ reply_to_message_id: 800 }));
+      expect(call[2]).toEqual(
+        expect.objectContaining({
+          reply_to_message_id: 800,
+          allow_sending_without_reply: true,
+        }),
+      );
     }
   });
 
@@ -854,7 +947,10 @@ describe("deliverReplies", () => {
     expect(sendPhoto).toHaveBeenCalledTimes(2);
     // First media should have reply_to_message_id
     expect(sendPhoto.mock.calls[0][2]).toEqual(
-      expect.objectContaining({ reply_to_message_id: 900 }),
+      expect.objectContaining({
+        reply_to_message_id: 900,
+        allow_sending_without_reply: true,
+      }),
     );
     // Second media should NOT have reply_to_message_id
     expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
@@ -870,7 +966,7 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage, pinChatMessage });
 
     await deliverReplies({
-      replies: [{ text: "chunk-one\n\nchunk-two", channelData: { telegram: { pin: true } } }],
+      replies: [{ text: "chunk-one\n\nchunk-two", delivery: { pin: true } }],
       chatId: "123",
       token: "tok",
       runtime,
@@ -883,6 +979,25 @@ describe("deliverReplies", () => {
     expect(pinChatMessage).toHaveBeenCalledWith("123", 101, { disable_notification: true });
   });
 
+  it("honors notify on reply delivery pins", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 101, chat: { id: "123" } });
+    const pinChatMessage = vi.fn().mockResolvedValue(true);
+    const bot = createBot({ sendMessage, pinChatMessage });
+
+    await deliverReplies({
+      replies: [{ text: "hello", delivery: { pin: { enabled: true, notify: true } } }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4096,
+    });
+
+    expect(pinChatMessage).toHaveBeenCalledWith("123", 101, { disable_notification: false });
+  });
+
   it("continues when pinning fails", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 201, chat: { id: "123" } });
@@ -890,7 +1005,7 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage, pinChatMessage });
 
     await deliverWith({
-      replies: [{ text: "hello", channelData: { telegram: { pin: true } } }],
+      replies: [{ text: "hello", delivery: { pin: true } }],
       runtime,
       bot,
     });

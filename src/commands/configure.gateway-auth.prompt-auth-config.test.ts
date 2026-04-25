@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   promptCustomApiConfig: vi.fn(),
   resolvePluginProviders: vi.fn(() => []),
   resolveProviderPluginChoice: vi.fn<() => unknown>(() => null),
+  resolvePreferredProviderForAuthChoice: vi.fn<() => Promise<string | undefined>>(
+    async () => undefined,
+  ),
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -25,7 +28,7 @@ vi.mock("./auth-choice-prompt.js", () => ({
 
 vi.mock("./auth-choice.js", () => ({
   applyAuthChoice: mocks.applyAuthChoice,
-  resolvePreferredProviderForAuthChoice: vi.fn(async () => undefined),
+  resolvePreferredProviderForAuthChoice: mocks.resolvePreferredProviderForAuthChoice,
 }));
 
 vi.mock("./model-picker.js", async (importActual) => {
@@ -41,7 +44,7 @@ vi.mock("./onboard-custom.js", () => ({
   promptCustomApiConfig: mocks.promptCustomApiConfig,
 }));
 
-vi.mock("../plugins/providers.js", () => ({
+vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
 
@@ -156,5 +159,79 @@ describe("promptAuthConfig", () => {
         message: "Anthropic OAuth models",
       }),
     );
+  });
+
+  it("preserves existing model entries outside provider-scoped allowlist updates", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("token");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { alias: "GPT" },
+              "anthropic/claude-opus-4-6": { alias: "Opus" },
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["anthropic/claude-sonnet-4-6"],
+      scopeKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "anthropic", label: "Anthropic", auth: [] },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
+      wizard: {
+        modelAllowlist: {
+          allowedKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+          initialSelections: ["anthropic/claude-sonnet-4-6"],
+        },
+      },
+    });
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(result.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "GPT" },
+      "anthropic/claude-sonnet-4-6": {},
+    });
+  });
+
+  it("scopes the allowlist picker to the selected provider when available", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
+    mocks.applyAuthChoice.mockResolvedValue({ config: {} });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredProvider: "openai",
+      }),
+    );
+  });
+
+  it("returns to auth selection when plugin install onboarding asks for a retry", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped
+      .mockResolvedValueOnce("provider-plugin:wecom:default")
+      .mockResolvedValueOnce("kilocode-api-key");
+    mocks.applyAuthChoice
+      .mockResolvedValueOnce({ config: {}, retrySelection: true })
+      .mockResolvedValueOnce(createApplyAuthChoiceConfig());
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolvePreferredProviderForAuthChoice
+      .mockResolvedValueOnce("wecom")
+      .mockResolvedValueOnce("kilocode");
+    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(mocks.applyAuthChoice).toHaveBeenCalledTimes(2);
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledTimes(1);
   });
 });

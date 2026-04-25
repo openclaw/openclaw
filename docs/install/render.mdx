@@ -6,6 +6,8 @@ read_when:
 title: "Render"
 ---
 
+# Render
+
 Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
 
 ## Prerequisites
@@ -20,8 +22,7 @@ Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yam
 Clicking this link will:
 
 1. Create a new Render service from the `render.yaml` Blueprint at the root of this repo.
-2. Prompt you to set `SETUP_PASSWORD`
-3. Build the Docker image and deploy
+2. Build the Docker image and deploy
 
 Once deployed, your service URL follows the pattern `https://<service-name>.onrender.com`.
 
@@ -38,10 +39,8 @@ services:
     plan: starter
     healthCheckPath: /health
     envVars:
-      - key: PORT
+      - key: OPENCLAW_GATEWAY_PORT
         value: "8080"
-      - key: SETUP_PASSWORD
-        sync: false # prompts during deploy
       - key: OPENCLAW_STATE_DIR
         value: /data/.openclaw
       - key: OPENCLAW_WORKSPACE_DIR
@@ -60,7 +59,6 @@ Key Blueprint features used:
 | --------------------- | ---------------------------------------------------------- |
 | `runtime: docker`     | Builds from the repo's Dockerfile                          |
 | `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances |
-| `sync: false`         | Prompts for value during deploy (secrets)                  |
 | `generateValue: true` | Auto-generates a cryptographically secure value            |
 | `disk`                | Persistent storage that survives redeploys                 |
 
@@ -72,22 +70,20 @@ Key Blueprint features used:
 | Starter   | Never             | 1GB+          | Personal use, small teams     |
 | Standard+ | Never             | 1GB+          | Production, multiple channels |
 
-The Blueprint defaults to `starter`. To use free tier, change `plan: free` in your fork's
-`render.yaml` (but note: no persistent disk means config resets on each deploy).
+The Blueprint defaults to `starter`. To use free tier, change `plan: free` in
+your fork's `render.yaml` (but note: no persistent disk means OpenClaw state
+resets on each deploy).
 
 ## After deployment
 
-### Complete web setup
-
-1. Navigate to `https://<your-service>.onrender.com/setup`
-2. Enter your `SETUP_PASSWORD`
-3. Select a model provider and paste your API key
-4. Optionally configure messaging channels (Telegram, Discord, Slack)
-5. Click **Run setup**
-
 ### Access the Control UI
 
-The web dashboard is available at `https://<your-service>.onrender.com/openclaw`.
+The web dashboard is available at `https://<your-service>.onrender.com/`.
+
+Connect using the configured shared secret. This deploy template auto-generates
+`OPENCLAW_GATEWAY_TOKEN` (find it in **Dashboard → your service →
+Environment**); if you replace it with password auth, use that password
+instead.
 
 ## Render Dashboard features
 
@@ -129,13 +125,15 @@ For OpenClaw, vertical scaling is usually sufficient. Horizontal scaling require
 
 ## Backups and migration
 
-Export your configuration and workspace at any time:
+Export your state, config, auth profiles, and workspace at any time using the
+shell access in the Render Dashboard:
 
-```
-https://<your-service>.onrender.com/setup/export
+```bash
+openclaw backup create
 ```
 
-This downloads a portable backup you can restore on any OpenClaw host.
+This creates a portable backup archive with OpenClaw state plus any configured
+workspace. See [Backup](/cli/backup) for details.
 
 ## Troubleshooting
 
@@ -143,8 +141,8 @@ This downloads a portable backup you can restore on any OpenClaw host.
 
 Check the deploy logs in the Render Dashboard. Common issues:
 
-- Missing `SETUP_PASSWORD` — the Blueprint prompts for this, but verify it's set
-- Port mismatch — ensure `PORT=8080` matches the Dockerfile's exposed port
+- Missing `OPENCLAW_GATEWAY_TOKEN` — verify it is set in **Dashboard → Environment**
+- Port mismatch — ensure `OPENCLAW_GATEWAY_PORT=8080` is set so the gateway binds to the port Render expects
 
 ### Slow cold starts (free tier)
 
@@ -153,7 +151,7 @@ Free tier services spin down after 15 minutes of inactivity. The first request a
 ### Data loss after redeploy
 
 This happens on free tier (no persistent disk). Upgrade to a paid plan, or
-regularly export your config via `/setup/export`.
+regularly export a full backup via `openclaw backup create` in the Render shell.
 
 ### Health check failures
 

@@ -1,32 +1,40 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
+import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  buildMentionRegexes,
   createChannelInboundDebouncer,
-  shouldDebounceTextInbound,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
-import { normalizeSignalMessagingTarget } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/config-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import {
   formatInboundEnvelope,
   formatInboundFromLabel,
+  matchesMentionPatterns,
+  resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
+  shouldDebounceTextInbound,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+} from "openclaw/plugin-sdk/config-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createInternalHookEvent,
+  fireAndForgetHook,
+  toInternalMessageReceivedContext,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -34,7 +42,7 @@ import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeE164, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -46,6 +54,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
+import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
@@ -54,6 +63,7 @@ import type {
   SignalReactionMessage,
   SignalReceivePayload,
 } from "./event-handler.types.js";
+import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions } from "./mentions.js";
 
 function formatAttachmentKindCount(kind: string, count: number): string {
@@ -112,6 +122,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    replyToBody?: string;
+    replyToSender?: string;
+    replyToIsQuote?: boolean;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -149,7 +162,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       envelope: envelopeOptions,
     });
     let combinedBody = body;
-    const historyKey = entry.isGroup ? String(entry.groupId ?? "unknown") : undefined;
+    const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
     if (entry.isGroup && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: deps.groupHistories,
@@ -203,6 +216,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Provider: "signal" as const,
       Surface: "signal" as const,
       MessageSid: entry.messageId,
+      ReplyToBody: entry.replyToBody,
+      ReplyToSender: entry.replyToSender,
+      ReplyToIsQuote: entry.replyToIsQuote,
       Timestamp: entry.timestamp ?? undefined,
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
@@ -268,6 +284,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             return;
           }
           await sendTypingSignal(ctxPayload.To, {
+            cfg: deps.cfg,
             baseUrl: deps.baseUrl,
             account: deps.account,
             accountId: deps.accountId,
@@ -290,6 +307,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       typingCallbacks,
       deliver: async (payload) => {
         await deps.deliverReplies({
+          cfg: deps.cfg,
           replies: [payload],
           target: ctxPayload.To,
           baseUrl: deps.baseUrl,
@@ -400,7 +418,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (params.reaction.isRemove) {
       return true; // Ignore reaction removals
     }
-    const emojiLabel = params.reaction.emoji?.trim() || "emoji";
+    const emojiLabel = normalizeOptionalString(params.reaction.emoji) ?? "emoji";
     const senderName = params.envelope.sourceName ?? params.senderDisplay;
     logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
@@ -517,10 +535,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const rawMessage = dataMessage?.message ?? "";
     const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
     const messageText = normalizedMessage.trim();
+    const groupId = dataMessage?.groupInfo?.groupId ?? undefined;
+    const isGroup = Boolean(groupId);
 
-    const quoteText = dataMessage?.quote?.text?.trim() ?? "";
-    const hasBodyContent =
-      Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
     const senderDisplay = formatSignalSenderDisplay(sender);
     const { resolveAccessDecision, dmAccess, effectiveDmAllow, effectiveGroupAllow } =
       await resolveSignalAccessState({
@@ -531,6 +548,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupAllowFrom: deps.groupAllowFrom,
         sender,
       });
+    const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
+    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
+      resolveSignalQuoteContext({
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+        isGroup,
+        dataMessage,
+        effectiveGroupAllow,
+      });
+    if (quoteText && !visibleQuoteText && isGroup) {
+      logVerbose(
+        `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
+      );
+    }
+    const hasBodyContent =
+      Boolean(messageText || visibleQuoteText) ||
+      Boolean(!reaction && dataMessage?.attachments?.length);
 
     if (
       reaction &&
@@ -556,9 +590,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
     const senderIdLine = formatSignalPairingIdLine(sender);
-    const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
-    const isGroup = Boolean(groupId);
 
     if (!isGroup) {
       const allowedDirectMessage = await handleSignalDirectMessageAccess({
@@ -571,6 +603,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
         sendPairingReply: async (text) => {
           await sendMessageSignal(`signal:${senderRecipient}`, text, {
+            cfg: deps.cfg,
             baseUrl: deps.baseUrl,
             account: deps.account,
             maxBytes: deps.mediaMaxBytes,
@@ -640,26 +673,29 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
       });
     const canDetectMention = mentionRegexes.length > 0;
-    const mentionGate = resolveMentionGatingWithBypass({
-      isGroup,
-      requireMention: Boolean(requireMention),
-      canDetectMention,
-      wasMentioned,
-      implicitMention: false,
-      hasAnyMention: false,
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
-      commandAuthorized,
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention,
+        wasMentioned,
+        hasAnyMention: false,
+        implicitMentionKinds: [],
+      },
+      policy: {
+        isGroup,
+        requireMention,
+        allowTextCommands: true,
+        hasControlCommand: hasControlCommandInMessage,
+        commandAuthorized,
+      },
     });
-    const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-    if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
+    const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
         log: logVerbose,
         channel: "signal",
         reason: "no mention",
         target: senderDisplay,
       });
-      const quoteText = dataMessage.quote?.text?.trim() || "";
       const pendingPlaceholder = (() => {
         if (!dataMessage.attachments?.length) {
           return "";
@@ -679,7 +715,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         const pendingKind = kindFromMime(firstContentType ?? undefined);
         return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
       })();
-      const pendingBodyText = messageText || pendingPlaceholder || quoteText;
+      const pendingBodyText = messageText || pendingPlaceholder || visibleQuoteText;
       const historyKey = groupId ?? "unknown";
       recordPendingHistoryEntryIfEnabled({
         historyMap: deps.groupHistories,
@@ -693,6 +729,47 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
         },
       });
+      const signalGroupPolicy = resolveChannelGroupPolicy({
+        cfg: deps.cfg,
+        channel: "signal",
+        groupId,
+        accountId: deps.accountId,
+      });
+      if (
+        (signalGroupPolicy.groupConfig?.ingest ?? signalGroupPolicy.defaultConfig?.ingest) === true
+      ) {
+        const canonicalGroupTarget =
+          normalizeSignalMessagingTarget(`group:${groupId}`) ?? `group:${groupId}`;
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent(
+              "message",
+              "received",
+              route.sessionKey,
+              toInternalMessageReceivedContext({
+                from: `group:${groupId}`,
+                to: canonicalGroupTarget,
+                content: pendingBodyText,
+                timestamp: envelope.timestamp ?? undefined,
+                channelId: "signal",
+                accountId: deps.accountId,
+                conversationId: canonicalGroupTarget,
+                messageId:
+                  typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+                senderId: senderDisplay,
+                senderName: envelope.sourceName ?? undefined,
+                provider: "signal",
+                surface: "signal",
+                originatingChannel: "signal",
+                originatingTo: canonicalGroupTarget,
+                isGroup: true,
+                groupId: canonicalGroupTarget,
+              }),
+            ),
+          ),
+          "signal: mention-skip message hook failed",
+        );
+      }
       return;
     }
 
@@ -743,7 +820,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
+    const bodyText = messageText || placeholder || visibleQuoteText || "";
     if (!bodyText) {
       return;
     }
@@ -757,6 +834,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && receiptTimestamp) {
       try {
         await sendReadReceiptSignal(`signal:${senderRecipient}`, receiptTimestamp, {
+          cfg: deps.cfg,
           baseUrl: deps.baseUrl,
           account: deps.account,
           accountId: deps.accountId,
@@ -794,6 +872,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      replyToBody: visibleQuoteText || undefined,
+      replyToSender: visibleQuoteSender,
+      replyToIsQuote: visibleQuoteText ? true : undefined,
     });
   };
 }

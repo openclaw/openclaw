@@ -1,16 +1,13 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliBannerLine } from "./banner.js";
 
-const readCliBannerTaglineModeMock = vi.fn();
+const readCliBannerTaglineModeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./banner-config-lite.js", () => ({
+  parseTaglineMode: (value: unknown) =>
+    value === "random" || value === "default" || value === "off" ? value : undefined,
   readCliBannerTaglineMode: readCliBannerTaglineModeMock,
 }));
-
-let formatCliBannerLine: typeof import("./banner.js").formatCliBannerLine;
-
-beforeAll(async () => {
-  ({ formatCliBannerLine } = await import("./banner.js"));
-});
 
 beforeEach(() => {
   readCliBannerTaglineModeMock.mockReset();

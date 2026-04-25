@@ -4,10 +4,8 @@ read_when:
   - You are debugging provider request rejections tied to transcript shape
   - You are changing transcript sanitization or tool-call repair logic
   - You are investigating tool-call id mismatches across providers
-title: "Transcript Hygiene"
+title: "Transcript hygiene"
 ---
-
-# Transcript Hygiene (Provider Fixups)
 
 This document describes **provider-specific fixes** applied to transcripts before a run
 (building model context). These are **in-memory** adjustments used to satisfy strict
@@ -18,6 +16,7 @@ file is backed up alongside the session file.
 
 Scope includes:
 
+- Runtime-only prompt context staying out of user-visible transcript turns
 - Tool call id sanitization
 - Tool call input validation
 - Tool result pairing repair
@@ -28,7 +27,21 @@ Scope includes:
 
 If you need transcript storage details, see:
 
-- [/reference/session-management-compaction](/reference/session-management-compaction)
+- [Session management deep dive](/reference/session-management-compaction)
+
+---
+
+## Global rule: runtime context is not user transcript
+
+Runtime/system context can be added to the model prompt for a turn, but it is
+not end-user-authored content. OpenClaw keeps a separate transcript-facing
+prompt body for Gateway replies, queued followups, ACP, CLI, and embedded Pi
+runs. Stored visible user turns use that transcript body instead of the
+runtime-enriched prompt.
+
+For legacy sessions that already persisted runtime wrappers, Gateway history
+surfaces apply a display projection before returning messages to WebChat,
+TUI, REST, or SSE clients.
 
 ---
 
@@ -37,7 +50,7 @@ If you need transcript storage details, see:
 All transcript hygiene is centralized in the embedded runner:
 
 - Policy selection: `src/agents/transcript-policy.ts`
-- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
 
 The policy uses `provider`, `modelApi`, and `modelId` to decide what to apply.
 
@@ -73,7 +86,7 @@ persisted tool calls (for example, after a rate limit failure).
 Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
-- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
 
 ---
 
@@ -99,11 +112,11 @@ external end-user instructions.
 **OpenAI / OpenAI Codex**
 
 - Image sanitization only.
-- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
+- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts, and drop replayable OpenAI reasoning after a model route switch.
 - No tool call id sanitization.
-- No tool result pairing repair.
+- Tool result pairing repair may move real matched outputs and synthesize Codex-style `aborted` outputs for missing tool calls.
 - No turn validation or reordering.
-- No synthetic tool results.
+- Missing OpenAI Responses-family tool outputs are synthesized as `aborted` to match Codex replay normalization.
 - No thought signature stripping.
 
 **Google (Generative AI / Gemini CLI / Antigravity)**
@@ -149,3 +162,8 @@ Before the 2026.1.22 release, OpenClaw applied multiple layers of transcript hyg
 This complexity caused cross-provider regressions (notably `openai-responses`
 `call_id|fc_id` pairing). The 2026.1.22 cleanup removed the extension, centralized
 logic in the runner, and made OpenAI **no-touch** beyond image sanitization.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)
