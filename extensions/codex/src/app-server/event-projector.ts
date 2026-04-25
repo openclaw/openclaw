@@ -2,6 +2,8 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
+  embeddedAgentLog,
+  emitAgentEvent as emitGlobalAgentEvent,
   formatErrorMessage,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
@@ -724,9 +726,23 @@ export class CodexAppServerEventProjector {
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
   ): void {
     try {
-      this.params.onAgentEvent?.(event);
-    } catch {
+      emitGlobalAgentEvent({
+        runId: this.params.runId,
+        stream: event.stream,
+        data: event.data,
+        ...(this.params.sessionKey ? { sessionKey: this.params.sessionKey } : {}),
+      });
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+    }
+    try {
+      const maybePromise = this.params.onAgentEvent?.(event);
+      void Promise.resolve(maybePromise).catch((error: unknown) => {
+        embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+      });
+    } catch (error) {
       // Downstream event consumers must not corrupt the canonical Codex turn projection.
+      embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
     }
   }
 

@@ -1676,6 +1676,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         timestamp: expect.any(Number),
       },
     });
+    const finalBroadcast = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
+    expect(finalBroadcast).toBeUndefined();
   });
 
   it("adds persisted media paths to the user transcript update", async () => {
