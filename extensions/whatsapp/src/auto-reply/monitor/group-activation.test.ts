@@ -247,4 +247,36 @@ describe("resolveGroupActivationFor", () => {
 
     expect(activation).toBe("always");
   });
+
+  it("honors persisted mention activation for non-admin senders when group config does not require mentions", async () => {
+    const sessionKey = "agent:main:whatsapp:group:123@g.us";
+    const { storePath, cleanup } = await makeSessionStore({
+      [sessionKey]: {
+        groupActivation: "mention",
+      },
+    });
+    cleanups.push(cleanup);
+
+    const activation = await resolveGroupActivationFor({
+      cfg: {
+        channels: {
+          whatsapp: {
+            groups: {
+              "*": {
+                requireMention: false,
+              },
+            },
+          },
+        },
+        session: { store: storePath },
+      } as never,
+      accountId: "default",
+      agentId: "main",
+      sessionKey,
+      conversationId: "123@g.us",
+      senderE164: "+15550002222",
+    });
+
+    expect(activation).toBe("mention");
+  });
 });

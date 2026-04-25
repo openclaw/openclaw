@@ -65,13 +65,22 @@ export async function resolveGroupActivationFor(params: {
       };
     });
   }
-  const requireMention = resolveWhatsAppInboundPolicy({
+  const policy = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,
     accountId: params.accountId,
-  }).resolveConversationRequireMention(params.conversationId, params.senderE164 ?? null);
+  });
+  const defaultRequireMention = policy.resolveConversationRequireMention(
+    params.conversationId,
+    null,
+  );
+  const requireMention = policy.resolveConversationRequireMention(
+    params.conversationId,
+    params.senderE164 ?? null,
+  );
   const defaultActivation = !requireMention ? "always" : "mention";
   const normalizedActivation = normalizeGroupActivation(activation);
-  if (normalizedActivation === "mention" && !requireMention) {
+  const senderBypassesMention = defaultRequireMention && !requireMention;
+  if (normalizedActivation === "mention" && senderBypassesMention) {
     return "always";
   }
   return normalizedActivation ?? defaultActivation;

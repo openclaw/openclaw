@@ -234,7 +234,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   if (isGroup && groupAdmin && !senderIsConfiguredAdmin) {
     return false;
   }
-  if (senderIsConfiguredAdmin) {
+  if (senderIsConfiguredAdmin && policy.groupPolicy !== "disabled") {
     return true;
   }
 

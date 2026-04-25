@@ -66,6 +66,7 @@ async function checkGroupAccess(params: {
 }) {
   setAccessControlTestConfig(params.cfg);
   return await checkInboundAccessControl({
+    cfg: getAccessControlTestConfig() as never,
     accountId: "default",
     from: params.from ?? "1203630@g.us",
     selfE164: "+15550009999",
