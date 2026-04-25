@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
 import type { Command } from "commander";
@@ -52,6 +53,8 @@ type MeetArtifactOptions = ResolveSpaceOptions & {
   conferenceRecord?: string;
   pageSize?: string;
   transcriptEntries?: boolean;
+  format?: "summary" | "markdown";
+  output?: string;
 };
 
 type SetupOptions = {
@@ -96,6 +99,15 @@ function writeStdoutJson(value: unknown): void {
 
 function writeStdoutLine(...values: unknown[]): void {
   process.stdout.write(`${format(...values)}\n`);
+}
+
+async function writeCliOutput(options: { output?: string }, text: string): Promise<void> {
+  if (options.output?.trim()) {
+    await writeFile(options.output, text.endsWith("\n") ? text : `${text}\n`, "utf8");
+    writeStdoutLine("wrote: %s", options.output);
+    return;
+  }
+  process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
 }
 
 async function promptInput(message: string): Promise<string> {
@@ -535,6 +547,123 @@ function writeAttendanceSummary(result: GoogleMeetAttendanceResult): void {
   }
 }
 
+function pushMarkdownLine(lines: string[], text = ""): void {
+  lines.push(text);
+}
+
+function formatMarkdownOptional(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value : "n/a";
+}
+
+function formatMarkdownIdentity(row: GoogleMeetAttendanceResult["attendance"][number]): string {
+  return row.displayName || row.user || row.participant;
+}
+
+function renderArtifactsMarkdown(result: GoogleMeetArtifactsResult): string {
+  const lines: string[] = ["# Google Meet Artifacts"];
+  if (result.input) {
+    pushMarkdownLine(lines, `Input: ${result.input}`);
+  }
+  if (result.space) {
+    pushMarkdownLine(lines, `Space: ${result.space.name}`);
+  }
+  pushMarkdownLine(lines);
+  pushMarkdownLine(lines, `Conference records: ${result.conferenceRecords.length}`);
+  for (const entry of result.artifacts) {
+    pushMarkdownLine(lines);
+    pushMarkdownLine(lines, `## ${entry.conferenceRecord.name}`);
+    pushMarkdownLine(lines, `Started: ${formatMarkdownOptional(entry.conferenceRecord.startTime)}`);
+    pushMarkdownLine(lines, `Ended: ${formatMarkdownOptional(entry.conferenceRecord.endTime)}`);
+    pushMarkdownLine(lines);
+    pushMarkdownLine(lines, `Participants: ${entry.participants.length}`);
+    pushMarkdownLine(lines, `Recordings: ${entry.recordings.length}`);
+    pushMarkdownLine(lines, `Transcripts: ${entry.transcripts.length}`);
+    pushMarkdownLine(
+      lines,
+      `Transcript entries: ${entry.transcriptEntries.reduce(
+        (count, transcript) => count + transcript.entries.length,
+        0,
+      )}`,
+    );
+    pushMarkdownLine(lines, `Smart notes: ${entry.smartNotes.length}`);
+    if (entry.recordings.length > 0) {
+      pushMarkdownLine(lines);
+      pushMarkdownLine(lines, "### Recordings");
+      for (const recording of entry.recordings) {
+        pushMarkdownLine(lines, `- ${recording.name}`);
+      }
+    }
+    if (entry.transcripts.length > 0) {
+      pushMarkdownLine(lines);
+      pushMarkdownLine(lines, "### Transcripts");
+      for (const transcript of entry.transcripts) {
+        pushMarkdownLine(lines, `- ${transcript.name}`);
+      }
+    }
+    for (const transcriptEntries of entry.transcriptEntries) {
+      pushMarkdownLine(lines);
+      pushMarkdownLine(lines, `### Transcript Entries: ${transcriptEntries.transcript}`);
+      if (transcriptEntries.entriesError) {
+        pushMarkdownLine(lines, `Warning: ${transcriptEntries.entriesError}`);
+        continue;
+      }
+      if (transcriptEntries.entries.length === 0) {
+        pushMarkdownLine(lines, "_No transcript entries._");
+        continue;
+      }
+      for (const transcriptEntry of transcriptEntries.entries) {
+        const times =
+          transcriptEntry.startTime || transcriptEntry.endTime
+            ? ` (${formatMarkdownOptional(transcriptEntry.startTime)} -> ${formatMarkdownOptional(
+                transcriptEntry.endTime,
+              )})`
+            : "";
+        const speaker = transcriptEntry.participant ? `${transcriptEntry.participant}: ` : "";
+        pushMarkdownLine(lines, `- ${speaker}${transcriptEntry.text ?? ""}${times}`);
+      }
+    }
+    if (entry.smartNotes.length > 0) {
+      pushMarkdownLine(lines);
+      pushMarkdownLine(lines, "### Smart Notes");
+      for (const smartNote of entry.smartNotes) {
+        pushMarkdownLine(lines, `- ${smartNote.name}`);
+      }
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderAttendanceMarkdown(result: GoogleMeetAttendanceResult): string {
+  const lines: string[] = ["# Google Meet Attendance"];
+  if (result.input) {
+    pushMarkdownLine(lines, `Input: ${result.input}`);
+  }
+  if (result.space) {
+    pushMarkdownLine(lines, `Space: ${result.space.name}`);
+  }
+  pushMarkdownLine(lines);
+  pushMarkdownLine(lines, `Conference records: ${result.conferenceRecords.length}`);
+  pushMarkdownLine(lines, `Attendance rows: ${result.attendance.length}`);
+  for (const row of result.attendance) {
+    pushMarkdownLine(lines);
+    pushMarkdownLine(lines, `## ${formatMarkdownIdentity(row)}`);
+    pushMarkdownLine(lines, `Record: ${row.conferenceRecord}`);
+    pushMarkdownLine(lines, `Resource: ${row.participant}`);
+    pushMarkdownLine(lines, `First joined: ${formatMarkdownOptional(row.earliestStartTime)}`);
+    pushMarkdownLine(lines, `Last left: ${formatMarkdownOptional(row.latestEndTime)}`);
+    pushMarkdownLine(lines, `Sessions: ${row.sessions.length}`);
+    for (const session of row.sessions) {
+      pushMarkdownLine(
+        lines,
+        `- ${session.name}: ${formatMarkdownOptional(session.startTime)} -> ${formatMarkdownOptional(
+          session.endTime,
+        )}`,
+      );
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export function registerGoogleMeetCli(params: {
   program: Command;
   config: GoogleMeetConfig;
@@ -857,6 +986,8 @@ export function registerGoogleMeetCli(params: {
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
     .option("--page-size <n>", "Max resources per Meet API page")
     .option("--no-transcript-entries", "Skip structured transcript entry lookup")
+    .option("--format <format>", "Output format: summary or markdown", "summary")
+    .option("--output <path>", "Write output to a file instead of stdout")
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
       const resolved = resolveArtifactTokenOptions(params.config, options);
@@ -869,11 +1000,25 @@ export function registerGoogleMeetCli(params: {
         includeTranscriptEntries: resolved.includeTranscriptEntries,
       });
       if (options.json) {
-        writeStdoutJson({
-          ...result,
-          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
-        });
+        await writeCliOutput(
+          options,
+          JSON.stringify(
+            {
+              ...result,
+              tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+            },
+            null,
+            2,
+          ),
+        );
         return;
+      }
+      if (options.format === "markdown") {
+        await writeCliOutput(options, renderArtifactsMarkdown(result));
+        return;
+      }
+      if (options.format && options.format !== "summary") {
+        throw new Error("Unsupported format. Expected summary or markdown.");
       }
       writeArtifactsSummary(result);
       writeStdoutLine(
@@ -893,6 +1038,8 @@ export function registerGoogleMeetCli(params: {
     .option("--client-secret <secret>", "OAuth client secret override")
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
     .option("--page-size <n>", "Max resources per Meet API page")
+    .option("--format <format>", "Output format: summary or markdown", "summary")
+    .option("--output <path>", "Write output to a file instead of stdout")
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
       const resolved = resolveArtifactTokenOptions(params.config, options);
@@ -904,11 +1051,25 @@ export function registerGoogleMeetCli(params: {
         pageSize: resolved.pageSize,
       });
       if (options.json) {
-        writeStdoutJson({
-          ...result,
-          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
-        });
+        await writeCliOutput(
+          options,
+          JSON.stringify(
+            {
+              ...result,
+              tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+            },
+            null,
+            2,
+          ),
+        );
         return;
+      }
+      if (options.format === "markdown") {
+        await writeCliOutput(options, renderAttendanceMarkdown(result));
+        return;
+      }
+      if (options.format && options.format !== "summary") {
+        throw new Error("Unsupported format. Expected summary or markdown.");
       }
       writeAttendanceSummary(result);
       writeStdoutLine(

@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { Command } from "commander";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
@@ -915,6 +918,48 @@ describe("google-meet plugin", () => {
     }
   });
 
+  it("CLI artifacts writes markdown output", async () => {
+    stubMeetArtifactsApi();
+    const program = new Command();
+    const stdout = captureStdout();
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));
+    const outputPath = path.join(tempDir, "artifacts.md");
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () => ({}) as unknown as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(
+        [
+          "googlemeet",
+          "artifacts",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--format",
+          "markdown",
+          "--output",
+          outputPath,
+        ],
+        { from: "user" },
+      );
+      const markdown = readFileSync(outputPath, "utf8");
+      expect(stdout.output()).toContain(`wrote: ${outputPath}`);
+      expect(markdown).toContain("# Google Meet Artifacts");
+      expect(markdown).toContain("## conferenceRecords/rec-1");
+      expect(markdown).toContain("### Transcript Entries: conferenceRecords/rec-1/transcripts/t1");
+      expect(markdown).toContain("Hello from the transcript.");
+    } finally {
+      stdout.restore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("CLI attendance prints participant sessions by default", async () => {
     stubMeetArtifactsApi();
     const program = new Command();
@@ -941,6 +986,42 @@ describe("google-meet plugin", () => {
       );
       expect(stdout.output()).toContain("attendance rows: 1");
       expect(stdout.output()).toContain("participant: Alice");
+      expect(stdout.output()).toContain(
+        "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+      );
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI attendance prints markdown output", async () => {
+    stubMeetArtifactsApi();
+    const program = new Command();
+    const stdout = captureStdout();
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () => ({}) as unknown as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(
+        [
+          "googlemeet",
+          "attendance",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--format",
+          "markdown",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain("# Google Meet Attendance");
+      expect(stdout.output()).toContain("## Alice");
       expect(stdout.output()).toContain(
         "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
       );
