@@ -253,7 +253,13 @@ const SOURCE_TEST_TARGETS = new Map([
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
+  ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+  [
+    "src/memory-host-sdk/host/embedding-defaults.ts",
+    ["src/memory-host-sdk/host/embeddings.test.ts"],
+  ],
+  ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
     "src/auto-reply/reply/dispatch-from-config.ts",
     ["src/auto-reply/reply/dispatch-from-config.test.ts"],
