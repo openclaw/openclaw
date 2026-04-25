@@ -7,9 +7,7 @@ read_when:
 title: "Session management deep dive"
 ---
 
-# Session Management & Compaction (Deep Dive)
-
-This document explains how OpenClaw manages sessions end-to-end:
+This page explains how OpenClaw manages sessions end-to-end:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks

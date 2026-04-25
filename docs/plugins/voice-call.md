@@ -6,8 +6,6 @@ read_when:
 title: "Voice call plugin"
 ---
 
-# Voice Call (plugin)
-
 Voice calls for OpenClaw via a plugin. Supports outbound notifications and
 multi-turn conversations with inbound policies.
 
