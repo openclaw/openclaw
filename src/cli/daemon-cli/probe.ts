@@ -43,7 +43,7 @@ export async function probeGatewayStatus(opts: {
       },
       async () => {
         const { probeGateway } = await loadProbeGatewayModule();
-        const probe = await probeGateway({
+        const probeOpts = {
           url: opts.url,
           auth: {
             token: opts.token,
@@ -51,13 +51,26 @@ export async function probeGatewayStatus(opts: {
           },
           tlsFingerprint: opts.tlsFingerprint,
           timeoutMs: opts.timeoutMs,
-          includeDetails: opts.requireRpc === true,
-          detailLevel: opts.requireRpc === true ? "full" : "none",
-        });
-        return probe;
+          includeDetails: false,
+        };
+        if (opts.requireRpc) {
+          const { callGateway } = await import("../../gateway/call.js");
+          await callGateway({
+            url: opts.url,
+            token: opts.token,
+            password: opts.password,
+            tlsFingerprint: opts.tlsFingerprint,
+            method: "status",
+            timeoutMs: opts.timeoutMs,
+            ...(opts.configPath ? { configPath: opts.configPath } : {}),
+          });
+          const authProbe = await probeGateway(probeOpts).catch(() => null);
+          return { ok: true as const, authProbe };
+        }
+        return await probeGateway(probeOpts);
       },
     );
-    const auth = result.auth;
+    const auth = "auth" in result ? result.auth : result.authProbe?.auth;
     if (result.ok) {
       return {
         ok: true,
@@ -66,9 +79,7 @@ export async function probeGatewayStatus(opts: {
           kind === "read"
             ? auth?.capability && auth.capability !== "unknown"
               ? auth.capability
-              : // A successful detailed probe performs read RPCs, so it proves read access
-                // even when hello metadata cannot recover richer scope metadata.
-                "read_only"
+              : "read_only"
             : auth?.capability,
         auth,
       } as const;
