@@ -16,6 +16,7 @@ import {
   updateLastRoute,
   updateSessionStore,
   updateSessionStoreEntry,
+  type SessionEntry,
 } from "./sessions.js";
 
 describe("sessions", () => {
