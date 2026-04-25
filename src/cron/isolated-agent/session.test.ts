@@ -400,7 +400,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
     });
 
-    it("preserves session context for stale non-isolated rollovers", () => {
+    it("preserves ambient session context for non-isolated expiration rollovers", () => {
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "existing-session-id-321",

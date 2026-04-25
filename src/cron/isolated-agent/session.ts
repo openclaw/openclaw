@@ -9,9 +9,7 @@ import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-type FreshCronSessionSanitizeMode = "isolated-force-new" | "stale-rollover";
-
-const FRESH_CRON_SAFE_PREFERENCE_FIELDS = [
+const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "heartbeatTaskState",
   "chatType",
   "thinkingLevel",
@@ -25,7 +23,7 @@ const FRESH_CRON_SAFE_PREFERENCE_FIELDS = [
   "displayName",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
-const STALE_SESSION_CONTEXT_PRESERVED_FIELDS = [
+const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "elevatedLevel",
   "groupActivation",
   "groupActivationNeedsSystemIntro",
@@ -87,13 +85,13 @@ function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): vo
 
 function sanitizeFreshCronSessionEntry(
   entry: SessionEntry,
-  mode: FreshCronSessionSanitizeMode,
+  options: { preserveAmbientContext: boolean },
 ): SessionEntry {
   const next = {} as SessionEntry;
 
-  copySessionFields(next, entry, FRESH_CRON_SAFE_PREFERENCE_FIELDS);
-  if (mode === "stale-rollover") {
-    copySessionFields(next, entry, STALE_SESSION_CONTEXT_PRESERVED_FIELDS);
+  copySessionFields(next, entry, FRESH_CRON_CARRIED_PREFERENCE_FIELDS);
+  if (options.preserveAmbientContext) {
+    copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
   }
   preserveNonAutoModelOverride(next, entry);
   preserveUserAuthOverride(next, entry);
@@ -159,10 +157,7 @@ export function resolveCronSession(params: {
 
   const baseEntry = entry
     ? isNewSession
-      ? sanitizeFreshCronSessionEntry(
-          entry,
-          params.forceNew ? "isolated-force-new" : "stale-rollover",
-        )
+      ? sanitizeFreshCronSessionEntry(entry, { preserveAmbientContext: !params.forceNew })
       : entry
     : undefined;
 
