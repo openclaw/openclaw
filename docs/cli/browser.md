@@ -242,6 +242,8 @@ This path is host-only. For Docker, headless servers, Browserless, or other remo
 Current existing-session limits:
 
 - snapshot-driven actions use refs, not CSS selectors
+- `browser.actionTimeoutMs` defaults supported `act` requests to 60000 ms when
+  callers omit `timeoutMs`; per-call `timeoutMs` still wins.
 - `click` is left-click only
 - `type` does not support `slowly=true`
 - `press` does not support `delayMs`

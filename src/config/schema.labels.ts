@@ -140,6 +140,7 @@ export const FIELD_LABELS: Record<string, string> = {
   browser: "Browser",
   "browser.enabled": "Browser Enabled",
   "browser.cdpUrl": "Browser CDP URL",
+  "browser.actionTimeoutMs": "Browser Action Timeout (ms)",
   "browser.color": "Browser Accent Color",
   "browser.executablePath": "Browser Executable Path",
   "browser.headless": "Browser Headless Mode",
