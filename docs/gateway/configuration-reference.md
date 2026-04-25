@@ -246,6 +246,9 @@ See [Plugins](/tools/plugin).
 - `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
   when your provider gives you a direct DevTools WebSocket URL.
+- If an externally managed CDP service is reachable through loopback, set that
+  profile's `attachOnly: true`; otherwise OpenClaw treats the loopback port as a
+  local managed browser profile and may report local port ownership errors.
 - `existing-session` profiles use Chrome MCP instead of CDP and can attach on
   the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific

@@ -230,19 +230,32 @@ export async function createTargetViaCdp(opts: {
     } else {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
     }
-    await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   }
 
-  return await withCdpSocket(wsUrl, async (send) => {
-    const created = (await send("Target.createTarget", { url: opts.url })) as {
-      targetId?: string;
-    };
-    const targetId = created?.targetId?.trim() ?? "";
-    if (!targetId) {
-      throw new Error("CDP Target.createTarget returned no targetId");
+  const candidateWsUrls =
+    isWebSocketUrl(opts.cdpUrl) && wsUrl !== opts.cdpUrl ? [wsUrl, opts.cdpUrl] : [wsUrl];
+  let lastError: unknown;
+  for (const candidateWsUrl of candidateWsUrls) {
+    try {
+      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy);
+      return await withCdpSocket(candidateWsUrl, async (send) => {
+        const created = (await send("Target.createTarget", { url: opts.url })) as {
+          targetId?: string;
+        };
+        const targetId = created?.targetId?.trim() ?? "";
+        if (!targetId) {
+          throw new Error("CDP Target.createTarget returned no targetId");
+        }
+        return { targetId };
+      });
+    } catch (err) {
+      lastError = err;
     }
-    return { targetId };
-  });
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error("CDP Target.createTarget failed");
 }
 
 export type CdpRemoteObject = {

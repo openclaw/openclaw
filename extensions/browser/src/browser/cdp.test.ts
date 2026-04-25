@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -349,6 +350,56 @@ describe("cdp", () => {
       url: "https://example.com",
     });
     expect(created.targetId).toBe("WS_FALLBACK");
+  });
+
+  it("falls back to direct WS connection when discovered Browserless endpoint rejects commands", async () => {
+    const server = createServer((req, res) => {
+      if (req.url?.startsWith("/json/version")) {
+        const addr = server.address() as AddressInfo;
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/e/bad`,
+          }),
+        );
+        return;
+      }
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    const wss = new WebSocketServer({ noServer: true });
+    server.on("upgrade", (req, socket, head) => {
+      if (req.url?.startsWith("/e/bad")) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+    });
+    wss.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(rawDataToString(data)) as {
+          id?: number;
+          method?: string;
+        };
+        if (msg.method === "Target.createTarget") {
+          socket.send(JSON.stringify({ id: msg.id, result: { targetId: "ROOT_FALLBACK" } }));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const addr = server.address() as AddressInfo;
+      const created = await createTargetViaCdp({
+        cdpUrl: `ws://127.0.0.1:${addr.port}?token=abc`,
+        url: "https://example.com",
+      });
+      expect(created.targetId).toBe("ROOT_FALLBACK");
+    } finally {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("captures an aria snapshot via CDP", async () => {

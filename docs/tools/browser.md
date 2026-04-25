@@ -297,6 +297,9 @@ instead, and remote CDP profiles use the browser behind `cdpUrl`.
 - **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
+- For externally managed CDP services on loopback (for example Browserless in
+  Docker published to `127.0.0.1`), also set `attachOnly: true`. Loopback CDP
+  without `attachOnly` is treated as a local OpenClaw-managed browser profile.
 - `headless` only affects local managed profiles that OpenClaw launches. It does not restart or change existing-session or remote CDP browsers.
 - `executablePath` follows the same local managed profile rule. Changing it on a
   running local managed profile marks that profile for restart/reconcile so the
@@ -370,6 +373,39 @@ Notes:
   `wss://` for a direct CDP connection or keep the HTTPS URL and let OpenClaw
   discover `/json/version`.
 
+### Browserless Docker on the same host
+
+When Browserless is self-hosted in Docker and OpenClaw runs on the host, treat
+Browserless as an externally managed CDP service:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browserless",
+    profiles: {
+      browserless: {
+        cdpUrl: "ws://127.0.0.1:3000",
+        attachOnly: true,
+        color: "#00AA00",
+      },
+    },
+  },
+}
+```
+
+The address in `browser.profiles.browserless.cdpUrl` must be reachable from the
+OpenClaw process. Browserless must also advertise a matching reachable endpoint;
+set Browserless `EXTERNAL` to that same public-to-OpenClaw WebSocket base, such
+as `ws://127.0.0.1:3000`, `ws://browserless:3000`, or a stable private Docker
+network address. If `/json/version` returns `webSocketDebuggerUrl` pointing at
+an address OpenClaw cannot reach, CDP HTTP can look healthy while the WebSocket
+attach still fails.
+
+Do not leave `attachOnly` unset for a loopback Browserless profile. Without
+`attachOnly`, OpenClaw treats the loopback port as a local managed browser
+profile and may report that the port is in use but not owned by OpenClaw.
+
 ## Direct WebSocket CDP providers
 
 Some hosted browser services expose a **direct WebSocket** endpoint rather than
@@ -388,10 +424,13 @@ CDP URL shapes and picks the right connection strategy automatically:
   [Browserbase](https://www.browserbase.com)). OpenClaw tries HTTP
   `/json/version` discovery first (normalising the scheme to `http`/`https`);
   if discovery returns a `webSocketDebuggerUrl` it is used, otherwise OpenClaw
-  falls back to a direct WebSocket handshake at the bare root. This lets a
-  bare `ws://` pointed at a local Chrome still connect, since Chrome only
-  accepts WebSocket upgrades on the specific per-target path from
-  `/json/version`.
+  falls back to a direct WebSocket handshake at the bare root. If the advertised
+  WebSocket endpoint rejects the CDP handshake but the configured bare root
+  accepts it, OpenClaw falls back to that root as well. This lets a bare `ws://`
+  pointed at a local Chrome still connect, since Chrome only accepts WebSocket
+  upgrades on the specific per-target path from `/json/version`, while hosted
+  providers can still use their root WebSocket endpoint when their discovery
+  endpoint advertises a short-lived URL that is not suitable for Playwright CDP.
 
 ### Browserbase
 
@@ -654,6 +693,8 @@ Common examples:
 - CDP startup or readiness failure:
   - `Chrome CDP websocket for profile "openclaw" is not reachable after start`
   - `Remote CDP for profile "<name>" is not reachable at <cdpUrl>`
+  - `Port <port> is in use for profile "<name>" but not by openclaw` when a
+    loopback external CDP service is configured without `attachOnly: true`
 - Navigation SSRF block:
   - `open`, `navigate`, snapshot, or tab-opening flows fail with a browser/network policy error while `start` and `tabs` still work
 

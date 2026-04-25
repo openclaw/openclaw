@@ -20,6 +20,7 @@ import {
   assertCdpEndpointAllowed,
   fetchJson,
   getHeadersWithAuth,
+  isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   withCdpSocket,
 } from "./cdp.helpers.js";
@@ -500,11 +501,22 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
           () => null,
         );
         const endpoint = wsUrl ?? normalized;
-        const headers = getHeadersWithAuth(endpoint);
-        // Bypass proxy for loopback CDP connections (#31219)
-        const browser = await withNoProxyForCdpUrl(endpoint, () =>
-          chromium.connectOverCDP(endpoint, { timeout, headers }),
-        );
+        const connectEndpoint = async (target: string) => {
+          const headers = getHeadersWithAuth(target);
+          // Bypass proxy for loopback CDP connections (#31219)
+          return await withNoProxyForCdpUrl(target, () =>
+            chromium.connectOverCDP(target, { timeout, headers }),
+          );
+        };
+        let browser: Browser;
+        try {
+          browser = await connectEndpoint(endpoint);
+        } catch (err) {
+          if (!isWebSocketUrl(normalized) || endpoint === normalized) {
+            throw err;
+          }
+          browser = await connectEndpoint(normalized);
+        }
         const onDisconnected = () => {
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {

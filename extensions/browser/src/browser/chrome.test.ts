@@ -662,6 +662,59 @@ describe("browser chrome helpers", () => {
     });
   });
 
+  it("falls back to the bare WebSocket root when discovered Browserless endpoint rejects readiness", async () => {
+    const server = createServer((req, res) => {
+      if (req.url?.startsWith("/json/version")) {
+        const addr = server.address() as AddressInfo;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            Browser: "Browserless/Mock",
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/e/bad`,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    const wss = new WebSocketServer({ noServer: true });
+    server.on("upgrade", (req, socket, head) => {
+      if (req.url?.startsWith("/e/bad")) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+    });
+    wss.on("connection", (ws) => {
+      ws.on("message", (raw) => {
+        const message = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
+        if (message.method === "Browser.getVersion" && message.id === 1) {
+          ws.send(JSON.stringify({ id: 1, result: { product: "Browserless/Mock" } }));
+        }
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+      server.once("error", reject);
+    });
+    try {
+      const addr = server.address() as AddressInfo;
+      const wsOnlyBase = `ws://127.0.0.1:${addr.port}?token=abc`;
+      await expect(isChromeCdpReady(wsOnlyBase, 300, 400)).resolves.toBe(true);
+      await expect(diagnoseChromeCdp(wsOnlyBase, 300, 400)).resolves.toMatchObject({
+        ok: true,
+        wsUrl: wsOnlyBase,
+        browser: "Browserless/Mock",
+      });
+    } finally {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("reports unreachable when a bare ws:// CDP URL points at a server with no /json/version and refuses WS", async () => {
     // Negative counterpart to the #68027 happy path — a bare ws URL
     // pointed at a port that neither serves /json/version nor accepts
