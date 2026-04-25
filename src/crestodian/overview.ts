@@ -237,16 +237,70 @@ export function formatCrestodianOverview(overview: CrestodianOverview): string {
 
 export function recommendCrestodianNextStep(overview: CrestodianOverview): string {
   if (!overview.config.exists) {
-    return 'say "setup" to create a starter config';
+    return 'run "setup" to create a starter config';
   }
   if (!overview.config.valid) {
-    return 'say "validate config" or "doctor" to inspect the config';
+    return 'run "validate config" or "doctor" to inspect the config';
   }
   if (!overview.defaultModel) {
-    return 'say "setup" or "set default model <provider/model>"';
+    return 'run "setup" or "set default model <provider/model>"';
   }
   if (!overview.gateway.reachable) {
-    return 'say "gateway status" or "restart gateway"';
+    return 'run "gateway status" or "restart gateway"';
   }
-  return 'say "talk to agent" to enter your default agent';
+  return 'run "talk to agent" to enter your default agent';
+}
+
+function formatStartupConfigStatus(overview: CrestodianOverview): string {
+  if (!overview.config.exists) {
+    return "missing";
+  }
+  return overview.config.valid ? "valid" : "invalid";
+}
+
+function formatStartupUse(overview: CrestodianOverview): string {
+  if (overview.defaultModel) {
+    return `Using: ${overview.defaultModel} for fuzzy local planning.`;
+  }
+  return "Using: deterministic typed commands until we configure a model.";
+}
+
+function formatStartupGatewayStatus(overview: CrestodianOverview): string {
+  if (overview.gateway.reachable) {
+    return `Gateway: reachable at ${overview.gateway.url}.`;
+  }
+  return `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`;
+}
+
+function formatStartupAction(overview: CrestodianOverview): string {
+  if (!overview.config.exists) {
+    return "I can start by creating a starter config with `setup`.";
+  }
+  if (!overview.config.valid) {
+    return "I can start debugging with `validate config` or `doctor`.";
+  }
+  if (!overview.defaultModel) {
+    return "I can start by choosing a model with `setup`.";
+  }
+  if (!overview.gateway.reachable) {
+    return "I can start debugging with `gateway status`, or queue `restart gateway` for approval.";
+  }
+  return "Everything basic is reachable. Use `talk to agent` when you want the normal agent.";
+}
+
+export function formatCrestodianStartupMessage(overview: CrestodianOverview): string {
+  const agent = overview.agents.find((entry) => entry.id === overview.defaultAgentId);
+  const agentLabel = agent?.name
+    ? `${overview.defaultAgentId} (${agent.name})`
+    : overview.defaultAgentId;
+  return [
+    "## Hi, I'm Crestodian.",
+    "",
+    "- Start me when setup, config, Gateway, model choice, or agent routing feels off.",
+    `- ${formatStartupUse(overview)}`,
+    `- Config: ${formatStartupConfigStatus(overview)}. Default agent: ${agentLabel}.`,
+    `- ${formatStartupGatewayStatus(overview)}`,
+    "",
+    formatStartupAction(overview),
+  ].join("\n");
 }
