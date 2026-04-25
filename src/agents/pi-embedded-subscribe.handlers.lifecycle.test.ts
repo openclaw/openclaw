@@ -455,4 +455,49 @@ describe("handleAgentEnd", () => {
       data: { phase: "end" },
     });
   });
+
+  it("omits raw HTML auth bodies from consoleMessage for HTML 403 auth failures", async () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      errorMessage:
+        '403 <!DOCTYPE html><html><body><h1>Access Denied</h1></body></html>',
+      content: [{ type: "text", text: "" }],
+    });
+
+    await handleAgentEnd(ctx);
+
+    const warnMeta = vi.mocked(ctx.log.warn).mock.calls[0]?.[1];
+    expect(warnMeta).toMatchObject({
+      providerRuntimeFailureKind: "auth_html_403",
+    });
+    const consoleMsg = typeof warnMeta?.consoleMessage === "string" ? warnMeta.consoleMessage : "";
+    expect(consoleMsg).not.toContain("rawError=");
+    expect(consoleMsg).not.toContain("<html>");
+  });
+
+  it("omits raw HTML from consoleMessage for Cloudflare challenge errors", async () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      errorMessage:
+        '403 <!DOCTYPE html><html><body><div id="cf-browser-verification"></div></body></html>',
+      content: [{ type: "text", text: "" }],
+    });
+
+    await handleAgentEnd(ctx);
+
+    const warnMeta = vi.mocked(ctx.log.warn).mock.calls[0]?.[1];
+    expect(warnMeta).toMatchObject({
+      providerRuntimeFailureKind: "cloudflare_challenge",
+    });
+    const consoleMsg = typeof warnMeta?.consoleMessage === "string" ? warnMeta.consoleMessage : "";
+    expect(consoleMsg).not.toContain("rawError=");
+    expect(consoleMsg).not.toContain("<html>");
+    expect(consoleMsg).not.toContain("cf-browser-verification");
+  });
 });
