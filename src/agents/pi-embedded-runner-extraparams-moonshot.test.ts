@@ -66,6 +66,82 @@ describe("applyExtraParamsToAgent Moonshot", () => {
     expect(payload.tool_choice).toEqual({ type: "tool", name: "read" });
   });
 
+  it("disables thinking when replayed Anthropic tool_use lacks reasoning_content", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "moonshot",
+      modelId: "kimi-k2.5",
+      thinkingLevel: "low",
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_123",
+                name: "read",
+                input: { path: "README.md" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(payload.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("disables thinking when replayed OpenAI tool_calls lacks reasoning_content", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "moonshot",
+      modelId: "kimi-k2.5",
+      thinkingLevel: "low",
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_123",
+                type: "function",
+                function: { name: "read", arguments: '{"path":"README.md"}' },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(payload.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("keeps thinking enabled when replayed tool calls include reasoning_content", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "moonshot",
+      modelId: "kimi-k2.5",
+      thinkingLevel: "low",
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            reasoning_content: "I should inspect the file before answering.",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_123",
+                name: "read",
+                input: { path: "README.md" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(payload.thinking).toEqual({ type: "enabled" });
+  });
+
   it("respects explicit Moonshot thinking param from model config", () => {
     const payload = runExtraParamsPayloadCase({
       provider: "moonshot",

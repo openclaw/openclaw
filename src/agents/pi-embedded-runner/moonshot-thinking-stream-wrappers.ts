@@ -67,6 +67,37 @@ function isPinnedToolChoice(toolChoice: unknown): boolean {
   return typeValue === "tool" || typeValue === "function";
 }
 
+function hasAssistantToolUseWithoutReasoningContent(messages: unknown): boolean {
+  if (!Array.isArray(messages)) {
+    return false;
+  }
+
+  return messages.some((message) => {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      return false;
+    }
+    const msg = message as Record<string, unknown>;
+    if (msg.role !== "assistant") {
+      return false;
+    }
+
+    const hasReasoningContent =
+      typeof msg.reasoning_content === "string" && msg.reasoning_content.length > 0;
+    const hasOpenAiToolCalls = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0;
+    const hasAnthropicToolUse =
+      Array.isArray(msg.content) &&
+      msg.content.some(
+        (block) =>
+          Boolean(block) &&
+          typeof block === "object" &&
+          !Array.isArray(block) &&
+          (block as Record<string, unknown>).type === "tool_use",
+      );
+
+    return (hasOpenAiToolCalls || hasAnthropicToolUse) && !hasReasoningContent;
+  });
+}
+
 export function resolveMoonshotThinkingType(params: {
   configuredThinking: unknown;
   thinkingLevel?: ThinkLevel;
@@ -112,6 +143,14 @@ export function createMoonshotThinkingWrapper(
           payloadObj.thinking = { type: "disabled" };
           effectiveThinkingType = "disabled";
         }
+      }
+
+      if (
+        effectiveThinkingType === "enabled" &&
+        hasAssistantToolUseWithoutReasoningContent(payloadObj.messages)
+      ) {
+        payloadObj.thinking = { type: "disabled" };
+        effectiveThinkingType = "disabled";
       }
 
       // thinking.keep is only valid on kimi-k2.6 when thinking is enabled. Gate
