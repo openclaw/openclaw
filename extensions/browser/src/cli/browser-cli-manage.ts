@@ -268,6 +268,9 @@ export function registerBrowserManageCommands(
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
+            `headless: ${status.headless}${
+              status.headlessSource ? ` (${status.headlessSource})` : ""
+            }`,
             `profileColor: ${status.color}`,
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),

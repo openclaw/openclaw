@@ -3,7 +3,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import {
+  getManagedBrowserMissingDisplayError,
+  OPENCLAW_BROWSER_HEADLESS_ENV,
+  resolveBrowserConfig,
+  resolveManagedBrowserHeadlessMode,
+  resolveProfile,
+  shouldStartLocalBrowserServer,
+} from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
@@ -313,6 +320,111 @@ describe("browser config", () => {
 
     const remote = resolveProfile(resolved, "remote");
     expect(remote?.headless).toBe(false);
+  });
+
+  describe("managed browser headless mode", () => {
+    const noDisplayEnv = {
+      DISPLAY: undefined,
+      WAYLAND_DISPLAY: undefined,
+      [OPENCLAW_BROWSER_HEADLESS_ENV]: undefined,
+    };
+
+    it("falls back to headless for local managed Linux profiles without display", () => {
+      const resolved = resolveBrowserConfig({});
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: true, source: "linux-display-fallback" });
+    });
+
+    it("does not apply the no-display fallback to remote CDP profiles", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
+        },
+      });
+      const profile = resolveProfile(resolved, "remote")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: false, source: "default" });
+    });
+
+    it("lets explicit profile headless=false beat the Linux no-display fallback", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: false, source: "profile" });
+    });
+
+    it("lets explicit global headless=false beat the Linux no-display fallback", () => {
+      const resolved = resolveBrowserConfig({ headless: false });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: false, source: "config" });
+    });
+
+    it("lets OPENCLAW_BROWSER_HEADLESS override profile/global config", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "1" },
+        }),
+      ).toEqual({ headless: true, source: "env" });
+    });
+
+    it("returns an actionable error only when headed mode is explicitly selected", () => {
+      const defaultResolved = resolveBrowserConfig({});
+      const defaultProfile = resolveProfile(defaultResolved, "openclaw")!;
+      expect(
+        getManagedBrowserMissingDisplayError(defaultResolved, defaultProfile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toBeNull();
+
+      const profileResolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(profileResolved, "openclaw")!;
+      expect(
+        getManagedBrowserMissingDisplayError(profileResolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toContain("browser.profiles.openclaw.headless=false");
+    });
   });
 
   it("inherits executablePath from global browser config when profile override is not set", () => {

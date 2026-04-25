@@ -171,6 +171,7 @@ describe("chrome.ts internal", () => {
         headless: false,
         noSandbox: false,
         extraArgs: [],
+        headlessSource: "default",
         ...overrides,
       }) as unknown as ResolvedBrowserConfig;
 
@@ -180,13 +181,16 @@ describe("chrome.ts internal", () => {
       cdpPort: 19222,
       cdpUrl: "http://127.0.0.1:19222",
       cdpIsLoopback: true,
+      driver: "openclaw",
       headless: false,
+      headlessSource: "default",
+      attachOnly: false,
     } as unknown as ResolvedBrowserProfile;
 
     it("toggles headless args", () => {
       const args = buildOpenClawChromeLaunchArgs({
         resolved: baseResolved({ headless: false }),
-        profile: { ...baseProfile, headless: true },
+        profile: { ...baseProfile, headless: true, headlessSource: "profile" },
         userDataDir: "/tmp/foo",
       });
       expect(args).toContain("--headless=new");
@@ -195,9 +199,38 @@ describe("chrome.ts internal", () => {
 
     it("lets profile headless=false override global headless=true", () => {
       const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({ headless: true }),
-        profile: { ...baseProfile, headless: false },
+        resolved: baseResolved({ headless: true, headlessSource: "config" }),
+        profile: { ...baseProfile, headless: false, headlessSource: "profile" },
         userDataDir: "/tmp/foo",
+      });
+      expect(args).not.toContain("--headless=new");
+      expect(args).not.toContain("--disable-gpu");
+    });
+
+    it("adds headless args for Linux local managed profiles without a display", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: baseProfile,
+        userDataDir: "/tmp/foo",
+        platform: "linux",
+        env: { DISPLAY: undefined, WAYLAND_DISPLAY: undefined },
+      });
+      expect(args).toContain("--headless=new");
+      expect(args).toContain("--disable-gpu");
+    });
+
+    it("does not apply Linux no-display fallback to remote profiles", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: {
+          ...baseProfile,
+          cdpHost: "10.0.0.42",
+          cdpUrl: "http://10.0.0.42:9222",
+          cdpIsLoopback: false,
+        },
+        userDataDir: "/tmp/foo",
+        platform: "linux",
+        env: { DISPLAY: undefined, WAYLAND_DISPLAY: undefined },
       });
       expect(args).not.toContain("--headless=new");
       expect(args).not.toContain("--disable-gpu");
