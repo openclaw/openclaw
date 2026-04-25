@@ -78,6 +78,33 @@ function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
 }
 
+function createExternalProviderConfig(params: {
+  provider: "twilio" | "telnyx" | "plivo";
+  publicUrl?: string;
+}): VoiceCallConfig {
+  const config = createVoiceCallBaseConfig({
+    provider: params.provider,
+    tunnelProvider: "none",
+  });
+  config.twilio = {
+    accountSid: "AC123",
+    authToken: "secret",
+  };
+  config.telnyx = {
+    apiKey: "key",
+    connectionId: "conn",
+    publicKey: "pub",
+  };
+  config.plivo = {
+    authId: "MA123",
+    authToken: "secret",
+  };
+  if (params.publicUrl) {
+    config.publicUrl = params.publicUrl;
+  }
+  return config;
+}
+
 describe("createVoiceCallRuntime lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -168,6 +195,36 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
     expect(mocks.webhookCtorArgs[0]?.[3]).toBe(coreConfig);
     expect(mocks.webhookCtorArgs[0]?.[4]).toBe(fullConfig);
+  });
+
+  it.each(["twilio", "telnyx", "plivo"] as const)(
+    "fails closed when %s falls back to a local-only webhook",
+    async (provider) => {
+      await expect(
+        createVoiceCallRuntime({
+          config: createExternalProviderConfig({ provider }),
+          coreConfig: {} as CoreConfig,
+          agentRuntime: {} as never,
+        }),
+      ).rejects.toThrow(`${provider} requires a publicly reachable webhook URL`);
+      expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("accepts an explicit public URL for external voice providers", async () => {
+    const runtime = await createVoiceCallRuntime({
+      config: createExternalProviderConfig({
+        provider: "twilio",
+        publicUrl: "https://voice.example.com/voice/webhook",
+      }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: {} as never,
+    });
+
+    expect(runtime.webhookUrl).toBe("https://voice.example.com/voice/webhook");
+    expect(runtime.publicUrl).toBe("https://voice.example.com/voice/webhook");
+
+    await runtime.stop();
   });
 
   it("wires the shared realtime agent consult tool and handler", async () => {
