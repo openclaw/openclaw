@@ -68,6 +68,7 @@ export function createChangedCheckPlan(result, options = {}) {
     }
   };
   const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
+  const addLint = (name, args) => add(name, args, baseEnv);
 
   add("conflict markers", ["check:no-conflict-markers"]);
 
@@ -109,7 +110,7 @@ export function createChangedCheckPlan(result, options = {}) {
 
   if (runAll) {
     addTypecheck("typecheck all", ["tsgo:all"]);
-    add("lint", ["lint"]);
+    addLint("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
     return {
       commands,
@@ -135,16 +136,16 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.coreTests) {
-    add("lint core", ["lint:core"]);
+    addLint("lint core", ["lint:core"]);
   }
   if (lanes.extensions || lanes.extensionTests) {
-    add("lint extensions", ["lint:extensions"]);
+    addLint("lint extensions", ["lint:extensions"]);
   }
   if (lanes.tooling) {
-    add("lint scripts", ["lint:scripts"]);
+    addLint("lint scripts", ["lint:scripts"]);
   }
   if (lanes.apps) {
-    add("lint apps", ["lint:apps"]);
+    addLint("lint apps", ["lint:apps"]);
   }
 
   if (lanes.core || lanes.extensions) {

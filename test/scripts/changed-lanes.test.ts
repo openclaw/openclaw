@@ -122,6 +122,19 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("runs changed-check lint lanes under the parent heavy-check lock", () => {
+    const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+    const lintCommand = plan.commands.find((command) => command.args[0] === "lint:extensions");
+
+    expect(lintCommand?.env).toMatchObject({
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
   it("routes core test-only changes to core test lanes only", () => {
     const result = detectChangedLanes(["src/shared/string-normalization.test.ts"]);
 
