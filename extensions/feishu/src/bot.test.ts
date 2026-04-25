@@ -2224,7 +2224,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCallArg(mockSaveMediaBuffer, 0, 4)).toBe("clip.mp4");
   });
 
-  it("falls back to the message payload filename when download metadata omits it", async () => {
+  it("sanitizes the message payload filename when download metadata omits it", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
       buffer: Buffer.from("video"),
@@ -2253,7 +2253,7 @@ describe("handleFeishuMessage command authorization", () => {
         content: JSON.stringify({
           file_key: "file_media_payload",
           image_key: "img_media_thumb",
-          file_name: "payload-name.mp4",
+          file_name: "../../payload-name.mp4",
         }),
       },
     };
@@ -2271,6 +2271,10 @@ describe("handleFeishuMessage command authorization", () => {
 
   it("downloads embedded media tags from post messages as files", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("video"),
+      contentType: "video/mp4",
+    });
 
     const cfg: ClawdbotConfig = {
       channels: {
@@ -2322,6 +2326,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCallArg(mockSaveMediaBuffer, 0, 1)).toBe("video/mp4");
     expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
     expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
+    expect(mockCallArg(mockSaveMediaBuffer, 0, 4)).toBe("embedded.mov");
   });
 
   it("includes message_id in BodyForAgent on its own line", async () => {
