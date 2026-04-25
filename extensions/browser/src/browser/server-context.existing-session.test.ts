@@ -38,6 +38,7 @@ function makeState(): BrowserServerState {
       cdpIsLoopback: true,
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
+      actionTimeoutMs: 20000,
       color: "#FF4500",
       headless: false,
       noSandbox: false,

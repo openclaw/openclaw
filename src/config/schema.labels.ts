@@ -637,6 +637,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.ssrfPolicy.hostnameAllowlist": "Browser Hostname Allowlist",
   "browser.remoteCdpTimeoutMs": "Remote CDP Timeout (ms)",
   "browser.remoteCdpHandshakeTimeoutMs": "Remote CDP Handshake Timeout (ms)",
+  "browser.actionTimeoutMs": "Browser Action Timeout (ms)",
   session: "Session",
   "session.scope": "Session Scope",
   "session.dmScope": "DM Session Scope",

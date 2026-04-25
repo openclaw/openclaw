@@ -54,6 +54,8 @@ export type BrowserConfig = {
   remoteCdpTimeoutMs?: number;
   /** Remote CDP WebSocket handshake timeout (ms). Default: max(remoteCdpTimeoutMs * 2, 2000). */
   remoteCdpHandshakeTimeoutMs?: number;
+  /** Default browser action request timeout (ms) before the client gives up. Default: 20000. */
+  actionTimeoutMs?: number;
   /** Accent color for the openclaw browser profile (hex). Default: #FF4500 */
   color?: string;
   /** Override the browser executable path (all platforms). */

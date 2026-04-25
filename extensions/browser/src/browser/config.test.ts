@@ -60,6 +60,7 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
+    expect(resolved.actionTimeoutMs).toBe(20000);
     expect(resolved.tabCleanup).toEqual({
       enabled: true,
       idleMinutes: 120,
@@ -122,6 +123,13 @@ describe("browser config", () => {
     });
     expect(resolved.remoteCdpTimeoutMs).toBe(2200);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
+  });
+
+  it("supports custom browser action timeouts", () => {
+    const resolved = resolveBrowserConfig({
+      actionTimeoutMs: 45000,
+    });
+    expect(resolved.actionTimeoutMs).toBe(45000);
   });
 
   it("supports custom browser tab cleanup policy", () => {

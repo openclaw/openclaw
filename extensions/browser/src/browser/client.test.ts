@@ -287,6 +287,9 @@ describe("browser client", () => {
       browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" }),
     ).resolves.toMatchObject({ ok: true, targetId: "t1", results: [{ ok: true }] });
     await expect(
+      browserAct("http://127.0.0.1:18791", { kind: "wait", timeMs: 20_000 }),
+    ).resolves.toMatchObject({ ok: true, targetId: "t1", results: [{ ok: true }] });
+    await expect(
       browserArmFileChooser("http://127.0.0.1:18791", {
         paths: ["/tmp/a.txt"],
       }),
@@ -312,6 +315,14 @@ describe("browser client", () => {
     expect(calls.some((c) => c.url.endsWith("/doctor"))).toBe(true);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
+
+    const act = calls.find(
+      (c) =>
+        c.url.endsWith("/act") && c.init?.body === JSON.stringify({ kind: "wait", timeMs: 20_000 }),
+    );
+    expect((act?.init as (RequestInit & { timeoutMs?: number }) | undefined)?.timeoutMs).toBe(
+      25_000,
+    );
 
     const screenshotCalls = calls.filter((c) => c.url.endsWith("/screenshot"));
     const screenshot = screenshotCalls[0];

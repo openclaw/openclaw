@@ -603,6 +603,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
           },
+          actionTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Browser Action Timeout (ms)",
+            description:
+              "Default timeout in milliseconds for browser act requests before the client gives up waiting. Increase this when long-running waits or interactions are healthy but exceed the default request budget.",
+          },
           color: {
             type: "string",
             title: "Browser Accent Color",
@@ -26399,6 +26407,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.remoteCdpHandshakeTimeoutMs": {
       label: "Remote CDP Handshake Timeout (ms)",
       help: "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
+      tags: ["performance"],
+    },
+    "browser.actionTimeoutMs": {
+      label: "Browser Action Timeout (ms)",
+      help: "Default timeout in milliseconds for browser act requests before the client gives up waiting. Increase this when long-running waits or interactions are healthy but exceed the default request budget.",
       tags: ["performance"],
     },
     "session.scope": {

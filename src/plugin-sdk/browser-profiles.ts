@@ -30,6 +30,7 @@ export type ResolvedBrowserConfig = {
   cdpIsLoopback: boolean;
   remoteCdpTimeoutMs: number;
   remoteCdpHandshakeTimeoutMs: number;
+  actionTimeoutMs: number;
   color: string;
   executablePath?: string;
   headless: boolean;

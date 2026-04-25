@@ -8,6 +8,9 @@ import type { BrowserActRequest, BrowserFormField } from "./client-actions.types
 import { fetchBrowserJson } from "./client-fetch.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./constants.js";
 
+const DEFAULT_BROWSER_ACTION_REQUEST_TIMEOUT_MS = 20_000;
+const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+
 export type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 
 export type BrowserActResponse = {
@@ -25,6 +28,28 @@ export type BrowserDownloadPayload = {
 };
 
 type BrowserDownloadResult = { ok: true; targetId: string; download: BrowserDownloadPayload };
+
+function normalizePositiveTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
+  const candidateTimeouts: number[] = [];
+
+  const explicitTimeout = normalizePositiveTimeoutMs((req as { timeoutMs?: unknown }).timeoutMs);
+  if (explicitTimeout !== undefined) {
+    candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
+  }
+
+  if (req.kind === "wait") {
+    const waitDuration = normalizePositiveTimeoutMs(req.timeMs);
+    if (waitDuration !== undefined) {
+      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
+    }
+  }
+
+  return Math.max(DEFAULT_BROWSER_ACTION_REQUEST_TIMEOUT_MS, ...candidateTimeouts);
+}
 
 async function postDownloadRequest(
   baseUrl: string | undefined,
@@ -167,7 +192,7 @@ export async function browserAct(
     timeoutMs:
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 20000,
+        : resolveBrowserActRequestTimeoutMs(req),
   });
 }
 

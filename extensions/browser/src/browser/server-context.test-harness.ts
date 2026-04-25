@@ -37,6 +37,7 @@ export function makeBrowserServerState(params?: {
     evaluateEnabled: false,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
+    actionTimeoutMs: 20_000,
     extraArgs: [],
     color: profile.color,
     headless: true,
@@ -60,6 +61,7 @@ export function makeBrowserServerState(params?: {
     resolved: {
       ...resolvedBase,
       ...params?.resolvedOverrides,
+      actionTimeoutMs: params?.resolvedOverrides?.actionTimeoutMs ?? resolvedBase.actionTimeoutMs,
       tabCleanup: params?.resolvedOverrides?.tabCleanup ?? resolvedBase.tabCleanup,
     },
     profiles: new Map(),

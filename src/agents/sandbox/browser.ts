@@ -96,6 +96,7 @@ function buildSandboxBrowserResolvedConfig(params: {
     cdpPortRangeEnd: cdpPortRange.end,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
+    actionTimeoutMs: 20_000,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath: undefined,
     headless: params.headless,
