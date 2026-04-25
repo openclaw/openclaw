@@ -17,7 +17,12 @@
 
 #include "gateway_client.h"
 #include "gateway_config.h"
+#include "gateway_remote_config.h"
+#include "product_coordinator.h"
+#include "product_state.h"
 #include "readiness.h"
+#include "remote_endpoint.h"
+#include "remote_probe.h"
 #include "runtime_paths.h"
 #include "state.h"
 
@@ -34,6 +39,27 @@ static GtkWidget *onboard_gateway_next_action_value = NULL;
 static GtkWidget *onboard_whats_next_guidance_label = NULL;
 static GtkWidget *onboard_whats_next_dashboard_button = NULL;
 static GtkWidget *onboard_environment_checks_box = NULL;
+
+/* ── Remote-mode subflow state (lives across rebuilds) ── */
+static gboolean g_onboard_chose_remote = FALSE;
+static GtkWidget *onboard_remote_carousel_ref = NULL;
+static GtkWidget *onboard_remote_transport_combo = NULL;
+static GtkStringList *onboard_remote_transport_model = NULL;
+static gboolean onboard_remote_transport_programmatic = FALSE;
+static GtkWidget *onboard_remote_url_entry = NULL;
+static GtkWidget *onboard_remote_ssh_target_entry = NULL;
+static GtkWidget *onboard_remote_ssh_identity_entry = NULL;
+/*
+ * Onboarding-side gateway auth rows. Always visible across both
+ * transports; mirror gateway.remote.token / gateway.remote.password
+ * with the writer's "empty string removes the key" semantics.
+ */
+static GtkWidget *onboard_remote_token_entry = NULL;
+static GtkWidget *onboard_remote_password_entry = NULL;
+static GtkWidget *onboard_remote_status_label = NULL;
+static GtkWidget *onboard_remote_test_btn = NULL;
+static GtkWidget *onboard_remote_apply_btn = NULL;
+static GCancellable *onboard_remote_probe_cancel = NULL;
 
 static void on_next_clicked(GtkButton *button, gpointer user_data) {
     (void)button;
@@ -199,6 +225,463 @@ static GtkWidget* build_stage_row(const char *label,
 
     gtk_box_append(GTK_BOX(row), text_col);
     return row;
+}
+
+/* ── Remote-mode subflow helpers ── */
+
+static const gchar* onboard_remote_selected_transport(void) {
+    if (!onboard_remote_transport_combo ||
+        !ADW_IS_COMBO_ROW(onboard_remote_transport_combo)) {
+        return "direct";
+    }
+    guint sel = adw_combo_row_get_selected(ADW_COMBO_ROW(onboard_remote_transport_combo));
+    return sel == 1u ? "ssh" : "direct";
+}
+
+static void onboard_remote_set_status(const gchar *text) {
+    if (!onboard_remote_status_label || !GTK_IS_LABEL(onboard_remote_status_label)) return;
+    gtk_label_set_text(GTK_LABEL(onboard_remote_status_label), text ? text : "");
+}
+
+static const gchar* onboard_remote_entry_text(GtkWidget *entry) {
+    if (!entry || !ADW_IS_ENTRY_ROW(entry)) return "";
+    const gchar *t = gtk_editable_get_text(GTK_EDITABLE(entry));
+    return t ? t : "";
+}
+
+static void onboard_remote_apply_field_visibility(void) {
+    const gchar *t = onboard_remote_selected_transport();
+    gboolean ssh = (g_strcmp0(t, "ssh") == 0);
+    if (onboard_remote_url_entry) gtk_widget_set_visible(onboard_remote_url_entry, !ssh);
+    if (onboard_remote_ssh_target_entry) gtk_widget_set_visible(onboard_remote_ssh_target_entry, ssh);
+    if (onboard_remote_ssh_identity_entry) gtk_widget_set_visible(onboard_remote_ssh_identity_entry, ssh);
+}
+
+static void on_onboard_remote_transport_notify(GObject *object,
+                                               GParamSpec *pspec,
+                                               gpointer user_data) {
+    (void)object; (void)pspec; (void)user_data;
+    if (onboard_remote_transport_programmatic) return;
+    onboard_remote_apply_field_visibility();
+}
+
+/*
+ * Validate + normalize a user-entered URL via the Remote Connection
+ * Mode contract. Mirrors the General section: the single validator for
+ * direct URLs across the whole companion is
+ * gateway_remote_config_normalize_url(). http/https are rejected on
+ * purpose; the contract is ws/wss-only.
+ */
+static gchar* onboard_remote_validate_and_normalize_url(const gchar *url,
+                                                        gchar **out_host,
+                                                        gint *out_port,
+                                                        gboolean *out_tls,
+                                                        gchar **out_error) {
+    if (out_host) *out_host = NULL;
+    if (out_port) *out_port = 0;
+    if (out_tls) *out_tls = FALSE;
+    if (out_error) *out_error = NULL;
+
+    if (!url || url[0] == '\0') {
+        if (out_error) *out_error = g_strdup("Gateway URL is empty");
+        return NULL;
+    }
+    g_autofree gchar *trimmed = g_strstrip(g_strdup(url));
+    if (trimmed[0] == '\0') {
+        if (out_error) *out_error = g_strdup("Gateway URL is empty");
+        return NULL;
+    }
+
+    gchar *normalized = gateway_remote_config_normalize_url(url,
+                                                            out_host,
+                                                            out_port,
+                                                            out_tls);
+    if (!normalized) {
+        if (out_error) {
+            *out_error = g_strdup(
+                "URL must be wss://host[:port] or ws://loopback[:port]");
+        }
+        return NULL;
+    }
+    return normalized;
+}
+
+static gchar* onboard_remote_resolve_config_path(void) {
+    g_autofree gchar *profile = NULL;
+    g_autofree gchar *state_dir = NULL;
+    g_autofree gchar *config_path = NULL;
+    systemd_get_runtime_context(&profile, &state_dir, &config_path);
+
+    GatewayConfig *cfg = gateway_client_get_config();
+    RuntimeEffectivePaths paths = {0};
+    runtime_effective_paths_resolve(cfg, profile, state_dir, config_path, &paths);
+    gchar *out = paths.effective_config_path
+                 ? g_strdup(paths.effective_config_path) : NULL;
+    runtime_effective_paths_clear(&paths);
+    return out;
+}
+
+static void onboard_remote_probe_done(const RemoteProbeResult *result, gpointer user_data) {
+    (void)user_data;
+    g_clear_object(&onboard_remote_probe_cancel);
+    if (onboard_remote_test_btn) gtk_widget_set_sensitive(onboard_remote_test_btn, TRUE);
+    if (!result) {
+        onboard_remote_set_status("probe completed without a result");
+        return;
+    }
+    g_autofree gchar *line = NULL;
+    if (result->kind == REMOTE_PROBE_OK) {
+        line = g_strdup_printf("✅ %s%s%s",
+                               result->title ? result->title : "ok",
+                               result->detail ? " — " : "",
+                               result->detail ? result->detail : "");
+    } else {
+        line = g_strdup_printf("⚠️ %s%s%s",
+                               result->title ? result->title : "failed",
+                               result->detail ? " — " : "",
+                               result->detail ? result->detail : "");
+    }
+    onboard_remote_set_status(line);
+}
+
+static void on_onboard_remote_test_clicked(GtkButton *button, gpointer user_data) {
+    (void)button; (void)user_data;
+    if (onboard_remote_probe_cancel) {
+        g_cancellable_cancel(onboard_remote_probe_cancel);
+        g_clear_object(&onboard_remote_probe_cancel);
+    }
+    onboard_remote_probe_cancel = g_cancellable_new();
+    gtk_widget_set_sensitive(onboard_remote_test_btn, FALSE);
+    onboard_remote_set_status("Testing…");
+
+    const gchar *transport = onboard_remote_selected_transport();
+    if (g_strcmp0(transport, "ssh") == 0) {
+        const gchar *target = onboard_remote_entry_text(onboard_remote_ssh_target_entry);
+        const gchar *identity = onboard_remote_entry_text(onboard_remote_ssh_identity_entry);
+        gchar *user = NULL, *host = NULL;
+        gint port = 22;
+        if (!gateway_remote_config_parse_ssh_target(target, &user, &host, &port)) {
+            gtk_widget_set_sensitive(onboard_remote_test_btn, TRUE);
+            onboard_remote_set_status("⚠️ invalid SSH target — expected user@host[:port]");
+            g_clear_object(&onboard_remote_probe_cancel);
+            return;
+        }
+        /*
+         * Test the same gateway port the coordinator will forward to
+         * once SSH mode is applied. Onboarding usually runs before any
+         * config has loaded, so the GATEWAY_DEFAULT_PORT fallback is
+         * the common path; once an explicit gateway.port has been
+         * declared the test must honor it to avoid a spurious failure.
+         */
+        GatewayConfig *cfg = gateway_client_get_config();
+        gint gateway_port = (cfg && cfg->port > 0) ? cfg->port
+                                                   : GATEWAY_DEFAULT_PORT;
+        remote_probe_ssh_async(user, host, port,
+                               (identity && identity[0] != '\0') ? identity : NULL,
+                               gateway_port,
+                               onboard_remote_probe_cancel,
+                               onboard_remote_probe_done, NULL);
+        g_free(user); g_free(host);
+        return;
+    }
+
+    /* direct */
+    const gchar *url = onboard_remote_entry_text(onboard_remote_url_entry);
+    g_autofree gchar *host = NULL;
+    gint port = 0; gboolean tls = FALSE;
+    g_autofree gchar *err = NULL;
+    g_autofree gchar *normalized = onboard_remote_validate_and_normalize_url(
+        url, &host, &port, &tls, &err);
+    if (!normalized) {
+        gtk_widget_set_sensitive(onboard_remote_test_btn, TRUE);
+        g_autofree gchar *line = g_strdup_printf("⚠️ %s", err ? err : "invalid URL");
+        onboard_remote_set_status(line);
+        g_clear_object(&onboard_remote_probe_cancel);
+        return;
+    }
+    remote_probe_direct_async(normalized,
+                              onboard_remote_probe_cancel,
+                              onboard_remote_probe_done, NULL);
+}
+
+static void on_onboard_remote_apply_clicked(GtkButton *button, gpointer user_data) {
+    (void)button; (void)user_data;
+
+    const gchar *transport = onboard_remote_selected_transport();
+    const gchar *url = onboard_remote_entry_text(onboard_remote_url_entry);
+    const gchar *ssh_target = onboard_remote_entry_text(onboard_remote_ssh_target_entry);
+    const gchar *ssh_identity = onboard_remote_entry_text(onboard_remote_ssh_identity_entry);
+    const gchar *remote_token = onboard_remote_entry_text(onboard_remote_token_entry);
+    const gchar *remote_password = onboard_remote_entry_text(onboard_remote_password_entry);
+
+    g_autofree gchar *normalized_url = NULL;
+    if (g_strcmp0(transport, "ssh") == 0) {
+        gchar *u = NULL, *h = NULL; gint p = 22;
+        if (!gateway_remote_config_parse_ssh_target(ssh_target, &u, &h, &p)) {
+            onboard_remote_set_status("⚠️ invalid SSH target — expected user@host[:port]");
+            g_free(u); g_free(h);
+            return;
+        }
+        g_free(u); g_free(h);
+    } else {
+        g_autofree gchar *host = NULL;
+        gint port = 0; gboolean tls = FALSE;
+        g_autofree gchar *err = NULL;
+        normalized_url = onboard_remote_validate_and_normalize_url(
+            url, &host, &port, &tls, &err);
+        if (!normalized_url) {
+            g_autofree gchar *line = g_strdup_printf("⚠️ %s",
+                                                     err ? err : "invalid URL");
+            onboard_remote_set_status(line);
+            return;
+        }
+    }
+
+    g_autofree gchar *config_path = onboard_remote_resolve_config_path();
+    if (!config_path || config_path[0] == '\0') {
+        onboard_remote_set_status("⚠️ could not resolve config path");
+        return;
+    }
+
+    g_autofree gchar *write_err = NULL;
+    /*
+     * Persist the normalized URL for the direct transport so a reload
+     * via gateway_remote_config_parse accepts it unchanged. For SSH
+     * transport, pass "" so the writer REMOVES gateway.remote.url —
+     * the URL row is hidden but may still hold stale text from when
+     * the operator was editing direct settings, and a present-but-
+     * invalid url poisons the SSH config on reload.
+     */
+    const gchar *url_to_persist =
+        (g_strcmp0(transport, "ssh") == 0)
+            ? ""
+            : (normalized_url ? normalized_url : "");
+    if (!gateway_config_write_remote_settings(config_path,
+                                              "remote",
+                                              transport,
+                                              url_to_persist,
+                                              ssh_target,
+                                              ssh_identity,
+                                              remote_token,
+                                              remote_password,
+                                              &write_err)) {
+        g_autofree gchar *line = g_strdup_printf("⚠️ save failed — %s",
+                                                 write_err ? write_err : "?");
+        onboard_remote_set_status(line);
+        return;
+    }
+
+    if (!product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_REMOTE)) {
+        onboard_remote_set_status("⚠️ failed to set connection mode to remote");
+        return;
+    }
+    gateway_client_refresh();
+    onboard_remote_set_status("✅ Saved. You can advance to the final step.");
+
+    /* Auto-advance to whats_next page if we have a carousel reference. */
+    if (onboard_remote_carousel_ref &&
+        ADW_IS_CAROUSEL(onboard_remote_carousel_ref)) {
+        guint n_pages = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(onboard_remote_carousel_ref));
+        if (n_pages > 0) {
+            GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(
+                ADW_CAROUSEL(onboard_remote_carousel_ref), n_pages - 1));
+            if (target) {
+                adw_carousel_scroll_to(ADW_CAROUSEL(onboard_remote_carousel_ref),
+                                       target, TRUE);
+            }
+        }
+    }
+}
+
+static void on_onboard_choose_local_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    GtkWidget *carousel = GTK_WIDGET(user_data);
+    g_onboard_chose_remote = FALSE;
+    /* Clear any persisted REMOTE intent: leave it as LOCAL. */
+    (void)product_coordinator_request_set_connection_mode(PRODUCT_CONNECTION_MODE_LOCAL);
+    /* Rebuild the carousel with the local page set. */
+    onboarding_view_rebuild_pages(carousel, ONBOARDING_SHOW_FULL,
+                                  &onboarding_view_callbacks);
+    /* Advance to the gateway page (position 2: welcome, mode-choice, gateway). */
+    guint n_pages = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(carousel));
+    if (n_pages > 2) {
+        GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), 2));
+        if (target) adw_carousel_scroll_to(ADW_CAROUSEL(carousel), target, TRUE);
+    }
+}
+
+static void on_onboard_choose_remote_clicked(GtkButton *button, gpointer user_data) {
+    (void)button;
+    GtkWidget *carousel = GTK_WIDGET(user_data);
+    g_onboard_chose_remote = TRUE;
+    onboarding_view_rebuild_pages(carousel, ONBOARDING_SHOW_FULL,
+                                  &onboarding_view_callbacks);
+    /* Advance to the remote-setup page (position 2). */
+    guint n_pages = (guint)adw_carousel_get_n_pages(ADW_CAROUSEL(carousel));
+    if (n_pages > 2) {
+        GtkWidget *target = GTK_WIDGET(adw_carousel_get_nth_page(ADW_CAROUSEL(carousel), 2));
+        if (target) adw_carousel_scroll_to(ADW_CAROUSEL(carousel), target, TRUE);
+    }
+}
+
+static GtkWidget* build_mode_choice_page(GtkWidget *carousel) {
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 40);
+    gtk_widget_set_margin_bottom(page, 40);
+    gtk_widget_set_valign(page, GTK_ALIGN_CENTER);
+
+    GtkWidget *title = gtk_label_new("How do you want to connect?");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(page), title);
+
+    GtkWidget *desc = gtk_label_new(
+        "OpenClaw can run a gateway on this machine, or connect to one running on a remote host. "
+        "If you're not sure, choose Local — you can switch later from the General settings.");
+    gtk_label_set_wrap(GTK_LABEL(desc), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(desc), 0.0);
+    gtk_box_append(GTK_BOX(page), desc);
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(btn_row, 24);
+
+    GtkWidget *local_btn = gtk_button_new_with_label("Use Local Gateway");
+    gtk_widget_add_css_class(local_btn, "pill");
+    g_signal_connect(local_btn, "clicked",
+                     G_CALLBACK(on_onboard_choose_local_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), local_btn);
+
+    GtkWidget *remote_btn = gtk_button_new_with_label("Use Remote Gateway");
+    gtk_widget_add_css_class(remote_btn, "pill");
+    gtk_widget_add_css_class(remote_btn, "suggested-action");
+    g_signal_connect(remote_btn, "clicked",
+                     G_CALLBACK(on_onboard_choose_remote_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), remote_btn);
+
+    gtk_box_append(GTK_BOX(page), btn_row);
+
+    GtkWidget *back_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(back_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(back_row, 16);
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(back_row), back_btn);
+    gtk_box_append(GTK_BOX(page), back_row);
+    return page;
+}
+
+static GtkWidget* build_remote_setup_page(GtkWidget *carousel) {
+    onboard_remote_carousel_ref = carousel;
+
+    GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_start(page, 40);
+    gtk_widget_set_margin_end(page, 40);
+    gtk_widget_set_margin_top(page, 32);
+    gtk_widget_set_margin_bottom(page, 32);
+
+    GtkWidget *title = gtk_label_new("Remote Gateway Setup");
+    gtk_widget_add_css_class(title, "title-2");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(page), title);
+
+    GtkWidget *desc = gtk_label_new(
+        "Tell the companion how to reach the remote gateway. Use Direct if the gateway URL "
+        "is reachable from this machine, or SSH to forward through an intermediate host.");
+    gtk_label_set_wrap(GTK_LABEL(desc), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(desc), 0.0);
+    gtk_box_append(GTK_BOX(page), desc);
+
+    GtkWidget *prefs = adw_preferences_group_new();
+    gtk_widget_set_margin_top(prefs, 16);
+    gtk_box_append(GTK_BOX(page), prefs);
+
+    onboard_remote_transport_combo = adw_combo_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_transport_combo),
+                                  "Transport");
+    GtkStringList *m = gtk_string_list_new(NULL);
+    gtk_string_list_append(m, "Direct (gateway reachable on the network)");
+    gtk_string_list_append(m, "SSH (forward through a remote host)");
+    g_clear_object(&onboard_remote_transport_model);
+    onboard_remote_transport_model = m; /* combo takes its own ref */
+    adw_combo_row_set_model(ADW_COMBO_ROW(onboard_remote_transport_combo),
+                            G_LIST_MODEL(m));
+    onboard_remote_transport_programmatic = TRUE;
+    adw_combo_row_set_selected(ADW_COMBO_ROW(onboard_remote_transport_combo), 0);
+    onboard_remote_transport_programmatic = FALSE;
+    g_signal_connect(onboard_remote_transport_combo, "notify::selected",
+                     G_CALLBACK(on_onboard_remote_transport_notify), NULL);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_transport_combo);
+
+    onboard_remote_url_entry = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_url_entry),
+                                  "Gateway URL");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs), onboard_remote_url_entry);
+
+    onboard_remote_ssh_target_entry = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_ssh_target_entry),
+                                  "SSH Target (user@host[:port])");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_ssh_target_entry);
+
+    onboard_remote_ssh_identity_entry = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_ssh_identity_entry),
+                                  "SSH Identity (private key path, optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_ssh_identity_entry);
+
+    /*
+     * Gateway auth rows mirror gateway.remote.token /
+     * gateway.remote.password. Always visible across transports because
+     * either transport may need a bearer / password depending on the
+     * remote gateway's configured auth.mode.
+     */
+    onboard_remote_token_entry = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_token_entry),
+                                  "Gateway Token (optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_token_entry);
+
+    onboard_remote_password_entry = adw_password_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(onboard_remote_password_entry),
+                                  "Gateway Password (optional)");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(prefs),
+                              onboard_remote_password_entry);
+
+    onboard_remote_apply_field_visibility();
+
+    GtkWidget *btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(btn_row, GTK_ALIGN_CENTER);
+    gtk_widget_set_margin_top(btn_row, 16);
+
+    GtkWidget *back_btn = gtk_button_new_with_label("Back");
+    g_signal_connect(back_btn, "clicked", G_CALLBACK(on_back_clicked), carousel);
+    gtk_box_append(GTK_BOX(btn_row), back_btn);
+
+    onboard_remote_test_btn = gtk_button_new_with_label("Test Connection");
+    g_signal_connect(onboard_remote_test_btn, "clicked",
+                     G_CALLBACK(on_onboard_remote_test_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), onboard_remote_test_btn);
+
+    onboard_remote_apply_btn = gtk_button_new_with_label("Save & Apply");
+    gtk_widget_add_css_class(onboard_remote_apply_btn, "suggested-action");
+    g_signal_connect(onboard_remote_apply_btn, "clicked",
+                     G_CALLBACK(on_onboard_remote_apply_clicked), NULL);
+    gtk_box_append(GTK_BOX(btn_row), onboard_remote_apply_btn);
+
+    gtk_box_append(GTK_BOX(page), btn_row);
+
+    onboard_remote_status_label = gtk_label_new("");
+    gtk_label_set_wrap(GTK_LABEL(onboard_remote_status_label), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(onboard_remote_status_label), 0.0);
+    gtk_widget_add_css_class(onboard_remote_status_label, "dim-label");
+    gtk_widget_set_margin_top(onboard_remote_status_label, 12);
+    gtk_box_append(GTK_BOX(page), onboard_remote_status_label);
+
+    return page;
 }
 
 static GtkWidget* build_welcome_page(GtkWidget *carousel) {
@@ -581,6 +1064,28 @@ void onboarding_view_reset(void) {
     onboard_whats_next_guidance_label = NULL;
     onboard_whats_next_dashboard_button = NULL;
     onboard_environment_checks_box = NULL;
+
+    /*
+     * Remote subflow widget pointers — null the references but keep
+     * g_onboard_chose_remote intact so a rebuild after the operator
+     * picks Remote does not flip back to Local.
+     */
+    if (onboard_remote_probe_cancel) {
+        g_cancellable_cancel(onboard_remote_probe_cancel);
+        g_clear_object(&onboard_remote_probe_cancel);
+    }
+    g_clear_object(&onboard_remote_transport_model);
+    onboard_remote_carousel_ref = NULL;
+    onboard_remote_transport_combo = NULL;
+    onboard_remote_transport_programmatic = FALSE;
+    onboard_remote_url_entry = NULL;
+    onboard_remote_ssh_target_entry = NULL;
+    onboard_remote_ssh_identity_entry = NULL;
+    onboard_remote_token_entry = NULL;
+    onboard_remote_password_entry = NULL;
+    onboard_remote_status_label = NULL;
+    onboard_remote_test_btn = NULL;
+    onboard_remote_apply_btn = NULL;
 }
 
 void onboarding_view_build_pages(GtkWidget *carousel,
@@ -595,11 +1100,25 @@ void onboarding_view_build_pages(GtkWidget *carousel,
     adw_carousel_append(ADW_CAROUSEL(carousel), welcome);
 
     if (route == ONBOARDING_SHOW_FULL) {
-        GtkWidget *gateway = build_gateway_page(carousel);
-        adw_carousel_append(ADW_CAROUSEL(carousel), gateway);
+        /*
+         * Connection-mode choice page. Lets the operator pick local vs.
+         * remote up front. The local branch keeps the existing local
+         * gateway + environment pages; the remote branch swaps them
+         * for the remote-setup form.
+         */
+        GtkWidget *mode_choice = build_mode_choice_page(carousel);
+        adw_carousel_append(ADW_CAROUSEL(carousel), mode_choice);
 
-        GtkWidget *environment = build_environment_page(carousel);
-        adw_carousel_append(ADW_CAROUSEL(carousel), environment);
+        if (g_onboard_chose_remote) {
+            GtkWidget *remote_setup = build_remote_setup_page(carousel);
+            adw_carousel_append(ADW_CAROUSEL(carousel), remote_setup);
+        } else {
+            GtkWidget *gateway = build_gateway_page(carousel);
+            adw_carousel_append(ADW_CAROUSEL(carousel), gateway);
+
+            GtkWidget *environment = build_environment_page(carousel);
+            adw_carousel_append(ADW_CAROUSEL(carousel), environment);
+        }
     }
 
     GtkWidget *whats_next = build_whats_next_page(carousel);

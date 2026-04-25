@@ -17,12 +17,30 @@
 #include "product_coordinator.h"
 #include "runtime_reveal.h"
 #include "state.h"
+#include "gateway_config.h"
+#include "connection_mode_resolver.h"
+#include "remote_endpoint.h"
+#include "remote_tunnel.h"
+#include "product_state.h"
 
 extern void systemd_restart_gateway(void);
+
+static void debug_refresh_remote_mode(void);
+static void on_remote_state_changed(gpointer user_data);
 
 static GtkWidget *dbg_state_label = NULL;
 static GtkWidget *dbg_unit_label = NULL;
 static GtkWidget *dbg_journal_label = NULL;
+
+/* Remote-mode diagnostics */
+static GtkWidget *dbg_remote_mode_label = NULL;
+static GtkWidget *dbg_remote_source_label = NULL;
+static GtkWidget *dbg_remote_transport_label = NULL;
+static GtkWidget *dbg_remote_endpoint_label = NULL;
+static GtkWidget *dbg_remote_tunnel_label = NULL;
+static GtkWidget *dbg_remote_tunnel_detail_label = NULL;
+static guint      dbg_endpoint_sub = 0;
+static guint      dbg_tunnel_sub   = 0;
 
 typedef struct {
     const gchar *label;
@@ -148,6 +166,25 @@ static GtkWidget* debug_build(void) {
     gtk_box_append(GTK_BOX(page), section_info_row("Unit", 120, &dbg_unit_label));
     gtk_box_append(GTK_BOX(page), section_info_row("State", 120, &dbg_state_label));
 
+    GtkWidget *remote_heading = gtk_label_new("Remote Mode");
+    gtk_widget_add_css_class(remote_heading, "heading");
+    gtk_label_set_xalign(GTK_LABEL(remote_heading), 0.0);
+    gtk_widget_set_margin_top(remote_heading, 12);
+    gtk_box_append(GTK_BOX(page), remote_heading);
+
+    gtk_box_append(GTK_BOX(page),
+        section_info_row("Effective mode", 140, &dbg_remote_mode_label));
+    gtk_box_append(GTK_BOX(page),
+        section_info_row("Mode source", 140, &dbg_remote_source_label));
+    gtk_box_append(GTK_BOX(page),
+        section_info_row("Transport", 140, &dbg_remote_transport_label));
+    gtk_box_append(GTK_BOX(page),
+        section_info_row("Endpoint state", 140, &dbg_remote_endpoint_label));
+    gtk_box_append(GTK_BOX(page),
+        section_info_row("Tunnel state", 140, &dbg_remote_tunnel_label));
+    gtk_box_append(GTK_BOX(page),
+        section_info_row("Tunnel detail", 140, &dbg_remote_tunnel_detail_label));
+
     GtkWidget *journal_heading = gtk_label_new("Journal");
     gtk_widget_add_css_class(journal_heading, "heading");
     gtk_label_set_xalign(GTK_LABEL(journal_heading), 0.0);
@@ -185,7 +222,100 @@ static GtkWidget* debug_build(void) {
     gtk_box_append(GTK_BOX(page), onboard_btn);
 
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
+
+    /* Live updates for the Remote Mode group. */
+    if (!dbg_endpoint_sub) {
+        dbg_endpoint_sub = remote_endpoint_subscribe(on_remote_state_changed, NULL);
+    }
+    if (!dbg_tunnel_sub) {
+        dbg_tunnel_sub = remote_tunnel_subscribe(on_remote_state_changed, NULL);
+    }
+
     return scrolled;
+}
+
+static const gchar* effective_mode_text(ProductConnectionMode m) {
+    switch (m) {
+    case PRODUCT_CONNECTION_MODE_LOCAL:  return "local";
+    case PRODUCT_CONNECTION_MODE_REMOTE: return "remote";
+    default:                             return "unspecified";
+    }
+}
+
+static const gchar* effective_mode_source_text(EffectiveModeSource s) {
+    switch (s) {
+    case EFFECTIVE_MODE_SRC_CONFIG_MODE:       return "config gateway.mode";
+    case EFFECTIVE_MODE_SRC_CONFIG_REMOTE_URL: return "config gateway.remote.url";
+    case EFFECTIVE_MODE_SRC_PRODUCT_STATE:     return "product state";
+    case EFFECTIVE_MODE_SRC_ONBOARDING:        return "onboarding fallback";
+    default:                                   return "—";
+    }
+}
+
+static void debug_refresh_remote_mode(void) {
+    if (!dbg_remote_mode_label) return;
+
+    GatewayConfig *config = gateway_client_get_config();
+    const gchar *cfg_mode = config ? config->mode : NULL;
+    gboolean has_remote_url = config && config->remote_url != NULL;
+    ProductConnectionMode persisted = product_state_get_connection_mode();
+    gboolean onboarded = product_state_get_onboarding_seen_version() > 0;
+
+    EffectiveConnectionMode em = connection_mode_resolve(
+        cfg_mode, has_remote_url, persisted, onboarded);
+
+    gtk_label_set_text(GTK_LABEL(dbg_remote_mode_label),
+                       effective_mode_text(em.mode));
+    gtk_label_set_text(GTK_LABEL(dbg_remote_source_label),
+                       effective_mode_source_text(em.source));
+
+    const gchar *transport_text = "—";
+    if (em.mode == PRODUCT_CONNECTION_MODE_REMOTE && config && config->remote_present) {
+        transport_text = (config->remote_transport == REMOTE_TRANSPORT_DIRECT)
+            ? "direct (ws[s])"
+            : "ssh local-forward";
+    }
+    gtk_label_set_text(GTK_LABEL(dbg_remote_transport_label), transport_text);
+
+    const RemoteEndpointSnapshot *ep = remote_endpoint_get();
+    if (ep) {
+        if (ep->kind == REMOTE_ENDPOINT_READY) {
+            g_autofree gchar *line = g_strdup_printf(
+                "ready %s://%s:%d",
+                ep->tls ? "wss" : "ws",
+                ep->host ? ep->host : "?",
+                ep->port);
+            gtk_label_set_text(GTK_LABEL(dbg_remote_endpoint_label), line);
+        } else {
+            g_autofree gchar *line = g_strdup_printf(
+                "%s%s%s",
+                remote_endpoint_state_to_string(ep->kind),
+                ep->detail ? " — " : "",
+                ep->detail ? ep->detail : "");
+            gtk_label_set_text(GTK_LABEL(dbg_remote_endpoint_label), line);
+        }
+    } else {
+        gtk_label_set_text(GTK_LABEL(dbg_remote_endpoint_label), "—");
+    }
+
+    const RemoteTunnelState *ts = remote_tunnel_get_state();
+    if (ts) {
+        g_autofree gchar *line = g_strdup_printf(
+            "%s pid=%d local_port=%d restarts=%d",
+            remote_tunnel_state_to_string(ts->kind),
+            ts->pid, ts->local_port, ts->restart_count);
+        gtk_label_set_text(GTK_LABEL(dbg_remote_tunnel_label), line);
+        gtk_label_set_text(GTK_LABEL(dbg_remote_tunnel_detail_label),
+                           (ts->last_error && ts->last_error[0]) ? ts->last_error : "—");
+    } else {
+        gtk_label_set_text(GTK_LABEL(dbg_remote_tunnel_label), "—");
+        gtk_label_set_text(GTK_LABEL(dbg_remote_tunnel_detail_label), "—");
+    }
+}
+
+static void on_remote_state_changed(gpointer user_data) {
+    (void)user_data;
+    debug_refresh_remote_mode();
 }
 
 static void debug_refresh(void) {
@@ -208,12 +338,28 @@ static void debug_refresh(void) {
     g_autofree gchar *cmd = g_strdup_printf("journalctl --user -u %s -f",
                                             unit ? unit : "openclaw-gateway.service");
     gtk_label_set_text(GTK_LABEL(dbg_journal_label), cmd);
+
+    debug_refresh_remote_mode();
 }
 
 static void debug_destroy(void) {
+    if (dbg_endpoint_sub) {
+        remote_endpoint_unsubscribe(dbg_endpoint_sub);
+        dbg_endpoint_sub = 0;
+    }
+    if (dbg_tunnel_sub) {
+        remote_tunnel_unsubscribe(dbg_tunnel_sub);
+        dbg_tunnel_sub = 0;
+    }
     dbg_state_label = NULL;
     dbg_unit_label = NULL;
     dbg_journal_label = NULL;
+    dbg_remote_mode_label = NULL;
+    dbg_remote_source_label = NULL;
+    dbg_remote_transport_label = NULL;
+    dbg_remote_endpoint_label = NULL;
+    dbg_remote_tunnel_label = NULL;
+    dbg_remote_tunnel_detail_label = NULL;
 }
 
 static void debug_invalidate(void) {

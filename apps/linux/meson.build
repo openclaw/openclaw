@@ -44,6 +44,14 @@ sources = [
   'src/systemd.c',
   'src/systemd_helpers.c',
   'src/gateway_config.c',
+  'src/gateway_remote_config.c',
+  'src/connection_mode_resolver.c',
+  'src/remote_port_check.c',
+  'src/remote_tunnel_command.c',
+  'src/remote_tunnel.c',
+  'src/remote_endpoint.c',
+  'src/remote_probe.c',
+  'src/connection_mode_coordinator.c',
   'src/gateway_http.c',
   'src/gateway_protocol.c',
   'src/gateway_ws.c',
@@ -158,9 +166,73 @@ test_runtime_mode_pres_exe = executable('test_runtime_mode_presentation',
 test('runtime_mode_presentation', test_runtime_mode_pres_exe)
 
 test_config_exe = executable('test_config',
-  ['tests/test_config.c', 'src/gateway_config.c', 'src/config_setup_transform.c', 'src/log.c'],
+  ['tests/test_config.c', 'src/gateway_config.c', 'src/gateway_remote_config.c', 'src/config_setup_transform.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('config', test_config_exe)
+
+test_gateway_remote_config_exe = executable('test_gateway_remote_config',
+  ['tests/test_gateway_remote_config.c', 'src/gateway_remote_config.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('gateway_remote_config', test_gateway_remote_config_exe)
+
+test_gateway_config_write_remote_exe = executable('test_gateway_config_write_remote',
+  ['tests/test_gateway_config_write_remote.c',
+   'src/gateway_config.c', 'src/gateway_remote_config.c',
+   'src/config_setup_transform.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('gateway_config_write_remote', test_gateway_config_write_remote_exe)
+
+test_connection_mode_resolver_exe = executable('test_connection_mode_resolver',
+  ['tests/test_connection_mode_resolver.c', 'src/connection_mode_resolver.c'],
+  dependencies : [glib_dep])
+test('connection_mode_resolver', test_connection_mode_resolver_exe)
+
+test_remote_tunnel_command_exe = executable('test_remote_tunnel_command',
+  ['tests/test_remote_tunnel_command.c', 'src/remote_tunnel_command.c'],
+  dependencies : [glib_dep])
+test('remote_tunnel_command', test_remote_tunnel_command_exe)
+
+test_connection_mode_coordinator_exe = executable(
+  'test_connection_mode_coordinator',
+  ['tests/test_connection_mode_coordinator.c',
+   'src/connection_mode_coordinator.c',
+   'src/remote_endpoint.c',
+   'src/remote_tunnel.c',
+   'src/remote_tunnel_command.c',
+   'src/remote_port_check.c',
+   'src/gateway_remote_config.c',
+   'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('connection_mode_coordinator', test_connection_mode_coordinator_exe)
+
+test_remote_tunnel_adopted_kill_exe = executable(
+  'test_remote_tunnel_adopted_kill',
+  ['tests/test_remote_tunnel_adopted_kill.c',
+   'src/remote_tunnel.c', 'src/remote_tunnel_command.c',
+   'src/remote_port_check.c',
+   'src/gateway_remote_config.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('remote_tunnel_adopted_kill',
+     test_remote_tunnel_adopted_kill_exe,
+     timeout : 10)
+
+test_remote_port_check_exe = executable('test_remote_port_check',
+  ['tests/test_remote_port_check.c', 'src/remote_port_check.c'],
+  dependencies : [glib_dep])
+test('remote_port_check', test_remote_port_check_exe)
+
+test_remote_endpoint_exe = executable('test_remote_endpoint',
+  ['tests/test_remote_endpoint.c', 'src/remote_endpoint.c', 'src/log.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('remote_endpoint', test_remote_endpoint_exe)
+
+test_remote_probe_timeout_exe = executable('test_remote_probe_timeout',
+  ['tests/test_remote_probe_timeout.c',
+   'src/remote_probe.c', 'src/gateway_remote_config.c',
+   'src/gateway_http.c',
+   'src/remote_port_check.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep, soup_dep])
+test('remote_probe_timeout', test_remote_probe_timeout_exe, timeout : 30)
 
 test_product_state_exe = executable('test_product_state',
   ['tests/test_product_state.c', 'src/product_state.c'],
@@ -188,8 +260,12 @@ test_shell_sections_display_exe = executable('test_shell_sections_display',
 test('shell_sections_display', test_shell_sections_display_exe)
 
 test_section_debug_exe = executable('test_section_debug',
-  ['tests/test_section_debug.c', 'src/section_debug.c', 'src/runtime_reveal.c'],
-  dependencies : [glib_dep, gio_dep, gtk4_dep, adwaita_dep])
+  ['tests/test_section_debug.c', 'src/section_debug.c', 'src/runtime_reveal.c',
+   'src/connection_mode_resolver.c', 'src/remote_endpoint.c',
+   'src/remote_tunnel.c', 'src/remote_tunnel_command.c',
+   'src/remote_port_check.c',
+   'src/gateway_remote_config.c', 'src/product_state.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, gtk4_dep, adwaita_dep, json_glib_dep])
 test('section_debug', test_section_debug_exe)
 
 # Real-controller contract audit (Tranche E.3). Links the production
@@ -210,7 +286,7 @@ test_onboarding_controller_exe = executable('test_onboarding_controller',
 test('onboarding_controller', test_onboarding_controller_exe)
 
 test_gateway_exe = executable('test_gateway',
-  ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c',
+  ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_remote_config.c', 'src/gateway_protocol.c',
    'src/device_identity.c', 'src/device_auth_store.c',
    'src/state.c', 'src/runtime_mode.c', 'src/readiness.c', 'src/log.c',
    'src/test_seams.c'],
@@ -265,6 +341,7 @@ test('app_window_routing', test_app_window_routing_exe)
 test_model_catalog_match_exe = executable('test_model_catalog_match',
   ['tests/test_model_catalog_match.c', 'src/display_model.c',
    'src/readiness.c', 'src/runtime_mode.c', 'src/gateway_config.c',
+   'src/gateway_remote_config.c',
    'src/runtime_paths.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('model_catalog_match', test_model_catalog_match_exe)
@@ -281,7 +358,8 @@ test('pairing_bootstrap_window', test_pairing_bootstrap_window_exe)
 
 test_display_model_exe = executable('test_display_model',
   ['tests/test_display_model.c', 'src/display_model.c', 'src/readiness.c',
-   'src/runtime_mode.c', 'src/gateway_config.c', 'src/runtime_paths.c', 'src/log.c'],
+   'src/runtime_mode.c', 'src/gateway_config.c', 'src/gateway_remote_config.c',
+   'src/runtime_paths.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('display_model', test_display_model_exe)
 

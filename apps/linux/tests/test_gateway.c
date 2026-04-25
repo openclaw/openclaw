@@ -356,12 +356,116 @@ static void test_config_password_mode_missing_password(void) {
     clear_env();
 }
 
-static void test_config_remote_mode_rejected(void) {
+static void test_config_remote_mode_ssh_requires_target(void) {
     g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
     g_assert_nonnull(tmpdir);
     g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
     g_file_set_contents(config_path,
-        "{\"gateway\":{\"mode\":\"remote\"}}", -1, NULL);
+        "{\"gateway\":{\"mode\":\"remote\",\"auth\":{\"mode\":\"token\",\"token\":\"t\"}}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_false(config->valid);
+    g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_REMOTE_TARGET_REQUIRED);
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_remote_mode_ssh_accepts_target(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"mode\":\"remote\","
+        "\"remote\":{\"transport\":\"ssh\",\"sshTarget\":\"alice@host.example\","
+        "\"token\":\"remote-t\"}}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_true(config->remote_present);
+    g_assert_cmpint(config->remote_transport, ==, 0 /* REMOTE_TRANSPORT_SSH */);
+    g_assert_cmpstr(config->remote_ssh_target_host, ==, "host.example");
+    g_assert_cmpstr(config->remote_ssh_target_user, ==, "alice");
+    g_assert_cmpint(config->remote_ssh_target_port, ==, 22);
+    /* SSH transport: host/port remain local-forward defaults */
+    g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    g_assert_cmpint(config->port, ==, 18789);
+    /* Remote token overlays onto operational token */
+    g_assert_cmpstr(config->token, ==, "remote-t");
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_remote_mode_direct_accepts_url(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"mode\":\"remote\","
+        "\"remote\":{\"transport\":\"direct\",\"url\":\"wss://gw.example.com\","
+        "\"token\":\"t2\"}}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpint(config->remote_transport, ==, 1 /* REMOTE_TRANSPORT_DIRECT */);
+    /* Direct transport: host/port/tls come from the remote URL */
+    g_assert_cmpstr(config->host, ==, "gw.example.com");
+    g_assert_cmpint(config->port, ==, 443);
+    g_assert_true(config->tls_enabled);
+    g_assert_cmpstr(config->token, ==, "t2");
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_remote_mode_direct_requires_url(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"mode\":\"remote\","
+        "\"remote\":{\"transport\":\"direct\"},"
+        "\"auth\":{\"mode\":\"token\",\"token\":\"t\"}}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_false(config->valid);
+    g_assert_cmpint(config->error_code, ==, GW_CFG_ERR_REMOTE_URL_REQUIRED);
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_unsupported_mode_still_rejected(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"mode\":\"floop\"}}", -1, NULL);
 
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
@@ -2554,7 +2658,11 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/config/auth_unsupported_mode", test_config_auth_unsupported_mode);
     g_test_add_func("/gateway/config/env_overrides_config_token", test_config_env_overrides_config_token);
     g_test_add_func("/gateway/config/password_mode_missing_password", test_config_password_mode_missing_password);
-    g_test_add_func("/gateway/config/remote_mode_rejected", test_config_remote_mode_rejected);
+    g_test_add_func("/gateway/config/remote_mode_ssh_requires_target", test_config_remote_mode_ssh_requires_target);
+    g_test_add_func("/gateway/config/remote_mode_ssh_accepts_target", test_config_remote_mode_ssh_accepts_target);
+    g_test_add_func("/gateway/config/remote_mode_direct_accepts_url", test_config_remote_mode_direct_accepts_url);
+    g_test_add_func("/gateway/config/remote_mode_direct_requires_url", test_config_remote_mode_direct_requires_url);
+    g_test_add_func("/gateway/config/unsupported_mode_still_rejected", test_config_unsupported_mode_still_rejected);
     g_test_add_func("/gateway/config/secret_ref_unsupported", test_config_secret_ref_unsupported);
     g_test_add_func("/gateway/config/precedence_explicit_over_state_dir", test_config_precedence_explicit_over_state_dir);
     g_test_add_func("/gateway/config/precedence_state_dir_over_home", test_config_precedence_state_dir_over_home);

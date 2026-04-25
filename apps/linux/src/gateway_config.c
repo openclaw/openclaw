@@ -21,6 +21,7 @@
  */
 
 #include "gateway_config.h"
+#include "gateway_remote_config.h"
 #include "json_access.h"
 #include "log.h"
 #include <json-glib/json-glib.h>
@@ -654,12 +655,22 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
         }
     }
 
-    /* Reject non-local modes for Linux MVP */
-    if (config->mode && g_strcmp0(config->mode, "local") != 0) {
+    /*
+     * Accept "local" and "remote" as the only recognized modes. Any other
+     * explicit value is a config error — the old "Linux MVP is local-only"
+     * guard was lifted when the Remote Connection Mode tranche landed.
+     *
+     * When mode is absent, downstream resolution (connection_mode_resolver)
+     * decides the effective mode from the remote subtree and persisted
+     * product state.
+     */
+    if (config->mode &&
+        g_strcmp0(config->mode, "local") != 0 &&
+        g_strcmp0(config->mode, "remote") != 0) {
         config->valid = FALSE;
         config->error_code = GW_CFG_ERR_MODE_UNSUPPORTED;
         config->error = g_strdup_printf(
-            "Unsupported gateway mode for Linux MVP: '%s' (only 'local' is supported)",
+            "Unsupported gateway mode: '%s' (supported: local, remote)",
             config->mode);
         return config;
     }
@@ -793,6 +804,111 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
     }
 
     resolve_auth(auth_obj, config);
+
+    /*
+     * Parse gateway.remote.* subtree if present. Failures surface via
+     * config->error_code; validation errors abort load before the
+     * (mode-insensitive) auth validation so the operator sees the
+     * precise remote-shaped error instead of a generic token-missing.
+     */
+    GatewayRemoteConfig rc = {0};
+    gboolean remote_parse_ok = gateway_remote_config_parse(gateway_obj, &rc);
+    if (!remote_parse_ok) {
+        switch (rc.error_code) {
+        case REMOTE_CFG_ERR_REMOTE_NOT_OBJECT:
+            config->error_code = GW_CFG_ERR_REMOTE_NOT_OBJECT; break;
+        case REMOTE_CFG_ERR_TRANSPORT_INVALID:
+            config->error_code = GW_CFG_ERR_REMOTE_TRANSPORT_INVALID; break;
+        case REMOTE_CFG_ERR_URL_INVALID:
+            config->error_code = GW_CFG_ERR_REMOTE_URL_INVALID; break;
+        case REMOTE_CFG_ERR_TARGET_INVALID:
+            config->error_code = GW_CFG_ERR_REMOTE_TARGET_INVALID; break;
+        default:
+            config->error_code = GW_CFG_ERR_PARSE; break;
+        }
+        config->valid = FALSE;
+        config->error = g_strdup(rc.error ? rc.error : "gateway.remote parse failed");
+        gateway_remote_config_clear(&rc);
+        return config;
+    }
+
+    /* Copy parsed remote fields onto config (heap ownership moves). */
+    config->remote_present = rc.present;
+    config->remote_transport = (gint)rc.transport;
+    config->remote_url = rc.url;              rc.url = NULL;
+    config->remote_url_host = rc.url_host;    rc.url_host = NULL;
+    config->remote_url_port = rc.url_port;
+    config->remote_url_tls = rc.url_tls;
+    config->remote_ssh_target = rc.ssh_target;            rc.ssh_target = NULL;
+    config->remote_ssh_target_host = rc.ssh_target_host;  rc.ssh_target_host = NULL;
+    config->remote_ssh_target_port = rc.ssh_target_port;
+    config->remote_ssh_target_user = rc.ssh_target_user;  rc.ssh_target_user = NULL;
+    config->remote_ssh_identity = rc.ssh_identity;        rc.ssh_identity = NULL;
+    config->remote_token = rc.token;                      rc.token = NULL;
+    config->remote_password = rc.password;                rc.password = NULL;
+    gateway_remote_config_clear(&rc);
+
+    /*
+     * Effective-mode overlay. When gateway.mode is explicitly "remote",
+     * the operational host/port/tls/token fields reflect the remote
+     * transport so downstream consumers (gateway_client, gateway_ws,
+     * gateway_http) can be mode-agnostic.
+     *
+     * For REMOTE + DIRECT: host/port/tls come from the remote URL.
+     * For REMOTE + SSH:    host stays 127.0.0.1, port stays the
+     *                      configured gateway.port (what the tunnel
+     *                      will forward to). Tunnel setup happens in
+     *                      the coordinator layer, not here.
+     *
+     * Remote token/password overlay: gateway.remote.token/password take
+     * precedence over gateway.auth.* in remote mode, matching macOS.
+     */
+    if (config->mode && g_strcmp0(config->mode, "remote") == 0) {
+        if (config->remote_transport == (gint)REMOTE_TRANSPORT_DIRECT) {
+            if (!config->remote_url) {
+                config->valid = FALSE;
+                config->error_code = GW_CFG_ERR_REMOTE_URL_REQUIRED;
+                config->error = g_strdup(
+                    "gateway.remote.transport=direct requires gateway.remote.url");
+                return config;
+            }
+            g_free(config->host);
+            config->host = g_strdup(config->remote_url_host);
+            config->port = config->remote_url_port;
+            config->tls_enabled = config->remote_url_tls;
+        } else {
+            /* REMOTE_TRANSPORT_SSH */
+            if (!config->remote_ssh_target) {
+                config->valid = FALSE;
+                config->error_code = GW_CFG_ERR_REMOTE_TARGET_REQUIRED;
+                config->error = g_strdup(
+                    "gateway.remote.transport=ssh requires gateway.remote.sshTarget");
+                return config;
+            }
+            /* host/port retain their configured local-forward values. */
+        }
+
+        if (config->remote_token && config->remote_token[0] != '\0') {
+            secure_clear_free(config->token);
+            config->token = g_strdup(config->remote_token);
+            config->token_is_secret_ref = FALSE;
+            if (!config->auth_mode || config->auth_mode[0] == '\0') {
+                g_free(config->auth_mode);
+                config->auth_mode = g_strdup("token");
+            }
+        }
+        if (config->remote_password && config->remote_password[0] != '\0') {
+            secure_clear_free(config->password);
+            config->password = g_strdup(config->remote_password);
+            config->password_is_secret_ref = FALSE;
+            if (!config->auth_mode || config->auth_mode[0] == '\0' ||
+                g_strcmp0(config->auth_mode, "token") == 0) {
+                g_free(config->auth_mode);
+                config->auth_mode = g_strdup("password");
+            }
+        }
+    }
+
     if (!validate_auth(config)) return config;
 
     /* Resolve controlUi.basePath */
@@ -890,12 +1006,26 @@ void gateway_config_free(GatewayConfig *config) {
     g_free(config->wizard_last_run_mode);
     g_free(config->wizard_marker_fail_reason);
 
+    g_free(config->remote_url);
+    g_free(config->remote_url_host);
+    g_free(config->remote_ssh_target);
+    g_free(config->remote_ssh_target_host);
+    g_free(config->remote_ssh_target_user);
+    g_free(config->remote_ssh_identity);
+    secure_clear_free(config->remote_token);
+    secure_clear_free(config->remote_password);
+
     g_free(config);
 }
 
 gboolean gateway_config_is_local(const GatewayConfig *config) {
     if (!config) return TRUE;
     return (config->mode == NULL || g_strcmp0(config->mode, "local") == 0);
+}
+
+gboolean gateway_config_is_remote(const GatewayConfig *config) {
+    if (!config) return FALSE;
+    return (config->mode != NULL && g_strcmp0(config->mode, "remote") == 0);
 }
 
 gchar* gateway_config_http_url(const GatewayConfig *config) {
@@ -962,6 +1092,15 @@ gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *
     if (g_strcmp0(a->wizard_last_run_at, b->wizard_last_run_at) != 0) return FALSE;
     if (g_strcmp0(a->wizard_last_run_mode, b->wizard_last_run_mode) != 0) return FALSE;
     if (g_strcmp0(a->wizard_marker_fail_reason, b->wizard_marker_fail_reason) != 0) return FALSE;
+
+    /* Remote-mode fields: any change in remote intent must rebuild transport. */
+    if (a->remote_present != b->remote_present) return FALSE;
+    if (a->remote_transport != b->remote_transport) return FALSE;
+    if (g_strcmp0(a->remote_url, b->remote_url) != 0) return FALSE;
+    if (g_strcmp0(a->remote_ssh_target, b->remote_ssh_target) != 0) return FALSE;
+    if (g_strcmp0(a->remote_ssh_identity, b->remote_ssh_identity) != 0) return FALSE;
+    if (g_strcmp0(a->remote_token, b->remote_token) != 0) return FALSE;
+    if (g_strcmp0(a->remote_password, b->remote_password) != 0) return FALSE;
 
     return TRUE;
 }
@@ -1054,4 +1193,179 @@ gchar* gateway_config_dashboard_url_with_route(const gchar *base_url, const gcha
                               needs_slash ? "/" : "",
                               route);
     }
+}
+
+/* ── Remote settings writer ── */
+
+static void rc_set_or_remove(JsonObject *o,
+                             const gchar *key,
+                             const gchar *value) {
+    if (!o || !key) return;
+    if (value && value[0] != '\0') {
+        json_object_set_string_member(o, key, value);
+    } else if (json_object_has_member(o, key)) {
+        json_object_remove_member(o, key);
+    }
+}
+
+gboolean gateway_config_write_remote_settings(const gchar *config_path,
+                                              const gchar *mode,
+                                              const gchar *transport,
+                                              const gchar *url,
+                                              const gchar *ssh_target,
+                                              const gchar *ssh_identity,
+                                              const gchar *remote_token,
+                                              const gchar *remote_password,
+                                              gchar **out_error) {
+    if (out_error) *out_error = NULL;
+
+    if (!config_path || config_path[0] == '\0') {
+        if (out_error) *out_error = g_strdup("config path is empty");
+        return FALSE;
+    }
+
+    /*
+     * Load existing JSON if the file exists; otherwise start with a
+     * fresh empty object. We never destroy keys we don't understand —
+     * the operator's hand-edits and the rest of the config tree must
+     * survive a remote-settings write unchanged.
+     */
+    g_autoptr(JsonParser) parser = json_parser_new();
+    JsonObject *root_obj = NULL;
+    g_autoptr(JsonNode) fresh_root = NULL;
+
+    if (g_file_test(config_path, G_FILE_TEST_EXISTS)) {
+        g_autoptr(GError) err = NULL;
+        if (!json_parser_load_from_file(parser, config_path, &err)) {
+            if (out_error) *out_error = g_strdup_printf(
+                "parse %s: %s", config_path, err ? err->message : "?");
+            return FALSE;
+        }
+        JsonNode *root = json_parser_get_root(parser);
+        if (!root || !JSON_NODE_HOLDS_OBJECT(root)) {
+            if (out_error) *out_error = g_strdup_printf(
+                "%s is not a JSON object", config_path);
+            return FALSE;
+        }
+        root_obj = json_node_get_object(root);
+    } else {
+        fresh_root = json_node_new(JSON_NODE_OBJECT);
+        JsonObject *empty = json_object_new();
+        json_node_take_object(fresh_root, empty);
+        root_obj = empty;
+    }
+
+    /* Ensure gateway object. */
+    JsonObject *gw_obj = NULL;
+    if (json_object_has_member(root_obj, "gateway")) {
+        JsonNode *gw_node = json_object_get_member(root_obj, "gateway");
+        if (!JSON_NODE_HOLDS_OBJECT(gw_node)) {
+            if (out_error) *out_error = g_strdup("gateway is not an object");
+            return FALSE;
+        }
+        gw_obj = json_node_get_object(gw_node);
+    } else {
+        gw_obj = json_object_new();
+        json_object_set_object_member(root_obj, "gateway", gw_obj);
+    }
+
+    /* gateway.mode (optional). */
+    if (mode && mode[0] != '\0') {
+        if (g_strcmp0(mode, "local") != 0 && g_strcmp0(mode, "remote") != 0) {
+            if (out_error) *out_error = g_strdup_printf(
+                "invalid mode '%s' (expected local|remote)", mode);
+            return FALSE;
+        }
+        json_object_set_string_member(gw_obj, "mode", mode);
+    }
+
+    /* Ensure gateway.remote object. */
+    JsonObject *rc_obj = NULL;
+    if (json_object_has_member(gw_obj, "remote")) {
+        JsonNode *rc_node = json_object_get_member(gw_obj, "remote");
+        if (!JSON_NODE_HOLDS_OBJECT(rc_node)) {
+            if (out_error) *out_error = g_strdup("gateway.remote is not an object");
+            return FALSE;
+        }
+        rc_obj = json_node_get_object(rc_node);
+    } else {
+        rc_obj = json_object_new();
+        json_object_set_object_member(gw_obj, "remote", rc_obj);
+    }
+
+    /* transport defaults to "direct" when absent; explicit empty removes. */
+    if (transport && transport[0] != '\0') {
+        if (g_strcmp0(transport, "direct") != 0 &&
+            g_strcmp0(transport, "ssh") != 0) {
+            if (out_error) *out_error = g_strdup_printf(
+                "invalid transport '%s' (expected direct|ssh)", transport);
+            return FALSE;
+        }
+        json_object_set_string_member(rc_obj, "transport", transport);
+    } else if (json_object_has_member(rc_obj, "transport")) {
+        json_object_remove_member(rc_obj, "transport");
+    }
+
+    rc_set_or_remove(rc_obj, "url", url);
+    rc_set_or_remove(rc_obj, "sshTarget", ssh_target);
+    rc_set_or_remove(rc_obj, "sshIdentity", ssh_identity);
+    rc_set_or_remove(rc_obj, "token", remote_token);
+    rc_set_or_remove(rc_obj, "password", remote_password);
+
+    /* Serialize. */
+    g_autoptr(JsonGenerator) gen = json_generator_new();
+    JsonNode *write_root = fresh_root ? fresh_root : json_parser_get_root(parser);
+    json_generator_set_root(gen, write_root);
+    json_generator_set_pretty(gen, TRUE);
+    json_generator_set_indent(gen, 2);
+
+    g_autofree gchar *data = json_generator_to_data(gen, NULL);
+    if (!data) {
+        if (out_error) *out_error = g_strdup("serialize failed");
+        return FALSE;
+    }
+
+    /* Atomic write: <path>.tmp.<pid> → rename(). g_file_set_contents
+     * already does an atomic-rename dance on POSIX. */
+    g_autoptr(GError) werr = NULL;
+    if (!g_file_set_contents(config_path, data, -1, &werr)) {
+        if (out_error) *out_error = g_strdup_printf(
+            "write %s: %s", config_path, werr ? werr->message : "?");
+        return FALSE;
+    }
+
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_REMOTE,
+                "gateway_config wrote remote settings to %s (mode=%s transport=%s "
+                "token=%s password=%s)",
+                config_path,
+                mode ? mode : "(unchanged)",
+                transport ? transport : "(unset)",
+                (remote_token && remote_token[0]) ? "set" : "cleared",
+                (remote_password && remote_password[0]) ? "set" : "cleared");
+    return TRUE;
+}
+
+/* ── Effective remote credential helpers ── */
+
+static gboolean cfg_in_remote_mode(const GatewayConfig *config) {
+    return config && config->mode &&
+           g_strcmp0(config->mode, "remote") == 0;
+}
+
+const gchar* gateway_config_remote_effective_token(const GatewayConfig *config) {
+    if (!config) return "";
+    if (cfg_in_remote_mode(config) &&
+        config->remote_token && config->remote_token[0] != '\0') {
+        return config->remote_token;
+    }
+    return config->token ? config->token : "";
+}
+
+const gchar* gateway_config_remote_effective_password(const GatewayConfig *config) {
+    if (!config) return "";
+    if (cfg_in_remote_mode(config) &&
+        config->remote_password && config->remote_password[0] != '\0') {
+        return config->remote_password;
+    }
+    return config->password ? config->password : "";
 }

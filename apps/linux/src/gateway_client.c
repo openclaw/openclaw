@@ -26,6 +26,11 @@
 #include "state.h"
 #include "log.h"
 #include "test_seams.h"
+#include "connection_mode_coordinator.h"
+#include "connection_mode_resolver.h"
+#include "remote_endpoint.h"
+#include "remote_tunnel.h"
+#include "product_state.h"
 #include <string.h>
 #include <gio/gio.h>
 
@@ -642,42 +647,62 @@ static void teardown_transport(gboolean invalidate_models,
     state_reset_resolved_facts();
 }
 
+static gboolean effective_mode_is_remote(void) {
+    if (!current_config) return FALSE;
+    EffectiveConnectionMode em = connection_mode_resolve(
+        current_config->mode,
+        (current_config->remote_url != NULL),
+        product_state_get_connection_mode(),
+        product_state_get_onboarding_seen_version() > 0);
+    return em.mode == PRODUCT_CONNECTION_MODE_REMOTE;
+}
+
 static void start_transport(void) {
     if (!current_config || !current_config->valid) return;
 
-    current_http_url = gateway_config_http_url(current_config);
-    current_ws_url = gateway_config_ws_url(current_config);
+    /*
+     * For REMOTE effective mode, defer to the endpoint snapshot instead
+     * of config's operational fields. This lets the SSH transport wait
+     * for the tunnel to come up (endpoint will re-trigger us via the
+     * endpoint-changed subscription when it transitions to READY).
+     */
+    const gchar *host = current_config->host;
+    gint port = current_config->port;
+    gboolean tls = current_config->tls_enabled;
+    const gchar *token = current_config->token;
+    const gchar *password = current_config->password;
+    const gchar *auth_mode = current_config->auth_mode;
+
+    if (effective_mode_is_remote()) {
+        const RemoteEndpointSnapshot *ep = remote_endpoint_get();
+        if (!ep || ep->kind != REMOTE_ENDPOINT_READY) {
+            OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                        "start_transport deferred — remote endpoint not READY (state=%s)",
+                        ep ? remote_endpoint_state_to_string(ep->kind) : "(null)");
+            return;
+        }
+        host = ep->host ? ep->host : "127.0.0.1";
+        port = ep->port;
+        tls = ep->tls;
+        if (ep->token && ep->token[0] != '\0') token = ep->token;
+        if (ep->password && ep->password[0] != '\0') password = ep->password;
+    }
+
+    g_free(current_http_url);
+    g_free(current_ws_url);
+    current_http_url = g_strdup_printf("%s://%s:%d", tls ? "https" : "http", host, port);
+    current_ws_url   = g_strdup_printf("%s://%s:%d", tls ? "wss" : "ws",  host, port);
 
     OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY, "start_transport http=%s ws=%s auth_mode=%s",
               current_http_url, current_ws_url,
-              current_config->auth_mode ? current_config->auth_mode : "(null)");
-
-    /* Resolve the effective state dir so device identity + device tokens
-     * persist under the correct profile. */
-    {
-        gchar *derived_profile = NULL;
-        gchar *derived_state_dir = NULL;
-        gchar *derived_config_path = NULL;
-        systemd_get_runtime_context(&derived_profile, &derived_state_dir, &derived_config_path);
-        RuntimeEffectivePaths paths = {0};
-        runtime_effective_paths_resolve(current_config, derived_profile,
-                                        derived_state_dir, derived_config_path, &paths);
-        gateway_ws_set_identity_context(paths.effective_state_dir);
-        runtime_effective_paths_clear(&paths);
-        g_free(derived_profile);
-        g_free(derived_state_dir);
-        g_free(derived_config_path);
-    }
+              auth_mode ? auth_mode : "(null)");
 
     /* Start HTTP health polling */
     do_health_check();
     health_poll_timer_id = g_timeout_add_seconds(HEALTH_POLL_INTERVAL_S, on_health_poll_timer, NULL);
 
     /* Start WebSocket connection with auth_mode-aware credentials */
-    gateway_ws_connect(current_ws_url,
-                       current_config->auth_mode,
-                       current_config->token,
-                       current_config->password,
+    gateway_ws_connect(current_ws_url, auth_mode, token, password,
                        on_ws_status, NULL);
 }
 
@@ -942,12 +967,99 @@ static void config_monitor_rearm(void) {
     }
 }
 
+static guint g_endpoint_sub = 0;
+
+static ProductConnectionMode gateway_client_effective_mode(void) {
+    if (!current_config) return PRODUCT_CONNECTION_MODE_LOCAL;
+    EffectiveConnectionMode em = connection_mode_resolve(
+        current_config->mode,
+        (current_config->remote_url != NULL),
+        product_state_get_connection_mode(),
+        product_state_get_onboarding_seen_version() > 0);
+    return em.mode;
+}
+
+static void on_remote_endpoint_changed(gpointer user_data) {
+    (void)user_data;
+    if (!initialized) return;
+    if (!current_config || !current_config->valid) return;
+    if (!effective_mode_is_remote()) return;
+
+    const RemoteEndpointSnapshot *ep = remote_endpoint_get();
+    if (!ep) return;
+
+    if (ep->kind == REMOTE_ENDPOINT_READY) {
+        teardown_transport(FALSE, FALSE, FALSE);
+        start_transport();
+    } else if (ep->kind == REMOTE_ENDPOINT_UNAVAILABLE ||
+               ep->kind == REMOTE_ENDPOINT_CONNECTING) {
+        teardown_transport(FALSE, FALSE, FALSE);
+    }
+}
+
+/*
+ * Resolve the effective runtime paths (profile/state-dir/config-path)
+ * from the systemd runtime context and the current config, then wire:
+ *   - gateway_ws_set_identity_context(state_dir) for device identity
+ *     and device-token persistence on the ws transport side, and
+ *   - remote_tunnel_set_state_dir(state_dir) so the tunnel supervisor
+ *     can write/adopt its `remote-tunnel.json` runtime record.
+ *
+ * This helper is idempotent and safe to call repeatedly. It must run
+ * BEFORE connection_mode_coordinator_apply() so the coordinator's
+ * remote_tunnel_ensure() path has adoption enabled on first-run; if
+ * the state dir is unset, remote_tunnel_ensure() degrades to "always
+ * respawn" and the runtime record isn't written.
+ */
+static void apply_runtime_paths_from_current_config(void) {
+    if (!current_config) return;
+    gchar *derived_profile = NULL;
+    gchar *derived_state_dir = NULL;
+    gchar *derived_config_path = NULL;
+    systemd_get_runtime_context(&derived_profile,
+                                &derived_state_dir,
+                                &derived_config_path);
+    RuntimeEffectivePaths paths = {0};
+    runtime_effective_paths_resolve(current_config,
+                                    derived_profile,
+                                    derived_state_dir,
+                                    derived_config_path,
+                                    &paths);
+    gateway_ws_set_identity_context(paths.effective_state_dir);
+    remote_tunnel_set_state_dir(paths.effective_state_dir);
+    runtime_effective_paths_clear(&paths);
+    g_free(derived_profile);
+    g_free(derived_state_dir);
+    g_free(derived_config_path);
+}
+
+static void gateway_client_apply_mode(void) {
+    if (!current_config || !current_config->valid) return;
+    /*
+     * Establish the effective state dir BEFORE handing control to the
+     * connection-mode coordinator. The coordinator may call
+     * remote_tunnel_ensure(), which consults the state dir to both
+     * adopt an existing tunnel process and persist a fresh runtime
+     * record. Without this, adoption silently degrades to "always
+     * respawn" and the runtime record is never written.
+     */
+    apply_runtime_paths_from_current_config();
+    connection_mode_coordinator_apply(current_config, gateway_client_effective_mode());
+}
+
 void gateway_client_init(void) {
     if (initialized) return;
     initialized = TRUE;
 
     gateway_http_init();
     gateway_ws_init();
+
+    /* Init remote-mode subsystems and subscribe to endpoint changes so
+     * tunnel readiness drives transport rebuild. Idempotent. */
+    connection_mode_coordinator_init();
+    if (!g_endpoint_sub) {
+        g_endpoint_sub = remote_endpoint_subscribe(on_remote_endpoint_changed, NULL);
+    }
 
     /* Start monitoring config file for live reload (Feature A) */
     config_monitor_rearm();
@@ -962,6 +1074,7 @@ void gateway_client_init(void) {
         return;
     }
 
+    gateway_client_apply_mode();
     start_transport();
 }
 
@@ -1027,7 +1140,12 @@ void gateway_client_refresh(void) {
         return;
     }
 
-    /* New config is valid (may be recovering from invalid, or changed) — rebuild transport */
+    /* New config is valid (may be recovering from invalid, or changed).
+     * Re-apply the connection-mode coordinator so mode/transport flips
+     * drive tunnel/endpoint lifecycle before we attempt to start the
+     * transport itself. start_transport gates on endpoint READY for
+     * remote mode, so this is safe to call eagerly. */
+    gateway_client_apply_mode();
     start_transport();
 }
 
@@ -1037,6 +1155,12 @@ void gateway_client_shutdown(void) {
 
     /* Stop monitoring config file (Feature A) */
     config_monitor_clear();
+
+    if (g_endpoint_sub) {
+        remote_endpoint_unsubscribe(g_endpoint_sub);
+        g_endpoint_sub = 0;
+    }
+    connection_mode_coordinator_shutdown();
 
     teardown_transport(TRUE, TRUE, TRUE);
     gateway_ws_shutdown();
