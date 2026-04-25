@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -9,17 +9,17 @@ let tmpDir: string;
 let originalStateDir: string | undefined;
 let fixtureId = 0;
 
-beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "session-entry-test-"));
+beforeAll(() => {
+  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
 });
 
-afterAll(async () => {
-  await fs.rm(fixtureRoot, { recursive: true, force: true });
+afterAll(() => {
+  fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
-beforeEach(async () => {
+beforeEach(() => {
   tmpDir = path.join(fixtureRoot, `case-${fixtureId++}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  fsSync.mkdirSync(tmpDir, { recursive: true });
   originalStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = tmpDir;
 });
@@ -47,16 +47,16 @@ function expectNoUnpairedSurrogates(value: string): void {
   }
 }
 
-async function writeSessionJsonl(fileName: string, records: readonly unknown[]): Promise<string> {
+function writeSessionJsonl(fileName: string, records: readonly unknown[]): string {
   const filePath = path.join(tmpDir, fileName);
-  await fs.writeFile(filePath, records.map((record) => JSON.stringify(record)).join("\n"));
+  fsSync.writeFileSync(filePath, records.map((record) => JSON.stringify(record)).join("\n"));
   return filePath;
 }
 
 describe("listSessionFilesForAgent", () => {
   it("includes reset and deleted transcripts in session file listing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    await fs.mkdir(path.join(sessionsDir, "archive"), { recursive: true });
+    fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
 
     const included = [
       "active.jsonl",
@@ -66,9 +66,9 @@ describe("listSessionFilesForAgent", () => {
     const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
 
     for (const fileName of [...included, ...excluded]) {
-      await fs.writeFile(path.join(sessionsDir, fileName), "");
+      fsSync.writeFileSync(path.join(sessionsDir, fileName), "");
     }
-    await fs.writeFile(
+    fsSync.writeFileSync(
       path.join(sessionsDir, "archive", "nested.jsonl.deleted.2026-02-16T22-29-33.000Z"),
       "",
     );
@@ -102,7 +102,7 @@ describe("buildSessionEntry", () => {
       JSON.stringify({ type: "message", message: { role: "user", content: "Tell me a joke" } }),
     ];
     const filePath = path.join(tmpDir, "session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -129,7 +129,7 @@ describe("buildSessionEntry", () => {
       JSON.stringify({ type: "session-meta", agentId: "test" }),
     ];
     const filePath = path.join(tmpDir, "empty-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -147,7 +147,7 @@ describe("buildSessionEntry", () => {
       JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
     ];
     const filePath = path.join(tmpDir, "gaps.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -172,7 +172,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "timestamps.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -213,7 +213,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "enveloped-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -251,7 +251,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "enveloped-session-array.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -269,7 +269,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "wrapped-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -291,7 +291,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "hard-wrapped-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -315,7 +315,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "surrogate-safe-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -342,7 +342,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "assistant-sentinel.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -365,7 +365,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "dreaming-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
 
@@ -375,9 +375,9 @@ describe("buildSessionEntry", () => {
 
   it("flags cron run transcripts from the sibling session store and skips their content", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
     const filePath = path.join(sessionsDir, "cron-run-session.jsonl");
-    await fs.writeFile(
+    fsSync.writeFileSync(
       filePath,
       [
         JSON.stringify({
@@ -396,7 +396,7 @@ describe("buildSessionEntry", () => {
         }),
       ].join("\n"),
     );
-    await fs.writeFile(
+    fsSync.writeFileSync(
       path.join(sessionsDir, "sessions.json"),
       JSON.stringify({
         "agent:main:cron:job-1:run:run-1": {
@@ -418,9 +418,9 @@ describe("buildSessionEntry", () => {
 
   it("flags dreaming narrative transcripts from the sibling session store before bootstrap lands", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
     const filePath = path.join(sessionsDir, "dreaming-session.jsonl");
-    await fs.writeFile(
+    fsSync.writeFileSync(
       filePath,
       [
         JSON.stringify({
@@ -440,7 +440,7 @@ describe("buildSessionEntry", () => {
         }),
       ].join("\n"),
     );
-    await fs.writeFile(
+    fsSync.writeFileSync(
       path.join(sessionsDir, "sessions.json"),
       JSON.stringify({
         "agent:main:dreaming-narrative-light-1775894400455": {
@@ -476,7 +476,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "dreaming-prompt-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
 
@@ -594,7 +594,7 @@ describe("buildSessionEntry", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const filePath = await writeSessionJsonl(testCase.fileName, testCase.records);
+      const filePath = writeSessionJsonl(testCase.fileName, testCase.records);
       const entry = await buildSessionEntry(filePath);
 
       expect(entry, testCase.name).not.toBeNull();
@@ -624,7 +624,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "spoof-attempt-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
 
@@ -641,8 +641,8 @@ describe("buildSessionEntry", () => {
       type: "message",
       message: { role: "user", content: "This should never reach the dreaming corpus." },
     });
-    await fs.writeFile(deletedPath, content);
-    await fs.writeFile(checkpointPath, content);
+    fsSync.writeFileSync(deletedPath, content);
+    fsSync.writeFileSync(checkpointPath, content);
 
     const deletedEntry = await buildSessionEntry(deletedPath);
     const checkpointEntry = await buildSessionEntry(checkpointPath);
@@ -670,7 +670,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "substring-marker-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
 

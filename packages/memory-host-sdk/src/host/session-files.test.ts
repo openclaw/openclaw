@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -9,17 +9,17 @@ let tmpDir: string;
 let originalStateDir: string | undefined;
 let fixtureId = 0;
 
-beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "session-entry-test-"));
+beforeAll(() => {
+  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
 });
 
-afterAll(async () => {
-  await fs.rm(fixtureRoot, { recursive: true, force: true });
+afterAll(() => {
+  fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
-beforeEach(async () => {
+beforeEach(() => {
   tmpDir = path.join(fixtureRoot, `case-${fixtureId++}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  fsSync.mkdirSync(tmpDir, { recursive: true });
   originalStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = tmpDir;
 });
@@ -35,7 +35,7 @@ afterEach(() => {
 describe("listSessionFilesForAgent", () => {
   it("includes reset and deleted transcripts in session file listing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    await fs.mkdir(path.join(sessionsDir, "archive"), { recursive: true });
+    fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
 
     const included = [
       "active.jsonl",
@@ -45,9 +45,9 @@ describe("listSessionFilesForAgent", () => {
     const excluded = ["active.jsonl.bak.2026-02-16T22-28-33.000Z", "sessions.json", "notes.md"];
 
     for (const fileName of [...included, ...excluded]) {
-      await fs.writeFile(path.join(sessionsDir, fileName), "");
+      fsSync.writeFileSync(path.join(sessionsDir, fileName), "");
     }
-    await fs.writeFile(
+    fsSync.writeFileSync(
       path.join(sessionsDir, "archive", "nested.jsonl.deleted.2026-02-16T22-29-33.000Z"),
       "",
     );
@@ -81,7 +81,7 @@ describe("buildSessionEntry", () => {
       JSON.stringify({ type: "message", message: { role: "user", content: "Tell me a joke" } }),
     ];
     const filePath = path.join(tmpDir, "session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -107,7 +107,7 @@ describe("buildSessionEntry", () => {
       JSON.stringify({ type: "session-meta", agentId: "test" }),
     ];
     const filePath = path.join(tmpDir, "empty-session.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -124,7 +124,7 @@ describe("buildSessionEntry", () => {
       JSON.stringify({ type: "message", message: { role: "assistant", content: "Second" } }),
     ];
     const filePath = path.join(tmpDir, "gaps.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
@@ -154,7 +154,7 @@ describe("buildSessionEntry", () => {
       }),
     ];
     const filePath = path.join(tmpDir, "enveloped-session-array.jsonl");
-    await fs.writeFile(filePath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
