@@ -20,6 +20,7 @@ import {
   normalizeOpenRouterBaseUrl,
   OPENROUTER_BASE_URL,
 } from "./provider-catalog.js";
+import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "openrouter";
@@ -145,5 +146,6 @@ export default definePluginEntry({
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
+    api.registerSpeechProvider(buildOpenRouterSpeechProvider());
   },
 });
