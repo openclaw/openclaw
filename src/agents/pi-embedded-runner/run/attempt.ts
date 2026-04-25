@@ -117,6 +117,10 @@ import {
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import {
+  logAgentRuntimeToolDiagnostics,
+  normalizeAgentRuntimeTools,
+} from "../../runtime-plan/tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -148,10 +152,7 @@ import {
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import {
-  resolveTranscriptPolicy,
-  shouldAllowProviderOwnedThinkingReplay,
-} from "../../transcript-policy.js";
+import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -219,10 +220,6 @@ import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import {
-  logProviderToolSchemaDiagnostics,
-  normalizeProviderToolSchemas,
-} from "../tool-schema-runtime.js";
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -290,6 +287,7 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
+import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
@@ -844,18 +842,17 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
     };
-    const tools =
-      params.runtimePlan?.tools.normalize(toolsEnabled ? toolsRaw : [], runtimePlanModelContext) ??
-      normalizeProviderToolSchemas({
-        tools: toolsEnabled ? toolsRaw : [],
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        env: process.env,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        model: params.model,
-      });
+    const tools = normalizeAgentRuntimeTools({
+      runtimePlan: params.runtimePlan,
+      tools: toolsEnabled ? toolsRaw : [],
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
@@ -942,20 +939,17 @@ export async function runEmbeddedAttempt(
       toolsEnabled,
       disableTools: params.disableTools,
     });
-    if (params.runtimePlan) {
-      params.runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
-    } else {
-      logProviderToolSchemaDiagnostics({
-        tools: effectiveTools,
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        env: process.env,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        model: params.model,
-      });
-    }
+    logAgentRuntimeToolDiagnostics({
+      runtimePlan: params.runtimePlan,
+      tools: effectiveTools,
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    });
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -1201,17 +1195,14 @@ export async function runEmbeddedAttempt(
         .then(() => true)
         .catch(() => false);
 
-      const transcriptPolicy =
-        params.runtimePlan?.transcript.resolvePolicy(runtimePlanModelContext) ??
-        resolveTranscriptPolicy({
-          modelApi: params.model?.api,
-          provider: params.provider,
-          modelId: params.modelId,
-          config: params.config,
-          workspaceDir: effectiveWorkspace,
-          env: process.env,
-          model: params.model,
-        });
+      const transcriptPolicy = resolveAttemptTranscriptPolicy({
+        runtimePlan: params.runtimePlan,
+        runtimePlanModelContext,
+        provider: params.provider,
+        modelId: params.modelId,
+        config: params.config,
+        env: process.env,
+      });
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
