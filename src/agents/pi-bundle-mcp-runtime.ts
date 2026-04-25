@@ -1,8 +1,16 @@
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
+import type {
+  JsonSchemaType,
+  JsonSchemaValidator,
+  jsonSchemaValidator,
+} from "@modelcontextprotocol/sdk/validation/types.js";
+import type { ErrorObject, ValidateFunction } from "ajv";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -34,7 +42,53 @@ type CreateSessionMcpRuntime = (
   params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
 ) => SessionMcpRuntime;
 
+const require = createRequire(import.meta.url);
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
+const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+
+type Ajv2020Like = {
+  compile: (schema: JsonSchemaType) => ValidateFunction;
+  errorsText: (errors?: ErrorObject[] | null) => string;
+};
+
+function isDraft202012Schema(schema: JsonSchemaType): boolean {
+  return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12_SCHEMA;
+}
+
+export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
+  const defaultValidator = new AjvJsonSchemaValidator();
+  const Ajv2020Ctor = require("ajv/dist/2020") as new (opts?: object) => Ajv2020Like;
+  const ajv2020 = new Ajv2020Ctor({
+    strict: false,
+    validateFormats: false,
+    validateSchema: false,
+    allErrors: true,
+  });
+
+  return {
+    getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
+      if (!isDraft202012Schema(schema)) {
+        return defaultValidator.getValidator<T>(schema);
+      }
+      const ajvValidator = ajv2020.compile(schema);
+      return (input: unknown) => {
+        const valid = ajvValidator(input);
+        if (valid) {
+          return {
+            valid: true,
+            data: input as T,
+            errorMessage: undefined,
+          };
+        }
+        return {
+          valid: false,
+          data: undefined,
+          errorMessage: ajv2020.errorsText(ajvValidator.errors),
+        };
+      };
+    },
+  };
+}
 
 function connectWithTimeout(
   client: Client,
@@ -178,7 +232,9 @@ export function createSessionMcpRuntime(params: {
               name: "openclaw-bundle-mcp",
               version: "0.0.0",
             },
-            {},
+            {
+              jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
+            },
           );
           const session: BundleMcpSession = {
             serverName,
