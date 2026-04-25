@@ -19,7 +19,10 @@ import type {
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import {
+  resolveConfiguredMediaMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/image-ops.js";
 import {
   classifyMediaReferenceSource,
@@ -646,6 +649,7 @@ export function createImageGenerateTool(options?: {
       });
       const count = resolveRequestedCount(params);
       const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
+      const mediaMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
         maxBytes: configuredMediaMaxBytes,
@@ -728,7 +732,7 @@ export function createImageGenerateTool(options?: {
             image.buffer,
             image.mimeType,
             "tool-image-generation",
-            configuredMediaMaxBytes,
+            mediaMaxBytes,
             filename || image.fileName,
           ),
         ),

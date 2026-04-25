@@ -97,6 +97,7 @@ async function downloadFalVideo(
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const arrayBuffer = await response.arrayBuffer();
     return {
+      url,
       buffer: Buffer.from(arrayBuffer),
       mimeType,
       fileName: `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,

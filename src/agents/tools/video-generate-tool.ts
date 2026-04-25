@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -559,6 +559,10 @@ type ExecutedVideoGeneration = {
   wakeResult: string;
 };
 
+function isGeneratedMediaSizeLimitError(error: unknown): boolean {
+  return error instanceof Error && /^Media exceeds \d+MB limit$/.test(error.message);
+}
+
 async function executeVideoGenerationJob(params: {
   effectiveCfg: OpenClawConfig;
   prompt: string;
@@ -628,18 +632,30 @@ async function executeVideoGenerationJob(params: {
     );
   }
 
-  const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(params.effectiveCfg);
-  const savedVideos = await Promise.all(
-    bufferVideos.map((video) =>
-      saveMediaBuffer(
+  const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "video");
+  const savedVideos: Array<Awaited<ReturnType<typeof saveMediaBuffer>>> = [];
+  for (const video of bufferVideos) {
+    try {
+      const saved = await saveMediaBuffer(
         video.buffer,
         video.mimeType,
         "tool-video-generation",
-        configuredMediaMaxBytes,
+        mediaMaxBytes,
         params.filename || video.fileName,
-      ),
-    ),
-  );
+      );
+      savedVideos.push(saved);
+    } catch (error) {
+      if (video.url && isGeneratedMediaSizeLimitError(error)) {
+        urlOnlyVideos.push({
+          url: video.url,
+          mimeType: video.mimeType,
+          fileName: video.fileName,
+        });
+        continue;
+      }
+      throw error;
+    }
+  }
   const totalCount = savedVideos.length + urlOnlyVideos.length;
   const requestedDurationSeconds =
     result.normalization?.durationSeconds?.requested ??
