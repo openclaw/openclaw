@@ -46,6 +46,23 @@ Before a harness is selected, OpenClaw has already resolved:
 That split is intentional. A harness runs a prepared attempt; it does not pick
 providers, replace channel delivery, or silently switch models.
 
+The prepared attempt also includes `params.runtimePlan`, an OpenClaw-owned
+policy bundle for runtime decisions that must stay shared across PI and native
+harnesses:
+
+- `runtimePlan.tools.normalize(...)` and
+  `runtimePlan.tools.logDiagnostics(...)` for provider-aware tool schema policy
+- `runtimePlan.transcript.resolvePolicy(...)` for transcript sanitization and
+  tool-call repair policy
+- `runtimePlan.delivery.isSilentPayload(...)` for shared `NO_REPLY` and media
+  delivery suppression
+- `runtimePlan.outcome.classifyRunResult(...)` for model fallback classification
+- `runtimePlan.observability` for resolved provider/model/harness metadata
+
+Harnesses may use the plan for decisions that need to match PI behavior, but
+should still treat it as host-owned attempt state. Do not mutate it or use it to
+switch providers/models inside a turn.
+
 ## Register a harness
 
 **Import:** `openclaw/plugin-sdk/agent-harness`
@@ -161,6 +178,16 @@ Legacy bundled plugins can still use
 middleware, but new result transforms should use the runtime-neutral API.
 The Pi-only `api.registerEmbeddedExtensionFactory(...)` hook has been removed;
 Pi tool-result transforms must use runtime-neutral middleware.
+
+### Terminal outcome classification
+
+Native harnesses that own their own protocol projection can use
+`classifyAgentHarnessTerminalOutcome(...)` from
+`openclaw/plugin-sdk/agent-harness-runtime` when a completed turn produced no
+visible assistant text. The helper returns `empty`, `reasoning-only`, or
+`planning-only` so OpenClaw's fallback policy can decide whether to retry on a
+different model. It intentionally leaves prompt errors, in-flight turns, and
+intentional silent replies such as `NO_REPLY` unclassified.
 
 ### Native Codex harness mode
 

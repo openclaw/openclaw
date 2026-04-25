@@ -191,7 +191,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers |
     | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
-    | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, tool progress formatting/detail helpers, and attempt result utilities |
+    | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
     | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
