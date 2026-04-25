@@ -191,6 +191,12 @@ const GoogleMeetToolSchema = Type.Object({
   includeTranscriptEntries: Type.Optional(
     Type.Boolean({ description: "For artifacts, include structured transcript entries" }),
   ),
+  includeAllConferenceRecords: Type.Optional(
+    Type.Boolean({
+      description:
+        "For artifacts or attendance with meeting input, fetch all conference records instead of only the latest.",
+    }),
+  ),
   accessToken: Type.Optional(Type.String({ description: "Access token override" })),
   refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
   clientId: Type.Optional(Type.String({ description: "OAuth client id override" })),
@@ -277,6 +283,7 @@ async function resolveArtifactQueryFromParams(
     conferenceRecord,
     pageSize: resolveOptionalPositiveInteger(raw.pageSize),
     includeTranscriptEntries: raw.includeTranscriptEntries !== false,
+    allConferenceRecords: raw.includeAllConferenceRecords === true,
   };
 }
 
@@ -424,6 +431,7 @@ export default definePluginEntry({
               conferenceRecord: resolved.conferenceRecord,
               pageSize: resolved.pageSize,
               includeTranscriptEntries: resolved.includeTranscriptEntries,
+              allConferenceRecords: resolved.allConferenceRecords,
             }),
           );
         } catch (err) {
@@ -445,6 +453,7 @@ export default definePluginEntry({
               meeting: resolved.meeting,
               conferenceRecord: resolved.conferenceRecord,
               pageSize: resolved.pageSize,
+              allConferenceRecords: resolved.allConferenceRecords,
             }),
           );
         } catch (err) {
@@ -604,6 +613,7 @@ export default definePluginEntry({
                   conferenceRecord: resolved.conferenceRecord,
                   pageSize: resolved.pageSize,
                   includeTranscriptEntries: resolved.includeTranscriptEntries,
+                  allConferenceRecords: resolved.allConferenceRecords,
                 }),
               );
             }
@@ -615,6 +625,7 @@ export default definePluginEntry({
                   meeting: resolved.meeting,
                   conferenceRecord: resolved.conferenceRecord,
                   pageSize: resolved.pageSize,
+                  allConferenceRecords: resolved.allConferenceRecords,
                 }),
               );
             }

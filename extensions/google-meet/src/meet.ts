@@ -532,6 +532,7 @@ async function resolveConferenceRecordQuery(params: {
   meeting?: string;
   conferenceRecord?: string;
   pageSize?: number;
+  allConferenceRecords?: boolean;
 }): Promise<{
   input?: string;
   space?: GoogleMeetSpace;
@@ -557,7 +558,8 @@ async function resolveConferenceRecordQuery(params: {
   const conferenceRecords = await listGoogleMeetConferenceRecords({
     accessToken: params.accessToken,
     meeting: space.name,
-    pageSize: params.pageSize,
+    pageSize: params.allConferenceRecords ? params.pageSize : 1,
+    maxItems: params.allConferenceRecords ? undefined : 1,
   });
   return {
     input: params.meeting,
@@ -572,6 +574,7 @@ export async function fetchGoogleMeetArtifacts(params: {
   conferenceRecord?: string;
   pageSize?: number;
   includeTranscriptEntries?: boolean;
+  allConferenceRecords?: boolean;
 }): Promise<GoogleMeetArtifactsResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const artifacts = await Promise.all(
@@ -652,6 +655,7 @@ export async function fetchGoogleMeetAttendance(params: {
   meeting?: string;
   conferenceRecord?: string;
   pageSize?: number;
+  allConferenceRecords?: boolean;
 }): Promise<GoogleMeetAttendanceResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const nestedRows = await Promise.all(
