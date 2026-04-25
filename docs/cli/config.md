@@ -385,6 +385,15 @@ untrusted until they validate. Invalid direct edits can be restored from the
 last-known-good backup during startup or hot reload. See
 [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config).
 
+Whole-file recovery is reserved for globally broken config, such as parse
+errors, root-level schema failures, legacy migration failures, or mixed plugin
+and root failures. If validation fails only under `plugins.entries.<id>...`,
+OpenClaw keeps the active `openclaw.json` in place and reports the plugin-local
+issue instead of restoring `.last-good`. This prevents plugin schema changes or
+`minHostVersion` skew from rolling back unrelated user settings such as models,
+providers, auth profiles, channels, gateway exposure, tools, memory, browser, or
+cron config.
+
 ## Subcommands
 
 - `config file`: Print the active config file path (resolved from `OPENCLAW_CONFIG_PATH` or default location). The path should name a regular file, not a symlink.
