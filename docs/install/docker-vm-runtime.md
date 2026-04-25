@@ -15,14 +15,15 @@ Anything installed at runtime will be lost on restart.
 
 All external binaries required by skills must be installed at image build time.
 
-The examples below show three common binaries only:
+The examples below show two common binaries:
 
-- `gog` for Gmail access
+- `gog` for Gmail access (from the `gogcli` repo)
 - `goplaces` for Google Places
-- `wacli` for WhatsApp
 
 These are examples, not a complete list.
 You may install as many binaries as needed using the same pattern.
+
+`wacli` (WhatsApp) is intentionally not shown here: as of v0.6.0 it ships only a macOS universal build, so it cannot run inside a Linux container. Check the [release page](https://github.com/steipete/wacli/releases) for Linux availability before adding it.
 
 If you add new skills later that depend on additional binaries, you must:
 
@@ -37,17 +38,17 @@ FROM node:24-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
-# Example binary 1: Gmail CLI
-RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
+# Pin versions for reproducible builds. Bump these as new releases ship.
+ARG GOGCLI_VERSION=0.13.0
+ARG GOPLACES_VERSION=0.3.0
 
-# Example binary 2: Google Places CLI
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
+# Example binary 1: Gmail CLI (https://github.com/steipete/gogcli/releases)
+RUN curl -L "https://github.com/steipete/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_${GOGCLI_VERSION}_linux_amd64.tar.gz" \
+  | tar -xz -C /usr/local/bin gog && chmod +x /usr/local/bin/gog
 
-# Example binary 3: WhatsApp CLI
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
+# Example binary 2: Google Places CLI (https://github.com/steipete/goplaces/releases)
+RUN curl -L "https://github.com/steipete/goplaces/releases/download/v${GOPLACES_VERSION}/goplaces_${GOPLACES_VERSION}_linux_amd64.tar.gz" \
+  | tar -xz -C /usr/local/bin goplaces && chmod +x /usr/local/bin/goplaces
 
 # Add more binaries below using the same pattern
 
@@ -70,7 +71,7 @@ CMD ["node","dist/index.js"]
 ```
 
 <Note>
-The download URLs above are for x86_64 (amd64). For ARM-based VMs (e.g. Hetzner ARM, GCP Tau T2A), replace the download URLs with the appropriate ARM64 variants from each tool's release page.
+The download URLs above are for x86_64 (amd64). For ARM-based VMs (e.g. Hetzner ARM, GCP Tau T2A), replace `linux_amd64` with `linux_arm64` in each URL.
 </Note>
 
 ## Build and launch
@@ -88,7 +89,6 @@ Verify binaries:
 ```bash
 docker compose exec openclaw-gateway which gog
 docker compose exec openclaw-gateway which goplaces
-docker compose exec openclaw-gateway which wacli
 ```
 
 Expected output:
@@ -96,7 +96,6 @@ Expected output:
 ```
 /usr/local/bin/gog
 /usr/local/bin/goplaces
-/usr/local/bin/wacli
 ```
 
 Verify Gateway:
