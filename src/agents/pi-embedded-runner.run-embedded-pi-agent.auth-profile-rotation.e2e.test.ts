@@ -5,7 +5,6 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
-import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { buildAttemptReplayMetadata } from "./pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -107,6 +106,7 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
+let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
 let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
@@ -116,6 +116,8 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
+  ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
+    await import("../logging/test-helpers/diagnostic-log-capture.js"));
   ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
     await import("../logging/logger.js"));
 });
@@ -861,7 +863,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
-    const logCapture = createDiagnosticLogRecordCapture();
+    const logCapture = createDiagnosticLogRecordCaptureFn();
     cleanupLogCapture = logCapture.cleanup;
     setLoggerOverrideFn({
       level: "trace",
