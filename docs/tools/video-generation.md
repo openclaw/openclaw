@@ -97,7 +97,7 @@ Duplicate prevention: if a video task is already `queued` or `running` for the c
 | Runway                | `gen4.5`                        | Yes  | 1 image                                              | 1 video          | `RUNWAYML_API_SECRET`                    |
 | Together              | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image                                              | No               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          | Yes  | 1 image (`kling`)                                    | No               | `VYDRA_API_KEY`                          |
-| xAI                   | `grok-imagine-video`            | Yes  | 1 image                                              | 1 video          | `XAI_API_KEY`                            |
+| xAI                   | `grok-imagine-video`            | Yes  | 1 first-frame image or up to 7 `reference_image`s    | 1 video          | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
 
@@ -150,7 +150,9 @@ Role hints are forwarded to the provider as-is. Canonical values come from
 the `VideoGenerationAssetRole` union but providers may accept additional
 role strings. `*Roles` arrays must not have more entries than the
 corresponding reference list; off-by-one mistakes fail with a clear error.
-Use an empty string to leave a slot unset.
+Use an empty string to leave a slot unset. For xAI, set every image role to
+`reference_image` to use its `reference_images` generation mode; omit the role
+or use `first_frame` for single-image image-to-video.
 
 ### Style controls
 
@@ -326,7 +328,7 @@ entries.
   </Accordion>
 
   <Accordion title="xAI">
-    Supports text-to-video, image-to-video, and remote video edit/extend flows.
+    Supports text-to-video, single first-frame image-to-video, up to 7 `reference_image` inputs through xAI `reference_images`, and remote video edit/extend flows.
   </Accordion>
 </AccordionGroup>
 
