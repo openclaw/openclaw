@@ -57,9 +57,11 @@ async function main() {
     "fresh overview did not report missing config",
   );
   assert(
-    overviewOutput.includes('Next: say "setup" to create a starter config'),
+    overviewOutput.includes('Next: run "setup" to create a starter config'),
     "fresh overview did not include setup recommendation",
   );
+
+  process.env.DISCORD_BOT_TOKEN = "openclaw-crestodian-discord-e2e-token";
 
   const setupRuntime = createRuntime();
   await runCrestodian(
@@ -74,6 +76,66 @@ async function main() {
   assert(
     setupOutput.includes("[crestodian] done: crestodian.setup"),
     "Crestodian setup did not apply",
+  );
+
+  clearConfigCache();
+  const modelRuntime = createRuntime();
+  await runCrestodian(
+    {
+      message: "set default model openai/gpt-5.2",
+      yes: true,
+      interactive: false,
+    },
+    modelRuntime.runtime,
+  );
+  assert(
+    modelRuntime.lines.join("\n").includes("[crestodian] done: config.setDefaultModel"),
+    "Crestodian default model update did not apply",
+  );
+
+  clearConfigCache();
+  const agentRuntime = createRuntime();
+  await runCrestodian(
+    {
+      message: "create agent reef workspace /tmp/openclaw-reef model openai/gpt-5.2",
+      yes: true,
+      interactive: false,
+    },
+    agentRuntime.runtime,
+  );
+  assert(
+    agentRuntime.lines.join("\n").includes("[crestodian] done: agents.create"),
+    "Crestodian agent creation did not apply",
+  );
+
+  clearConfigCache();
+  const discordTokenRuntime = createRuntime();
+  await runCrestodian(
+    {
+      message: "config set-ref channels.discord.token env DISCORD_BOT_TOKEN",
+      yes: true,
+      interactive: false,
+    },
+    discordTokenRuntime.runtime,
+  );
+  assert(
+    discordTokenRuntime.lines.join("\n").includes("[crestodian] done: config.setRef"),
+    "Crestodian Discord token SecretRef did not apply",
+  );
+
+  clearConfigCache();
+  const discordEnabledRuntime = createRuntime();
+  await runCrestodian(
+    {
+      message: "config set channels.discord.enabled true",
+      yes: true,
+      interactive: false,
+    },
+    discordEnabledRuntime.runtime,
+  );
+  assert(
+    discordEnabledRuntime.lines.join("\n").includes("[crestodian] done: config.set"),
+    "Crestodian Discord enabled flag did not apply",
   );
 
   clearConfigCache();
@@ -96,10 +158,36 @@ async function main() {
       config.agents.defaults.model.primary === "openai/gpt-5.2",
     "first-run setup did not write default model",
   );
+  const reef = config.agents?.list?.find((agent) => agent.id === "reef");
+  assert(reef, "Crestodian did not create reef agent");
+  assert(reef.workspace === "/tmp/openclaw-reef", "Crestodian did not write reef workspace");
+  assert(reef.model === "openai/gpt-5.2", "Crestodian did not write reef model");
+  assert(config.channels?.discord?.enabled === true, "Crestodian did not enable Discord");
+  const discordToken = config.channels?.discord?.token;
+  assert(
+    discordToken &&
+      typeof discordToken === "object" &&
+      "source" in discordToken &&
+      discordToken.source === "env" &&
+      "id" in discordToken &&
+      discordToken.id === "DISCORD_BOT_TOKEN",
+    "Crestodian did not write Discord token SecretRef",
+  );
+  assert(
+    !JSON.stringify(config.channels.discord).includes(process.env.DISCORD_BOT_TOKEN),
+    "Crestodian persisted the raw Discord token",
+  );
 
   const auditPath = path.join(stateDir, "audit", "crestodian.jsonl");
   const audit = (await fs.readFile(auditPath, "utf8")).trim();
   assert(audit.includes('"operation":"crestodian.setup"'), "setup audit entry missing");
+  assert(
+    audit.includes('"operation":"config.setDefaultModel"'),
+    "default model audit entry missing",
+  );
+  assert(audit.includes('"operation":"agents.create"'), "agent creation audit entry missing");
+  assert(audit.includes('"operation":"config.setRef"'), "Discord SecretRef audit entry missing");
+  assert(audit.includes('"operation":"config.set"'), "Discord enabled audit entry missing");
 
   console.log("Crestodian first-run Docker E2E passed");
 }
