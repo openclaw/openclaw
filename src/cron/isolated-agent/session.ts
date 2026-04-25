@@ -9,6 +9,64 @@ import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+function clearFreshCronSessionState(entry: SessionEntry): SessionEntry {
+  const next = { ...entry };
+
+  delete next.abortedLastRun;
+  delete next.agentHarnessId;
+  delete next.agentRuntimeOverride;
+  delete next.cacheRead;
+  delete next.cacheWrite;
+  delete next.claudeCliSessionId;
+  delete next.cliSessionBindings;
+  delete next.cliSessionIds;
+  delete next.contextTokens;
+  delete next.deliveryContext;
+  delete next.endedAt;
+  delete next.estimatedCostUsd;
+  delete next.execAsk;
+  delete next.execHost;
+  delete next.execNode;
+  delete next.execSecurity;
+  delete next.fallbackNoticeActiveModel;
+  delete next.fallbackNoticeReason;
+  delete next.fallbackNoticeSelectedModel;
+  delete next.heartbeatIsolatedBaseSessionKey;
+  delete next.inputTokens;
+  delete next.lastAccountId;
+  delete next.lastChannel;
+  delete next.lastHeartbeatSentAt;
+  delete next.lastHeartbeatText;
+  delete next.lastThreadId;
+  delete next.lastTo;
+  delete next.liveModelSwitchPending;
+  delete next.model;
+  delete next.modelProvider;
+  delete next.outputTokens;
+  delete next.pluginDebugEntries;
+  delete next.runtimeMs;
+  delete next.sessionFile;
+  delete next.startedAt;
+  delete next.status;
+  delete next.systemPromptReport;
+  delete next.totalTokens;
+  delete next.totalTokensFresh;
+
+  if (next.modelOverrideSource === "auto") {
+    delete next.modelOverride;
+    delete next.providerOverride;
+    delete next.modelOverrideSource;
+  }
+
+  if (next.authProfileOverrideSource !== "user") {
+    delete next.authProfileOverride;
+    delete next.authProfileOverrideSource;
+    delete next.authProfileOverrideCompactionCount;
+  }
+
+  return next;
+}
+
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -65,27 +123,15 @@ export function resolveCronSession(params: {
     previousSessionId,
   });
 
+  const baseEntry = entry ? (isNewSession ? clearFreshCronSessionState(entry) : entry) : undefined;
+
   const sessionEntry: SessionEntry = {
     // Preserve existing per-session overrides even when rolling to a new sessionId.
-    ...entry,
+    ...baseEntry,
     // Always update these core fields
     sessionId,
     updatedAt: params.nowMs,
     systemSent,
-    // When starting a fresh session (forceNew / isolated), clear delivery routing
-    // state inherited from prior sessions. Without this, lastThreadId leaks into
-    // the new session and causes announce-mode cron deliveries to post as thread
-    // replies instead of channel top-level messages.
-    // deliveryContext must also be cleared because normalizeSessionEntryDelivery
-    // repopulates lastThreadId from deliveryContext.threadId on store writes.
-    ...(isNewSession && {
-      lastChannel: undefined,
-      lastTo: undefined,
-      lastAccountId: undefined,
-      lastThreadId: undefined,
-      deliveryContext: undefined,
-      sessionFile: undefined,
-    }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };
 }

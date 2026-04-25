@@ -222,6 +222,131 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("gpt-5.4");
     });
 
+    it("clears stale run-scoped state when forceNew rolls to a fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-987",
+          updatedAt: NOW_MS - 1000,
+          status: "done",
+          startedAt: NOW_MS - 10_000,
+          endedAt: NOW_MS - 1_000,
+          runtimeMs: 9_000,
+          lastHeartbeatText: "old heartbeat",
+          lastHeartbeatSentAt: NOW_MS - 1_000,
+          heartbeatIsolatedBaseSessionKey: "agent:main:cron:old",
+          model: "claude-opus-4-6",
+          modelProvider: "anthropic",
+          agentHarnessId: "claude-cli",
+          agentRuntimeOverride: "claude-cli",
+          cliSessionIds: { anthropic: "old-cli-session" },
+          cliSessionBindings: {},
+          claudeCliSessionId: "old-claude-session",
+          liveModelSwitchPending: true,
+          fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
+          fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
+          fallbackNoticeReason: "rate limit",
+          inputTokens: 1,
+          outputTokens: 2,
+          totalTokens: 3,
+          totalTokensFresh: true,
+          estimatedCostUsd: 0.01,
+          execAsk: "always",
+          execHost: "gateway",
+          execNode: "node-1",
+          execSecurity: "allowlist",
+          cacheRead: 4,
+          cacheWrite: 5,
+          contextTokens: 200_000,
+          systemPromptReport: {
+            source: "run",
+            generatedAt: NOW_MS,
+            systemPrompt: {
+              chars: 1,
+              projectContextChars: 0,
+              nonProjectContextChars: 1,
+            },
+            injectedWorkspaceFiles: [],
+            skills: { promptChars: 0, entries: [] },
+            tools: { listChars: 0, schemaChars: 0, entries: [] },
+          },
+          pluginDebugEntries: [{ pluginId: "test", lines: ["old"] }],
+          authProfileOverride: "auto-auth",
+          authProfileOverrideSource: "auto",
+          authProfileOverrideCompactionCount: 2,
+          modelOverride: "auto-model",
+          providerOverride: "anthropic",
+          modelOverrideSource: "auto",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.status).toBeUndefined();
+      expect(result.sessionEntry.startedAt).toBeUndefined();
+      expect(result.sessionEntry.endedAt).toBeUndefined();
+      expect(result.sessionEntry.runtimeMs).toBeUndefined();
+      expect(result.sessionEntry.lastHeartbeatText).toBeUndefined();
+      expect(result.sessionEntry.lastHeartbeatSentAt).toBeUndefined();
+      expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
+      expect(result.sessionEntry.model).toBeUndefined();
+      expect(result.sessionEntry.modelProvider).toBeUndefined();
+      expect(result.sessionEntry.agentHarnessId).toBeUndefined();
+      expect(result.sessionEntry.agentRuntimeOverride).toBeUndefined();
+      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
+      expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
+      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+      expect(result.sessionEntry.liveModelSwitchPending).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeReason).toBeUndefined();
+      expect(result.sessionEntry.inputTokens).toBeUndefined();
+      expect(result.sessionEntry.outputTokens).toBeUndefined();
+      expect(result.sessionEntry.totalTokens).toBeUndefined();
+      expect(result.sessionEntry.totalTokensFresh).toBeUndefined();
+      expect(result.sessionEntry.estimatedCostUsd).toBeUndefined();
+      expect(result.sessionEntry.execAsk).toBeUndefined();
+      expect(result.sessionEntry.execHost).toBeUndefined();
+      expect(result.sessionEntry.execNode).toBeUndefined();
+      expect(result.sessionEntry.execSecurity).toBeUndefined();
+      expect(result.sessionEntry.cacheRead).toBeUndefined();
+      expect(result.sessionEntry.cacheWrite).toBeUndefined();
+      expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.systemPromptReport).toBeUndefined();
+      expect(result.sessionEntry.pluginDebugEntries).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverride).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideSource).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+      expect(result.sessionEntry.modelOverride).toBeUndefined();
+      expect(result.sessionEntry.providerOverride).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+    });
+
+    it("preserves user-selected model and auth overrides for fresh cron sessions", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-654",
+          updatedAt: NOW_MS - 1000,
+          modelOverride: "claude-sonnet-4-6",
+          providerOverride: "anthropic",
+          modelOverrideSource: "user",
+          authProfileOverride: "work-profile",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 3,
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
+      expect(result.sessionEntry.providerOverride).toBe("anthropic");
+      expect(result.sessionEntry.modelOverrideSource).toBe("user");
+      expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
+      expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
+      expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
+    });
+
     it("clears delivery routing metadata when session is stale", () => {
       const result = resolveWithStoredEntry({
         entry: {
