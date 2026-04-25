@@ -615,6 +615,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- macOS/Gateway pairing: silently accept same-host native app
+  `metadata-upgrade` reconnects, so macOS patch-version changes update paired
+  metadata instead of spamming security audit warnings and `pairing required`
+  disconnects. Thanks @steipete.
 - CLI/Gateway: wait for one-shot gateway RPC clients to finish WebSocket teardown before the CLI process exits, reducing hangs where commands like `openclaw status` or `openclaw version` could finish their work but stay alive until an external timeout killed them (#70691). Thanks @Takhoffman.
 - Thinking defaults/status: raise the implicit default thinking level for reasoning-capable models from legacy `off`/`low` fallback behavior to a safe provider-supported `medium` equivalent when no explicit config default is set, preserve configured-model reasoning metadata when runtime catalog loading is empty, and make `/status` report the same resolved default as runtime (#70601). Thanks @Takhoffman.
 - Gateway/model pricing: extend OpenRouter and LiteLLM catalog fetch timeouts to 60 seconds, reducing noisy timeout warnings during slow upstream responses. Thanks @steipete.
