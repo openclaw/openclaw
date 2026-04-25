@@ -656,6 +656,60 @@ module.exports = {
     );
   });
 
+  it("sanitizes plugin CLI descriptor descriptions and rejects unsafe command names", async () => {
+    useNoBundledPlugins();
+    const unsafeDescription =
+      "Open \u001B]8;;https://example.test\u0007link\u001B]8;;\u0007 now\u001B[2J";
+    const plugin = writePlugin({
+      id: "unsafe-cli-descriptors",
+      filename: "unsafe-cli-descriptors.cjs",
+      body: `module.exports = {
+  id: "unsafe-cli-descriptors",
+  register(api) {
+    api.registerCli(() => {}, {
+      commands: ["bad\\ncommand"],
+      descriptors: [
+        {
+          name: "safe-command",
+          description: ${JSON.stringify(unsafeDescription)},
+          hasSubcommands: false,
+        },
+        {
+          name: "bad\\nname",
+          description: "Bad descriptor",
+          hasSubcommands: false,
+        },
+      ],
+    });
+  },
+};`,
+    });
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.dir] },
+          allow: ["unsafe-cli-descriptors"],
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars).toHaveLength(1);
+    expect(registry.cliRegistrars[0]?.commands).toEqual(["safe-command"]);
+    expect(registry.cliRegistrars[0]?.descriptors).toEqual([
+      {
+        name: "safe-command",
+        description: "Open link now",
+        hasSubcommands: false,
+      },
+    ]);
+    expect(registry.diagnostics.map((diag) => diag.message)).toEqual([
+      'invalid cli descriptor name: "bad\\nname"',
+      'invalid cli command name: "bad\\ncommand"',
+    ]);
+  });
+
   it("rejects async plugin registration when collecting CLI metadata", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
