@@ -19,7 +19,7 @@ import {
   type CrestodianCommandDeps,
   type CrestodianOperation,
 } from "./operations.js";
-import { formatCrestodianOverview, loadCrestodianOverview } from "./overview.js";
+import { formatCrestodianStartupMessage, loadCrestodianOverview } from "./overview.js";
 
 export type CrestodianTuiOptions = {
   yes?: boolean;
@@ -73,14 +73,6 @@ function splitModelRef(ref: string | undefined): { provider?: string; model?: st
     provider: trimmed.slice(0, slash),
     model: trimmed.slice(slash + 1),
   };
-}
-
-function crestodianWelcome(overviewText: string): string {
-  return [
-    overviewText,
-    "",
-    "Say: status, doctor, health, gateway status, restart gateway, agents, models, set default model <provider/model>, talk to agent, audit, or quit.",
-  ].join("\n");
 }
 
 class CrestodianTuiBackend implements TuiBackend {
@@ -212,7 +204,7 @@ class CrestodianTuiBackend implements TuiBackend {
     this.messages.splice(
       0,
       this.messages.length,
-      message("assistant", crestodianWelcome(formatCrestodianOverview(overview))),
+      message("assistant", formatCrestodianStartupMessage(overview)),
     );
     return { ok: true };
   }
@@ -325,10 +317,7 @@ export async function runCrestodianTui(
   let nextInput: string | undefined;
   for (;;) {
     const overview = await loadCrestodianOverview();
-    const backend = new CrestodianTuiBackend(
-      opts,
-      crestodianWelcome(formatCrestodianOverview(overview)),
-    );
+    const backend = new CrestodianTuiBackend(opts, formatCrestodianStartupMessage(overview));
     await runTui({
       local: true,
       session: CRESTODIAN_SESSION_KEY,

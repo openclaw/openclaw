@@ -18,23 +18,21 @@ Running `openclaw crestodian` starts the same helper explicitly.
 ## What Crestodian shows
 
 On startup, interactive Crestodian opens the same TUI shell used by
-`openclaw tui`, with a Crestodian chat backend. The chat log starts with a
-compact system overview:
+`openclaw tui`, with a Crestodian chat backend. The chat log starts with a short
+greeting:
 
-- config path and validity
-- configured agents and the default agent
-- default model
-- local Codex and Claude Code CLI availability
-- OpenAI and Anthropic API-key presence
-- planner mode (`deterministic` or model-assisted through the configured model)
-- local docs path or the public docs URL
-- local source path for Git checkouts, otherwise the OpenClaw GitHub source URL
-- gateway reachability
-- the immediate recommended next step
+- when to start Crestodian
+- the model or deterministic planner path Crestodian is actually using
+- config validity and the default agent
+- Gateway reachability from the first startup probe
+- the next debug action Crestodian can take
 
 It does not dump secrets or load plugin CLI commands just to start. The TUI
 still provides the normal header, chat log, status line, footer, autocomplete,
 and editor controls.
+
+Use `status` for the detailed inventory with config path, docs/source paths,
+local CLI probes, API-key presence, agents, model, and Gateway details.
 
 Crestodian uses the same OpenClaw reference discovery as regular agents. In a Git checkout,
 it points itself at local `docs/` and the local source tree. In an npm package install, it
