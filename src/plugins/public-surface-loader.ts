@@ -174,8 +174,27 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   const sentinel = {} as T;
   loadedPublicSurfaceModules.set(location.modulePath, sentinel);
   try {
-    const loaded = loadPublicSurfaceModule(location.modulePath) as T;
-    Object.assign(sentinel, loaded);
+    const loaded = loadPublicSurfaceModule(location.modulePath);
+    // Defensive: if loaded is null/undefined, refuse to cache and throw
+    if (loaded === undefined || loaded === null) {
+      loadedPublicSurfaceModules.delete(location.modulePath);
+      throw new Error(
+        `Bundled plugin public surface loaded but returned null/undefined: ${location.modulePath}`,
+      );
+    }
+    // Defensive: verify loaded module is accessible (handles proxy with null target like #62844)
+    // If the module is a Proxy with null/undefined target, property access will throw.
+    // Use void to explicitly acknowledge the intentionally unused result — this triggers
+    // the proxy get trap without needing an eslint disable comment.
+    try {
+      void (loaded as object)["constructor"];
+    } catch {
+      loadedPublicSurfaceModules.delete(location.modulePath);
+      throw new Error(
+        `Bundled plugin public surface returned inaccessible proxy (null target): ${location.modulePath}`,
+      );
+    }
+    Object.assign(sentinel, loaded as T);
     return sentinel;
   } catch (error) {
     loadedPublicSurfaceModules.delete(location.modulePath);

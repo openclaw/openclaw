@@ -373,6 +373,20 @@ function loadBundledEntryModuleSync(
     getJitiEndMs = profile ? performance.now() : 0;
     loaded = jiti(modulePath);
   }
+  // Defensive: if loaded is undefined or null, refuse to cache and throw
+  if (loaded === undefined || loaded === null) {
+    throw new Error(`Bundled module loaded but returned null/undefined: ${modulePath}`);
+  }
+  // Defensive: verify loaded module is accessible (handles jiti proxy with null target)
+  // If the module is a Proxy with a null/undefined target, property access will throw.
+  // Use void to explicitly acknowledge the intentionally unused result — this triggers
+  // the proxy get trap (catches #62844) without needing an eslint disable comment.
+  try {
+    void (loaded as object)["constructor"];
+  } catch {
+    loadedModuleExports.delete(modulePath);
+    throw new Error(`Bundled module returned inaccessible proxy (null/undefined target): ${modulePath}`);
+  }
   if (profile) {
     const endMs = performance.now();
     // Use shared formatter — but split timing fields ourselves so we can
