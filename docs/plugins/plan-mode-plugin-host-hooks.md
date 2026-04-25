@@ -32,6 +32,17 @@ Read [the full RFC packet](/plan/plan-mode-plugin-host-hooks-rfc) for:
 - migration plan from PR #71676 to a bundled plugin
 - copy-ready GitHub RFC issue bodies
 
+Filed RFC issues:
+
+| RFC | Issue                                                       | Topic                                                                       |
+| --- | ----------------------------------------------------------- | --------------------------------------------------------------------------- |
+| A   | [#71732](https://github.com/openclaw/openclaw/issues/71732) | Plugin session extensions and patch actions                                 |
+| B   | [#71733](https://github.com/openclaw/openclaw/issues/71733) | Durable next-turn injections and agent turn preparation hooks               |
+| C   | [#71734](https://github.com/openclaw/openclaw/issues/71734) | Trusted tool policy stage and plugin tool metadata                          |
+| D   | [#71735](https://github.com/openclaw/openclaw/issues/71735) | Scoped plugin commands, trusted command ownership, and continuation         |
+| E   | [#71736](https://github.com/openclaw/openclaw/issues/71736) | Control UI plugin contribution slots                                        |
+| F   | [#71737](https://github.com/openclaw/openclaw/issues/71737) | Agent events, run context, scheduler lifecycle, and heartbeat contributions |
+
 ## Summary
 
 Make Plan Mode plugin-owned by adding a small set of generic host seams to

@@ -25,6 +25,17 @@ This document is intentionally more detailed than a public user guide. It is a
 maintainer handoff artifact for filing RFC issues, reviewing the host-hook PR,
 and preventing a plugin port from silently dropping parity.
 
+## Filed RFC Issues
+
+| RFC | Issue                                                       | Decision thread                                                             |
+| --- | ----------------------------------------------------------- | --------------------------------------------------------------------------- |
+| A   | [#71732](https://github.com/openclaw/openclaw/issues/71732) | Plugin session extensions and patch actions                                 |
+| B   | [#71733](https://github.com/openclaw/openclaw/issues/71733) | Durable next-turn injections and agent turn preparation hooks               |
+| C   | [#71734](https://github.com/openclaw/openclaw/issues/71734) | Trusted tool policy stage and plugin tool metadata                          |
+| D   | [#71735](https://github.com/openclaw/openclaw/issues/71735) | Scoped plugin commands, trusted command ownership, and continuation         |
+| E   | [#71736](https://github.com/openclaw/openclaw/issues/71736) | Control UI plugin contribution slots                                        |
+| F   | [#71737](https://github.com/openclaw/openclaw/issues/71737) | Agent events, run context, scheduler lifecycle, and heartbeat contributions |
+
 ## Maintainer Decision To Make
 
 The decision is not "merge PR #71676 or reject Plan Mode." The useful decision
