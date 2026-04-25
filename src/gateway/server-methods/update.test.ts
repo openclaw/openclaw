@@ -103,6 +103,7 @@ vi.mock("./restart-request.js", () => ({
     sessionKey: params.sessionKey,
     note: params.note,
     restartDelayMs: undefined,
+    continuationMessage: params.continuationMessage,
   }),
 }));
 

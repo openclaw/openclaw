@@ -4495,19 +4495,22 @@ public struct UpdateRunParams: Codable, Sendable {
     public let note: String?
     public let restartdelayms: Int?
     public let timeoutms: Int?
+    public let continuationmessage: String?
 
     public init(
         sessionkey: String?,
         deliverycontext: [String: AnyCodable]?,
         note: String?,
         restartdelayms: Int?,
-        timeoutms: Int?)
+        timeoutms: Int?,
+        continuationmessage: String?)
     {
         self.sessionkey = sessionkey
         self.deliverycontext = deliverycontext
         self.note = note
         self.restartdelayms = restartdelayms
         self.timeoutms = timeoutms
+        self.continuationmessage = continuationmessage
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4516,6 +4519,7 @@ public struct UpdateRunParams: Codable, Sendable {
         case note
         case restartdelayms = "restartDelayMs"
         case timeoutms = "timeoutMs"
+        case continuationmessage = "continuationMessage"
     }
 }
 
