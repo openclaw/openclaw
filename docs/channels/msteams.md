@@ -71,6 +71,7 @@ teams app create \
 ```
 
 This single command:
+
 - Creates an Entra ID (Azure AD) application
 - Generates a client secret
 - Builds and uploads a Teams app manifest (with icons)
