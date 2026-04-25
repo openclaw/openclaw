@@ -39,6 +39,7 @@ const state = vi.hoisted(() => ({
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
+  fileWrites: [] as Array<{ path: string; data: string }>,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   isCurrentProcessLaunchdServiceLabel: vi.fn<(label: string) => boolean>(() => false),
@@ -242,6 +243,7 @@ vi.mock("node:fs/promises", async () => {
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
       const key = p;
       state.files.set(key, data);
+      state.fileWrites.push({ path: key, data });
       state.dirs.add(key.split("/").slice(0, -1).join("/"));
       state.fileModes.set(key, opts?.mode ?? 0o666);
     }),
@@ -274,6 +276,7 @@ beforeEach(() => {
   state.dirModes.clear();
   state.files.clear();
   state.fileModes.clear();
+  state.fileWrites.length = 0;
   cleanStaleGatewayProcessesSync.mockReset();
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReset();
@@ -470,6 +473,48 @@ describe("launchd install", () => {
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
     expect(plist).toContain("<key>ThrottleInterval</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
+  });
+
+  it("rewrites the plist before bootstrap during restart fallback", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.serviceLoaded = false;
+    state.kickstartError = "Could not find service";
+    state.kickstartCode = 113;
+    state.kickstartFailuresRemaining = 1;
+    state.files.set(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.gateway</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>node</string>",
+        "      <string>gateway.js</string>",
+        "    </array>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n"),
+    );
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>StandardOutPath</key>");
+    expect(plist).toContain("<key>StandardErrorPath</key>");
+    expect(plist).toContain("<key>KeepAlive</key>");
+    expect(plist).toContain("<string>node</string>");
+    const rewriteIndex = state.fileWrites.findIndex((write) => write.path === plistPath);
+    const bootstrapIndex = state.launchctlCalls.findIndex((call) => call[0] === "bootstrap");
+    expect(rewriteIndex).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+    expect(rewriteIndex).toBeLessThan(bootstrapIndex);
   });
 
   it("tightens writable bits on launch agent dirs and plist", async () => {
