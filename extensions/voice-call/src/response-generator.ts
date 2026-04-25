@@ -172,6 +172,14 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
   return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
 }
 
+function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
+  const trimmed = sessionKey.trim();
+  if (trimmed.toLowerCase().startsWith("agent:")) {
+    return trimmed;
+  }
+  return `agent:${agentId}:${trimmed}`;
+}
+
 /**
  * Generate a voice response using the embedded Pi agent with full tool support.
  * Uses the same agent infrastructure as messaging for consistent behavior.
@@ -264,6 +272,8 @@ export async function generateVoiceResponse(
     const result = await agentRuntime.runEmbeddedPiAgent({
       sessionId,
       sessionKey,
+      sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, sessionKey),
+      agentId,
       messageProvider: "voice",
       sessionFile,
       workspaceDir,

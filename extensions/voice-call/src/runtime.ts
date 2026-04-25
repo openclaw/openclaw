@@ -318,6 +318,7 @@ export async function createVoiceCallRuntime(params: {
             cfg,
             agentRuntime,
             logger: log,
+            agentId: config.agentId ?? "main",
             sessionKey: resolveVoiceCallConsultSessionKey(call),
             messageProvider: "voice",
             lane: "voice",
