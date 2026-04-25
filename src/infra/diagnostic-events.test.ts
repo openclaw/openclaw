@@ -174,6 +174,36 @@ describe("diagnostic-events", () => {
     delete state.trustedEvents;
   });
 
+  it("isolates trusted event trace context from listener mutation", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const trace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+    });
+    const seen: Array<{ traceId: string | undefined; trusted: boolean }> = [];
+    onInternalDiagnosticEvent((event) => {
+      (event.trace as { traceId: string }).traceId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    });
+    onInternalDiagnosticEvent((event, metadata) => {
+      seen.push({ traceId: event.trace?.traceId, trusted: metadata.trusted });
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      trace,
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(seen).toEqual([{ traceId: trace.traceId, trusted: true }]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("listener error type=model.call.started seq=1: TypeError"),
+    );
+  });
+
   it("drops prototype-pollution keys during event enrichment", () => {
     const eventInput = Object.assign(Object.create(null), {
       type: "message.queued",

@@ -472,7 +472,7 @@ function dispatchDiagnosticEvent(
   try {
     for (const listener of state.listeners) {
       try {
-        listener(enriched, metadata);
+        listener(cloneDiagnosticEventForListener(enriched), metadata);
       } catch (err) {
         const errorMessage =
           err instanceof Error
@@ -489,6 +489,14 @@ function dispatchDiagnosticEvent(
   } finally {
     state.dispatchDepth -= 1;
   }
+}
+
+function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): DiagnosticEventPayload {
+  const cloned = { ...event } as DiagnosticEventPayload & Record<string, unknown>;
+  if (event.trace) {
+    cloned.trace = Object.freeze({ ...event.trace });
+  }
+  return Object.freeze(cloned) as DiagnosticEventPayload;
 }
 
 function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void {
