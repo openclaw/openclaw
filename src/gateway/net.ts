@@ -19,7 +19,8 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const preferredLanInterfaceNames = ["en0", "eth0"];
 const preferredLanInterfaceNamePattern = /^(?:en|eth|wl|wlan|wi-?fi|ethernet)/i;
-const deprioritizedLanInterfaceNamePattern = /^(?:docker\d*|br-|veth|cni|podman|virbr|lxc|lxdbr)/i;
+const deprioritizedLanInterfaceNamePattern =
+  /^(?:docker\d*|br-|veth|cni|podman|virbr|lxc|lxdbr|flannel|cali|weave|cilium)/i;
 
 function isDeprioritizedLanInterfaceName(name: string): boolean {
   return deprioritizedLanInterfaceNamePattern.test(name);

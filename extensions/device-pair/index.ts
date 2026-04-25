@@ -242,7 +242,8 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
 
 const preferredLanInterfaceNames = ["en0", "eth0"];
 const preferredLanInterfaceNamePattern = /^(?:en|eth|wl|wlan|wi-?fi|ethernet)/i;
-const deprioritizedLanInterfaceNamePattern = /^(?:docker\d*|br-|veth|cni|podman|virbr|lxc|lxdbr)/i;
+const deprioritizedLanInterfaceNamePattern =
+  /^(?:docker\d*|br-|veth|cni|podman|virbr|lxc|lxdbr|flannel|cali|weave|cilium)/i;
 
 function pickPreferredLanIPv4(candidates: IPv4Candidate[]): string | null {
   for (const name of preferredLanInterfaceNames) {

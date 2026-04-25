@@ -367,6 +367,16 @@ describe("pickPrimaryLanIPv4", () => {
       expected: "172.17.0.1",
     },
     {
+      name: "deprioritizes Kubernetes CNI overlays before other candidates",
+      interfaces: makeNetworkInterfacesSnapshot({
+        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        "flannel.1": [{ address: "10.244.0.1", family: "IPv4" }],
+        cali123456789: [{ address: "10.244.1.1", family: "IPv4" }],
+        wg0: [{ address: "192.168.178.209", family: "IPv4" }],
+      }),
+      expected: "192.168.178.209",
+    },
+    {
       name: "no non-internal interface",
       interfaces: makeNetworkInterfacesSnapshot({
         lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
