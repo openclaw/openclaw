@@ -365,9 +365,9 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     : never
   : never;
 
-export type DiagnosticEventMetadata = {
+export type DiagnosticEventMetadata = Readonly<{
   trusted: boolean;
-};
+}>;
 
 type DiagnosticEventListener = (
   evt: DiagnosticEventPayload,
@@ -444,7 +444,7 @@ function dispatchDiagnosticEvent(
   try {
     for (const listener of state.listeners) {
       try {
-        listener(cloneDiagnosticEventForListener(enriched), metadata);
+        listener(cloneDiagnosticEventForListener(enriched), Object.freeze({ ...metadata }));
       } catch (err) {
         const errorMessage =
           err instanceof Error

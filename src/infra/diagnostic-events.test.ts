@@ -193,6 +193,27 @@ describe("diagnostic-events", () => {
     expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
   });
 
+  it("isolates diagnostic metadata from listener mutation", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const seen: boolean[] = [];
+    onInternalDiagnosticEvent((_event, metadata) => {
+      (metadata as { trusted: boolean }).trusted = true;
+    });
+    onInternalDiagnosticEvent((_event, metadata) => {
+      seen.push(metadata.trusted);
+    });
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "plugin",
+    });
+
+    expect(seen).toEqual([false]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("listener error type=message.queued seq=1: TypeError"),
+    );
+  });
+
   it("isolates trusted event trace context from listener mutation", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const trace = createDiagnosticTraceContext({
