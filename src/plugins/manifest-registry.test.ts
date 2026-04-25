@@ -510,6 +510,67 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("reports non-bundled channel manifests without channel config descriptors", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.channels).toEqual(["external-chat"]);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        pluginId: "external-chat",
+        source: path.join(dir, "openclaw.plugin.json"),
+        message: expect.stringContaining("without channelConfigs metadata"),
+      }),
+    );
+  });
+
+  it("accepts non-bundled channel manifests with channel config descriptors", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        "external-chat": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              token: { type: "string" },
+            },
+          },
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.channelConfigs?.["external-chat"]?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+    });
+    expect(
+      registry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+  });
+
   it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

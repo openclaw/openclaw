@@ -35,6 +35,12 @@ prefer `openclaw/plugin-sdk/channel-core`; keep `openclaw/plugin-sdk/core` for
 the broader umbrella surface and shared helpers such as
 `buildChannelConfigSchema`.
 
+For channel config, publish the channel-owned JSON Schema through
+`openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
+subpath is for shared schema primitives and the generic builder. Any
+bundled-channel-named schema exports on that subpath are legacy compatibility
+exports, not a pattern for new plugins.
+
 <Warning>
   Do not import provider- or channel-branded convenience seams (for example
   `openclaw/plugin-sdk/slack`, `.../discord`, `.../signal`, `.../whatsapp`).
