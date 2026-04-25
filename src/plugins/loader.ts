@@ -516,7 +516,64 @@ function resolveRuntimePackageImportTarget(exportsField: unknown): string | null
   return null;
 }
 
+function collectRuntimePackageWildcardImportTargets(
+  dependencyRoot: string,
+  exportKey: string,
+  targetPattern: string,
+): Map<string, string> {
+  const targets = new Map<string, string>();
+  const wildcardIndex = exportKey.indexOf("*");
+  const targetWildcardIndex = targetPattern.indexOf("*");
+  if (wildcardIndex === -1 || targetWildcardIndex === -1) {
+    return targets;
+  }
+  const exportPrefix = exportKey.slice(0, wildcardIndex);
+  const exportSuffix = exportKey.slice(wildcardIndex + 1);
+  const targetPrefix = targetPattern.slice(0, targetWildcardIndex);
+  const targetSuffix = targetPattern.slice(targetWildcardIndex + 1);
+  const targetBase = path.resolve(dependencyRoot, targetPrefix);
+  if (!isPathInside(dependencyRoot, targetBase) || !safeStatSync(targetBase)?.isDirectory()) {
+    return targets;
+  }
+  const stack = [targetBase];
+  while (stack.length > 0) {
+    const currentDir = stack.pop();
+    if (!currentDir) {
+      continue;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (!isPathInside(dependencyRoot, entryPath)) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const relativeTarget = path.relative(targetBase, entryPath).split(path.sep).join("/");
+      if (targetSuffix && !relativeTarget.endsWith(targetSuffix)) {
+        continue;
+      }
+      const wildcardValue = targetSuffix
+        ? relativeTarget.slice(0, -targetSuffix.length)
+        : relativeTarget;
+      targets.set(`${exportPrefix}${wildcardValue}${exportSuffix}`, entryPath);
+    }
+  }
+  return targets;
+}
+
 function collectRuntimePackageImportTargets(
+  dependencyRoot: string,
   pkg: RuntimeDependencyPackageJson,
 ): Map<string, string> {
   const targets = new Map<string, string>();
@@ -528,12 +585,22 @@ function collectRuntimePackageImportTargets(
     Object.keys(exportsField).some((key) => key.startsWith("."))
   ) {
     for (const [exportKey, exportValue] of Object.entries(exportsField)) {
-      if (!exportKey.startsWith(".") || exportKey.includes("*")) {
+      if (!exportKey.startsWith(".")) {
         continue;
       }
       const resolved = resolveRuntimePackageImportTarget(exportValue);
       if (resolved) {
-        targets.set(exportKey, resolved);
+        if (exportKey.includes("*")) {
+          for (const [wildcardExportKey, targetPath] of collectRuntimePackageWildcardImportTargets(
+            dependencyRoot,
+            exportKey,
+            resolved,
+          )) {
+            targets.set(wildcardExportKey, targetPath);
+          }
+        } else {
+          targets.set(exportKey, resolved);
+        }
       }
     }
     return targets;
@@ -562,7 +629,10 @@ function registerBundledRuntimeDependencyJitiAliases(rootDir: string): void {
       continue;
     }
     const dependencyRoot = path.dirname(dependencyPackageJsonPath);
-    for (const [exportKey, entry] of collectRuntimePackageImportTargets(dependencyPackageJson)) {
+    for (const [exportKey, entry] of collectRuntimePackageImportTargets(
+      dependencyRoot,
+      dependencyPackageJson,
+    )) {
       if (!entry || entry.startsWith("#")) {
         continue;
       }
@@ -582,8 +652,8 @@ function resolveBundledRuntimeDependencyJitiAliasMap(): Record<string, string> |
     return undefined;
   }
   return Object.fromEntries(
-    [...bundledRuntimeDependencyJitiAliases.entries()].toSorted(([left], [right]) =>
-      left.localeCompare(right),
+    [...bundledRuntimeDependencyJitiAliases.entries()].toSorted(
+      ([left], [right]) => right.length - left.length || left.localeCompare(right),
     ),
   );
 }

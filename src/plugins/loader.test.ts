@@ -1589,10 +1589,14 @@ module.exports = {
           "./oauth": {
             import: "./oauth.js",
           },
+          "./*": {
+            import: "./dist/*",
+          },
         },
       }),
       "utf-8",
     );
+    fs.mkdirSync(path.join(packageDepRoot, "dist", "client"), { recursive: true });
     fs.writeFileSync(
       path.join(packageDepRoot, "index.js"),
       "export default { marker: 'root-ok' };\n",
@@ -1604,11 +1608,17 @@ module.exports = {
       "utf-8",
     );
     fs.writeFileSync(
+      path.join(packageDepRoot, "dist", "client", "index.js"),
+      "export const clientMarker = 'client-ok';\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
       path.join(packageRoot, "dist", "manifest-support.js"),
       [
         `import support from "root-support";`,
         `import { oauthMarker } from "root-support/oauth";`,
-        `export const marker = [support.marker, oauthMarker].join(":");`,
+        `import { clientMarker } from "root-support/client/index.js";`,
+        `export const marker = [support.marker, oauthMarker, clientMarker].join(":");`,
         "",
       ].join("\n"),
       "utf-8",
