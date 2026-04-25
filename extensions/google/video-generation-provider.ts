@@ -289,18 +289,25 @@ async function requestGoogleVideoJson(params: {
     }),
   );
   try {
-    const response = await fetch(params.url, {
-      method: params.method,
-      headers: params.headers,
-      ...(params.body === undefined ? {} : { body: JSON.stringify(params.body) }),
+    const { response, release } = await fetchWithSsrFGuard({
+      url: params.url,
+      init: {
+        method: params.method,
+        headers: params.headers,
+        ...(params.body === undefined ? {} : { body: JSON.stringify(params.body) }),
+      },
       signal: controller.signal,
     });
-    const text = await response.text();
-    const payload = text ? (JSON.parse(text) as unknown) : {};
-    if (!response.ok) {
-      throw new Error(typeof payload === "string" ? payload : JSON.stringify(payload ?? null));
+    try {
+      const text = await response.text();
+      const payload = text ? (JSON.parse(text) as unknown) : {};
+      if (!response.ok) {
+        throw new Error(typeof payload === "string" ? payload : JSON.stringify(payload ?? null));
+      }
+      return payload;
+    } finally {
+      await release();
     }
-    return payload;
   } finally {
     clearTimeout(timeout);
   }
