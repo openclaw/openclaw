@@ -131,6 +131,7 @@ const PROTO_KEY = "__proto__";
 const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 4096;
 const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
 const ORIGINAL_OPENCLAW_OTEL_PRELOADED = process.env.OPENCLAW_OTEL_PRELOADED;
+const ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN = process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
 
 function createLogger() {
   return {
@@ -204,6 +205,7 @@ function flushDiagnosticEvents() {
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
     delete process.env.OPENCLAW_OTEL_PRELOADED;
+    delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
     telemetryState.spans.length = 0;
@@ -223,6 +225,11 @@ describe("diagnostics-otel service", () => {
       delete process.env.OPENCLAW_OTEL_PRELOADED;
     } else {
       process.env.OPENCLAW_OTEL_PRELOADED = ORIGINAL_OPENCLAW_OTEL_PRELOADED;
+    }
+    if (ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN === undefined) {
+      delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
+    } else {
+      process.env.OTEL_SEMCONV_STABILITY_OPT_IN = ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN;
     }
   });
 
@@ -776,6 +783,7 @@ describe("diagnostics-otel service", () => {
     });
     expect(modelCall?.[1]).toEqual({
       attributes: expect.not.objectContaining({
+        "gen_ai.provider.name": expect.anything(),
         "openclaw.callId": expect.anything(),
         "openclaw.runId": expect.anything(),
         "openclaw.sessionKey": expect.anything(),
@@ -838,6 +846,102 @@ describe("diagnostics-otel service", () => {
     });
     expect(toolSpan?.end).toHaveBeenCalledWith(expect.any(Number));
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    await service.stop?.(ctx);
+  });
+
+  test("maps model call APIs to GenAI operation names and error type", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "openai-completions",
+      durationMs: 80,
+    });
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-2",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      api: "google-generative-ai",
+      durationMs: 90,
+    });
+    emitDiagnosticEvent({
+      type: "model.call.error",
+      runId: "run-1",
+      callId: "call-3",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "openai-responses",
+      durationMs: 40,
+      errorCategory: "TimeoutError",
+    });
+    await flushDiagnosticEvents();
+
+    const modelCallAttrs = telemetryState.tracer.startSpan.mock.calls
+      .filter((call) => call[0] === "openclaw.model.call")
+      .map((call) => (call[1] as { attributes?: Record<string, unknown> }).attributes);
+    expect(modelCallAttrs).toEqual([
+      expect.objectContaining({
+        "gen_ai.system": "openai",
+        "gen_ai.request.model": "gpt-5.4",
+        "gen_ai.operation.name": "text_completion",
+      }),
+      expect.objectContaining({
+        "gen_ai.system": "google",
+        "gen_ai.request.model": "gemini-2.5-flash",
+        "gen_ai.operation.name": "generate_content",
+      }),
+      expect.objectContaining({
+        "gen_ai.system": "openai",
+        "gen_ai.request.model": "gpt-5.4",
+        "gen_ai.operation.name": "chat",
+        "error.type": "TimeoutError",
+      }),
+    ]);
+    await service.stop?.(ctx);
+  });
+
+  test("uses latest GenAI provider attribute only when semconv opt-in is set", async () => {
+    process.env.OTEL_SEMCONV_STABILITY_OPT_IN = "http,gen_ai_latest_experimental";
+
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "openai-completions",
+      durationMs: 80,
+    });
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    expect(modelCall?.[1]).toMatchObject({
+      attributes: {
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": "gpt-5.4",
+        "gen_ai.operation.name": "text_completion",
+      },
+    });
+    expect(modelCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "gen_ai.system": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
     await service.stop?.(ctx);
   });
 

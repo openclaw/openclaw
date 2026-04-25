@@ -50,6 +50,8 @@ const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
 const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
+const OTEL_SEMCONV_STABILITY_OPT_IN_ENV = "OTEL_SEMCONV_STABILITY_OPT_IN";
+const GEN_AI_LATEST_EXPERIMENTAL_OPT_IN = "gen_ai_latest_experimental";
 
 type OtelContentCapturePolicy = {
   inputMessages: boolean;
@@ -64,6 +66,10 @@ type MessageDeliveryDiagnosticEvent = Extract<
   {
     type: "message.delivery.started" | "message.delivery.completed" | "message.delivery.error";
   }
+>;
+type ModelCallLifecycleDiagnosticEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "model.call.completed" | "model.call.error" }
 >;
 
 const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
@@ -133,8 +139,49 @@ function lowCardinalityAttr(value: string | undefined, fallback = "unknown"): st
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
 }
 
-function genAiOperationName(api: string | undefined): "chat" | "text_completion" {
-  return api === "completions" ? "text_completion" : "chat";
+function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
+  return (
+    value
+      ?.split(",")
+      .map((part) => part.trim())
+      .includes(optIn) ?? false
+  );
+}
+
+function emitLatestGenAiSemconv(): boolean {
+  return hasOtelSemconvOptIn(
+    process.env[OTEL_SEMCONV_STABILITY_OPT_IN_ENV],
+    GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
+  );
+}
+
+function genAiOperationName(
+  api: string | undefined,
+): "chat" | "generate_content" | "text_completion" {
+  const normalized = api?.trim().toLowerCase();
+  if (!normalized) {
+    return "chat";
+  }
+  if (normalized === "completions" || normalized.endsWith("-completions")) {
+    return "text_completion";
+  }
+  if (normalized === "generate_content" || normalized.includes("generative-ai")) {
+    return "generate_content";
+  }
+  return "chat";
+}
+
+function assignGenAiModelCallAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: ModelCallLifecycleDiagnosticEvent,
+): void {
+  if (emitLatestGenAiSemconv()) {
+    attrs["gen_ai.provider.name"] = evt.provider;
+  } else {
+    attrs["gen_ai.system"] = evt.provider;
+  }
+  attrs["gen_ai.request.model"] = evt.model;
+  attrs["gen_ai.operation.name"] = genAiOperationName(evt.api);
 }
 
 function clampOtelLogText(value: string, maxChars: number): string {
@@ -1066,9 +1113,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
-      const modelCallMetricAttrs = (
-        evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" | "model.call.error" }>,
-      ) => ({
+      const modelCallMetricAttrs = (evt: ModelCallLifecycleDiagnosticEvent) => ({
         "openclaw.provider": evt.provider,
         "openclaw.model": evt.model,
         "openclaw.api": lowCardinalityAttr(evt.api),
@@ -1086,10 +1131,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const spanAttrs: Record<string, string | number | boolean> = {
           "openclaw.provider": evt.provider,
           "openclaw.model": evt.model,
-          "gen_ai.system": evt.provider,
-          "gen_ai.request.model": evt.model,
-          "gen_ai.operation.name": genAiOperationName(evt.api),
         };
+        assignGenAiModelCallAttrs(spanAttrs, evt);
         if (evt.api) {
           spanAttrs["openclaw.api"] = evt.api;
         }
@@ -1123,10 +1166,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.provider": evt.provider,
           "openclaw.model": evt.model,
           "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other"),
-          "gen_ai.system": evt.provider,
-          "gen_ai.request.model": evt.model,
-          "gen_ai.operation.name": genAiOperationName(evt.api),
+          "error.type": lowCardinalityAttr(evt.errorCategory, "other"),
         };
+        assignGenAiModelCallAttrs(spanAttrs, evt);
         if (evt.api) {
           spanAttrs["openclaw.api"] = evt.api;
         }
