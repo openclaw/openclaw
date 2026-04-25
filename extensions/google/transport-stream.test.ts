@@ -175,16 +175,13 @@ describe("google transport stream", () => {
       throw new Error("Expected Google transport request body to be serialized JSON");
     }
     const payload = JSON.parse(requestBody) as Record<string, unknown>;
-    expect(payload.systemInstruction).toEqual({
-      parts: [{ text: "Follow policy." }],
-    });
     expect(payload.cachedContent).toBe("cachedContents/request-cache");
+    expect(payload.systemInstruction).toBeUndefined();
     expect(payload.generationConfig).toMatchObject({
       thinkingConfig: { includeThoughts: true, thinkingLevel: "HIGH" },
     });
-    expect(payload.toolConfig).toMatchObject({
-      functionCallingConfig: { mode: "AUTO" },
-    });
+    expect(payload.tools).toBeUndefined();
+    expect(payload.toolConfig).toBeUndefined();
     expect(result).toMatchObject({
       api: "google-generative-ai",
       provider: "google",
@@ -513,5 +510,44 @@ describe("google transport stream", () => {
     );
 
     expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
+  });
+
+  it("omits prompt and tool request settings when cachedContent is used", () => {
+    const model = {
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+      api: "google-generative-ai",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"google-generative-ai">;
+
+    const params = buildGoogleGenerativeAiParams(
+      model,
+      {
+        systemPrompt: "Follow policy.",
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: { type: "object" },
+          },
+        ],
+      } as never,
+      {
+        cachedContent: "cachedContents/prebuilt-context",
+        toolChoice: "auto",
+      },
+    );
+
+    expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
+    expect(params.systemInstruction).toBeUndefined();
+    expect(params.tools).toBeUndefined();
+    expect(params.toolConfig).toBeUndefined();
   });
 });

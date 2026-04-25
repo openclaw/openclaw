@@ -481,7 +481,9 @@ export function buildGoogleGenerativeAiParams(
   if (Object.keys(generationConfig).length > 0) {
     params.generationConfig = generationConfig;
   }
-  if (context.systemPrompt) {
+  const usesCachedContent =
+    typeof params.cachedContent === "string" && params.cachedContent.length > 0;
+  if (!usesCachedContent && context.systemPrompt) {
     params.systemInstruction = {
       parts: [
         {
@@ -490,7 +492,7 @@ export function buildGoogleGenerativeAiParams(
       ],
     };
   }
-  if (context.tools?.length) {
+  if (!usesCachedContent && context.tools?.length) {
     params.tools = convertGoogleTools(context.tools);
     const toolChoice = mapToolChoice(options?.toolChoice);
     if (toolChoice) {

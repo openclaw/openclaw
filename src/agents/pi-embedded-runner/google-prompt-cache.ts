@@ -407,6 +407,9 @@ export async function prepareGooglePromptCacheStreamFn(
       options,
       (payload) => {
         payload.cachedContent = cachedContent;
+        delete payload.systemInstruction;
+        delete payload.tools;
+        delete payload.toolConfig;
       },
     );
 }

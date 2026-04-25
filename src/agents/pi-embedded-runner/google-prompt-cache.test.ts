@@ -80,6 +80,30 @@ function createCapturingStreamFn(result = "stream") {
   };
 }
 
+function createConflictingPayloadStreamFn(result = "stream") {
+  let capturedPayload: Record<string, unknown> | undefined;
+  const streamFn = vi.fn(
+    (
+      model: Parameters<StreamFn>[0],
+      _context: Parameters<StreamFn>[1],
+      options: Parameters<StreamFn>[2],
+    ) => {
+      const payload: Record<string, unknown> = {
+        systemInstruction: { parts: [{ text: "Follow policy." }] },
+        tools: [{ functionDeclarations: [{ name: "lookup" }] }],
+        toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+      };
+      void options?.onPayload?.(payload, model);
+      capturedPayload = payload;
+      return result as never;
+    },
+  );
+  return {
+    streamFn,
+    getCapturedPayload: () => capturedPayload,
+  };
+}
+
 function preparePromptCacheStream(params: {
   fetchMock: ReturnType<typeof vi.fn>;
   now: number;
@@ -172,9 +196,39 @@ describe("google prompt cache", () => {
     expect(getCapturedPayload()).toMatchObject({
       cachedContent: "cachedContents/system-cache-1",
     });
+    expect(getCapturedPayload()?.systemInstruction).toBeUndefined();
+    expect(getCapturedPayload()?.tools).toBeUndefined();
+    expect(getCapturedPayload()?.toolConfig).toBeUndefined();
     expect(entries).toHaveLength(1);
     expect(entries[0]?.customType).toBe("openclaw.google-prompt-cache");
     expect((entries[0]?.data as { status?: string; cachedContent?: string })?.status).toBe("ready");
+  });
+
+  it("removes GenerateContent fields that conflict with managed cachedContent", async () => {
+    const now = 1_500_000;
+    const sessionManager = makeSessionManager();
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-conflict",
+      expireTime: new Date(now + 3_600_000).toISOString(),
+    });
+    const { streamFn: innerStreamFn, getCapturedPayload } = createConflictingPayloadStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    void wrapped?.(
+      makeGoogleModel(),
+      { systemPrompt: "Follow policy.", messages: [] } as never,
+      {} as never,
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      cachedContent: "cachedContents/system-cache-conflict",
+    });
   });
 
   it("reuses a persisted cache entry without creating a second cache", async () => {
