@@ -32,7 +32,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
-const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
@@ -662,45 +661,34 @@ async function importInstalledDistModule(params, distPath) {
 }
 
 export async function runPluginRegistryPostinstallMigration(params = {}) {
-  const env = params.env ?? process.env;
   const log = params.log ?? console;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  if (env?.[DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]?.trim()) {
-    return { status: "disabled" };
-  }
 
   try {
-    const [configModule, registryModule] = await Promise.all([
-      importInstalledDistModule(params, "dist/config/config.js"),
-      importInstalledDistModule(params, "dist/plugins/plugin-registry.js"),
-    ]);
-    if (!configModule || !registryModule) {
+    const migrationModule = await importInstalledDistModule(
+      params,
+      "dist/commands/doctor/shared/plugin-registry-migration.js",
+    );
+    if (!migrationModule) {
       return { status: "skipped", reason: "missing-dist-entry" };
     }
-    const readConfig =
-      typeof configModule.readBestEffortConfig === "function"
-        ? configModule.readBestEffortConfig
-        : configModule.loadConfig;
-    if (
-      typeof readConfig !== "function" ||
-      typeof registryModule.ensurePluginRegistryMigrated !== "function"
-    ) {
+    if (typeof migrationModule.migratePluginRegistryForInstall !== "function") {
       return { status: "skipped", reason: "missing-dist-contract" };
     }
 
-    const config = await readConfig();
-    const inspection = await registryModule.ensurePluginRegistryMigrated({
-      config,
-      env,
+    const result = await migrationModule.migratePluginRegistryForInstall({
+      env: params.env ?? process.env,
       packageRoot,
     });
-    if (inspection.migrated) {
-      log.log(
-        `[postinstall] migrated plugin registry: ${inspection.current.plugins.length} plugin(s) indexed`,
-      );
-      return { status: "migrated", inspection };
+    for (const warning of result.preflight?.deprecationWarnings ?? []) {
+      log.warn(`[postinstall] ${warning}`);
     }
-    return { status: "fresh", inspection };
+    if (result.migrated) {
+      log.log(
+        `[postinstall] migrated plugin registry: ${result.current.plugins.length} plugin(s) indexed`,
+      );
+    }
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`[postinstall] could not migrate plugin registry: ${message}`);

@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
   getPluginRecord,
-  ensurePluginRegistryMigrated,
   inspectPluginRegistry,
   isPluginEnabled,
   listPluginContributionIds,
@@ -183,38 +182,6 @@ describe("plugin registry facade", () => {
       state: "fresh",
       refreshReasons: [],
       persisted: {
-        plugins: [expect.objectContaining({ pluginId: "demo" })],
-      },
-    });
-  });
-
-  it("migrates missing persisted registry state from legacy discovery inputs", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-    const env = hermeticEnv();
-
-    await expect(
-      ensurePluginRegistryMigrated({ stateDir, candidates: [candidate], env }),
-    ).resolves.toMatchObject({
-      state: "missing",
-      refreshReasons: ["missing"],
-      migrated: true,
-      current: {
-        refreshReason: "migration",
-        migrationVersion: 1,
-        plugins: [expect.objectContaining({ pluginId: "demo", enabled: true })],
-      },
-    });
-
-    await expect(
-      inspectPluginRegistry({ stateDir, candidates: [candidate], env }),
-    ).resolves.toMatchObject({
-      state: "fresh",
-      refreshReasons: [],
-      persisted: {
-        refreshReason: "migration",
         plugins: [expect.objectContaining({ pluginId: "demo" })],
       },
     });
