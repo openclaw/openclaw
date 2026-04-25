@@ -17,10 +17,10 @@ MiniMax also provides:
 
 Provider split:
 
-| Provider ID      | Auth    | Capabilities                                                    |
-| ---------------- | ------- | --------------------------------------------------------------- |
-| `minimax`        | API key | Text, image generation, image understanding, speech, web search |
-| `minimax-portal` | OAuth   | Text, image generation, image understanding, speech             |
+| Provider ID      | Auth    | Capabilities                                                                                        |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------------- |
+| `minimax`        | API key | Text, image generation, music generation, video generation, image understanding, speech, web search |
+| `minimax-portal` | OAuth   | Text, image generation, music generation, video generation, image understanding, speech             |
 
 ## Built-in catalog
 
@@ -286,10 +286,11 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
 
 ### Music generation
 
-The bundled `minimax` plugin also registers music generation through the shared
-`music_generate` tool.
+The bundled MiniMax plugin registers music generation through the shared
+`music_generate` tool for both `minimax` and `minimax-portal`.
 
 - Default music model: `minimax/music-2.6`
+- OAuth music model: `minimax-portal/music-2.6`
 - Also supports `minimax/music-2.5` and `minimax/music-2.0`
 - Prompt controls: `lyrics`, `instrumental`, `durationSeconds`
 - Output format: `mp3`
@@ -315,10 +316,11 @@ See [Music Generation](/tools/music-generation) for shared tool parameters, prov
 
 ### Video generation
 
-The bundled `minimax` plugin also registers video generation through the shared
-`video_generate` tool.
+The bundled MiniMax plugin registers video generation through the shared
+`video_generate` tool for both `minimax` and `minimax-portal`.
 
 - Default video model: `minimax/MiniMax-Hailuo-2.3`
+- OAuth video model: `minimax-portal/MiniMax-Hailuo-2.3`
 - Modes: text-to-video and single-image reference flows
 - Supports `aspectRatio` and `resolution`
 
