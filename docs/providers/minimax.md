@@ -256,6 +256,12 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
   MP3 to 48kHz Opus with `ffmpeg`, because the Feishu/Lark file API only
   accepts `file_type: "opus"` for native audio messages.
 
+| Setting                                  | Env var                | Default                       | Description                      |
+| ---------------------------------------- | ---------------------- | ----------------------------- | -------------------------------- |
+| `messages.tts.providers.minimax.baseUrl` | `MINIMAX_API_HOST`     | `https://api.minimax.io`      | MiniMax T2A API host.            |
+| `messages.tts.providers.minimax.model`   | `MINIMAX_TTS_MODEL`    | `speech-2.8-hd`               | TTS model id.                    |
+| `messages.tts.providers.minimax.voiceId` | `MINIMAX_TTS_VOICE_ID` | `English_expressive_narrator` | Voice id used for speech output. |
+
 ### Music generation
 
 The bundled `minimax` plugin also registers music generation through the shared
