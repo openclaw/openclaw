@@ -60,4 +60,15 @@ describe("sessionsCommand model resolution", () => {
     );
     expect(model).toBe("gpt-5.4");
   });
+
+  it("normalizes provider alias prefixes for display overrides", async () => {
+    const model = await resolveSubagentModel(
+      {
+        providerOverride: "z-ai",
+        modelOverride: "z-ai/deepseek-chat",
+      },
+      "subagent-3",
+    );
+    expect(model).toBe("deepseek-chat");
+  });
 });
