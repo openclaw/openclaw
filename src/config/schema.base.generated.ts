@@ -18029,6 +18029,38 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
                 },
+                session: {
+                  type: "object",
+                  properties: {
+                    dmScope: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "main",
+                        },
+                        {
+                          type: "string",
+                          const: "per-peer",
+                        },
+                        {
+                          type: "string",
+                          const: "per-channel-peer",
+                        },
+                        {
+                          type: "string",
+                          const: "per-account-channel-peer",
+                        },
+                      ],
+                      title: "Binding Session DM Scope",
+                      description:
+                        'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Binding Session",
+                  description:
+                    "Optional route session overrides for conversations matched by this binding. Use this when a narrow route should keep the same agent but isolate session continuity differently.",
+                },
               },
               required: ["agentId", "match"],
               additionalProperties: false,
@@ -25143,6 +25175,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Binding Agent ID",
       help: "Target agent ID that receives traffic when the corresponding binding match rule is satisfied. Use valid configured agent IDs only so routing does not fail at runtime.",
       tags: ["advanced"],
+    },
+    "bindings[].session": {
+      label: "Binding Session",
+      help: "Optional route session overrides for conversations matched by this binding. Use this when a narrow route should keep the same agent but isolate session continuity differently.",
+      tags: ["storage"],
+    },
+    "bindings[].session.dmScope": {
+      label: "Binding Session DM Scope",
+      help: 'Optional DM session scope override for this route binding. For example, keep global session.dmScope="main" while using "per-account-channel-peer" for selected direct peers.',
+      tags: ["storage"],
     },
     "bindings[].match": {
       label: "Binding Match Rule",

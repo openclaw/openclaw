@@ -346,6 +346,8 @@ export const FIELD_LABELS: Record<string, string> = {
   bindings: "Bindings",
   "bindings[].type": "Binding Type",
   "bindings[].agentId": "Binding Agent ID",
+  "bindings[].session": "Binding Session",
+  "bindings[].session.dmScope": "Binding Session DM Scope",
   "bindings[].match": "Binding Match Rule",
   "bindings[].match.channel": "Binding Channel",
   "bindings[].match.accountId": "Binding Account ID",
