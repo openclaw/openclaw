@@ -19,6 +19,7 @@ import {
   buildGoogleMeetPreflightReport,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
+  fetchLatestGoogleMeetConferenceRecord,
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
@@ -150,6 +151,7 @@ const GoogleMeetToolSchema = Type.Object({
       "setup_status",
       "resolve_space",
       "preflight",
+      "latest",
       "artifacts",
       "attendance",
       "recover_current_tab",
@@ -389,6 +391,26 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.latest",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          const meeting = resolveMeetingInput(config, raw.meeting);
+          const token = await resolveGoogleMeetTokenFromParams(config, raw);
+          respond(
+            true,
+            await fetchLatestGoogleMeetConferenceRecord({
+              accessToken: token.accessToken,
+              meeting,
+            }),
+          );
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.artifacts",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -560,6 +582,16 @@ export default definePluginEntry({
                   space,
                   previewAcknowledged: config.preview.enrollmentAcknowledged,
                   tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+                }),
+              );
+            }
+            case "latest": {
+              const meeting = resolveMeetingInput(config, raw.meeting);
+              const token = await resolveGoogleMeetTokenFromParams(config, raw);
+              return json(
+                await fetchLatestGoogleMeetConferenceRecord({
+                  accessToken: token.accessToken,
+                  meeting,
                 }),
               );
             }
