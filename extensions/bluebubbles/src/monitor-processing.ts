@@ -354,6 +354,52 @@ export function logVerbose(
   }
 }
 
+export type BlueBubblesInboundChatResolveTarget =
+  | { readonly kind: "chat_id"; readonly chatId: number }
+  | { readonly kind: "chat_identifier"; readonly chatIdentifier: string }
+  | { readonly kind: "handle"; readonly address: string };
+
+/**
+ * Builds the fallback target used to look up a chatGuid when an inbound
+ * webhook arrives without one.
+ *
+ * Critically, group inbounds that lack every chat identifier (chatGuid /
+ * chatId / chatIdentifier all missing) MUST NOT fall through to the
+ * sender's handle. Resolving a group via the sender handle yields that
+ * sender's DM chatGuid, which then poisons every downstream action keyed
+ * off it: ack reactions land in the DM, the read receipt marks the DM,
+ * and the outbound reply cache stores the wrong chat — so a later short
+ * id resolved against that cache cannot detect the cross-chat reuse and
+ * the agent's react/reply silently target the DM instead of the group.
+ *
+ * Returns null in that unresolvable group case so the caller can skip
+ * actions that need a chatGuid rather than acting on a wrong one. DMs
+ * always resolve via the sender handle (the chat is, by definition, the
+ * conversation with that handle).
+ */
+export function buildBlueBubblesInboundChatResolveTarget(params: {
+  isGroup: boolean;
+  chatId?: number | null;
+  chatIdentifier?: string | null;
+  senderId: string;
+}): BlueBubblesInboundChatResolveTarget | null {
+  if (params.isGroup) {
+    if (typeof params.chatId === "number" && Number.isFinite(params.chatId)) {
+      return { kind: "chat_id", chatId: params.chatId };
+    }
+    const trimmedIdentifier = params.chatIdentifier?.trim();
+    if (trimmedIdentifier) {
+      return { kind: "chat_identifier", chatIdentifier: trimmedIdentifier };
+    }
+    return null;
+  }
+  const trimmedSender = params.senderId.trim();
+  if (!trimmedSender) {
+    return null;
+  }
+  return { kind: "handle", address: trimmedSender };
+}
+
 function logGroupAllowlistHint(params: {
   runtime: BlueBubblesRuntimeEnv;
   reason: string;
@@ -1295,13 +1341,13 @@ async function processMessageAfterDedupe(
   });
   let chatGuidForActions = chatGuid;
   if (!chatGuidForActions && baseUrl && password) {
-    const resolveTarget =
-      isGroup && (chatId || chatIdentifier)
-        ? chatId
-          ? ({ kind: "chat_id", chatId } as const)
-          : ({ kind: "chat_identifier", chatIdentifier: chatIdentifier ?? "" } as const)
-        : ({ kind: "handle", address: message.senderId } as const);
-    if (resolveTarget.kind !== "chat_identifier" || resolveTarget.chatIdentifier) {
+    const resolveTarget = buildBlueBubblesInboundChatResolveTarget({
+      isGroup,
+      chatId,
+      chatIdentifier,
+      senderId: message.senderId,
+    });
+    if (resolveTarget) {
       chatGuidForActions =
         (await resolveChatGuidForTarget({
           baseUrl,
@@ -1309,6 +1355,12 @@ async function processMessageAfterDedupe(
           target: resolveTarget,
           allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
         })) ?? undefined;
+    } else {
+      logVerbose(
+        core,
+        runtime,
+        `cannot resolve chatGuid for group inbound (chatGuid/chatId/chatIdentifier all missing); senderId=${message.senderId}`,
+      );
     }
   }
 
