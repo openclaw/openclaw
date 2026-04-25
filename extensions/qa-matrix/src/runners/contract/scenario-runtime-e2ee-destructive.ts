@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
@@ -15,6 +15,7 @@ import {
 } from "./scenario-catalog.js";
 import {
   createMatrixQaOpenClawCliRuntime,
+  formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
@@ -273,13 +274,13 @@ function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
   const stderr = result.stderr.trim();
   const payload = stdout || stderr;
   if (!payload) {
-    throw new Error(`openclaw ${result.args.join(" ")} did not print JSON`);
+    throw new Error(`${formatMatrixQaCliCommand(result.args)} did not print JSON`);
   }
   try {
     return JSON.parse(payload) as unknown;
   } catch (error) {
     throw new Error(
-      `openclaw ${result.args.join(" ")} printed invalid JSON: ${
+      `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
         error instanceof Error ? error.message : String(error)
       }\n${redactMatrixQaCliOutput(payload)}`,
       { cause: error },
@@ -603,10 +604,14 @@ async function mutateMatrixQaCliStateLoss(params: {
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
   const recoveryKeyPath = path.join(accountRoot, "recovery-key.json");
-  const preservedRecoveryKeyPath = path.join(params.runtime.rootDir, "preserved-recovery-key.json");
+  const preservedRecoveryKeyPath = path.join(
+    params.runtime.stateDir,
+    "preserved-recovery-key.json",
+  );
   let recoveryKeyPreserved = false;
   if (params.preserveRecoveryKey) {
     await copyFile(recoveryKeyPath, preservedRecoveryKeyPath);
+    await chmod(preservedRecoveryKeyPath, 0o600).catch(() => undefined);
     recoveryKeyPreserved = true;
   }
   await rm(accountRoot, { force: true, recursive: true });

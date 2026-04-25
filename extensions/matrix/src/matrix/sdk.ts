@@ -1130,10 +1130,10 @@ export class MatrixClient {
     const [backup, deviceVerification, ownDevices] = await Promise.all([
       this.getRoomKeyBackupStatus(),
       this.getDeviceVerificationStatus(userId, deviceId),
-      this.listOwnDevices(),
+      this.listOwnDevices().catch(() => null),
     ]);
     const serverDeviceKnown = deviceId
-      ? ownDevices.some((device) => device.deviceId === deviceId)
+      ? (ownDevices?.some((device) => device.deviceId === deviceId) ?? null)
       : null;
 
     return {
