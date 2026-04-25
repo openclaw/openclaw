@@ -75,6 +75,8 @@ vi.mock("../../config/config.js", async () => {
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
   resolveDefaultAgentId: () => "main",
+  resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
+    cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
     cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
   resolveAgentEffectiveModelPrimary: () => undefined,
@@ -347,6 +349,7 @@ describe("gateway agent handler", () => {
     }
     resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
+    mocks.loadConfigReturn = {};
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
@@ -1551,6 +1554,33 @@ describe("gateway agent handler", () => {
       expect.objectContaining({
         message: expect.stringContaining("malformed session key"),
       }),
+    );
+  });
+
+  it("redacts unsafe avatar sources in agent.identity.get", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        defaults: { workspace: "/tmp/workspace" },
+        list: [{ id: "main", identity: { avatar: "/Users/test/private/avatar.png" } }],
+      },
+    };
+
+    const respond = await invokeAgentIdentityGet(
+      {
+        sessionKey: "agent:main:main",
+      },
+      { reqId: "5-avatar-source" },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        agentId: "main",
+        avatarSource: undefined,
+        avatarStatus: "none",
+        avatarReason: "outside_workspace",
+      }),
+      undefined,
     );
   });
 });
