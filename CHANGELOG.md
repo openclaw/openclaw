@@ -55,6 +55,9 @@ Docs: https://docs.openclaw.ai
   setup/join diagnostics, keep inaccessible nodes out of auto-selection, and
   preflight local BlackHole/SoX requirements before agents try local Chrome.
   Thanks @steipete.
+- Providers/MiniMax: route `image-01` requests to the dedicated image
+  generation endpoint while preserving CN endpoint selection. Fixes #61149.
+  Thanks @mushuiyu886.
 - Plugins/startup: remove ownerless bundled runtime-dependency install locks
   after a short grace window and include lock owner details when startup times
   out waiting for a plugin runtime-deps lock.
