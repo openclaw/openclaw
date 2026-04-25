@@ -42,32 +42,8 @@ export async function probeGatewayStatus(opts: {
         enabled: opts.json !== true,
       },
       async () => {
-        if (opts.requireRpc) {
-          const { callGateway } = await import("../../gateway/call.js");
-          await callGateway({
-            url: opts.url,
-            token: opts.token,
-            password: opts.password,
-            tlsFingerprint: opts.tlsFingerprint,
-            method: "status",
-            timeoutMs: opts.timeoutMs,
-            ...(opts.configPath ? { configPath: opts.configPath } : {}),
-          });
-          const { probeGateway } = await loadProbeGatewayModule();
-          const authProbe = await probeGateway({
-            url: opts.url,
-            auth: {
-              token: opts.token,
-              password: opts.password,
-            },
-            tlsFingerprint: opts.tlsFingerprint,
-            timeoutMs: opts.timeoutMs,
-            includeDetails: false,
-          }).catch(() => null);
-          return { ok: true as const, authProbe };
-        }
         const { probeGateway } = await loadProbeGatewayModule();
-        return await probeGateway({
+        const probe = await probeGateway({
           url: opts.url,
           auth: {
             token: opts.token,
@@ -75,12 +51,13 @@ export async function probeGatewayStatus(opts: {
           },
           tlsFingerprint: opts.tlsFingerprint,
           timeoutMs: opts.timeoutMs,
-          includeDetails: false,
+          includeDetails: opts.requireRpc === true,
+          detailLevel: opts.requireRpc === true ? "full" : "none",
         });
+        return probe;
       },
     );
-    const auth =
-      "auth" in result ? result.auth : "authProbe" in result ? result.authProbe?.auth : undefined;
+    const auth = result.auth;
     if (result.ok) {
       return {
         ok: true,
@@ -89,8 +66,8 @@ export async function probeGatewayStatus(opts: {
           kind === "read"
             ? auth?.capability && auth.capability !== "unknown"
               ? auth.capability
-              : // The status RPC proves read access even when a follow-up hello probe
-                // cannot recover richer scope metadata.
+              : // A successful detailed probe performs read RPCs, so it proves read access
+                // even when hello metadata cannot recover richer scope metadata.
                 "read_only"
             : auth?.capability,
         auth,

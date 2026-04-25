@@ -708,21 +708,29 @@ type ValidateConfigWithPluginsResult =
 
 export function validateConfigObjectWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: { env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: true,
+    env: params?.env,
+    pluginValidation: params?.pluginValidation ?? "full",
+  });
 }
 
 export function validateConfigObjectRawWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: { env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: false,
+    env: params?.env,
+    pluginValidation: params?.pluginValidation ?? "full",
+  });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
 ): ValidateConfigWithPluginsResult {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
@@ -730,6 +738,14 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const config = base.config;
+  if (opts.pluginValidation === "skip") {
+    return {
+      ok: true,
+      config,
+      warnings: [],
+    };
+  }
+
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
