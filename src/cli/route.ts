@@ -23,7 +23,10 @@ async function prepareRoutedCommand(params: {
   const { VERSION } = await import("../version.js");
   await applyCliExecutionStartupPresentation({
     argv: params.argv,
-    routeLogsToStderrOnSuppress: false,
+    // Route logs to stderr in --json mode so scripts that capture stdout
+    // (e.g. `openclaw agent --json --message ...`) receive only the JSON
+    // envelope, not the plugin-registration / gateway lifecycle log noise
+    // that preaction-driven commands already redirect. (#71319)
     startupPolicy,
     showBanner: process.stdout.isTTY && !startupPolicy.suppressDoctorStdout,
     version: VERSION,
