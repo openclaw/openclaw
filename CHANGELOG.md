@@ -235,6 +235,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/config: include generated Telegram channel config schema metadata in packaged plugin manifests so forum-topic/group config is accepted before runtime loads. Thanks @steipete.
 - CLI/Claude: include user-configured `mcp.servers` in the strict Claude CLI MCP bundle config, matching Pi runs while preserving the OpenClaw loopback override. Fixes #70909. Thanks @keishingu.
 - Browser/tool: keep explicit AI snapshots from inheriting the efficient role-snapshot default and preserve numeric Playwright AI refs, so `--format ai` remains a real AI snapshot path. Fixes #62550. Thanks @ly85206559.
+- Control UI/chat: collapse assistant token/model context details behind an explicit Context disclosure and show full dates in message footers, making historical transcript timing clear without noisy default metadata.
 - Gateway/config: keep in-process config patch reload comparisons on the resolved source snapshot when `${VAR}` env refs are restored on disk, avoiding false full gateway restarts for unchanged gateway/plugin secrets. Fixes #71208. Thanks @robbiethompson18.
 - Slack/messages: serialize write-client requests and whole outbound sends per target so rapid multi-message Slack replies preserve send order. Fixes #69101. (#69105) Thanks @nightq and @ztexydt-cqh.
 - Slack/messages: keep Slack bot tokens out of internal message-ordering and DM cache keys. Thanks @steipete.
