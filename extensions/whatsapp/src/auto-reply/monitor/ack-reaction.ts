@@ -72,7 +72,7 @@ export async function maybeSendAckReaction(params: {
   sendReactionWhatsApp(params.msg.chatId, params.msg.id, emoji, {
     verbose: params.verbose,
     fromMe: false,
-    participant: sender.jid ?? undefined,
+    participant: sender.jid ?? sender.lid ?? undefined,
     accountId: params.accountId,
     cfg: params.cfg,
   }).catch((err) => {

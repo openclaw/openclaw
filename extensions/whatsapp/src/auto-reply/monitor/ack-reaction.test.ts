@@ -93,6 +93,31 @@ describe("maybeSendAckReaction", () => {
     },
   );
 
+  it("uses sender LID as participant for group ack reactions when JID is unavailable", async () => {
+    await runAckReaction({
+      msg: createMessage({
+        from: "1234567890@g.us",
+        conversationId: "1234567890@g.us",
+        chatType: "group",
+        chatId: "1234567890@g.us",
+        sender: { lid: "alice@lid", name: "Alice" },
+        wasMentioned: true,
+      }),
+      sessionKey: "whatsapp:default:group:1234567890@g.us",
+      conversationId: "1234567890@g.us",
+    });
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "1234567890@g.us",
+      "msg-1",
+      "👀",
+      expect.objectContaining({
+        fromMe: false,
+        participant: "alice@lid",
+      }),
+    );
+  });
+
   it("suppresses ack reactions when reactionLevel is off", async () => {
     await runAckReaction({
       cfg: createConfig("off"),
