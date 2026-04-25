@@ -200,7 +200,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
   process to expose its CDP HTTP endpoint. `localCdpReadyTimeoutMs` is the
   follow-up budget for CDP websocket readiness after the process is discovered.
   Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
-  starts slowly. Values are capped at 120000 ms.
+  starts slowly. Values must be positive integers up to `120000` ms; invalid
+  config values are rejected.
 - `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
 - `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 
