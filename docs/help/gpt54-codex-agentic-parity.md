@@ -1,3 +1,12 @@
+---
+summary: "How OpenClaw closes agentic execution gaps for GPT-5.4 and Codex-style models"
+title: "GPT-5.4 / Codex agentic parity"
+read_when:
+  - Debugging GPT-5.4 or Codex agent behavior
+  - Comparing OpenClaw agentic behavior across frontier models
+  - Reviewing the strict-agentic, tool-schema, elevation, and replay fixes
+---
+
 # GPT-5.4 / Codex Agentic Parity in OpenClaw
 
 OpenClaw already worked well with tool-using frontier models, but GPT-5.4 and Codex-style models were still underperforming in a few practical ways:
@@ -217,3 +226,7 @@ Keep the default contract when:
 - you want the existing looser behavior
 - you are not using GPT-5-family models
 - you are testing prompts rather than runtime enforcement
+
+## Related
+
+- [GPT-5.4 / Codex parity maintainer notes](/help/gpt54-codex-agentic-parity-maintainers)

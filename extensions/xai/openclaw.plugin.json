@@ -2,6 +2,13 @@
   "id": "xai",
   "enabledByDefault": true,
   "providers": ["xai"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "xai-native",
+      "hosts": ["api.x.ai", "api.grok.x.ai"]
+    }
+  ],
+  "syntheticAuthRefs": ["xai"],
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]
   },
@@ -78,7 +85,25 @@
   "contracts": {
     "webSearchProviders": ["grok"],
     "videoGenerationProviders": ["xai"],
+    "mediaUnderstandingProviders": ["xai"],
+    "speechProviders": ["xai"],
+    "realtimeTranscriptionProviders": ["xai"],
+    "imageGenerationProviders": ["xai"],
     "tools": ["code_execution", "x_search"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "xai": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "grok-stt"
+      },
+      "autoPriority": {
+        "audio": 25
+      }
+    }
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

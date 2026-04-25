@@ -58,6 +58,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   cloudflareAiGatewayGatewayId?: string;
   customBaseUrl?: string;
   customApiKey?: string;
+  lmstudioApiKey?: string;
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
@@ -75,6 +76,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
   skipSkills?: boolean;
+  skipBootstrap?: boolean;
   skipSearch?: boolean;
   skipHealth?: boolean;
   skipUi?: boolean;

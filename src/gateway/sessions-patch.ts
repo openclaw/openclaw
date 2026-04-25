@@ -9,13 +9,13 @@ import {
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
-  formatXHighModelHint,
+  isThinkingLevelSupported,
   normalizeElevatedLevel,
   normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
-  supportsXHighThinking,
+  resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,7 +26,12 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-overrides.js";
+import {
+  applyTraceOverride,
+  applyVerboseOverride,
+  parseTraceOverride,
+  parseVerboseOverride,
+} from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -273,6 +278,15 @@ export async function applySessionsPatchToStore(params: {
     applyVerboseOverride(next, parsed.value);
   }
 
+  if ("traceLevel" in patch) {
+    const raw = patch.traceLevel;
+    const parsed = parseTraceOverride(raw);
+    if (!parsed.ok) {
+      return invalid(parsed.error);
+    }
+    applyTraceOverride(next, parsed.value);
+  }
+
   if ("reasoningLevel" in patch) {
     const raw = patch.reasoningLevel;
     if (raw === null) {
@@ -420,14 +434,29 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
-  if (next.thinkingLevel === "xhigh") {
+  if (next.thinkingLevel) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
-    if (!supportsXHighThinking(effectiveProvider, effectiveModel)) {
+    const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
+    if (!thinkingLevel) {
+      delete next.thinkingLevel;
+    } else if (
+      !isThinkingLevelSupported({
+        provider: effectiveProvider,
+        model: effectiveModel,
+        level: thinkingLevel,
+      })
+    ) {
       if ("thinkingLevel" in patch) {
-        return invalid(`thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`);
+        return invalid(
+          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|")})`,
+        );
       }
-      next.thinkingLevel = "high";
+      next.thinkingLevel = resolveSupportedThinkingLevel({
+        provider: effectiveProvider,
+        model: effectiveModel,
+        level: thinkingLevel,
+      });
     }
   }
 

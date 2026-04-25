@@ -12,6 +12,7 @@ import type {
   MemoryQmdSearchMode,
 } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CANONICAL_ROOT_MEMORY_FILENAME } from "../../memory/root-memory-files.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -89,9 +90,9 @@ const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
-  maxResults: 6,
-  maxSnippetChars: 700,
-  maxInjectedChars: 4_000,
+  maxResults: 4,
+  maxSnippetChars: 450,
+  maxInjectedChars: 2_200,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
 };
 const DEFAULT_QMD_MCPORTER: ResolvedQmdMcporterConfig = {
@@ -106,6 +107,10 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
     {
       action: "allow",
       match: { chatType: "direct" },
+    },
+    {
+      action: "allow",
+      match: { chatType: "channel" },
     },
   ],
 };
@@ -331,8 +336,7 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
+    { path: workspaceDir, pattern: CANONICAL_ROOT_MEMORY_FILENAME, base: "memory-root" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({

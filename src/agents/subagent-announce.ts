@@ -1,4 +1,10 @@
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -42,11 +48,13 @@ import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
   loadConfig: typeof loadConfig;
+  loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
 };
 
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
   loadConfig,
+  loadSubagentRegistryRuntime,
 };
 
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
@@ -123,6 +131,27 @@ function isWakeContinuationRun(runId: string): boolean {
     return false;
   }
   return stripWakeRunSuffixes(trimmed) !== trimmed;
+}
+
+function stripAndClassifyReply(text: string): string | null {
+  let result = text;
+  let didStrip = false;
+  const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
+  if (hasLeadingSilentToken) {
+    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
+    didStrip = true;
+  }
+  if (hasLeadingSilentToken || result.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
+    result = stripSilentToken(result, SILENT_REPLY_TOKEN);
+    didStrip = true;
+  }
+  if (
+    didStrip &&
+    (!result.trim() || isSilentReplyText(result, SILENT_REPLY_TOKEN) || isAnnounceSkip(result))
+  ) {
+    return null;
+  }
+  return result;
 }
 
 async function wakeSubagentRunAfterDescendants(params: {
@@ -256,7 +285,12 @@ export async function runSubagentAnnounceFlow(params: {
     if (!outcome) {
       outcome = { status: "unknown" };
     }
-
+    const failedTerminalOutcome = outcome.status === "error";
+    const allowFailedOutputCapture =
+      !failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply);
+    if (failedTerminalOutcome) {
+      reply = undefined;
+    }
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
@@ -266,7 +300,7 @@ export async function runSubagentAnnounceFlow(params: {
       | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
       | undefined;
     try {
-      subagentRegistryRuntime = await loadSubagentRegistryRuntime();
+      subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
       if (
         requesterDepth >= 1 &&
         subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
@@ -338,16 +372,18 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!childCompletionFindings) {
-      const fallbackReply = normalizeOptionalString(params.fallbackReply);
+      const fallbackReply = failedTerminalOutcome
+        ? undefined
+        : normalizeOptionalString(params.fallbackReply);
       const fallbackIsSilent =
         Boolean(fallbackReply) &&
         (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
 
-      if (!reply) {
+      if (!reply && allowFailedOutputCapture) {
         reply = await readSubagentOutput(params.childSessionKey, outcome);
       }
 
-      if (!reply?.trim()) {
+      if (!reply?.trim() && allowFailedOutputCapture) {
         reply = await readLatestSubagentOutputWithRetry({
           sessionKey: params.childSessionKey,
           maxWaitMs: params.timeoutMs,
@@ -383,9 +419,28 @@ export async function runSubagentAnnounceFlow(params: {
 
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
         if (fallbackReply && !fallbackIsSilent) {
-          reply = fallbackReply;
+          const cleaned = stripAndClassifyReply(fallbackReply);
+          if (cleaned === null) {
+            return true;
+          }
+          reply = cleaned;
         } else {
           return true;
+        }
+      } else if (reply) {
+        const cleaned = stripAndClassifyReply(reply);
+        if (cleaned === null) {
+          if (fallbackReply && !fallbackIsSilent) {
+            const cleanedFallback = stripAndClassifyReply(fallbackReply);
+            if (cleanedFallback === null) {
+              return true;
+            }
+            reply = cleanedFallback;
+          } else {
+            return true;
+          }
+        } else {
+          reply = cleaned;
         }
       }
     }

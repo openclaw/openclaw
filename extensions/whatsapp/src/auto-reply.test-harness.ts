@@ -2,7 +2,7 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
@@ -12,7 +12,12 @@ import {
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
-export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+export {
+  resetBaileysMocks,
+  resetLoadConfigMock,
+  setLoadConfigMock,
+  setRuntimeConfigSourceSnapshotMock,
+} from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyExport = any;
@@ -39,6 +44,22 @@ type WebAutoReplyMonitorHarness = {
 };
 
 export const TEST_NET_IP = "93.184.216.34";
+
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return {
+    ...actual,
+    createWaSocket: vi.fn(async () => ({
+      ev: {
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+      ws: { close: vi.fn() },
+      user: { id: "123@s.whatsapp.net" },
+    })),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -163,16 +184,27 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 
 export function createWebListenerFactoryCapture(): AnyExport {
   let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+  let capturedOptions:
+    | {
+        onMessage: (msg: WebInboundMessage) => Promise<void>;
+        debounceMs?: number;
+        selfChatMode?: boolean;
+      }
+    | undefined;
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessage) => Promise<void>;
+    debounceMs?: number;
+    selfChatMode?: boolean;
   }) => {
     capturedOnMessage = opts.onMessage;
+    capturedOptions = opts;
     return { close: vi.fn() };
   };
 
   return {
     listenerFactory,
     getOnMessage: () => capturedOnMessage,
+    getLastOptions: () => capturedOptions,
   };
 }
 

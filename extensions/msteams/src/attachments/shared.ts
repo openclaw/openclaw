@@ -1,7 +1,5 @@
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
-export { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
-import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
@@ -83,6 +81,42 @@ export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 export { isRecord };
+
+// Keep this local; importing the broad media-runtime SDK barrel pulls image/audio runtimes into
+// hot MSTeams attachment tests for one tiny estimator.
+export function estimateBase64DecodedBytes(base64: string): number {
+  let effectiveLen = 0;
+  for (let i = 0; i < base64.length; i += 1) {
+    const code = base64.charCodeAt(i);
+    if (code <= 0x20) {
+      continue;
+    }
+    effectiveLen += 1;
+  }
+
+  if (effectiveLen === 0) {
+    return 0;
+  }
+
+  let padding = 0;
+  let end = base64.length - 1;
+  while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
+    end -= 1;
+  }
+  if (end >= 0 && base64[end] === "=") {
+    padding = 1;
+    end -= 1;
+    while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
+      end -= 1;
+    }
+    if (end >= 0 && base64[end] === "=") {
+      padding = 2;
+    }
+  }
+
+  const estimated = Math.floor((effectiveLen * 3) / 4) - padding;
+  return Math.max(0, estimated);
+}
 
 /**
  * Host suffixes for SharePoint/OneDrive shared links that must be fetched via
@@ -402,6 +436,8 @@ export type MSTeamsAttachmentDownloadLogger = {
   error?: (message: string, meta?: Record<string, unknown>) => void;
 };
 
+export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];
@@ -453,7 +489,7 @@ export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress
  */
 export async function resolveAndValidateIP(
   hostname: string,
-  resolveFn?: (hostname: string) => Promise<{ address: string }>,
+  resolveFn?: MSTeamsAttachmentResolveFn,
 ): Promise<string> {
   const resolve = resolveFn ?? lookup;
   let resolved: { address: string };
@@ -490,10 +526,10 @@ export async function safeFetch(params: {
   authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const resolveFn = params.resolveFn;
+  const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
     typeof params.requestInit === "object" &&
@@ -577,7 +613,7 @@ export async function safeFetchWithPolicy(params: {
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
   return await safeFetch({
     url: params.url,

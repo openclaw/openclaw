@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import { callGateway } from "../../gateway/call.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { readLatestAssistantReply, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
@@ -16,10 +16,13 @@ import {
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = <T = unknown>(opts: CallGatewayOptions) => Promise<T>;
 
 const defaultSessionsSendA2ADeps = {
-  callGateway,
+  callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+    const { callGateway } = await import("../../gateway/call.js");
+    return callGateway<T>(opts);
+  },
 };
 
 let sessionsSendA2ADeps: {
@@ -89,7 +92,7 @@ export async function runSessionsSendA2AFlow(params: {
           message: incomingMessage,
           extraSystemPrompt: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
-          lane: AGENT_LANE_NESTED,
+          lane: resolveNestedAgentLaneForSession(currentSessionKey),
           sourceSessionKey: nextSessionKey,
           sourceChannel:
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
@@ -120,7 +123,7 @@ export async function runSessionsSendA2AFlow(params: {
       message: "Agent-to-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
-      lane: AGENT_LANE_NESTED,
+      lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",

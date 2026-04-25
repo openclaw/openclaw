@@ -51,6 +51,21 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
   }
 }
 
+export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
+  return Array.from(pluginCommands.values());
+}
+
+export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
+  pluginCommands.clear();
+  for (const command of commands) {
+    const name = normalizeOptionalLowercaseString(command.name);
+    if (!name) {
+      continue;
+    }
+    pluginCommands.set(`/${name}`, command);
+  }
+}
+
 function resolvePluginNativeName(
   command: OpenClawPluginCommandDefinition,
   provider?: string,
@@ -79,6 +94,15 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   ) {
     return [];
   }
+  return listProviderPluginCommandSpecs(provider);
+}
+
+/** Resolve plugin command specs for a provider's native naming surface without support gating. */
+export function listProviderPluginCommandSpecs(provider?: string): Array<{
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+}> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: resolvePluginNativeName(cmd, provider),
     description: cmd.description,

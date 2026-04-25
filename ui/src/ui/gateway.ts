@@ -7,6 +7,7 @@ import {
 } from "../../../src/gateway/protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
+  formatConnectErrorMessage,
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
 } from "../../../src/gateway/protocol/connect-error-details.js";
@@ -27,24 +28,36 @@ export type GatewayResponseFrame = {
   id: string;
   ok: boolean;
   payload?: unknown;
-  error?: { code: string; message: string; details?: unknown };
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+    retryable?: boolean;
+    retryAfterMs?: number;
+  };
 };
 
 export type GatewayErrorInfo = {
   code: string;
   message: string;
   details?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
 };
 
 export class GatewayRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
-    super(error.message);
+    super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
     this.details = error.details;
+    this.retryable = error.retryable === true;
+    this.retryAfterMs = error.retryAfterMs;
   }
 }
 
@@ -210,6 +223,8 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+export type GatewayEventListener = (evt: GatewayEventFrame) => void;
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
@@ -285,6 +300,7 @@ export class GatewayBrowserClient {
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private eventListeners = new Set<GatewayEventListener>();
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -478,6 +494,8 @@ export class GatewayBrowserClient {
         code: err.gatewayCode,
         message: err.message,
         details: err.details,
+        retryable: err.retryable,
+        retryAfterMs: err.retryAfterMs,
       };
     } else {
       this.pendingConnectError = undefined;
@@ -534,6 +552,9 @@ export class GatewayBrowserClient {
       }
       try {
         this.opts.onEvent?.(evt);
+        for (const listener of this.eventListeners) {
+          listener(evt);
+        }
       } catch (err) {
         console.error("[gateway] event handler error:", err);
       }
@@ -555,6 +576,8 @@ export class GatewayBrowserClient {
             code: res.error?.code ?? "UNAVAILABLE",
             message: res.error?.message ?? "request failed",
             details: res.error?.details,
+            retryable: res.error?.retryable,
+            retryAfterMs: res.error?.retryAfterMs,
           }),
         );
       }
@@ -606,6 +629,13 @@ export class GatewayBrowserClient {
     });
     this.ws.send(JSON.stringify(frame));
     return p;
+  }
+
+  addEventListener(listener: GatewayEventListener): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
   }
 
   private queueConnect() {

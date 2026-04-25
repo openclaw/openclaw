@@ -1,15 +1,25 @@
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
-  isRedactedSessionsSpawnAttachment,
-  sanitizeToolUseResultPairing,
-} from "../../session-transcript-repair.js";
-import { extractToolCallsFromAssistant } from "../../tool-call-id.js";
+  extractToolCallsFromAssistant,
+  sanitizeToolCallIdsForCloudCodeAssist,
+  type ToolCallIdMode,
+} from "../../tool-call-id.js";
+import { hasUnredactedSessionsSpawnAttachments } from "../../tool-call-shared.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
+import { wrapStreamObjectEvents } from "./stream-wrapper.js";
+
+type UnknownToolLoopGuardState = {
+  lastUnknownToolName?: string;
+  count: number;
+  countedMessages: WeakSet<object>;
+};
 
 function resolveCaseInsensitiveAllowedToolName(
   rawName: string,
@@ -243,28 +253,6 @@ function isThinkingLikeReplayBlock(block: unknown): boolean {
   }
   const type = (block as { type?: unknown }).type;
   return type === "thinking" || type === "redacted_thinking";
-}
-
-function hasUnredactedSessionsSpawnAttachments(block: ReplayToolCallBlock): boolean {
-  const rawName = typeof block.name === "string" ? block.name.trim() : "";
-  if (normalizeLowercaseStringOrEmpty(rawName) !== "sessions_spawn") {
-    return false;
-  }
-  for (const payload of [block.arguments, block.input]) {
-    if (!payload || typeof payload !== "object") {
-      continue;
-    }
-    const attachments = (payload as { attachments?: unknown }).attachments;
-    if (!Array.isArray(attachments)) {
-      continue;
-    }
-    for (const attachment of attachments) {
-      if (!isRedactedSessionsSpawnAttachment(attachment)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
@@ -599,20 +587,10 @@ function trimWhitespaceFromToolCallNamesInMessage(
   message: unknown,
   allowedToolNames?: Set<string>,
 ): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
+  visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
     if (!isToolCallBlockType(typedBlock.type)) {
-      continue;
+      return;
     }
     const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
     if (typeof typedBlock.name === "string") {
@@ -620,52 +598,197 @@ function trimWhitespaceFromToolCallNamesInMessage(
       if (normalized !== typedBlock.name) {
         typedBlock.name = normalized;
       }
-      continue;
+      return;
     }
     const inferred = inferToolNameFromToolCallId(rawId, allowedToolNames);
     if (inferred) {
       typedBlock.name = inferred;
     }
-  }
+  });
   normalizeToolCallIdsInMessage(message);
+}
+
+function classifyToolCallMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+):
+  | { kind: "none" }
+  | { kind: "allowed" }
+  | { kind: "incomplete" }
+  | { kind: "unknown"; toolName: string } {
+  if (!message || typeof message !== "object" || !allowedToolNames || allowedToolNames.size === 0) {
+    return { kind: "none" };
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return { kind: "none" };
+  }
+
+  let unknownToolName: string | undefined;
+  let sawToolCall = false;
+  let sawAllowedToolCall = false;
+  let sawIncompleteToolCall = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; name?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
+      continue;
+    }
+    sawToolCall = true;
+    const rawName = typeof typedBlock.name === "string" ? typedBlock.name.trim() : "";
+    if (!rawName) {
+      sawIncompleteToolCall = true;
+      continue;
+    }
+    if (resolveExactAllowedToolName(rawName, allowedToolNames)) {
+      sawAllowedToolCall = true;
+      continue;
+    }
+    const normalizedUnknownToolName = normalizeToolName(rawName);
+    if (!unknownToolName) {
+      unknownToolName = normalizedUnknownToolName;
+      continue;
+    }
+    if (unknownToolName !== normalizedUnknownToolName) {
+      sawIncompleteToolCall = true;
+    }
+  }
+
+  if (!sawToolCall) {
+    return { kind: "none" };
+  }
+  if (sawAllowedToolCall) {
+    return { kind: "allowed" };
+  }
+  if (sawIncompleteToolCall) {
+    return { kind: "incomplete" };
+  }
+  return unknownToolName ? { kind: "unknown", toolName: unknownToolName } : { kind: "incomplete" };
+}
+
+function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  (message as { content?: unknown }).content = [
+    {
+      type: "text",
+      text: `I can't use the tool "${toolName}" here because it isn't available. I need to stop retrying it and answer without that tool.`,
+    },
+  ];
+}
+
+function guardUnknownToolLoopInMessage(
+  message: unknown,
+  state: UnknownToolLoopGuardState,
+  params: {
+    allowedToolNames?: Set<string>;
+    threshold?: number;
+    countAttempt: boolean;
+    resetOnAllowedTool?: boolean;
+    resetOnMissingUnknownTool?: boolean;
+  },
+): boolean {
+  const threshold = params.threshold;
+  if (threshold === undefined || threshold <= 0) {
+    return false;
+  }
+
+  const toolCallState = classifyToolCallMessage(message, params.allowedToolNames);
+  if (toolCallState.kind === "allowed") {
+    if (params.resetOnAllowedTool === true) {
+      state.lastUnknownToolName = undefined;
+      state.count = 0;
+    }
+    return false;
+  }
+  if (toolCallState.kind !== "unknown") {
+    if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
+      state.lastUnknownToolName = undefined;
+      state.count = 0;
+    }
+    return false;
+  }
+  const unknownToolName = toolCallState.toolName;
+
+  if (!params.countAttempt) {
+    if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
+      rewriteUnknownToolLoopMessage(message, unknownToolName);
+    }
+    return false;
+  }
+
+  if (message && typeof message === "object") {
+    if (state.countedMessages.has(message)) {
+      if (state.lastUnknownToolName === unknownToolName && state.count > threshold) {
+        rewriteUnknownToolLoopMessage(message, unknownToolName);
+      }
+      return true;
+    }
+    state.countedMessages.add(message);
+  }
+
+  if (state.lastUnknownToolName === unknownToolName) {
+    state.count += 1;
+  } else {
+    state.lastUnknownToolName = unknownToolName;
+    state.count = 1;
+  }
+
+  if (state.count > threshold) {
+    rewriteUnknownToolLoopMessage(message, unknownToolName);
+  }
+  return true;
 }
 
 function wrapStreamTrimToolCallNames(
   stream: ReturnType<typeof streamSimple>,
   allowedToolNames?: Set<string>,
+  options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
 ): ReturnType<typeof streamSimple> {
+  const unknownToolGuardState = options?.state ?? {
+    count: 0,
+    countedMessages: new WeakSet<object>(),
+  };
+  let streamAttemptAlreadyCounted = false;
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
     trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
+    guardUnknownToolLoopInMessage(message, unknownToolGuardState, {
+      allowedToolNames,
+      threshold: options?.unknownToolThreshold,
+      countAttempt: !streamAttemptAlreadyCounted,
+      resetOnAllowedTool: true,
+    });
     return message;
   };
 
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as {
-              partial?: unknown;
-              message?: unknown;
-            };
-            trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
-            trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
-          }
-          return result;
+  wrapStreamObjectEvents(stream, (event) => {
+    trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+    if (event.message && typeof event.message === "object") {
+      const countedStreamAttempt = guardUnknownToolLoopInMessage(
+        event.message,
+        unknownToolGuardState,
+        {
+          allowedToolNames,
+          threshold: options?.unknownToolThreshold,
+          countAttempt: !streamAttemptAlreadyCounted,
+          resetOnAllowedTool: true,
+          resetOnMissingUnknownTool: false,
         },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
+      );
+      streamAttemptAlreadyCounted ||= countedStreamAttempt;
+    }
+    guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
+      allowedToolNames,
+      threshold: options?.unknownToolThreshold,
+      countAttempt: false,
+    });
+  });
 
   return stream;
 }
@@ -673,16 +796,46 @@ function wrapStreamTrimToolCallNames(
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
+  guardOptions?: { unknownToolThreshold?: number },
 ): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
+  const unknownToolGuardState: UnknownToolLoopGuardState = {
+    count: 0,
+    countedMessages: new WeakSet<object>(),
+  };
+  return (model, context, streamOptions) => {
+    const maybeStream = baseFn(model, context, streamOptions);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamTrimToolCallNames(stream, allowedToolNames),
+        wrapStreamTrimToolCallNames(stream, allowedToolNames, {
+          unknownToolThreshold: guardOptions?.unknownToolThreshold,
+          state: unknownToolGuardState,
+        }),
       );
     }
-    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
+    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames, {
+      unknownToolThreshold: guardOptions?.unknownToolThreshold,
+      state: unknownToolGuardState,
+    });
   };
+}
+
+export function sanitizeReplayToolCallIdsForStream(params: {
+  messages: AgentMessage[];
+  mode: ToolCallIdMode;
+  allowedToolNames?: Set<string>;
+  preserveNativeAnthropicToolUseIds?: boolean;
+  preserveReplaySafeThinkingToolCallIds?: boolean;
+  repairToolUseResultPairing?: boolean;
+}): AgentMessage[] {
+  const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
+    preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+    preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
+    allowedToolNames: params.allowedToolNames,
+  });
+  if (!params.repairToolUseResultPairing) {
+    return sanitized;
+  }
+  return sanitizeToolUseResultPairing(sanitized);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(

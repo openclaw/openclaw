@@ -30,6 +30,17 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.timeoutSeconds).toBe(300);
   });
 
+  it("keeps explicit probeAgent config", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        probeAgent: "claude",
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.probeAgent).toBe("claude");
+  });
+
   it("accepts agent command overrides", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
@@ -47,6 +58,37 @@ describe("embedded acpx plugin config", () => {
     });
   });
 
+  it("leaves probeAgent undefined by default so the runtime picks its built-in probe agent", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: undefined,
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.probeAgent).toBeUndefined();
+  });
+
+  it("carries an explicit probeAgent through to the resolved plugin config, trimmed and lowercased", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        probeAgent: "  OpenCode  ",
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.probeAgent).toBe("opencode");
+  });
+
+  it("rejects an empty probeAgent string", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          probeAgent: "",
+        },
+        workspaceDir: "/tmp/openclaw-acpx",
+      }),
+    ).toThrow(/probeAgent must be a non-empty string/);
+  });
+
   it("injects the built-in plugin-tools MCP server only when explicitly enabled", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
@@ -56,6 +98,21 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-plugin-tools"];
+    expect(server).toBeDefined();
+    expect(server.command).toBe(process.execPath);
+    expect(Array.isArray(server.args)).toBe(true);
+    expect(server.args?.length).toBeGreaterThan(0);
+  });
+
+  it("injects the built-in OpenClaw tools MCP server only when explicitly enabled", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        openClawToolsMcpBridge: true,
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    const server = resolved.mcpServers["openclaw-tools"];
     expect(server).toBeDefined();
     expect(server.command).toBe(process.execPath);
     expect(Array.isArray(server.args)).toBe(true);
@@ -74,11 +131,13 @@ describe("embedded acpx plugin config", () => {
       properties: expect.objectContaining({
         cwd: expect.any(Object),
         stateDir: expect.any(Object),
+        probeAgent: expect.any(Object),
         timeoutSeconds: expect.objectContaining({
           default: 120,
         }),
         agents: expect.any(Object),
         mcpServers: expect.any(Object),
+        openClawToolsMcpBridge: expect.any(Object),
       }),
     });
   });

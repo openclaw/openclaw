@@ -3,10 +3,8 @@ summary: "Slash commands: text vs native, config, and supported commands"
 read_when:
   - Using or configuring chat commands
   - Debugging command routing or permissions
-title: "Slash Commands"
+title: "Slash commands"
 ---
-
-# Slash commands
 
 Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
 The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
@@ -14,7 +12,7 @@ The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
-- **Directives**: `/think`, `/fast`, `/verbose`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
+- **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
   - Directives are stripped from the message before the model sees it.
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
@@ -69,6 +67,7 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.restart` (default `true`) enables `/restart` plus gateway restart tool actions.
 - `commands.ownerAllowFrom` (optional) sets the explicit owner allowlist for owner-only command/tool surfaces. This is separate from `commands.allowFrom`.
+- Per-channel `channels.<channel>.commands.enforceOwnerForCommands` (optional, default `false`) makes owner-only commands require **owner identity** to run on that surface. When `true`, the sender must either match a resolved owner candidate (for example an entry in `commands.ownerAllowFrom` or provider-native owner metadata) or hold internal `operator.admin` scope on an internal message channel. A wildcard entry in channel `allowFrom`, or an empty/unresolved owner-candidate list, is **not** sufficient — owner-only commands fail closed on that channel. Leave this off if you want owner-only commands gated only by `ownerAllowFrom` and the standard command allowlists.
 - `commands.ownerDisplay` controls how owner ids appear in the system prompt: `raw` or `hash`.
 - `commands.ownerDisplaySecret` optionally sets the HMAC secret used when `commands.ownerDisplay="hash"`.
 - `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
@@ -90,11 +89,13 @@ Current source-of-truth:
 Built-in commands available today:
 
 - `/new [model]` starts a new session; `/reset` is the reset alias.
+- `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
 - `/compact [instructions]` compacts the session context. See [/concepts/compaction](/concepts/compaction).
 - `/stop` aborts the current run.
 - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
-- `/think <off|minimal|low|medium|high|xhigh>` sets the thinking level. Aliases: `/thinking`, `/t`.
+- `/think <level>` sets the thinking level. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
 - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
+- `/trace on|off` toggles plugin trace output for the current session.
 - `/fast [status|on|off]` shows or sets fast mode.
 - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
 - `/elevated [on|off|ask|full]` toggles elevated mode. Alias: `/elev`.
@@ -105,10 +106,12 @@ Built-in commands available today:
 - `/help` shows the short help summary.
 - `/commands` shows the generated command catalog.
 - `/tools [compact|verbose]` shows what the current agent can use right now.
-- `/status` shows runtime status, including provider usage/quota when available.
+- `/status` shows execution/runtime status, including `Execution`/`Runtime` labels and provider usage/quota when available.
+- `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
 - `/tasks` lists active/recent background tasks for the current session.
 - `/context [list|detail|json]` explains how context is assembled.
 - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
+- `/export-trajectory [path]` exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Alias: `/trajectory`.
 - `/whoami` shows your sender id. Alias: `/id`.
 - `/skill <name> [input]` runs a skill by name.
 - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
@@ -183,14 +186,18 @@ Notes:
 - Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
+- `/trace` is narrower than `/verbose`: it only reveals plugin-owned trace/debug lines and keeps normal verbose tool chatter off.
 - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
 - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
 - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
-- `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
+- `/reasoning`, `/verbose`, and `/trace` are risky in group settings: they may reveal internal reasoning, tool output, or plugin diagnostics you did not intend to expose. Prefer leaving them off, especially in group chats.
 - `/model` persists the new session model immediately.
 - If the agent is idle, the next run uses it right away.
 - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
 - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
+- In the local TUI, `/crestodian [request]` returns from the normal agent TUI to
+  Crestodian. This is separate from message-channel rescue mode and does not
+  grant remote config authority.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
 - **Group mention gating:** command-only messages from allowlisted senders bypass mention requirements.
 - **Inline shortcuts (allowlisted senders only):** certain commands also work when embedded in a normal message and are stripped before the model sees the remaining text.
@@ -224,6 +231,7 @@ of treating `/tools` as a static catalog.
 
 - **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` for the current model provider when usage tracking is enabled. OpenClaw normalizes provider windows to `% left`; for MiniMax, remaining-only percent fields are inverted before display, and `model_remains` responses prefer the chat-model entry plus a model-tagged plan label.
 - **Token/cache lines** in `/status` can fall back to the latest transcript usage entry when the live session snapshot is sparse. Existing nonzero live values still win, and transcript fallback can also recover the active runtime model label plus a larger prompt-oriented total when stored totals are missing or smaller.
+- **Execution vs runtime:** `/status` reports `Execution` for the effective sandbox path and `Runtime` for who is actually running the session: `OpenClaw Pi Default`, `OpenAI Codex`, a CLI backend, or an ACP backend.
 - **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
 - `/model status` is about **models/auth/endpoints**, not usage.
 
@@ -267,6 +275,27 @@ Notes:
 
 - Overrides apply immediately to new config reads, but do **not** write to `openclaw.json`.
 - Use `/debug reset` to clear all overrides and return to the on-disk config.
+
+## Plugin trace output
+
+`/trace` lets you toggle **session-scoped plugin trace/debug lines** without turning on full verbose mode.
+
+Examples:
+
+```text
+/trace
+/trace on
+/trace off
+```
+
+Notes:
+
+- `/trace` with no argument shows the current session trace state.
+- `/trace on` enables plugin trace lines for the current session.
+- `/trace off` disables them again.
+- Plugin trace lines can appear in `/status` and as a follow-up diagnostic message after the normal assistant reply.
+- `/trace` does not replace `/debug`; `/debug` still manages runtime-only config overrides.
+- `/trace` does not replace `/verbose`; normal verbose tool/status output still belongs to `/verbose`.
 
 ## Config updates
 
@@ -359,3 +388,9 @@ Example:
 
 See [BTW Side Questions](/tools/btw) for the full behavior and client UX
 details.
+
+## Related
+
+- [Skills](/tools/skills)
+- [Skills config](/tools/skills-config)
+- [Creating skills](/tools/creating-skills)

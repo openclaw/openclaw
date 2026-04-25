@@ -25,6 +25,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   bootstrapCode: 1,
   kickstartError: "",
+  kickstartCode: 1,
   kickstartFailuresRemaining: 0,
   disableError: "",
   disableCode: 1,
@@ -39,6 +40,7 @@ const state = vi.hoisted(() => ({
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
+  fileWrites: [] as Array<{ path: string; data: string }>,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   isCurrentProcessLaunchdServiceLabel: vi.fn<(label: string) => boolean>(() => false),
@@ -50,6 +52,30 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
 );
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
+
+function createDefaultLaunchdEnv(): Record<string, string | undefined> {
+  return {
+    HOME: "/Users/test",
+    OPENCLAW_PROFILE: "default",
+  };
+}
+
+async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaunchAgent>[0]) {
+  vi.useFakeTimers();
+  try {
+    const stopPromise = stopLaunchAgent(args)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+    await vi.runAllTimersAsync();
+    const result = await stopPromise;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return;
+  } finally {
+    vi.useRealTimers();
+  }
+}
 
 function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefined>) {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
@@ -68,6 +94,17 @@ function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefi
   expect(enableIndex).toBeLessThan(bootstrapIndex);
 
   return { domain, label, serviceId, bootstrapIndex };
+}
+
+async function expectRestartLaunchAgentKickstartFailure(
+  env: Record<string, string | undefined>,
+): Promise<void> {
+  await expect(
+    restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    }),
+  ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 }
 
 function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
@@ -142,7 +179,7 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "kickstart") {
       if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
         state.kickstartFailuresRemaining -= 1;
-        return { stdout: "", stderr: state.kickstartError, code: 1 };
+        return { stdout: "", stderr: state.kickstartError, code: state.kickstartCode };
       }
       state.serviceLoaded = true;
       state.serviceRunning = true;
@@ -201,12 +238,21 @@ vi.mock("node:fs/promises", async () => {
       }
       throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
     }),
+    readFile: vi.fn(async (p: string) => {
+      const key = p;
+      const data = state.files.get(key);
+      if (data !== undefined) {
+        return data;
+      }
+      throw new Error(`ENOENT: no such file or directory, open '${key}'`);
+    }),
     unlink: vi.fn(async (p: string) => {
       state.files.delete(p);
     }),
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
       const key = p;
       state.files.set(key, data);
+      state.fileWrites.push({ path: key, data });
       state.dirs.add(key.split("/").slice(0, -1).join("/"));
       state.fileModes.set(key, opts?.mode ?? 0o666);
     }),
@@ -225,6 +271,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.kickstartError = "";
+  state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
   state.disableError = "";
   state.disableCode = 1;
@@ -239,6 +286,7 @@ beforeEach(() => {
   state.dirModes.clear();
   state.files.clear();
   state.fileModes.clear();
+  state.fileWrites.length = 0;
   cleanStaleGatewayProcessesSync.mockReset();
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReset();
@@ -321,10 +369,7 @@ describe("launchctl list detection", () => {
 
 describe("launchd bootstrap repair", () => {
   it("enables, bootstraps, and kickstarts the resolved label", async () => {
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
     const repair = await repairLaunchAgentBootstrap({ env });
     expect(repair).toEqual({ ok: true, status: "repaired" });
 
@@ -340,10 +385,7 @@ describe("launchd bootstrap repair", () => {
   it("treats bootstrap exit 130 as success", async () => {
     state.bootstrapError = "Service already loaded";
     state.bootstrapCode = 130;
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
@@ -354,10 +396,7 @@ describe("launchd bootstrap repair", () => {
   it("treats 'already exists in domain' bootstrap failures as success", async () => {
     state.bootstrapError =
       "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
@@ -367,10 +406,7 @@ describe("launchd bootstrap repair", () => {
 
   it("keeps genuine bootstrap failures as failures", async () => {
     state.bootstrapError = "Could not find specified service";
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
@@ -385,10 +421,7 @@ describe("launchd bootstrap repair", () => {
   it("returns a typed kickstart failure", async () => {
     state.kickstartError = "launchctl kickstart failed: permission denied";
     state.kickstartFailuresRemaining = 1;
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
@@ -401,13 +434,6 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd install", () => {
-  function createDefaultLaunchdEnv(): Record<string, string | undefined> {
-    return {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
-  }
-
   it("enables service before bootstrap without self-restarting the fresh agent", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
@@ -457,6 +483,47 @@ describe("launchd install", () => {
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
     expect(plist).toContain("<key>ThrottleInterval</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
+  });
+
+  it("rewrites the plist before bootstrap during restart fallback", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.serviceLoaded = false;
+    state.kickstartError = "Could not find service";
+    state.kickstartFailuresRemaining = 1;
+    state.files.set(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.gateway</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>node</string>",
+        "      <string>gateway.js</string>",
+        "    </array>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n"),
+    );
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>StandardOutPath</key>");
+    expect(plist).toContain("<key>StandardErrorPath</key>");
+    expect(plist).toContain("<key>KeepAlive</key>");
+    expect(plist).toContain("<string>node</string>");
+    const rewriteIndex = state.fileWrites.findIndex((write) => write.path === plistPath);
+    const bootstrapIndex = state.launchctlCalls.findIndex((call) => call[0] === "bootstrap");
+    expect(rewriteIndex).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+    expect(rewriteIndex).toBeLessThan(bootstrapIndex);
   });
 
   it("tightens writable bits on launch agent dirs and plist", async () => {
@@ -546,7 +613,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout });
 
     expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
@@ -564,7 +631,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout });
 
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
@@ -597,7 +664,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout });
 
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
@@ -610,7 +677,9 @@ describe("launchd install", () => {
     state.printFailuresRemaining = 10;
     state.bootoutError = "launchctl bootout permission denied";
 
-    await expect(stopLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() }),
+    ).rejects.toThrow(
       "launchctl print could not confirm stop; used bootout fallback and left service unloaded: launchctl print permission denied; launchctl bootout failed: launchctl bootout permission denied",
     );
   });
@@ -706,12 +775,7 @@ describe("launchd install", () => {
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
 
-    await expect(
-      restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+    await expectRestartLaunchAgentKickstartFailure(env);
 
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
@@ -723,12 +787,7 @@ describe("launchd install", () => {
     state.kickstartFailuresRemaining = 1;
     state.printNotLoadedRemaining = 1;
 
-    await expect(
-      restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+    await expectRestartLaunchAgentKickstartFailure(env);
 
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(true);
@@ -739,12 +798,7 @@ describe("launchd install", () => {
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
 
-    await expect(
-      restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+    await expectRestartLaunchAgentKickstartFailure(env);
 
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);

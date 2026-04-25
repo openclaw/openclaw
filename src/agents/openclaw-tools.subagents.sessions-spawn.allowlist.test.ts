@@ -7,24 +7,7 @@ import {
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
-  configOverride: {
-    session: { mainKey: "main", scope: "per-sender" },
-    tools: {
-      sessions_spawn: {
-        attachments: {
-          enabled: true,
-          maxFiles: 50,
-          maxFileBytes: 1 * 1024 * 1024,
-          maxTotalBytes: 5 * 1024 * 1024,
-        },
-      },
-    },
-    agents: {
-      defaults: {
-        workspace: "/tmp",
-      },
-    },
-  },
+  configOverride: {} as Record<string, unknown>,
 }));
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
@@ -80,7 +63,7 @@ async function spawn(params: {
     },
     {
       agentSessionKey: params.requesterSessionKey ?? "main",
-      agentChannel: params.requesterChannel ?? "whatsapp",
+      agentChannel: params.requesterChannel ?? "mobilechat",
     },
   );
 }

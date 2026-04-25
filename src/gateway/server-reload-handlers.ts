@@ -1,3 +1,5 @@
+import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -23,6 +25,7 @@ import {
 } from "../secrets/runtime.js";
 import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import { enqueueConfigRecoveryNotice } from "./config-recovery-notice.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -50,7 +53,37 @@ type GatewayHotReloadState = {
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
-export function createGatewayReloadHandlers(params: {
+type GatewayReloadLog = {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+};
+
+const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
+
+async function disposeMcpRuntimesWithTimeout(params: {
+  dispose: () => Promise<void>;
+  timeoutMs: number;
+  onWarn: (message: string) => void;
+  label: string;
+}) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const disposePromise = params.dispose().catch((error: unknown) => {
+    params.onWarn(`${params.label} failed: ${String(error)}`);
+  });
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), params.timeoutMs);
+    timer.unref?.();
+  });
+  const result = await Promise.race([disposePromise.then(() => "done" as const), timeoutPromise]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  if (result === "timeout") {
+    params.onWarn(`${params.label} exceeded ${params.timeoutMs}ms; continuing`);
+  }
+}
+
+type GatewayReloadHandlerParams = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
@@ -64,13 +97,52 @@ export function createGatewayReloadHandlers(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
-  logReload: { info: (msg: string) => void; warn: (msg: string) => void };
+  logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
-}) {
+};
+
+type ManagedGatewayConfigReloaderParams = Omit<
+  GatewayReloadHandlerParams,
+  "createHealthMonitor" | "logReload"
+> & {
+  minimalTestGateway: boolean;
+  initialConfig: OpenClawConfig;
+  initialCompareConfig?: OpenClawConfig;
+  initialInternalWriteHash: string | null;
+  watchPath: string;
+  readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
+  recoverSnapshot: typeof import("../config/config.js").recoverConfigFromLastKnownGood;
+  promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
+  subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
+  logReload: GatewayReloadLog & {
+    error: (msg: string) => void;
+  };
+  channelManager: GatewayChannelManager;
+  activateRuntimeSecrets: ActivateRuntimeSecrets;
+  resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
+  sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
+  clients: Iterable<SharedGatewayAuthClient>;
+};
+
+export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
   const applyHotReload = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
+
+    if (
+      plan.changedPaths.some(
+        (path) =>
+          path === "models" ||
+          path.startsWith("models.") ||
+          path === "agents.defaults.model" ||
+          path.startsWith("agents.defaults.model.") ||
+          path === "agents.defaults.models" ||
+          path.startsWith("agents.defaults.models."),
+      )
+    ) {
+      resetModelCatalogCache();
+    }
 
     if (plan.reloadHooks) {
       try {
@@ -105,8 +177,19 @@ export function createGatewayReloadHandlers(params: {
       nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
     }
 
+    if (plan.disposeMcpRuntimes) {
+      await disposeMcpRuntimesWithTimeout({
+        dispose: disposeAllSessionMcpRuntimes,
+        timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
+        onWarn: params.logReload.warn,
+        label: "bundle-mcp runtime disposal during config reload",
+      });
+    }
+
     if (plan.restartGmailWatcher) {
-      await stopGmailWatcher().catch(() => {});
+      await stopGmailWatcher().catch((err) => {
+        params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
+      });
       await startGmailWatcherWithLogs({
         cfg: nextConfig,
         log: params.logHooks,
@@ -230,51 +313,20 @@ export function createGatewayReloadHandlers(params: {
         },
       });
       return true;
-    } else {
-      // No active operations or pending replies, restart immediately
-      params.logReload.warn(`config change requires gateway restart (${reasons})`);
-      const emitted = emitGatewayRestart();
-      if (!emitted) {
-        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
-      }
-      return true;
     }
+    // No active operations or pending replies, restart immediately
+    params.logReload.warn(`config change requires gateway restart (${reasons})`);
+    const emitted = emitGatewayRestart();
+    if (!emitted) {
+      params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+    }
+    return true;
   };
 
   return { applyHotReload, requestGatewayRestart };
 }
 
-export function startManagedGatewayConfigReloader(params: {
-  minimalTestGateway: boolean;
-  initialConfig: OpenClawConfig;
-  initialInternalWriteHash: string | null;
-  watchPath: string;
-  readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
-  subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
-  deps: CliDeps;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  getState: () => GatewayHotReloadState;
-  setState: (state: GatewayHotReloadState) => void;
-  startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
-  logHooks: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
-  logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  logCron: { error: (msg: string) => void };
-  logReload: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
-  channelManager: GatewayChannelManager;
-  activateRuntimeSecrets: ActivateRuntimeSecrets;
-  resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
-  sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
-  clients: Iterable<SharedGatewayAuthClient>;
-}) {
+export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigReloaderParams) {
   if (params.minimalTestGateway) {
     return { stop: async () => {} };
   }
@@ -299,8 +351,20 @@ export function startManagedGatewayConfigReloader(params: {
 
   return startGatewayConfigReloader({
     initialConfig: params.initialConfig,
+    initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
+    recoverSnapshot: async (snapshot, reason) =>
+      await params.recoverSnapshot({ snapshot, reason: `reload-${reason}` }),
+    promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
+    onRecovered: ({ reason, snapshot, recoveredSnapshot }) => {
+      enqueueConfigRecoveryNotice({
+        cfg: recoveredSnapshot.config,
+        phase: "reload",
+        reason: `reload-${reason}`,
+        configPath: snapshot.path,
+      });
+    },
     subscribeToWrites: params.subscribeToWrites,
     onHotReload: async (plan, nextConfig) => {
       const previousSharedGatewaySessionGeneration =

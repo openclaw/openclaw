@@ -1,8 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  buildCopilotDynamicHeaders,
   createHtmlEntityToolCallArgumentDecodingWrapper,
+  defaultToolStreamExtraParams,
   decodeHtmlEntitiesInObject,
+  hasCopilotVisionInput,
 } from "./provider-stream-shared.js";
 
 type FakeWrappedStream = {
@@ -38,6 +41,89 @@ describe("decodeHtmlEntitiesInObject", () => {
     ).toEqual({
       command: 'cd ~/dev && echo "ok"',
       args: ["<input>", "'quoted'"],
+    });
+  });
+});
+
+describe("defaultToolStreamExtraParams", () => {
+  it("defaults tool_stream on when absent", () => {
+    expect(defaultToolStreamExtraParams()).toEqual({ tool_stream: true });
+    expect(defaultToolStreamExtraParams({ fastMode: true })).toEqual({
+      fastMode: true,
+      tool_stream: true,
+    });
+  });
+
+  it("preserves explicit tool_stream values", () => {
+    const enabled = { tool_stream: true, fastMode: true };
+    const disabled = { tool_stream: false, fastMode: true };
+
+    expect(defaultToolStreamExtraParams(enabled)).toBe(enabled);
+    expect(defaultToolStreamExtraParams(disabled)).toBe(disabled);
+  });
+});
+
+describe("buildCopilotDynamicHeaders", () => {
+  it("matches Copilot IDE-style request headers without the legacy Openai-Intent", () => {
+    expect(
+      buildCopilotDynamicHeaders({
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        hasImages: false,
+      }),
+    ).toMatchObject({
+      "Copilot-Integration-Id": "vscode-chat",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Openai-Organization": "github-copilot",
+      "x-initiator": "user",
+    });
+    expect(
+      buildCopilotDynamicHeaders({
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        hasImages: false,
+      }),
+    ).not.toHaveProperty("Openai-Intent");
+  });
+
+  it("marks tool-result follow-up turns as agent initiated and vision-capable", () => {
+    expect(
+      buildCopilotDynamicHeaders({
+        messages: [
+          { role: "user", content: "hi", timestamp: 1 },
+          {
+            role: "toolResult",
+            content: [{ type: "image", data: "abc", mimeType: "image/png" }],
+            timestamp: 2,
+            toolCallId: "call_1",
+            toolName: "view_image",
+            isError: false,
+          },
+        ],
+        hasImages: true,
+      }),
+    ).toMatchObject({
+      "Copilot-Vision-Request": "true",
+      "x-initiator": "agent",
+    });
+  });
+
+  it("detects nested tool-result image blocks in user-shaped provider payloads", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            content: [{ type: "image", source: { data: "abc", media_type: "image/png" } }],
+          },
+        ],
+        timestamp: 1,
+      },
+    ] as unknown as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+
+    expect(hasCopilotVisionInput(messages)).toBe(true);
+    expect(buildCopilotDynamicHeaders({ messages, hasImages: true })).toMatchObject({
+      "Copilot-Vision-Request": "true",
+      "x-initiator": "agent",
     });
   });
 });

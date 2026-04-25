@@ -16,6 +16,10 @@
         "type": "string",
         "minLength": 1
       },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
+      },
       "permissionMode": {
         "type": "string",
         "enum": ["approve-all", "approve-reads", "deny-all"]
@@ -25,6 +29,9 @@
         "enum": ["deny", "fail"]
       },
       "pluginToolsMcpBridge": {
+        "type": "boolean"
+      },
+      "openClawToolsMcpBridge": {
         "type": "boolean"
       },
       "strictWindowsCmdWrapper": {
@@ -38,6 +45,10 @@
       "queueOwnerTtlSeconds": {
         "type": "number",
         "minimum": 0
+      },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
       },
       "mcpServers": {
         "type": "object",
@@ -100,6 +111,11 @@
       "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into embedded ACP sessions so ACP agents can call plugin-registered tools.",
       "advanced": true
     },
+    "openClawToolsMcpBridge": {
+      "label": "OpenClaw Tools MCP Bridge",
+      "help": "Default off. When enabled, inject the built-in OpenClaw core-tools MCP server into embedded ACP sessions so ACP agents can call selected built-in tools such as cron.",
+      "advanced": true
+    },
     "strictWindowsCmdWrapper": {
       "label": "Strict Windows cmd Wrapper",
       "help": "Legacy compatibility field. The current embedded acpx/runtime package uses its own Windows command resolution behavior. Setting this to false is accepted for compatibility and logged as ignored.",
@@ -113,6 +129,11 @@
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
       "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
+      "advanced": true
+    },
+    "probeAgent": {
+      "label": "Health Probe Agent",
+      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to the first `acp.allowedAgents` entry when that allowlist is set, otherwise to the runtime built-in probe agent (codex). Set this explicitly (for example `opencode` or `claude`) when the default probe agent is not installed or not authenticated, so the whole embedded ACP backend does not get marked unavailable.",
       "advanced": true
     },
     "mcpServers": {

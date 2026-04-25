@@ -1,4 +1,3 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -13,17 +12,22 @@ import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
-import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForMirror,
+} from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
+import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -33,7 +37,7 @@ import {
   validateSendParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type InflightResult = {
   ok: boolean;
@@ -55,6 +59,44 @@ const getInflightMap = (context: GatewayRequestContext) => {
   }
   return inflight;
 };
+
+async function resolveGatewayInflightMap(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  respond: RespondFn;
+}): Promise<Map<string, Promise<InflightResult>> | undefined> {
+  const cached = params.context.dedupe.get(params.dedupeKey);
+  if (cached) {
+    params.respond(cached.ok, cached.payload, cached.error, {
+      cached: true,
+    });
+    return undefined;
+  }
+  const inflightMap = getInflightMap(params.context);
+  const inflight = inflightMap.get(params.dedupeKey);
+  if (inflight) {
+    const result = await inflight;
+    const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+    params.respond(result.ok, result.payload, result.error, meta);
+    return undefined;
+  }
+  return inflightMap;
+}
+
+async function runGatewayInflightWork(params: {
+  inflightMap: Map<string, Promise<InflightResult>>;
+  dedupeKey: string;
+  work: Promise<InflightResult>;
+  respond: RespondFn;
+}) {
+  params.inflightMap.set(params.dedupeKey, params.work);
+  try {
+    const result = await params.work;
+    params.respond(result.ok, result.payload, result.error, result.meta);
+  } finally {
+    params.inflightMap.delete(params.dedupeKey);
+  }
+}
 
 async function resolveRequestedChannel(params: {
   requestChannel: unknown;
@@ -182,8 +224,45 @@ function cacheGatewayDedupeFailure(params: {
   });
 }
 
+function createGatewayInflightSuccess(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  payload: unknown;
+  channel: string;
+}): InflightResult {
+  cacheGatewayDedupeSuccess({
+    context: params.context,
+    dedupeKey: params.dedupeKey,
+    payload: params.payload,
+  });
+  return {
+    ok: true,
+    payload: params.payload,
+    meta: { channel: params.channel },
+  };
+}
+
+function createGatewayInflightUnavailableFailure(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  channel: string;
+  err: unknown;
+}): InflightResult {
+  const error = errorShape(ErrorCodes.UNAVAILABLE, String(params.err));
+  cacheGatewayDedupeFailure({
+    context: params.context,
+    dedupeKey: params.dedupeKey,
+    error,
+  });
+  return {
+    ok: false,
+    error,
+    meta: { channel: params.channel, error: formatForLog(params.err) },
+  };
+}
+
 export const sendHandlers: GatewayRequestHandlers = {
-  "message.action": async ({ params, respond, context }) => {
+  "message.action": async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateMessageActionParams(p)) {
       respond(
@@ -214,21 +293,26 @@ export const sendHandlers: GatewayRequestHandlers = {
       };
       idempotencyKey: string;
     };
+    // Owner status is an authorization signal used to unlock owner-only
+    // channel actions and owner-only tool policy. The legitimate propagation
+    // path is the trusted runtime forwarding a real channel-sender ownership
+    // bit through the gateway RPC — but that wire value must not be honored
+    // for callers who are not already full operators. Per SECURITY.md,
+    // shared-secret bearer and admin-scoped callers get the full default
+    // operator scope set (including `operator.admin`); those callers are
+    // trusted to forward `senderIsOwner`. Narrowly-scoped callers
+    // (e.g. `operator.write`-only, including the gateway-forwarding
+    // least-privilege path) are not trusted to assert ownership, so their
+    // wire value is forced to `false` to prevent a non-admin scoped caller
+    // from unlocking owner-only channel actions by setting
+    // `senderIsOwner: true` on the request.
+    const callerScopes = client?.connect?.scopes ?? [];
+    const callerIsFullOperator = Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
+    const senderIsOwner = callerIsFullOperator && request.senderIsOwner === true;
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
-    const cached = context.dedupe.get(dedupeKey);
-    if (cached) {
-      respond(cached.ok, cached.payload, cached.error, {
-        cached: true,
-      });
-      return;
-    }
-    const inflightMap = getInflightMap(context);
-    const inflight = inflightMap.get(dedupeKey);
-    if (inflight) {
-      const result = await inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-      respond(result.ok, result.payload, result.error, meta);
+    const inflightMap = await resolveGatewayInflightMap({ context, dedupeKey, respond });
+    if (!inflightMap) {
       return;
     }
     const resolvedChannel = await resolveRequestedChannel({
@@ -263,7 +347,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           params: request.params,
           accountId: normalizeOptionalString(request.accountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
-          senderIsOwner: request.senderIsOwner,
+          senderIsOwner,
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           agentId: normalizeOptionalString(request.agentId) ?? undefined,
@@ -279,26 +363,13 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error, meta: { channel } };
         }
         const payload = extractToolPayload(handled);
-        cacheGatewayDedupeSuccess({ context, dedupeKey, payload });
-        return {
-          ok: true,
-          payload,
-          meta: { channel },
-        };
+        return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
       } catch (err) {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-        cacheGatewayDedupeFailure({ context, dedupeKey, error });
-        return { ok: false, error, meta: { channel, error: formatForLog(err) } };
+        return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
       }
     })();
 
-    inflightMap.set(dedupeKey, work);
-    try {
-      const result = await work;
-      respond(result.ok, result.payload, result.error, result.meta);
-    } finally {
-      inflightMap.delete(dedupeKey);
-    }
+    await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
   },
   send: async ({ params, respond, context, client }) => {
     const p = params;
@@ -322,25 +393,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       channel?: string;
       accountId?: string;
       agentId?: string;
+      replyToId?: string;
       threadId?: string;
       sessionKey?: string;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `send:${idem}`;
-    const cached = context.dedupe.get(dedupeKey);
-    if (cached) {
-      respond(cached.ok, cached.payload, cached.error, {
-        cached: true,
-      });
-      return;
-    }
-    const inflightMap = getInflightMap(context);
-    const inflight = inflightMap.get(dedupeKey);
-    if (inflight) {
-      const result = await inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-      respond(result.ok, result.payload, result.error, meta);
+    const inflightMap = await resolveGatewayInflightMap({ context, dedupeKey, respond });
+    if (!inflightMap) {
       return;
     }
     const to = normalizeOptionalString(request.to) ?? "";
@@ -370,6 +431,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const { cfg, channel } = resolvedChannel;
     const accountId = normalizeOptionalString(request.accountId);
+    const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
     const outboundChannel = channel;
     const plugin = resolveOutboundChannelPlugin({ channel, cfg });
@@ -405,16 +467,11 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const mirrorPayloads = normalizeReplyPayloadsForDelivery([
-          { text: message, mediaUrl, mediaUrls },
-        ]);
-        const mirrorText = mirrorPayloads
-          .map((payload) => payload.text)
-          .filter(Boolean)
-          .join("\n");
-        const mirrorMediaUrls = mirrorPayloads.flatMap(
-          (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
-        );
+        const outboundPayloads = [{ text: message, mediaUrl, mediaUrls }];
+        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
+        const mirrorText = mirrorProjection.text;
+        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         const providedSessionKey = normalizeOptionalLowercaseString(request.sessionKey);
         const explicitAgentId = normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
@@ -430,15 +487,30 @@ export const sendHandlers: GatewayRequestHandlers = {
           target: deliveryTarget,
           currentSessionKey: providedSessionKey,
           resolvedTarget: idLikeTarget,
+          replyToId,
           threadId,
         });
+        const providedSessionBaseKey =
+          parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
+        const shouldUseDerivedThreadSessionKey =
+          channel === "slack" &&
+          !!providedSessionKey &&
+          !!normalizeOptionalString(derivedRoute?.threadId) &&
+          normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
+            normalizeOptionalLowercaseString(providedSessionBaseKey) &&
+          normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
         const outboundRoute = derivedRoute
           ? providedSessionKey
-            ? {
-                ...derivedRoute,
-                sessionKey: providedSessionKey,
-                baseSessionKey: providedSessionKey,
-              }
+            ? shouldUseDerivedThreadSessionKey
+              ? {
+                  ...derivedRoute,
+                  baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey,
+                }
+              : {
+                  ...derivedRoute,
+                  sessionKey: providedSessionKey,
+                  baseSessionKey: providedSessionKey,
+                }
             : derivedRoute
           : null;
         if (outboundRoute) {
@@ -454,16 +526,18 @@ export const sendHandlers: GatewayRequestHandlers = {
           cfg,
           agentId: effectiveAgentId,
           sessionKey: outboundSessionKey,
+          conversationType: outboundRoute?.chatType,
         });
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
           to: deliveryTarget,
           accountId,
-          payloads: [{ text: message, mediaUrl, mediaUrls }],
+          payloads: outboundPayloads,
+          replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
-          threadId: threadId ?? null,
+          threadId: outboundRoute?.threadId ?? threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: outboundSessionKey
@@ -482,26 +556,13 @@ export const sendHandlers: GatewayRequestHandlers = {
           throw new Error("No delivery result");
         }
         const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
-        cacheGatewayDedupeSuccess({ context, dedupeKey, payload });
-        return {
-          ok: true,
-          payload,
-          meta: { channel },
-        };
+        return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
       } catch (err) {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-        cacheGatewayDedupeFailure({ context, dedupeKey, error });
-        return { ok: false, error, meta: { channel, error: formatForLog(err) } };
+        return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
       }
     })();
 
-    inflightMap.set(dedupeKey, work);
-    try {
-      const result = await work;
-      respond(result.ok, result.payload, result.error, result.meta);
-    } finally {
-      inflightMap.delete(dedupeKey);
-    }
+    await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
   },
   poll: async ({ params, respond, context, client }) => {
     const p = params;

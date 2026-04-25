@@ -6,11 +6,13 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertOkOrThrowProviderError,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
+  mergeSsrFPolicies,
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -53,35 +55,6 @@ let falFetchGuard = fetchWithSsrFGuard;
 
 export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
-}
-
-function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPolicy | undefined {
-  const merged: SsrFPolicy = {};
-  for (const policy of policies) {
-    if (!policy) {
-      continue;
-    }
-    if (policy.allowPrivateNetwork) {
-      merged.allowPrivateNetwork = true;
-    }
-    if (policy.dangerouslyAllowPrivateNetwork) {
-      merged.dangerouslyAllowPrivateNetwork = true;
-    }
-    if (policy.allowRfc2544BenchmarkRange) {
-      merged.allowRfc2544BenchmarkRange = true;
-    }
-    if (policy.allowedHostnames?.length) {
-      merged.allowedHostnames = Array.from(
-        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
-      );
-    }
-    if (policy.hostnameAllowlist?.length) {
-      merged.hostnameAllowlist = Array.from(
-        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
-      );
-    }
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
@@ -279,12 +252,7 @@ async function fetchImageBuffer(
     auditContext: "fal-image-download",
   });
   try {
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `fal image download failed (${response.status}): ${text || response.statusText}`,
-      );
-    }
+    await assertOkOrThrowProviderError(response, "fal image download failed");
     const mimeType = response.headers.get("content-type")?.trim() || "image/png";
     const arrayBuffer = await response.arrayBuffer();
     return { buffer: Buffer.from(arrayBuffer), mimeType };

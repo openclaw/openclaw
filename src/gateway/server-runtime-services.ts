@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -67,43 +68,76 @@ function recoverPendingOutboundDeliveries(params: {
   })().catch((err) => params.log.error(`Delivery recovery failed: ${String(err)}`));
 }
 
+function recoverPendingSessionDeliveries(params: {
+  deps: import("../cli/deps.types.js").CliDeps;
+  log: GatewayRuntimeServiceLogger;
+  maxEnqueuedAt: number;
+}): void {
+  const timer = setTimeout(() => {
+    void (async () => {
+      const { recoverPendingRestartContinuationDeliveries } =
+        await import("./server-restart-sentinel.js");
+      const logRecovery = params.log.child("session-delivery-recovery");
+      await recoverPendingRestartContinuationDeliveries({
+        deps: params.deps,
+        log: logRecovery,
+        maxEnqueuedAt: params.maxEnqueuedAt,
+      });
+    })().catch((err) => params.log.error(`Session delivery recovery failed: ${String(err)}`));
+  }, 1_250);
+  timer.unref?.();
+}
+
 export function startGatewayRuntimeServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
-  cron: { start: () => Promise<void> };
-  logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
   stopModelPricingRefresh: () => void;
 } {
-  const heartbeatRunner = params.minimalTestGateway
-    ? createNoopHeartbeatRunner()
-    : startHeartbeatRunner({ cfg: params.cfgAtStart });
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,
   });
 
-  if (!params.minimalTestGateway) {
-    startGatewayCronWithLogging({
-      cron: params.cron,
-      logCron: params.logCron,
-    });
-    recoverPendingOutboundDeliveries({
-      cfg: params.cfgAtStart,
-      log: params.log,
-    });
-  }
-
   return {
-    heartbeatRunner,
+    heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
     stopModelPricingRefresh:
-      !params.minimalTestGateway && process.env.VITEST !== "1"
+      !params.minimalTestGateway && !isVitestRuntimeEnv()
         ? startGatewayModelPricingRefresh({ config: params.cfgAtStart })
         : () => {},
   };
+}
+
+export function activateGatewayScheduledServices(params: {
+  minimalTestGateway: boolean;
+  cfgAtStart: OpenClawConfig;
+  deps: import("../cli/deps.types.js").CliDeps;
+  sessionDeliveryRecoveryMaxEnqueuedAt: number;
+  cron: { start: () => Promise<void> };
+  logCron: { error: (message: string) => void };
+  log: GatewayRuntimeServiceLogger;
+}): { heartbeatRunner: HeartbeatRunner } {
+  if (params.minimalTestGateway) {
+    return { heartbeatRunner: createNoopHeartbeatRunner() };
+  }
+  const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
+  startGatewayCronWithLogging({
+    cron: params.cron,
+    logCron: params.logCron,
+  });
+  recoverPendingOutboundDeliveries({
+    cfg: params.cfgAtStart,
+    log: params.log,
+  });
+  recoverPendingSessionDeliveries({
+    deps: params.deps,
+    log: params.log,
+    maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
+  });
+  return { heartbeatRunner };
 }

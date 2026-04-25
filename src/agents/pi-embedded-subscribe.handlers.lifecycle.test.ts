@@ -11,6 +11,7 @@ function createContext(
   lastAssistant: unknown,
   overrides?: {
     onAgentEvent?: (event: unknown) => void;
+    onBeforeLifecycleTerminal?: () => void | Promise<void>;
     onBlockReplyFlush?: () => void | Promise<void>;
   },
 ): EmbeddedPiSubscribeContext {
@@ -21,6 +22,7 @@ function createContext(
       config: {},
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
+      onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
       onBlockReply,
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
@@ -47,6 +49,15 @@ function createContext(
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
+async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedPiSubscribeContext) {
+  await handleAgentEnd(ctx);
+
+  const warn = vi.mocked(ctx.log.warn);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
+  return warn.mock.calls[0]?.[1];
+}
+
 describe("handleAgentEnd", () => {
   it("logs the resolved error message when run ends with assistant error", async () => {
     const onAgentEvent = vi.fn();
@@ -61,12 +72,8 @@ describe("handleAgentEnd", () => {
     );
     ctx.state.livenessState = "working";
 
-    await handleAgentEnd(ctx);
-
-    const warn = vi.mocked(ctx.log.warn);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
-    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+    const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
+    expect(warnMeta).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
       error: "LLM request failed: connection refused by the provider endpoint.",
@@ -95,12 +102,8 @@ describe("handleAgentEnd", () => {
       content: [{ type: "text", text: "" }],
     });
 
-    await handleAgentEnd(ctx);
-
-    const warn = vi.mocked(ctx.log.warn);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
-    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+    const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
+    expect(warnMeta).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
       error: "The AI service is temporarily overloaded. Please try again in a moment.",
@@ -183,6 +186,30 @@ describe("handleAgentEnd", () => {
       providerRuntimeFailureKind: "auth_scope",
       httpCode: "401",
     });
+  });
+
+  it("omits raw HTML auth bodies from consoleMessage for HTML 403 auth failures", async () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      errorMessage: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
+      content: [{ type: "text", text: "" }],
+    });
+
+    await handleAgentEnd(ctx);
+
+    const warnMeta = vi.mocked(ctx.log.warn).mock.calls[0]?.[1];
+    expect(warnMeta).toMatchObject({
+      providerRuntimeFailureKind: "auth_html_403",
+      rawErrorPreview: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
+      error:
+        "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    });
+    const consoleMsg = typeof warnMeta?.consoleMessage === "string" ? warnMeta.consoleMessage : "";
+    expect(consoleMsg).not.toContain("rawError=");
+    expect(consoleMsg).not.toContain("<html>");
   });
 
   it("keeps non-error run-end logging on debug only", async () => {
@@ -353,6 +380,90 @@ describe("handleAgentEnd", () => {
 
     resolveChannelFlush?.();
     await endPromise;
+  });
+
+  it("runs the before-lifecycle callback before the lifecycle end event", async () => {
+    const order: string[] = [];
+    const onAgentEvent = vi.fn(() => {
+      order.push("event");
+    });
+    const onBeforeLifecycleTerminal = vi.fn(() => {
+      order.push("before");
+    });
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(order).toEqual(["before", "event"]);
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("runs an async before-lifecycle callback before the lifecycle end event", async () => {
+    const order: string[] = [];
+    const onAgentEvent = vi.fn(() => {
+      order.push("event");
+    });
+    const onBeforeLifecycleTerminal = vi.fn(() =>
+      Promise.resolve().then(() => {
+        order.push("before");
+      }),
+    );
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(order).toEqual(["before", "event"]);
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("still emits lifecycle terminal when sync before-lifecycle callback throws", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeLifecycleTerminal = vi.fn(() => {
+      throw new Error("hook exploded");
+    });
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("still emits lifecycle terminal when async before-lifecycle callback rejects", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeLifecycleTerminal = vi.fn(() => Promise.reject(new Error("hook failed")));
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
   });
 
   it("emits lifecycle end after async channel flush completes", async () => {

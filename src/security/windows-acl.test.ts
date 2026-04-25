@@ -207,6 +207,21 @@ Successfully processed 1 files`;
       expect(entries).toHaveLength(1);
     });
 
+    it("skips entries with parentheses but no colon separator (line 190)", () => {
+      // parseAceEntry: entry has '(' so passes the early guard but has no ':'
+      const output = `C:\\test\\file.txt BUILTIN(F)\n                     BUILTIN\\Administrators:(F)`;
+      const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
+      // BUILTIN(F) has no ':' → returns null; only the Administrators entry is kept
+      expectSinglePrincipal(entries, "BUILTIN\\Administrators");
+    });
+
+    it("skips entries where all tokens are inherit flags (line 207)", () => {
+      // Only inherit flags: I, OI, CI — after filtering, rights is empty → returns null
+      const output = `C:\\test\\file.txt BUILTIN\\Users:(I)(OI)(CI)\n                     BUILTIN\\Administrators:(F)`;
+      const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
+      expectSinglePrincipal(entries, "BUILTIN\\Administrators");
+    });
+
     it.each([
       { rights: "(F)", canWrite: true, canRead: true },
       { rights: "(M)", canWrite: true, canRead: true },
@@ -425,7 +440,7 @@ Successfully processed 1 files`;
       expectInspectSuccess(result, 2);
       // /sid is passed so that account names are printed as SIDs, making the
       // audit locale-independent (fixes #35834).
-      expect(mockExec).toHaveBeenCalledWith("icacls", ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenCalledWith("icacls.exe", ["C:\\test\\file.txt", "/sid"]);
     });
 
     it("classifies *S-1-5-18 (SID form of SYSTEM from /sid) as trusted", async () => {
@@ -470,8 +485,8 @@ Successfully processed 1 files`;
       expectInspectSuccess(result, 2);
       expect(result.trusted).toHaveLength(2);
       expect(result.untrustedGroup).toHaveLength(0);
-      expect(mockExec).toHaveBeenNthCalledWith(1, "icacls", ["C:\\test\\file.txt", "/sid"]);
-      expect(mockExec).toHaveBeenNthCalledWith(2, "whoami", ["/user", "/fo", "csv", "/nh"]);
+      expect(mockExec).toHaveBeenNthCalledWith(1, "icacls.exe", ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenNthCalledWith(2, "whoami.exe", ["/user", "/fo", "csv", "/nh"]);
     });
 
     it("returns error state on exec failure", async () => {
@@ -495,6 +510,59 @@ Successfully processed 1 files`;
         exec: mockExec,
       });
       expectInspectSuccess(result, 2);
+    });
+
+    it("returns null SID and continues when whoami throws (line 277)", async () => {
+      // icacls returns an untrusted SID entry (triggers needsUserSidResolution)
+      // whoami throws → resolveCurrentUserSid catch block returns null
+      const unknownSid = "S-1-5-21-9999-8888-7777-1001";
+      const mockExec = vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: `C:\\test\\file.txt ${unknownSid}:(F)`,
+          stderr: "",
+        })
+        .mockRejectedValueOnce(new Error("whoami: command not found"));
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        // No USERSID → triggers SID resolution attempt
+      });
+      // Should still succeed — whoami failure is swallowed
+      expect(result.ok).toBe(true);
+      // Unknown SID stays in untrustedGroup (resolveCurrentUserSid returned null)
+      expect(result.untrustedGroup).toHaveLength(1);
+      expect(mockExec).toHaveBeenCalledTimes(2);
+    });
+
+    it("uses SystemRoot for Windows system commands when available", async () => {
+      const mockExec = vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: "C:\\test\\file.txt *S-1-5-21-111-222-333-1001:(F)",
+          stderr: "",
+        })
+        .mockResolvedValueOnce({
+          stdout: '"mock-host\\\\MockUser","S-1-5-21-111-222-333-1001"\r\n',
+          stderr: "",
+        });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { SystemRoot: "C:\\Windows" },
+      });
+
+      expectInspectSuccess(result, 1);
+      expect(mockExec).toHaveBeenNthCalledWith(1, "C:\\Windows\\System32\\icacls.exe", [
+        "C:\\test\\file.txt",
+        "/sid",
+      ]);
+      expect(mockExec).toHaveBeenNthCalledWith(2, "C:\\Windows\\System32\\whoami.exe", [
+        "/user",
+        "/fo",
+        "csv",
+        "/nh",
+      ]);
     });
   });
 
@@ -629,6 +697,40 @@ Successfully processed 1 files`;
       });
       expect(result?.display).toBe(expected);
     });
+
+    it("world SIDs in USERSID env are not added to trusted set", () => {
+      // S-1-1-0 = Everyone. Even if USERSID is set to this, it must NOT be trusted.
+      const env = { USERSID: "S-1-1-0" };
+      const entries: WindowsAclEntry[] = [
+        aclEntry({
+          principal: "S-1-1-0",
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        }),
+      ];
+      const summary = summarizeWindowsAcl(entries, env);
+      // Everyone must remain in untrustedWorld, not trusted
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.trusted).toHaveLength(0);
+    });
+
+    it("returns null when no username can be resolved (line 348)", () => {
+      // Temporarily make os.userInfo().username empty so resolveWindowsUserPrincipal returns null
+      userInfoMock.mockReturnValueOnce({
+        username: "",
+        uid: -1,
+        gid: -1,
+        shell: "",
+        homedir: "",
+      });
+      const result = createIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env: { USERNAME: "", USERDOMAIN: "" },
+      });
+      expect(result).toBeNull();
+    });
   });
 
   describe("summarizeWindowsAcl — localized SYSTEM account names", () => {
@@ -642,6 +744,13 @@ Successfully processed 1 files`;
 
     it("classifies Spanish SYSTEM (AUTORIDAD NT\\SYSTEM) as trusted", () => {
       expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
+    });
+
+    it("classifies principal with diacritic not in TRUSTED_BASE but matching stripped suffix (line 145)", () => {
+      // "NT Authority\\Syst\u00e9me" has \u00e9 (e-acute) which is not in TRUSTED_BASE directly.
+      // After diacritic stripping: "nt authority\\systeme" which ends with stripped("\\syst\u00e8me") = "\\systeme".
+      // This exercises the classifyPrincipal diacritic-strip fallback at line 145.
+      expectTrustedOnly([aclEntry({ principal: "NT Authority\\Syst\u00e9me" })]);
     });
 
     it("French Windows full scenario: user + Système only → no untrusted", () => {

@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackChannelConfigEntries } from "../channel-config.js";
 import { createSlackMonitorContext } from "../context.js";
@@ -23,6 +23,7 @@ export function createInboundSlackTestContext(params: {
     app: { client: params.appClient ?? {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "B1",
+    botId: "B1",
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,
@@ -80,13 +81,18 @@ export function createSlackSessionStoreFixture(prefix: string) {
 
   return {
     setup() {
-      fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      fixtureRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
     },
     cleanup() {
       if (!fixtureRoot) {
         return;
       }
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      fs.rmSync(fixtureRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
       fixtureRoot = "";
     },
     makeTmpStorePath() {

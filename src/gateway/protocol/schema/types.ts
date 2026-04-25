@@ -1,4 +1,4 @@
-import type { Static } from "@sinclair/typebox";
+import type { Static } from "typebox";
 import { ProtocolSchemas } from "./protocol-schemas.js";
 
 type ProtocolSchemaName = keyof typeof ProtocolSchemas;
@@ -80,10 +80,13 @@ export type WizardStatusResult = SchemaType<"WizardStatusResult">;
 export type TalkModeParams = SchemaType<"TalkModeParams">;
 export type TalkConfigParams = SchemaType<"TalkConfigParams">;
 export type TalkConfigResult = SchemaType<"TalkConfigResult">;
+export type TalkRealtimeSessionParams = SchemaType<"TalkRealtimeSessionParams">;
+export type TalkRealtimeSessionResult = SchemaType<"TalkRealtimeSessionResult">;
 export type TalkSpeakParams = SchemaType<"TalkSpeakParams">;
 export type TalkSpeakResult = SchemaType<"TalkSpeakResult">;
 export type ChannelsStatusParams = SchemaType<"ChannelsStatusParams">;
 export type ChannelsStatusResult = SchemaType<"ChannelsStatusResult">;
+export type ChannelsStartParams = SchemaType<"ChannelsStartParams">;
 export type ChannelsLogoutParams = SchemaType<"ChannelsLogoutParams">;
 export type WebLoginStartParams = SchemaType<"WebLoginStartParams">;
 export type WebLoginWaitParams = SchemaType<"WebLoginWaitParams">;

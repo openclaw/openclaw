@@ -7,8 +7,8 @@ import {
   refreshRemoteBinsForConnectedNodes,
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
-import { startMcpLoopbackServer } from "./mcp-http.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 
@@ -27,6 +27,7 @@ export async function startGatewayEarlyRuntime(params: {
     warn: (msg: string) => void;
   };
   nodeRegistry: Parameters<typeof setSkillsRemoteRegistry>[0];
+  pluginRegistry?: PluginRegistry;
   broadcast: Parameters<typeof startGatewayMaintenanceTimers>[0]["broadcast"];
   nodeSendToAllSubscribed: Parameters<
     typeof startGatewayMaintenanceTimers
@@ -54,14 +55,6 @@ export async function startGatewayEarlyRuntime(params: {
   setSkillsRefreshTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
   loadConfig: () => OpenClawConfig;
 }) {
-  let mcpServer: { port: number; close: () => Promise<void> } | undefined;
-  try {
-    mcpServer = await startMcpLoopbackServer(0);
-    params.log.info(`MCP loopback server listening on http://127.0.0.1:${mcpServer.port}/mcp`);
-  } catch (error) {
-    params.log.warn(`MCP loopback server failed to start: ${String(error)}`);
-  }
-
   let bonjourStop: (() => Promise<void>) | null = null;
   if (!params.minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
@@ -75,6 +68,7 @@ export async function startGatewayEarlyRuntime(params: {
       wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
       tailscaleMode: params.tailscaleMode,
       mdnsMode: params.cfgAtStart.discovery?.mdns?.mode,
+      gatewayDiscoveryServices: params.pluginRegistry?.gatewayDiscoveryServices,
       logDiscovery: params.logDiscovery,
     });
     bonjourStop = discovery.bonjourStop;
@@ -127,7 +121,6 @@ export async function startGatewayEarlyRuntime(params: {
       });
 
   return {
-    mcpServer,
     bonjourStop,
     skillsChangeUnsub,
     maintenance,
