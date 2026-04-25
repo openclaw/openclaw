@@ -166,16 +166,27 @@ describe("chrome.ts internal", () => {
       cdpPort: 19222,
       cdpUrl: "http://127.0.0.1:19222",
       cdpIsLoopback: true,
+      headless: false,
     } as unknown as ResolvedBrowserProfile;
 
     it("toggles headless args", () => {
       const args = buildOpenClawChromeLaunchArgs({
-        resolved: baseResolved({ headless: true }),
-        profile: baseProfile,
+        resolved: baseResolved({ headless: false }),
+        profile: { ...baseProfile, headless: true },
         userDataDir: "/tmp/foo",
       });
       expect(args).toContain("--headless=new");
       expect(args).toContain("--disable-gpu");
+    });
+
+    it("lets profile headless=false override global headless=true", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved({ headless: true }),
+        profile: { ...baseProfile, headless: false },
+        userDataDir: "/tmp/foo",
+      });
+      expect(args).not.toContain("--headless=new");
+      expect(args).not.toContain("--disable-gpu");
     });
 
     it("toggles no-sandbox args", () => {

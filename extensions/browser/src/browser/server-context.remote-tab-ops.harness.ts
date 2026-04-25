@@ -77,6 +77,7 @@ function resolveProfileForTest(
     cdpIsLoopback,
     color: rawProfile.color ?? state.resolved.color,
     driver: rawProfile.driver === "existing-session" ? "existing-session" : "openclaw",
+    headless: rawProfile.headless ?? state.resolved.headless,
     attachOnly: rawProfile.attachOnly ?? state.resolved.attachOnly,
     userDataDir: rawProfile.userDataDir,
   };

@@ -35,6 +35,7 @@ function createAttachOnlyLoopbackProfile(cdpUrl: string) {
       cdpPort: 9222,
       color: "#00AA00",
       driver: "openclaw",
+      headless: false,
       attachOnly: true,
     },
     resolvedOverrides: {
@@ -236,6 +237,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
         cdpPort: 443,
         color: "#00AA00",
         driver: "openclaw",
+        headless: false,
         attachOnly: false,
       },
       resolvedOverrides: {
