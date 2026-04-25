@@ -103,7 +103,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     color: profileCtx.profile.color,
     headless: profileCtx.profile.headless,
     noSandbox: current.resolved.noSandbox,
-    executablePath: current.resolved.executablePath ?? null,
+    executablePath: profileCtx.profile.executablePath ?? null,
     attachOnly: profileCtx.profile.attachOnly,
   };
 }

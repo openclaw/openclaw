@@ -94,6 +94,7 @@ export type ResolvedBrowserProfile = {
   userDataDir?: string;
   color: string;
   driver: "openclaw" | "existing-session";
+  executablePath?: string;
   headless: boolean;
   attachOnly: boolean;
 };
@@ -370,6 +371,7 @@ export function resolveProfile(
   let cdpUrl = "";
   const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
   const headless = profile.headless ?? resolved.headless;
+  const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
 
   if (driver === "existing-session") {
     return {
@@ -381,6 +383,7 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       color: profile.color,
       driver,
+      executablePath,
       headless,
       attachOnly: true,
     };
@@ -415,6 +418,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    executablePath,
     headless,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };

@@ -168,7 +168,11 @@ See [Plugins](/tools/plugin).
     },
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" },
+      work: {
+        cdpPort: 18801,
+        color: "#0066CC",
+        executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      },
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
       brave: {
         driver: "existing-session",
@@ -211,6 +215,9 @@ See [Plugins](/tools/plugin).
   `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.
+- Local managed profiles can set `executablePath` to override the global
+  `browser.executablePath` for that profile. Use this to run one profile in
+  Chrome and another in Brave.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `browser.executablePath` accepts `~` for your OS home directory.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).

@@ -26,6 +26,8 @@ function createExistingSessionProfileState(params?: { isHttpReachable?: () => Pr
           cdpUrl: "",
           userDataDir: "/tmp/brave-profile",
           color: "#00AA00",
+          executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+          headless: false,
           attachOnly: true,
         },
         isHttpReachable: params?.isHttpReachable ?? (async () => true),
@@ -80,6 +82,7 @@ describe("basic browser routes", () => {
       cdpPort: null,
       cdpUrl: null,
       userDataDir: "/tmp/brave-profile",
+      executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
       pid: 4321,
     });
   });
