@@ -1026,7 +1026,7 @@ describe("runCliAgent spawn path", () => {
     releaseSpawn?.();
 
     const results = await Promise.all([first, second]);
-    expect(results.map((result) => result.text).sort()).toEqual(["one", "two"]);
+    expect(results.map((result) => result.text).toSorted()).toEqual(["one", "two"]);
     expect(stdin.write).toHaveBeenCalledTimes(2);
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
