@@ -349,6 +349,7 @@ capabilities: {
     enabled: true,
     maxVideos: 1,
     maxInputImages: 1,
+    maxInputImagesByModel: { "provider/reference-to-video": 9 },
     maxDurationSeconds: 5,
   },
   videoToVideo: {
@@ -365,6 +366,10 @@ enough to advertise transform-mode support. Providers should declare
 `generate`, `imageToVideo`, and `videoToVideo` explicitly so live tests,
 contract tests, and the shared `video_generate` tool can validate mode support
 deterministically.
+
+When one model in a provider has wider reference-input support than the rest,
+use `maxInputImagesByModel`, `maxInputVideosByModel`, or
+`maxInputAudiosByModel` instead of raising the mode-wide limit.
 
 ## Live tests
 

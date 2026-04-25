@@ -42,6 +42,15 @@ const SEEDANCE_REFERENCE_MAX_IMAGES = 9;
 const SEEDANCE_REFERENCE_MAX_VIDEOS = 3;
 const SEEDANCE_REFERENCE_MAX_AUDIOS = 3;
 const SEEDANCE_REFERENCE_MAX_FILES = 12;
+const SEEDANCE_REFERENCE_MAX_IMAGES_BY_MODEL = Object.fromEntries(
+  SEEDANCE_2_REFERENCE_VIDEO_MODELS.map((model) => [model, SEEDANCE_REFERENCE_MAX_IMAGES]),
+);
+const SEEDANCE_REFERENCE_MAX_VIDEOS_BY_MODEL = Object.fromEntries(
+  SEEDANCE_2_REFERENCE_VIDEO_MODELS.map((model) => [model, SEEDANCE_REFERENCE_MAX_VIDEOS]),
+);
+const SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL = Object.fromEntries(
+  SEEDANCE_2_REFERENCE_VIDEO_MODELS.map((model) => [model, SEEDANCE_REFERENCE_MAX_AUDIOS]),
+);
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 600_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -443,8 +452,9 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       imageToVideo: {
         enabled: true,
         maxVideos: 1,
-        maxInputImages: SEEDANCE_REFERENCE_MAX_IMAGES,
-        maxInputAudios: SEEDANCE_REFERENCE_MAX_AUDIOS,
+        maxInputImages: 1,
+        maxInputImagesByModel: SEEDANCE_REFERENCE_MAX_IMAGES_BY_MODEL,
+        maxInputAudiosByModel: SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL,
         supportedDurationSecondsByModel: Object.fromEntries(
           SEEDANCE_2_VIDEO_MODELS.map((model) => [model, SEEDANCE_2_DURATION_SECONDS]),
         ),
@@ -456,9 +466,11 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       videoToVideo: {
         enabled: true,
         maxVideos: 1,
-        maxInputImages: SEEDANCE_REFERENCE_MAX_IMAGES,
-        maxInputVideos: SEEDANCE_REFERENCE_MAX_VIDEOS,
-        maxInputAudios: SEEDANCE_REFERENCE_MAX_AUDIOS,
+        maxInputImages: 0,
+        maxInputImagesByModel: SEEDANCE_REFERENCE_MAX_IMAGES_BY_MODEL,
+        maxInputVideos: 0,
+        maxInputVideosByModel: SEEDANCE_REFERENCE_MAX_VIDEOS_BY_MODEL,
+        maxInputAudiosByModel: SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL,
         supportedDurationSecondsByModel: Object.fromEntries(
           SEEDANCE_2_VIDEO_MODELS.map((model) => [model, SEEDANCE_2_DURATION_SECONDS]),
         ),

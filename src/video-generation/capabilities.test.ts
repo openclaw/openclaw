@@ -107,4 +107,53 @@ describe("video-generation capabilities", () => {
       },
     });
   });
+
+  it("applies model-specific reference input limits", () => {
+    const provider = createProvider({
+      imageToVideo: {
+        enabled: true,
+        maxInputImages: 1,
+        maxInputImagesByModel: {
+          "vendor/reference-to-video": 9,
+        },
+      },
+      videoToVideo: {
+        enabled: true,
+        maxInputImages: 0,
+        maxInputImagesByModel: {
+          "vendor/reference-to-video": 9,
+        },
+        maxInputVideos: 0,
+        maxInputVideosByModel: {
+          "vendor/reference-to-video": 3,
+        },
+      },
+    });
+
+    expect(
+      resolveVideoGenerationModeCapabilities({
+        provider,
+        model: "vendor/text-to-video",
+        inputImageCount: 2,
+      }).capabilities?.maxInputImages,
+    ).toBe(1);
+    expect(
+      resolveVideoGenerationModeCapabilities({
+        provider,
+        model: "vendor/reference-to-video",
+        inputImageCount: 2,
+      }).capabilities?.maxInputImages,
+    ).toBe(9);
+    expect(
+      resolveVideoGenerationModeCapabilities({
+        provider,
+        model: "vendor/reference-to-video",
+        inputImageCount: 1,
+        inputVideoCount: 1,
+      }).capabilities,
+    ).toMatchObject({
+      maxInputImages: 9,
+      maxInputVideos: 3,
+    });
+  });
 });
