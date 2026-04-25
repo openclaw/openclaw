@@ -1,10 +1,4 @@
-import { sendMediaWithLeadingCaption } from "openclaw/plugin-sdk/reply-payload";
-import {
-  chunkByParagraph,
-  chunkMarkdownTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "../../auto-reply/chunk.js";
+import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
@@ -45,6 +39,11 @@ import {
 } from "./delivery-queue.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
+import {
+  planOutboundMediaMessageUnits,
+  planOutboundTextMessageUnits,
+  type OutboundMessageSendOverrides,
+} from "./message-plan.js";
 import type { DeliveryMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
@@ -82,14 +81,8 @@ async function loadChannelBootstrapRuntime() {
   return await channelBootstrapRuntimePromise;
 }
 
-type Chunker = (
-  text: string,
-  limit: number,
-  ctx?: { formatting?: OutboundDeliveryFormattingOptions },
-) => string[];
-
 type ChannelHandler = {
-  chunker: Chunker | null;
+  chunker: ChannelOutboundAdapter["chunker"] | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   supportsMedia: boolean;
@@ -111,45 +104,25 @@ type ChannelHandler = {
   resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
   sendPayload?: (
     payload: ReplyPayload,
-    overrides?: {
-      replyToId?: string | null;
-      threadId?: string | number | null;
-      audioAsVoice?: boolean;
-    },
+    overrides?: OutboundMessageSendOverrides,
   ) => Promise<OutboundDeliveryResult>;
   sendFormattedText?: (
     text: string,
-    overrides?: {
-      replyToId?: string | null;
-      threadId?: string | number | null;
-      audioAsVoice?: boolean;
-    },
+    overrides?: OutboundMessageSendOverrides,
   ) => Promise<OutboundDeliveryResult[]>;
   sendFormattedMedia?: (
     caption: string,
     mediaUrl: string,
-    overrides?: {
-      replyToId?: string | null;
-      threadId?: string | number | null;
-      audioAsVoice?: boolean;
-    },
+    overrides?: OutboundMessageSendOverrides,
   ) => Promise<OutboundDeliveryResult>;
   sendText: (
     text: string,
-    overrides?: {
-      replyToId?: string | null;
-      threadId?: string | number | null;
-      audioAsVoice?: boolean;
-    },
+    overrides?: OutboundMessageSendOverrides,
   ) => Promise<OutboundDeliveryResult>;
   sendMedia: (
     caption: string,
     mediaUrl: string,
-    overrides?: {
-      replyToId?: string | null;
-      threadId?: string | number | null;
-      audioAsVoice?: boolean;
-    },
+    overrides?: OutboundMessageSendOverrides,
   ) => Promise<OutboundDeliveryResult>;
 };
 
@@ -203,11 +176,16 @@ function createPluginHandler(
   const chunkerMode = outbound.chunkerMode;
   const resolveCtx = (overrides?: {
     replyToId?: string | null;
+    replyToIdSource?: "explicit" | "implicit";
     threadId?: string | number | null;
     audioAsVoice?: boolean;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
+    replyToIdSource:
+      overrides && "replyToIdSource" in overrides
+        ? overrides.replyToIdSource
+        : baseCtx.replyToIdSource,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
   });
@@ -841,55 +819,27 @@ async function deliverOutboundPayloadsCore(
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
   });
-  const chunkTextForDelivery = (text: string, limit: number): string[] =>
-    params.formatting
-      ? handler.chunker!(text, limit, { formatting: params.formatting })
-      : handler.chunker!(text, limit);
 
-  const sendTextChunks = async (
-    text: string,
-    overrides?: {
-      replyToId?: string | null;
-      replyToIdSource?: "explicit" | "implicit";
-      threadId?: string | number | null;
-      audioAsVoice?: boolean;
-    },
-  ) => {
-    const consumeReplyTo = <T extends NonNullable<typeof overrides>>(value: T): T =>
-      applyReplyToConsumption(value, {
-        consumeImplicitReply: value.replyToIdSource === "implicit",
-      });
-    throwIfAborted(abortSignal);
-    if (!handler.chunker || textLimit === undefined) {
-      results.push(await handler.sendText(text, consumeReplyTo(overrides ?? {})));
-      return;
-    }
-    if (chunkMode === "newline") {
-      const mode = handler.chunkerMode ?? "text";
-      const blockChunks =
-        mode === "markdown"
-          ? chunkMarkdownTextWithMode(text, textLimit, "newline")
-          : chunkByParagraph(text, textLimit);
-
-      if (!blockChunks.length && text) {
-        blockChunks.push(text);
+  const sendTextChunks = async (text: string, overrides: OutboundMessageSendOverrides = {}) => {
+    const units = planOutboundTextMessageUnits({
+      text,
+      overrides,
+      chunker: handler.chunker,
+      chunkerMode: handler.chunkerMode,
+      textLimit,
+      chunkMode,
+      formatting: params.formatting,
+      consumeReplyTo: (value) =>
+        applyReplyToConsumption(value, {
+          consumeImplicitReply: value.replyToIdSource === "implicit",
+        }),
+    });
+    for (const unit of units) {
+      if (unit.kind !== "text") {
+        continue;
       }
-      for (const blockChunk of blockChunks) {
-        const chunks = chunkTextForDelivery(blockChunk, textLimit);
-        if (!chunks.length && blockChunk) {
-          chunks.push(blockChunk);
-        }
-        for (const chunk of chunks) {
-          throwIfAborted(abortSignal);
-          results.push(await handler.sendText(chunk, consumeReplyTo(overrides ?? {})));
-        }
-      }
-      return;
-    }
-    const chunks = chunkTextForDelivery(text, textLimit);
-    for (const chunk of chunks) {
       throwIfAborted(abortSignal);
-      results.push(await handler.sendText(chunk, consumeReplyTo(overrides ?? {})));
+      results.push(await handler.sendText(unit.text, unit.overrides));
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
@@ -951,14 +901,16 @@ async function deliverOutboundPayloadsCore(
 
       params.onPayload?.(payloadSummary);
       const replyToResolution = resolveCurrentReplyTo(effectivePayload);
-      const sendOverrides = {
+      const sendOverrides: OutboundMessageSendOverrides = {
         replyToId: replyToResolution.replyToId,
         replyToIdSource: replyToResolution.source,
-        threadId: params.threadId ?? undefined,
-        audioAsVoice: effectivePayload.audioAsVoice === true ? true : undefined,
-        forceDocument: params.forceDocument,
+        ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+        ...(effectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
       };
-      const applySendReplyToConsumption = <T extends typeof sendOverrides>(overrides: T): T =>
+      const applySendReplyToConsumption = <T extends OutboundMessageSendOverrides>(
+        overrides: T,
+      ): T =>
         applyReplyToConsumption(overrides, {
           consumeImplicitReply: replyToResolution.source === "implicit",
         });
@@ -1074,32 +1026,24 @@ async function deliverOutboundPayloadsCore(
       let firstMessageId: string | undefined;
       let lastMessageId: string | undefined;
       const beforeCount = results.length;
-      await sendMediaWithLeadingCaption({
+      const mediaUnits = planOutboundMediaMessageUnits({
         mediaUrls: payloadSummary.mediaUrls,
         caption: payloadSummary.text,
-        send: async ({ mediaUrl, caption }) => {
-          throwIfAborted(abortSignal);
-          if (handler.sendFormattedMedia) {
-            const delivery = await handler.sendFormattedMedia(
-              caption ?? "",
-              mediaUrl,
-              applySendReplyToConsumption(sendOverrides),
-            );
-            results.push(delivery);
-            firstMessageId ??= delivery.messageId;
-            lastMessageId = delivery.messageId;
-            return;
-          }
-          const delivery = await handler.sendMedia(
-            caption ?? "",
-            mediaUrl,
-            applySendReplyToConsumption(sendOverrides),
-          );
-          results.push(delivery);
-          firstMessageId ??= delivery.messageId;
-          lastMessageId = delivery.messageId;
-        },
+        overrides: sendOverrides,
+        consumeReplyTo: applySendReplyToConsumption,
       });
+      for (const unit of mediaUnits) {
+        if (unit.kind !== "media") {
+          continue;
+        }
+        throwIfAborted(abortSignal);
+        const delivery = handler.sendFormattedMedia
+          ? await handler.sendFormattedMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides)
+          : await handler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
+        results.push(delivery);
+        firstMessageId ??= delivery.messageId;
+        lastMessageId = delivery.messageId;
+      }
       await maybePinDeliveredMessage({
         handler,
         payload: effectivePayload,

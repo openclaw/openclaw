@@ -3,8 +3,8 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/types.js";
 
 export type ReplyToOverride = {
-  replyToId?: string | null;
-  replyToIdSource?: ReplyToResolution["source"];
+  replyToId?: string | null | undefined;
+  replyToIdSource?: ReplyToResolution["source"] | undefined;
 };
 
 export type ReplyToResolution = {
