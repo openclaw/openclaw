@@ -180,6 +180,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
+- Thinking: `/think adaptive` uses Google dynamic thinking. Gemini 3/3.1 omit a fixed
+  `thinkingLevel`; Gemini 2.5 sends `thinkingBudget: -1`.
 - Direct Gemini runs also accept `agents.defaults.models["google/<model>"].params.cachedContent`
   (or legacy `cached_content`) to forward a provider-native
   `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
