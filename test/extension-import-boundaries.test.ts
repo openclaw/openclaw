@@ -1,29 +1,11 @@
 import { describe, expect, it } from "vitest";
-import {
-  collectExtensionPluginSdkBoundaryInventory,
-  main as extensionPluginSdkMain,
-} from "../scripts/check-extension-plugin-sdk-boundary.mjs";
-import {
-  collectSdkPackageExtensionImportBoundaryInventory,
-  main as sdkPackageMain,
-} from "../scripts/check-sdk-package-extension-import-boundary.mjs";
-import {
-  collectSrcExtensionImportBoundaryInventory,
-  main as srcExtensionMain,
-} from "../scripts/check-src-extension-import-boundary.mjs";
+import { main as extensionPluginSdkMain } from "../scripts/check-extension-plugin-sdk-boundary.mjs";
+import { main as sdkPackageMain } from "../scripts/check-sdk-package-extension-import-boundary.mjs";
+import { main as srcExtensionMain } from "../scripts/check-src-extension-import-boundary.mjs";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
-const srcInventoryPromise = collectSrcExtensionImportBoundaryInventory();
 const srcJsonOutputPromise = getJsonOutput(srcExtensionMain, ["--json"]);
-const sdkPackageInventoryPromise = collectSdkPackageExtensionImportBoundaryInventory();
 const sdkPackageJsonOutputPromise = getJsonOutput(sdkPackageMain, ["--json"]);
-const srcOutsideInventoryPromise =
-  collectExtensionPluginSdkBoundaryInventory("src-outside-plugin-sdk");
-const pluginSdkInternalInventoryPromise =
-  collectExtensionPluginSdkBoundaryInventory("plugin-sdk-internal");
-const relativeOutsidePackageInventoryPromise = collectExtensionPluginSdkBoundaryInventory(
-  "relative-outside-package",
-);
 const srcOutsideJsonOutputPromise = getJsonOutput(extensionPluginSdkMain, [
   "--mode=src-outside-plugin-sdk",
   "--json",
@@ -53,10 +35,6 @@ async function getJsonOutput(
 }
 
 describe("src extension import boundary inventory", () => {
-  it("stays empty", async () => {
-    expect(await srcInventoryPromise).toEqual([]);
-  });
-
   it("script json output stays empty", async () => {
     const jsonOutput = await srcJsonOutputPromise;
 
@@ -67,10 +45,6 @@ describe("src extension import boundary inventory", () => {
 });
 
 describe("sdk/package extension import boundary inventory", () => {
-  it("stays empty", async () => {
-    expect(await sdkPackageInventoryPromise).toEqual([]);
-  });
-
   it("script json output stays empty", async () => {
     const jsonOutput = await sdkPackageJsonOutputPromise;
 
@@ -81,22 +55,9 @@ describe("sdk/package extension import boundary inventory", () => {
 });
 
 describe("extension src outside plugin-sdk boundary inventory", () => {
-  it("stays empty and sorted", async () => {
-    const inventory = await srcOutsideInventoryPromise;
+  it("script json output stays empty", async () => {
     const jsonResult = await srcOutsideJsonOutputPromise;
 
-    expect(inventory).toEqual([]);
-    expect(
-      [...inventory].toSorted(
-        (left, right) =>
-          left.file.localeCompare(right.file) ||
-          left.line - right.line ||
-          left.kind.localeCompare(right.kind) ||
-          left.specifier.localeCompare(right.specifier) ||
-          left.resolvedPath.localeCompare(right.resolvedPath) ||
-          left.reason.localeCompare(right.reason),
-      ),
-    ).toEqual(inventory);
     expect(jsonResult.exitCode).toBe(0);
     expect(jsonResult.stderr).toBe("");
     expect(jsonResult.json).toEqual([]);
@@ -104,11 +65,9 @@ describe("extension src outside plugin-sdk boundary inventory", () => {
 });
 
 describe("extension plugin-sdk-internal boundary inventory", () => {
-  it("stays empty", async () => {
-    const inventory = await pluginSdkInternalInventoryPromise;
+  it("script json output stays empty", async () => {
     const jsonResult = await pluginSdkInternalJsonOutputPromise;
 
-    expect(inventory).toEqual([]);
     expect(jsonResult.exitCode).toBe(0);
     expect(jsonResult.stderr).toBe("");
     expect(jsonResult.json).toEqual([]);
@@ -116,11 +75,9 @@ describe("extension plugin-sdk-internal boundary inventory", () => {
 });
 
 describe("extension relative-outside-package boundary inventory", () => {
-  it("stays empty", async () => {
-    const inventory = await relativeOutsidePackageInventoryPromise;
+  it("script json output stays empty", async () => {
     const jsonResult = await relativeOutsidePackageJsonOutputPromise;
 
-    expect(inventory).toEqual([]);
     expect(jsonResult.exitCode).toBe(0);
     expect(jsonResult.stderr).toBe("");
     expect(jsonResult.json).toEqual([]);

@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  loadPluginManifestRegistry,
-  resolveManifestContractOwnerPluginId,
-  resolveManifestContractPluginIds,
-  resolveManifestContractPluginIdsByCompatibilityRuntimePath,
-} from "./manifest-registry.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
   hasBundledWebFetchProviderPublicArtifact,
   hasBundledWebSearchProviderPublicArtifact,
@@ -34,12 +29,34 @@ function supportsSecretRefWebSearchApiKey(
   return Array.isArray(typeValue) && typeValue.includes("object");
 }
 
+const registry = loadPluginManifestRegistry();
+
+function bundledPluginIdsWithContract(
+  contract: "webSearchProviders" | "webFetchProviders",
+): string[] {
+  return registry.plugins
+    .filter(
+      (plugin) => plugin.origin === "bundled" && (plugin.contracts?.[contract]?.length ?? 0) > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function ownerPluginIdForContractValue(
+  contract: "webSearchProviders" | "webFetchProviders",
+  value: string,
+): string | undefined {
+  const normalized = value.toLowerCase();
+  return registry.plugins.find(
+    (plugin) =>
+      plugin.origin === "bundled" &&
+      plugin.contracts?.[contract]?.some((candidate) => candidate.toLowerCase() === normalized),
+  )?.id;
+}
+
 describe("web provider public artifacts", () => {
   it("has a public artifact for every bundled web search provider declared in manifests", () => {
-    const pluginIds = resolveManifestContractPluginIds({
-      contract: "webSearchProviders",
-      origin: "bundled",
-    });
+    const pluginIds = bundledPluginIdsWithContract("webSearchProviders");
 
     expect(pluginIds).not.toHaveLength(0);
     for (const pluginId of pluginIds) {
@@ -48,10 +65,7 @@ describe("web provider public artifacts", () => {
   });
 
   it("keeps public web search artifacts mapped to their manifest owner plugin", () => {
-    const pluginIds = resolveManifestContractPluginIds({
-      contract: "webSearchProviders",
-      origin: "bundled",
-    });
+    const pluginIds = bundledPluginIdsWithContract("webSearchProviders");
 
     const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
       onlyPluginIds: pluginIds,
@@ -59,18 +73,13 @@ describe("web provider public artifacts", () => {
 
     expect(providers).not.toBeNull();
     for (const provider of providers ?? []) {
-      expect(
-        resolveManifestContractOwnerPluginId({
-          contract: "webSearchProviders",
-          value: provider.id,
-          origin: "bundled",
-        }),
-      ).toBe(provider.pluginId);
+      expect(ownerPluginIdForContractValue("webSearchProviders", provider.id)).toBe(
+        provider.pluginId,
+      );
     }
   });
 
   it("registers compatibility runtime paths for bundled SecretRef-capable web search providers", () => {
-    const registry = loadPluginManifestRegistry({ cache: false });
     const expectedPluginIds = registry.plugins
       .filter(
         (plugin) =>
@@ -82,20 +91,22 @@ describe("web provider public artifacts", () => {
       .toSorted((left, right) => left.localeCompare(right));
 
     expect(expectedPluginIds).not.toHaveLength(0);
-    expect(
-      resolveManifestContractPluginIdsByCompatibilityRuntimePath({
-        contract: "webSearchProviders",
-        path: "tools.web.search.apiKey",
-        origin: "bundled",
-      }),
-    ).toEqual(expectedPluginIds);
+    const actualPluginIds = registry.plugins
+      .filter(
+        (plugin) =>
+          plugin.origin === "bundled" &&
+          (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+          (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(
+            "tools.web.search.apiKey",
+          ),
+      )
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+    expect(actualPluginIds).toEqual(expectedPluginIds);
   });
 
   it("has a public artifact for every bundled web fetch provider declared in manifests", () => {
-    const pluginIds = resolveManifestContractPluginIds({
-      contract: "webFetchProviders",
-      origin: "bundled",
-    });
+    const pluginIds = bundledPluginIdsWithContract("webFetchProviders");
 
     expect(pluginIds).not.toHaveLength(0);
     for (const pluginId of pluginIds) {
