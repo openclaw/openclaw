@@ -11,6 +11,7 @@ const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
 const buildAllPluginInspectReportsMock = vi.hoisted(() => vi.fn());
 const formatPluginCompatibilityNoticeMock = vi.hoisted(() => vi.fn(() => "ok"));
+const refreshPluginRegistryAfterConfigMutationMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../../cli/npm-resolution.js", () => ({
   buildNpmInstallRecordFields: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock("../../cli/plugins-command-helpers.js", () => ({
 
 vi.mock("../../cli/plugins-install-persist.js", () => ({
   persistPluginInstall: vi.fn(async () => undefined),
+}));
+
+vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutationMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -208,6 +213,18 @@ describe("handlePluginsCommand", () => {
         }),
       }),
     );
+    expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        reason: "policy-changed",
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              superpowers: expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+      }),
+    );
 
     const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg());
     disableParams.command.senderIsOwner = true;
@@ -219,6 +236,18 @@ describe("handlePluginsCommand", () => {
         plugins: expect.objectContaining({
           entries: expect.objectContaining({
             superpowers: expect.objectContaining({ enabled: false }),
+          }),
+        }),
+      }),
+    );
+    expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        reason: "policy-changed",
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              superpowers: expect.objectContaining({ enabled: false }),
+            }),
           }),
         }),
       }),
