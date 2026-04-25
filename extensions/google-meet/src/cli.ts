@@ -71,6 +71,7 @@ type MeetArtifactOptions = ResolveSpaceOptions & {
   lateAfterMinutes?: string;
   earlyBeforeMinutes?: string;
   zip?: boolean;
+  dryRun?: boolean;
   format?: "summary" | "markdown" | "csv";
   output?: string;
 };
@@ -1051,7 +1052,7 @@ export function collectGoogleMeetArtifactWarnings(
   return warnings;
 }
 
-function buildGoogleMeetExportManifest(params: {
+export function buildGoogleMeetExportManifest(params: {
   artifacts: GoogleMeetArtifactsResult;
   attendance: GoogleMeetAttendanceResult;
   files: string[];
@@ -1103,6 +1104,17 @@ function buildGoogleMeetExportManifest(params: {
     ...(params.zipFile ? { zipFile: params.zipFile } : {}),
     warnings,
   };
+}
+
+export function googleMeetExportFileNames(): string[] {
+  return [
+    "summary.md",
+    "attendance.csv",
+    "transcript.md",
+    "artifacts.json",
+    "attendance.json",
+    "manifest.json",
+  ];
 }
 
 function defaultExportDirectory(): string {
@@ -1203,14 +1215,7 @@ export async function writeMeetExportBundle(params: {
   const outputDir = params.outputDir?.trim() || defaultExportDirectory();
   await mkdir(outputDir, { recursive: true });
   const zipFile = params.zip ? `${outputDir.replace(/\/$/, "")}.zip` : undefined;
-  const fileNames = [
-    "summary.md",
-    "attendance.csv",
-    "transcript.md",
-    "artifacts.json",
-    "attendance.json",
-    "manifest.json",
-  ];
+  const fileNames = googleMeetExportFileNames();
   const files = [
     {
       name: "summary.md",
@@ -1813,6 +1818,7 @@ export function registerGoogleMeetCli(params: {
     .option("--early-before-minutes <n>", "Mark early leavers before this many minutes", "5")
     .option("--output <dir>", "Output directory")
     .option("--zip", "Also write a portable .zip archive")
+    .option("--dry-run", "Fetch export data and print the manifest without writing files", false)
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
       const resolved = resolveArtifactTokenOptions(params.config, options);
@@ -1868,6 +1874,22 @@ export function registerGoogleMeetCli(params: {
           ? { earlyBeforeMinutes: resolved.earlyBeforeMinutes }
           : {}),
       };
+      if (options.dryRun) {
+        writeStdoutJson({
+          dryRun: true,
+          manifest: buildGoogleMeetExportManifest({
+            artifacts,
+            attendance,
+            files: googleMeetExportFileNames(),
+            request,
+            tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+            ...(meetingResult.calendarEvent ? { calendarEvent: meetingResult.calendarEvent } : {}),
+          }),
+          ...(meetingResult.calendarEvent ? { calendarEvent: meetingResult.calendarEvent } : {}),
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
       const bundle = await writeMeetExportBundle({
         outputDir: options.output,
         artifacts,

@@ -211,6 +211,11 @@ const GoogleMeetToolSchema = Type.Object({
   ),
   outputDir: Type.Optional(Type.String({ description: "For export, output directory" })),
   zip: Type.Optional(Type.Boolean({ description: "For export, also write a .zip archive" })),
+  dryRun: Type.Optional(
+    Type.Boolean({
+      description: "For export, return the manifest without writing files.",
+    }),
+  ),
   includeAllConferenceRecords: Type.Optional(
     Type.Boolean({
       description:
@@ -403,7 +408,8 @@ async function exportGoogleMeetBundleFromParams(
       earlyBeforeMinutes: resolved.earlyBeforeMinutes,
     }),
   ]);
-  const { writeMeetExportBundle } = await import("./src/cli.js");
+  const { buildGoogleMeetExportManifest, googleMeetExportFileNames, writeMeetExportBundle } =
+    await import("./src/cli.js");
   const calendarId = normalizeOptionalString(raw.calendarId);
   const request = {
     ...(resolved.meeting ? { meeting: resolved.meeting } : {}),
@@ -427,6 +433,22 @@ async function exportGoogleMeetBundleFromParams(
       ? { earlyBeforeMinutes: resolved.earlyBeforeMinutes }
       : {}),
   };
+  const tokenSource = resolved.token.refreshed ? "refresh-token" : "cached-access-token";
+  if (raw.dryRun === true) {
+    return {
+      dryRun: true,
+      manifest: buildGoogleMeetExportManifest({
+        artifacts,
+        attendance,
+        files: googleMeetExportFileNames(),
+        request,
+        tokenSource,
+        ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
+      }),
+      ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
+      tokenSource,
+    };
+  }
   const outputDir = normalizeOptionalString(raw.outputDir) ?? normalizeOptionalString(raw.output);
   const bundle = await writeMeetExportBundle({
     ...(outputDir ? { outputDir } : {}),
@@ -434,13 +456,13 @@ async function exportGoogleMeetBundleFromParams(
     attendance,
     zip: raw.zip === true,
     request,
-    tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
+    tokenSource,
     ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
   });
   return {
     ...bundle,
     ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-    tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
+    tokenSource,
   };
 }
 
