@@ -489,8 +489,12 @@ These override `messages.tts.*` for that host.
 
 ## Output formats (fixed)
 
-- **Feishu / Matrix / Telegram / WhatsApp**: Opus voice message (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+- **Feishu / Matrix / Telegram / WhatsApp**: voice-note replies prefer Opus (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
   - 48kHz / 64kbps is a good voice message tradeoff.
+- **Feishu**: when a voice-note reply is produced as MP3/WAV/M4A or another
+  likely audio file, the Feishu plugin transcodes it to 48kHz Ogg/Opus with
+  `ffmpeg` before sending the native `audio` bubble. If conversion fails, Feishu
+  receives the original file as an attachment.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate) for normal audio attachments. For voice-note targets such as Feishu and Telegram, OpenClaw transcodes the MiniMax MP3 to 48kHz Opus with `ffmpeg` before delivery.
@@ -572,6 +576,8 @@ Notes:
 The `tts` tool converts text to speech and returns an audio attachment for
 reply delivery. When the channel is Feishu, Matrix, Telegram, or WhatsApp,
 the audio is delivered as a voice message rather than a file attachment.
+Feishu can transcode non-Opus TTS output on this path when `ffmpeg` is
+available.
 It accepts optional `channel` and `timeoutMs` fields; `timeoutMs` is a
 per-call provider request timeout in milliseconds.
 

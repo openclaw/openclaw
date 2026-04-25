@@ -396,6 +396,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
           accountId,
+          ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
       },
     });

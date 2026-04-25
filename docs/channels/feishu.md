@@ -424,6 +424,14 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - ✅ Interactive cards (including streaming updates)
 - ⚠️ Rich text (post-style formatting; doesn't support full Feishu/Lark authoring capabilities)
 
+Native Feishu/Lark audio bubbles use the Feishu `audio` message type and require
+Ogg/Opus upload media (`file_type: "opus"`). Existing `.opus` and `.ogg` media
+is sent directly as native audio. MP3/WAV/M4A and other likely audio formats are
+transcoded to 48kHz Ogg/Opus with `ffmpeg` only when the reply requests voice
+delivery (`audioAsVoice` / message tool `asVoice`, including TTS voice-note
+replies). Ordinary MP3 attachments stay regular files. If `ffmpeg` is missing or
+conversion fails, OpenClaw falls back to a file attachment and logs the reason.
+
 ### Threads and replies
 
 - ✅ Inline replies
