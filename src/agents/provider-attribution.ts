@@ -343,9 +343,6 @@ export function resolveProviderEndpoint(
 
 function resolveKnownProviderFamily(provider: string | undefined, modelId?: string | null): string {
   const normalizedModelId = normalizeOptionalLowercaseString(modelId);
-  if (normalizedModelId?.includes("deepseek")) {
-    return "deepseek";
-  }
   switch (provider) {
     case "openai":
     case "openai-codex":
@@ -383,6 +380,12 @@ function resolveKnownProviderFamily(provider: string | undefined, modelId?: stri
     case "together":
       return "together";
     default:
+      // Only use model-id family detection for unknown/custom provider IDs. Known
+      // providers such as OpenRouter must keep their provider-owned compat rules
+      // even when serving DeepSeek-family models.
+      if (normalizedModelId?.includes("deepseek")) {
+        return "deepseek";
+      }
       return provider || "unknown";
   }
 }

@@ -1535,6 +1535,61 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("keeps OpenRouter-hosted DeepSeek models on OpenRouter thinking format", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "deepseek/deepseek-r1",
+        name: "DeepSeek R1",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        messages: [
+          { role: "user", content: "call a tool", timestamp: 1 },
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "openrouter",
+            model: "deepseek/deepseek-r1",
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 2,
+          },
+        ],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup data",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      { reasoning: "high" } as never,
+    ) as {
+      messages?: Array<Record<string, unknown>>;
+      reasoning?: unknown;
+      reasoning_effort?: unknown;
+    };
+
+    expect(params.reasoning).toEqual({ effort: "high" });
+    expect(params).not.toHaveProperty("reasoning_effort");
+    expect(params.messages?.[1]).not.toHaveProperty("reasoning_content");
+  });
+
   it("does not add DeepSeek reasoning_content when thinking is disabled", () => {
     const params = buildOpenAICompletionsParams(
       {

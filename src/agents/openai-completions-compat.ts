@@ -72,9 +72,13 @@ export function resolveOpenAICompletionsCompatDefaults(
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
-  const providerOrFamilyIsDeepSeek =
-    isDefaultRouteProvider(input.provider, "deepseek") || knownProviderFamily === "deepseek";
-  const isDeepSeek = endpointClass === "deepseek-native" || providerOrFamilyIsDeepSeek;
+  const isDeepSeek =
+    endpointClass === "deepseek-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek")) ||
+    // `knownProviderFamily` may come from a model-id heuristic for custom/local
+    // providers, e.g. Ollama-hosted `deepseek-*` models. Known proxy providers
+    // such as OpenRouter keep their own family and thinking format.
+    knownProviderFamily === "deepseek";
   const isNonStandard =
     endpointClass === "cerebras-native" ||
     endpointClass === "chutes-native" ||
