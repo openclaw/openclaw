@@ -10,6 +10,7 @@ import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
 // Keep the historical one-line-per-message export shape for normal turns, but
 // wrap pathological long messages so downstream indexers never ingest a single
 // toxic line. Wrapped continuation lines still map back to the same JSONL line.
@@ -188,6 +189,68 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
+function stripRelevantMemoriesEnvelope(text: string): string {
+  return text.replace(RELEVANT_MEMORIES_BLOCK_RE, " ");
+}
+
+function isSilentReplyScaffolding(text: string): boolean {
+  return /^(?:NO_REPLY|SKIPPED)$/i.test(text.trim());
+}
+
+function isCronTaskEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  if (!/^\[cron:[^\]]+]/i.test(trimmed)) {
+    return false;
+  }
+  return /(?:\btask_role=|\btask_origin=|\bnotify_policy=|Current time:|reply\s+`?NO_REPLY`?|Return your response as plain text|A scheduled reminder has been triggered\.)/i.test(
+    trimmed,
+  );
+}
+
+function isAsyncExecReceiptEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    /^System \(untrusted\):\s*\[[^\]]+\]\s*(?:Exec|Process)\s+(?:completed|failed)/i.test(
+      trimmed,
+    ) || /An async command you ran earlier has completed\./i.test(trimmed)
+  );
+}
+
+function isStartupResetEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    /^\[Startup context loaded by runtime\]/i.test(trimmed) ||
+    /Bootstrap files like SOUL\.md, USER\.md, and MEMORY\.md/i.test(trimmed) ||
+    /A new session was started via \/new or \/reset\./i.test(trimmed) ||
+    /Execute your Session Startup sequence now/i.test(trimmed)
+  );
+}
+
+function stripSessionScaffolding(text: string, role: "user" | "assistant"): string {
+  let next = text;
+  if (role === "user") {
+    next = stripInboundMetadata(next);
+    next = stripRelevantMemoriesEnvelope(next);
+  }
+  next = normalizeSessionText(next);
+  if (!next) {
+    return "";
+  }
+  if (isSilentReplyScaffolding(next)) {
+    return "";
+  }
+  if (role === "user") {
+    if (
+      isCronTaskEnvelope(next) ||
+      isAsyncExecReceiptEnvelope(next) ||
+      isStartupResetEnvelope(next)
+    ) {
+      return "";
+    }
+  }
+  return next;
+}
+
 function collectRawSessionText(content: unknown): string | null {
   if (typeof content === "string") {
     return content;
@@ -267,26 +330,6 @@ function renderSessionExportLines(label: string, text: string): string[] {
   return splitLongSessionLine(text).map((segment) => `${label}: ${segment}`);
 }
 
-/**
- * Strip OpenClaw-injected inbound metadata envelopes from a raw text block.
- *
- * User-role messages arriving from external channels (Telegram, Discord,
- * Slack, …) are stored with a multi-line prefix containing Conversation info,
- * Sender info, and other AI-facing metadata blocks. These envelopes must be
- * removed BEFORE normalization, because `stripInboundMetadata` relies on
- * newline structure and fenced `json` code fences to locate sentinels; once
- * `normalizeSessionText` collapses newlines into spaces, stripping is
- * impossible.
- *
- * See: https://github.com/openclaw/openclaw/issues/63921
- */
-function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
-  if (role !== "user") {
-    return text;
-  }
-  return stripInboundMetadata(text);
-}
-
 export function extractSessionText(
   content: unknown,
   role: "user" | "assistant" = "assistant",
@@ -295,7 +338,7 @@ export function extractSessionText(
   if (rawText === null) {
     return null;
   }
-  const stripped = stripInboundMetadataForUserRole(rawText, role);
+  const stripped = stripSessionScaffolding(rawText, role);
   const normalized = normalizeSessionText(stripped);
   return normalized ? normalized : null;
 }
