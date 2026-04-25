@@ -194,6 +194,14 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 - `attachOnly: true` means never launch a local browser; only attach if one is already running.
 - `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
+- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
+  default to headless automatically when neither the environment nor profile/global
+  config explicitly chooses headed mode. `openclaw browser status --json`
+  reports `headlessSource` as `env`, `profile`, `config`,
+  `linux-display-fallback`, or `default`.
+- `OPENCLAW_BROWSER_HEADLESS=1` forces local managed launches headless for the
+  current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode and returns
+  an actionable error on Linux hosts without a display server.
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.

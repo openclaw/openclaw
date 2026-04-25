@@ -46,11 +46,17 @@ import {
   ensureProfileCleanExit,
   isProfileDecorated,
 } from "./chrome.profile-decoration.js";
-import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import {
+  getManagedBrowserMissingDisplayError,
+  resolveManagedBrowserHeadlessMode,
+  type ResolvedBrowserConfig,
+  type ResolvedBrowserProfile,
+} from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
@@ -179,9 +185,10 @@ function chromeLaunchHints(params: {
   if (process.platform === "linux" && !params.resolved.noSandbox) {
     hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
   }
-  if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !params.profile.headless) {
+  const headlessMode = resolveManagedBrowserHeadlessMode(params.resolved, params.profile);
+  if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !headlessMode.headless) {
     hints.push(
-      "No DISPLAY/X server was detected. Enable browser.headless: true, start Xvfb, or run the Gateway in a desktop session.",
+      "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
     );
   }
   if (CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput)) {
@@ -223,8 +230,11 @@ export function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
   userDataDir: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): string[] {
   const { resolved, profile, userDataDir } = params;
+  const headlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, params);
   const args: string[] = [
     `--remote-debugging-port=${profile.cdpPort}`,
     `--user-data-dir=${userDataDir}`,
@@ -239,7 +249,7 @@ export function buildOpenClawChromeLaunchArgs(params: {
     "--password-store=basic",
   ];
 
-  if (profile.headless) {
+  if (headlessMode.headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
   }
@@ -381,6 +391,10 @@ export async function launchOpenClawChrome(
 ): Promise<RunningChrome> {
   if (!profile.cdpIsLoopback) {
     throw new Error(`Profile "${profile.name}" is remote; cannot launch local Chrome.`);
+  }
+  const missingDisplayError = getManagedBrowserMissingDisplayError(resolved, profile);
+  if (missingDisplayError) {
+    throw new BrowserProfileUnavailableError(missingDisplayError);
   }
   await ensurePortAvailable(profile.cdpPort);
 

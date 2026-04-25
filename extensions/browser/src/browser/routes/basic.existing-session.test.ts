@@ -41,6 +41,38 @@ function createExistingSessionProfileState(params?: {
   };
 }
 
+function createManagedProfileState() {
+  return {
+    resolved: {
+      enabled: true,
+      headless: false,
+      headlessSource: "default",
+      noSandbox: false,
+      executablePath: undefined,
+    },
+    profiles: new Map(),
+    forProfile: () =>
+      ({
+        profile: {
+          name: "openclaw",
+          driver: "openclaw",
+          cdpPort: 18800,
+          cdpUrl: "http://127.0.0.1:18800",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          userDataDir: "/tmp/openclaw-profile",
+          color: "#FF4500",
+          headless: false,
+          headlessSource: "default",
+          attachOnly: false,
+        },
+        isHttpReachable: async () => false,
+        isTransportAvailable: async () => false,
+        isReachable: async () => false,
+      }) as never,
+  };
+}
+
 async function callBasicRouteWithState(params: {
   query?: Record<string, string>;
   state: ReturnType<typeof createExistingSessionProfileState>;
@@ -60,6 +92,40 @@ async function callBasicRouteWithState(params: {
 }
 
 describe("basic browser routes", () => {
+  it("reports Linux no-display headless fallback for local managed profiles", async () => {
+    const originalPlatform = process.platform;
+    const originalDisplay = process.env.DISPLAY;
+    const originalWayland = process.env.WAYLAND_DISPLAY;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    delete process.env.DISPLAY;
+    delete process.env.WAYLAND_DISPLAY;
+    try {
+      const response = await callBasicRouteWithState({
+        query: { profile: "openclaw" },
+        state: createManagedProfileState(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({
+        profile: "openclaw",
+        headless: true,
+        headlessSource: "linux-display-fallback",
+      });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+      if (originalDisplay === undefined) {
+        delete process.env.DISPLAY;
+      } else {
+        process.env.DISPLAY = originalDisplay;
+      }
+      if (originalWayland === undefined) {
+        delete process.env.WAYLAND_DISPLAY;
+      } else {
+        process.env.WAYLAND_DISPLAY = originalWayland;
+      }
+    }
+  });
+
   it("maps existing-session status failures to JSON browser errors", async () => {
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({

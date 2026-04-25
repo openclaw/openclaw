@@ -1,5 +1,6 @@
 import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
 import { BrowserError, toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -83,6 +84,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
   } catch (err) {
     detectError = String(err);
   }
+  const headlessMode = resolveManagedBrowserHeadlessMode(current.resolved, profileCtx.profile);
 
   return {
     enabled: current.resolved.enabled,
@@ -103,7 +105,8 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     detectError,
     userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
     color: profileCtx.profile.color,
-    headless: profileCtx.profile.headless,
+    headless: headlessMode.headless,
+    headlessSource: headlessMode.source,
     noSandbox: current.resolved.noSandbox,
     executablePath: profileCtx.profile.executablePath ?? null,
     attachOnly: profileCtx.profile.attachOnly,

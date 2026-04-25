@@ -67,6 +67,10 @@ Notes:
   OpenClaw did not launch the browser process itself.
 - For local managed profiles, `openclaw browser stop` stops the spawned browser
   process.
+- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
+  run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`,
+  `browser.headless=false`, or `browser.profiles.<name>.headless=false`
+  explicitly requests a visible browser.
 
 ## If the command is missing
 
