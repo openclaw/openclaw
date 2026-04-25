@@ -106,6 +106,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Auth/Codex: bootstrap `openai-codex:default` from Codex CLI credentials on fresh installs without replacing a locally refreshed OpenClaw OAuth token later. Fixes #71305. Thanks @Gforce10-design.
 - Plugin SDK/tool-result transforms: bound middleware `details`, validate in-place result mutations, and mark fail-closed middleware fallbacks with canonical `error` status. Thanks @vincentkoc.
 - Discord/gateway: prevent startup from getting stuck at `awaiting gateway readiness` when Carbon gateway registration races with a lifecycle reconnect. Fixes #52372. (#68159) Thanks @IVY-AI-gif.
 - Discord/gateway: supervise Carbon's async gateway registration promise so fatal Discord metadata failures surface through startup instead of process-level unhandled rejections. (#62451) Thanks @safzanpirani.
