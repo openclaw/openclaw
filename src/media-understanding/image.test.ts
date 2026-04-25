@@ -111,7 +111,6 @@ describe("describeImageWithModel", () => {
     resolveModelWithRegistryMock.mockImplementation(
       // Delegate to modelRegistry.find so tests that override discoverModelsMock
       // automatically get the right model through resolveModelWithRegistry.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ({ modelRegistry, provider, modelId }: any) => modelRegistry.find(provider, modelId),
     );
   });
