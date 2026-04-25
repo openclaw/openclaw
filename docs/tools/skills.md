@@ -203,6 +203,11 @@ Fields under `metadata.openclaw`:
 - `primaryEnv` — env var name associated with `skills.entries.<name>.apiKey`.
 - `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/uv/download).
 
+Legacy `metadata.clawdbot` blocks are still accepted when
+`metadata.openclaw` is absent, so older installed skills keep their dependency
+gates and installer hints. New and updated skills should use
+`metadata.openclaw`.
+
 Note on sandboxing:
 
 - `requires.bins` is checked on the **host** at skill load time.
