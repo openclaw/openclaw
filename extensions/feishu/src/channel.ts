@@ -1,5 +1,6 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   adaptScopedAccountAccessor,
   createHybridChannelConfigAdapter,
@@ -827,6 +828,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
+            const audioAsVoice =
+              readBooleanParam(ctx.params, "asVoice") ??
+              readBooleanParam(ctx.params, "audioAsVoice");
             const rawCard =
               presentation !== undefined
                 ? buildFeishuPresentationCard({ presentation, fallbackText: text })
