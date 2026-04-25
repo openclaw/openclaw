@@ -42,7 +42,9 @@ If you want OpenAI, ElevenLabs, Google Gemini, Gradium, MiniMax, Vydra, xAI, or 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
 - `GRADIUM_API_KEY`
-- `MINIMAX_API_KEY`
+- `MINIMAX_API_KEY`; MiniMax TTS also accepts Token Plan auth via
+  `MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, or
+  `MINIMAX_CODING_API_KEY`
 - `OPENAI_API_KEY`
 - `VYDRA_API_KEY`
 - `XAI_API_KEY`
@@ -180,6 +182,13 @@ Full schema is in [Gateway configuration](/gateway/configuration).
   },
 }
 ```
+
+MiniMax TTS auth resolution is `messages.tts.providers.minimax.apiKey`, then
+stored `minimax-portal` OAuth/token profiles, then Token Plan environment keys
+(`MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`,
+`MINIMAX_CODING_API_KEY`), then `MINIMAX_API_KEY`. When no explicit TTS
+`baseUrl` is set, OpenClaw can reuse the configured `minimax-portal` OAuth
+host for Token Plan speech.
 
 ### Google Gemini primary
 
