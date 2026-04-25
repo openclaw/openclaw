@@ -68,4 +68,27 @@ describe("runCrestodian", () => {
     expect(planner).not.toHaveBeenCalled();
     expect(lines.join("\n")).toContain("Default model:");
   });
+
+  it("starts interactive Crestodian in the TUI shell", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "crestodian-run-tui-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
+    const { runtime, lines } = createRuntime();
+    const runInteractiveTui = vi.fn(async () => {});
+
+    await runCrestodian(
+      {
+        input: { isTTY: true } as unknown as NodeJS.ReadableStream,
+        output: { isTTY: true } as unknown as NodeJS.WritableStream,
+        runInteractiveTui,
+      },
+      runtime,
+    );
+
+    expect(runInteractiveTui).toHaveBeenCalledWith(
+      expect.objectContaining({ runInteractiveTui }),
+      runtime,
+    );
+    expect(lines.join("\n")).not.toContain("Say: status");
+  });
 });

@@ -17,7 +17,9 @@ Running `openclaw crestodian` starts the same helper explicitly.
 
 ## What Crestodian shows
 
-On startup, Crestodian prints a compact system overview:
+On startup, interactive Crestodian opens the same TUI shell used by
+`openclaw tui`, with a Crestodian chat backend. The chat log starts with a
+compact system overview:
 
 - config path and validity
 - configured agents and the default agent
@@ -30,7 +32,9 @@ On startup, Crestodian prints a compact system overview:
 - gateway reachability
 - the immediate recommended next step
 
-It does not dump secrets or load plugin CLI commands just to start.
+It does not dump secrets or load plugin CLI commands just to start. The TUI
+still provides the normal header, chat log, status line, footer, autocomplete,
+and editor controls.
 
 Crestodian uses the same OpenClaw reference discovery as regular agents. In a Git checkout,
 it points itself at local `docs/` and the local source tree. In an npm package install, it
@@ -51,7 +55,7 @@ openclaw crestodian --message "set default model openai/gpt-5.5" --yes
 openclaw onboard --modern
 ```
 
-Inside the interactive prompt:
+Inside the Crestodian TUI:
 
 ```text
 status
