@@ -12,6 +12,30 @@ export type ReplyToResolution = {
   source?: "explicit" | "implicit";
 };
 
+export function createReplyToFanout(params: {
+  replyToId?: string | null;
+  replyToMode?: ReplyToMode;
+  replyToIdSource?: ReplyToResolution["source"];
+}): () => string | undefined {
+  const replyToId = params.replyToId ?? undefined;
+  if (!replyToId) {
+    return () => undefined;
+  }
+  const singleUse =
+    params.replyToIdSource !== "explicit" &&
+    params.replyToMode !== undefined &&
+    isSingleUseReplyToMode(params.replyToMode);
+  if (!singleUse) {
+    return () => replyToId;
+  }
+  let current: string | undefined = replyToId;
+  return () => {
+    const value = current;
+    current = undefined;
+    return value;
+  };
+}
+
 export function createReplyToDeliveryPolicy(params: {
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
