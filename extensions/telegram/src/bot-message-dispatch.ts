@@ -207,6 +207,15 @@ function resolveTelegramReasoningLevel(params: {
   return "off";
 }
 
+function formatProgressAsMarkdownCode(text: string): string {
+  const maxBacktickRun = Math.max(
+    0,
+    ...Array.from(text.matchAll(/`+/g), (match) => match[0].length),
+  );
+  const fence = "`".repeat(maxBacktickRun + 1);
+  return `${fence}${text}${fence}`;
+}
+
 export const dispatchTelegramMessage = async ({
   context,
   bot,
@@ -404,9 +413,10 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
-    const previewText = ["Working…", ...previewToolProgressLines.map((entry) => `• ${entry}`)].join(
-      "\n",
-    );
+    const previewText = [
+      "Working…",
+      ...previewToolProgressLines.map((entry) => `• ${formatProgressAsMarkdownCode(entry)}`),
+    ].join("\n");
     answerLane.lastPartialText = previewText;
     answerLane.stream.update(previewText);
   };
