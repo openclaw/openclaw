@@ -188,6 +188,56 @@ describe("describeImageWithModel", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("resolves custom provider image models from config when discovery misses", async () => {
+    discoverModelsMock.mockReturnValue({ find: vi.fn(() => null) });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "vllm",
+      model: "vllm/Qwen3.5",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "custom vision ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              apiKey: "vllm-local", // pragma: allowlist secret
+              api: "openai-completions",
+              models: [
+                {
+                  id: "vllm/Qwen3.5",
+                  name: "Qwen3.5",
+                  input: ["text", "image"],
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      provider: "vllm",
+      model: "Qwen3.5",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "custom vision ok",
+      model: "vllm/Qwen3.5",
+    });
+    expect(completeMock).toHaveBeenCalledOnce();
+  });
+
   it("passes image prompt as system instructions for codex image requests", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

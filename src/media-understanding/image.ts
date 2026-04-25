@@ -6,8 +6,9 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
-import { normalizeModelRef } from "../agents/model-selection.js";
+import { normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { buildInlineProviderModels } from "../agents/pi-embedded-runner/model.inline-provider.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
@@ -99,6 +100,21 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return Boolean(value) && typeof (value as { then?: unknown }).then === "function";
 }
 
+function resolveConfiguredImageModel(params: {
+  cfg: ImageDescriptionRequest["cfg"];
+  provider: string;
+  modelId: string;
+}): Model<Api> | undefined {
+  const configuredProviders = params.cfg?.models?.providers ?? {};
+  const normalizedProvider = normalizeProviderId(params.provider);
+  return buildInlineProviderModels(configuredProviders).find(
+    (entry) =>
+      (entry.provider === params.provider ||
+        normalizeProviderId(entry.provider) === normalizedProvider) &&
+      (entry.id === params.modelId || entry.id === `${entry.provider}/${params.modelId}`),
+  ) as Model<Api> | undefined;
+}
+
 function composeImageDescriptionPayloadHandlers(
   first: ProviderStreamOptions["onPayload"] | undefined,
   second: ProviderStreamOptions["onPayload"] | undefined,
@@ -141,7 +157,19 @@ async function resolveImageRuntime(params: {
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const model = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model<Api> | null;
+  const registryModel = modelRegistry.find(
+    resolvedRef.provider,
+    resolvedRef.model,
+  ) as Model<Api> | null;
+  const configuredModel = resolveConfiguredImageModel({
+    cfg: params.cfg,
+    provider: resolvedRef.provider,
+    modelId: resolvedRef.model,
+  });
+  const model =
+    configuredModel?.input?.includes("image") && !registryModel?.input?.includes("image")
+      ? configuredModel
+      : (registryModel ?? configuredModel);
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
