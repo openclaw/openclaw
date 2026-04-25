@@ -41,6 +41,8 @@ Docs: https://docs.openclaw.ai
 - Browser/CDP: honor configured remote and `attachOnly` CDP HTTP/WebSocket
   timeouts when opening tabs through raw CDP or `/json/new` fallback. (#54238)
   Thanks @FuncWei.
+- WhatsApp/TTS: send visible text separately from PTT voice-note audio instead
+  of relying on hidden voice-note captions. Fixes #51081.
 - Agents/TTS: preserve `[[audio_as_voice]]` directives on trusted text
   tool-result `MEDIA:` payloads so generated audio still delivers as a voice
   note. (#46535) Thanks @azade-c.

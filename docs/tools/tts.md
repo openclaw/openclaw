@@ -664,6 +664,8 @@ reply delivery. When the channel is Feishu, Matrix, Telegram, or WhatsApp,
 the audio is delivered as a voice message rather than a file attachment.
 Feishu can transcode non-Opus TTS output on this path when `ffmpeg` is
 available.
+WhatsApp sends visible text separately from PTT voice-note audio because clients
+do not consistently render captions on voice notes.
 It accepts optional `channel` and `timeoutMs` fields; `timeoutMs` is a
 per-call provider request timeout in milliseconds.
 

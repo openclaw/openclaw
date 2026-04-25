@@ -365,7 +365,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - non-Ogg audio, including Microsoft Edge TTS MP3/WebM output, is transcoded to Ogg/Opus before PTT delivery
     - native Ogg/Opus audio is sent with `audio/ogg; codecs=opus` for voice-note compatibility
     - animated GIF playback is supported via `gifPlayback: true` on video sends
-    - captions are applied to the first media item when sending multi-media reply payloads
+    - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
   </Accordion>
 
