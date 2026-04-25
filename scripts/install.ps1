@@ -29,7 +29,7 @@ function Write-Host {
         "error" { "$ERROR✗$NC $Message" }
         default { "$MUTED·$NC $Message" }
     }
-    Microsoft.PowerShell.Host\Write-Host $msg
+    Microsoft.PowerShell.Utility\Write-Host $msg
 }
 
 function Write-Banner {
@@ -199,14 +199,103 @@ function Ensure-Git {
     return Install-Git
 }
 
+function Read-TrimmedFileText {
+    param([string]$Path)
+
+    if (!(Test-Path -LiteralPath $Path)) {
+        return ""
+    }
+
+    return ((Get-Content -LiteralPath $Path -Raw) -replace "(\r?\n)+$", "")
+}
+
+function ConvertTo-PowerShellSingleQuotedLiteral {
+    param([string]$Value)
+
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+function Invoke-NativeCommandCapture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+
+    try {
+        $startFilePath = $FilePath
+        $startArguments = $Arguments
+
+        if ($FilePath -match '(?i)\.(cmd|bat)$') {
+            # Start-Process cannot directly redirect stdio for command shims like
+            # npm.cmd. Run them inside a nested PowerShell so the shim executes
+            # normally while stdout/stderr still flow back to these temp files.
+            $commandParts = @(
+                ConvertTo-PowerShellSingleQuotedLiteral -Value $FilePath
+            )
+            foreach ($argument in $Arguments) {
+                $commandParts += ConvertTo-PowerShellSingleQuotedLiteral -Value $argument
+            }
+            $commandScript = "& " + ($commandParts -join " ") + "`nexit `$LASTEXITCODE"
+            $startFilePath = "powershell.exe"
+            $startArguments = @(
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                $commandScript
+            )
+        }
+
+        $process = Start-Process -FilePath $startFilePath `
+            -ArgumentList $startArguments `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+        return @{
+            ExitCode = $process.ExitCode
+            Stdout = Read-TrimmedFileText -Path $stdoutPath
+            Stderr = Read-TrimmedFileText -Path $stderrPath
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-OpenClawNpm {
-    param([string]$Version = "latest")
+    param([string]$Target = "latest")
+
+    $installSpec = Resolve-PackageInstallSpec -Target $Target
     
-    Write-Host "Installing OpenClaw (openclaw@$Version)..." -Level info
+    Write-Host "Installing OpenClaw ($installSpec)..." -Level info
     
     try {
-        # Use -ExecutionPolicy Bypass to handle restricted execution policy
-        npm install -g openclaw@$Version --no-fund --no-audit 2>&1
+        # Run npm out-of-process so warning chatter on stderr does not get
+        # promoted into a terminating PowerShell error while the install succeeds.
+        $installResult = Invoke-NativeCommandCapture -FilePath "npm.cmd" -Arguments @(
+            "install",
+            "-g",
+            $installSpec,
+            "--no-fund",
+            "--no-audit"
+        )
+        if ($installResult.Stdout) {
+            Microsoft.PowerShell.Utility\Write-Output $installResult.Stdout
+        }
+        if ($installResult.Stderr) {
+            Microsoft.PowerShell.Utility\Write-Output $installResult.Stderr
+        }
+        if ($installResult.ExitCode -ne 0) {
+            Write-Host "npm install failed with exit code $($installResult.ExitCode)" -Level error
+            return $false
+        }
         Write-Host "OpenClaw installed" -Level success
         return $true
     } catch {
@@ -257,6 +346,34 @@ node "%~dp0..\openclaw\dist\entry.js" %*
     return $true
 }
 
+function Test-ExplicitPackageInstallSpec {
+    param([string]$Target)
+
+    if ([string]::IsNullOrWhiteSpace($Target)) {
+        return $false
+    }
+
+    return $Target.Contains("://") -or
+        $Target.Contains("#") -or
+        $Target -match '^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm):'
+}
+
+function Resolve-PackageInstallSpec {
+    param([string]$Target = "latest")
+
+    $trimmed = $Target.Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        return "openclaw@latest"
+    }
+    if ($trimmed.ToLowerInvariant() -eq "main") {
+        return "github:openclaw/openclaw#main"
+    }
+    if (Test-ExplicitPackageInstallSpec -Target $trimmed) {
+        return $trimmed
+    }
+    return "openclaw@$trimmed"
+}
+
 function Add-ToPath {
     param([string]$Path)
     
@@ -301,9 +418,9 @@ function Main {
         }
         
         if ($DryRun) {
-            Write-Host "[DRY RUN] Would install OpenClaw via npm (tag: $Tag)" -Level info
+            Write-Host "[DRY RUN] Would install OpenClaw via npm ($((Resolve-PackageInstallSpec -Target $Tag)))" -Level info
         } else {
-            if (!(Install-OpenClawNpm -Version $Tag)) {
+            if (!(Install-OpenClawNpm -Target $Tag)) {
                 exit 1
             }
         }
@@ -311,8 +428,13 @@ function Main {
     
     # Try to add npm global bin to PATH
     try {
-        $npmPrefix = npm config get prefix 2>$null
-        if ($npmPrefix) {
+        $prefixResult = Invoke-NativeCommandCapture -FilePath "npm.cmd" -Arguments @(
+            "config",
+            "get",
+            "prefix"
+        )
+        $npmPrefix = $prefixResult.Stdout
+        if ($prefixResult.ExitCode -eq 0 -and $npmPrefix) {
             Add-ToPath -Path "$npmPrefix"
         }
     } catch { }

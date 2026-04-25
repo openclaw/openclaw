@@ -3,10 +3,8 @@ summary: "Global voice wake words (Gateway-owned) and how they sync across nodes
 read_when:
   - Changing voice wake words behavior or defaults
   - Adding new node platforms that need wake word sync
-title: "Voice Wake"
+title: "Voice wake"
 ---
-
-# Voice Wake (Global Wake Words)
 
 OpenClaw treats **wake words as a single global list** owned by the **Gateway**.
 
@@ -64,3 +62,9 @@ Who receives it:
 
 - Voice Wake is currently disabled in Android runtime/Settings.
 - Android voice uses manual mic capture in the Voice tab instead of wake-word triggers.
+
+## Related
+
+- [Talk mode](/nodes/talk)
+- [Audio and voice notes](/nodes/audio)
+- [Media understanding](/nodes/media-understanding)

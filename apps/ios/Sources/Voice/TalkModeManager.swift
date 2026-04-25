@@ -34,6 +34,7 @@ final class TalkModeManager: NSObject {
     private typealias SpeechRequest = SFSpeechAudioBufferRecognitionRequest
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
+    private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
     private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
     var isEnabled: Bool = false
     var isListening: Bool = false
@@ -97,7 +98,7 @@ final class TalkModeManager: NSObject {
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
-    private let silenceWindow: TimeInterval = 0.9
+    private var silenceWindow: TimeInterval = TimeInterval(TalkModeManager.defaultSilenceTimeoutMs) / 1000
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
     private var noiseFloor: Double?
@@ -1007,7 +1008,9 @@ final class TalkModeManager: NSObject {
                 self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
             }
 
-            let configuredKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? self.apiKey : nil
+            let configuredKey = self.apiKey?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty == false ? self.apiKey : nil
             #if DEBUG
             let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
             #else
@@ -1513,7 +1516,9 @@ final class TalkModeManager: NSObject {
                 "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
         }
 
-        let configuredKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? self.apiKey : nil
+        let configuredKey = self.apiKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false ? self.apiKey : nil
         #if DEBUG
         let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
         #else
@@ -1969,38 +1974,6 @@ extension TalkModeManager {
         return trimmed
     }
 
-    struct TalkProviderConfigSelection {
-        let provider: String
-        let config: [String: Any]
-    }
-
-    private static func normalizedTalkProviderID(_ raw: String?) -> String? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    static func selectTalkProviderConfig(_ talk: [String: Any]?) -> TalkProviderConfigSelection? {
-        guard let talk else { return nil }
-        let rawProvider = talk["provider"] as? String
-        let rawProviders = talk["providers"] as? [String: Any]
-        guard rawProvider != nil || rawProviders != nil else { return nil }
-        let providers = rawProviders ?? [:]
-        let normalizedProviders = providers.reduce(into: [String: [String: Any]]()) { acc, entry in
-            guard
-                let providerID = Self.normalizedTalkProviderID(entry.key),
-                let config = entry.value as? [String: Any]
-            else { return }
-            acc[providerID] = config
-        }
-        let providerID =
-            Self.normalizedTalkProviderID(rawProvider) ??
-            normalizedProviders.keys.min() ??
-            Self.defaultTalkProvider
-        return TalkProviderConfigSelection(
-            provider: providerID,
-            config: normalizedProviders[providerID] ?? [:])
-    }
-
     func reloadConfig() async {
         guard let gateway else { return }
         self.pcmFormatUnavailable = false
@@ -2012,40 +1985,27 @@ extension TalkModeManager {
             )
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
-            let talk = config["talk"] as? [String: Any]
-            let selection = Self.selectTalkProviderConfig(talk)
-            if talk != nil, selection == nil {
+            let parsed = TalkModeGatewayConfigParser.parse(
+                config: config,
+                defaultProvider: Self.defaultTalkProvider,
+                defaultModelIdFallback: Self.defaultModelIdFallback,
+                defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs)
+            if parsed.missingResolvedPayload {
                 GatewayDiagnostics.log(
-                    "talk config ignored: legacy payload unsupported on iOS beta; expected talk.provider/providers")
+                    "talk config ignored: normalized payload missing talk.resolved")
             }
-            let activeProvider = selection?.provider ?? Self.defaultTalkProvider
-            let activeConfig = selection?.config
-            self.defaultVoiceId = (activeConfig?["voiceId"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let aliases = activeConfig?["voiceAliases"] as? [String: Any] {
-                var resolved: [String: String] = [:]
-                for (key, value) in aliases {
-                    guard let id = value as? String else { continue }
-                    let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    let trimmedId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !normalizedKey.isEmpty, !trimmedId.isEmpty else { continue }
-                    resolved[normalizedKey] = trimmedId
-                }
-                self.voiceAliases = resolved
-            } else {
-                self.voiceAliases = [:]
-            }
+            let activeProvider = parsed.activeProvider
+            self.defaultVoiceId = parsed.defaultVoiceId
+            self.voiceAliases = parsed.voiceAliases
             if !self.voiceOverrideActive {
                 self.currentVoiceId = self.defaultVoiceId
             }
-            let model = (activeConfig?["modelId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.defaultModelId = (model?.isEmpty == false) ? model : Self.defaultModelIdFallback
+            self.defaultModelId = parsed.defaultModelId
             if !self.modelOverrideActive {
                 self.currentModelId = self.defaultModelId
             }
-            self.defaultOutputFormat = (activeConfig?["outputFormat"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let rawConfigApiKey = (activeConfig?["apiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.defaultOutputFormat = parsed.defaultOutputFormat
+            let rawConfigApiKey = parsed.rawConfigApiKey
             let configApiKey = Self.normalizedTalkApiKey(rawConfigApiKey)
             let localApiKey = Self.normalizedTalkApiKey(
                 GatewaySettingsStore.loadTalkProviderApiKey(provider: activeProvider))
@@ -2064,11 +2024,13 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = self.defaultModelId
             self.gatewayTalkApiKeyConfigured = (self.apiKey?.isEmpty == false)
             self.gatewayTalkConfigLoaded = true
-            if let interrupt = talk?["interruptOnSpeech"] as? Bool {
+            if let interrupt = parsed.interruptOnSpeech {
                 self.interruptOnSpeech = interrupt
             }
-            if selection != nil {
-                GatewayDiagnostics.log("talk config provider=\(activeProvider)")
+            self.silenceWindow = TimeInterval(parsed.silenceTimeoutMs) / 1000
+            if parsed.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
+                GatewayDiagnostics.log(
+                    "talk config provider=\(activeProvider) silenceTimeoutMs=\(parsed.silenceTimeoutMs)")
             }
         } catch {
             self.defaultModelId = Self.defaultModelIdFallback
@@ -2079,6 +2041,7 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
+            self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
         }
     }
 

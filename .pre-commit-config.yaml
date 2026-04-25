@@ -66,9 +66,13 @@ repos:
           - --exclude-lines
           - 'env: \{ MISTRAL_API_K[E]Y: "sk-\.\.\." \},'
           - --exclude-lines
-          - '"ap[i]Key": "xxxxx",'
+          - '"ap[i]Key": "xxxxx"(,)?'
           - --exclude-lines
           - 'ap[i]Key: "A[I]za\.\.\.",'
+          - --exclude-lines
+          - '"ap[i]Key": "(resolved|normalized|legacy)-key"(,)?'
+          - --exclude-lines
+          - 'sparkle:edSignature="[A-Za-z0-9+/=]+"'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
@@ -113,10 +117,10 @@ repos:
   # Project checks (same commands as CI)
   - repo: local
     hooks:
-      # pnpm audit --prod --audit-level=high
+      # node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
       - id: pnpm-audit-prod
         name: pnpm-audit-prod
-        entry: pnpm audit --prod --audit-level=high
+        entry: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
         language: system
         pass_filenames: false
 

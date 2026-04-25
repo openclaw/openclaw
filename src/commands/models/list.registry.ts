@@ -1,23 +1,26 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import { listProfilesForProvider } from "../../agents/auth-profiles.js";
-import {
-  getCustomProviderApiKey,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-} from "../../agents/model-auth.js";
-import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import {
   formatErrorWithStack,
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
+import { toModelRow as toModelRowBase } from "./list.model-row.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+  hasUsableCustomProviderApiKey,
+  listProfilesForProvider,
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+  resolveOpenClawAgentDir,
+} from "./list.runtime.js";
 import type { ModelRow } from "./list.types.js";
-import { isLocalBaseUrl, modelKey } from "./shared.js";
+import { modelKey } from "./shared.js";
 
 const hasAuthForProvider = (
   provider: string,
@@ -36,7 +39,10 @@ const hasAuthForProvider = (
   if (resolveEnvApiKey(provider)) {
     return true;
   }
-  if (getCustomProviderApiKey(cfg, provider)) {
+  if (hasUsableCustomProviderApiKey(cfg, provider)) {
+    return true;
+  }
+  if (resolveRuntimeSyntheticAuthProviderRefs().includes(provider)) {
     return true;
   }
   return false;
@@ -80,7 +86,7 @@ function validateAvailableModels(availableModels: unknown): Model<Api>[] {
   return availableModels as Model<Api>[];
 }
 
-function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
+function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Model<Api>[] {
   let availableModels: unknown;
   try {
     availableModels = registry.getAvailable();
@@ -88,28 +94,40 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
     throw normalizeAvailabilityError(err);
   }
   try {
-    return validateAvailableModels(availableModels);
+    return validateAvailableModels(availableModels).filter(
+      (model) =>
+        !shouldSuppressBuiltInModel({
+          provider: model.provider,
+          id: model.id,
+          baseUrl: model.baseUrl,
+          config: cfg,
+        }),
+    );
   } catch (err) {
     throw normalizeAvailabilityError(err);
   }
 }
 
-export async function loadModelRegistry(
-  cfg: OpenClawConfig,
-  opts?: { sourceConfig?: OpenClawConfig },
-) {
-  // Persistence must be based on source config (pre-resolution) so SecretRef-managed
-  // credentials remain markers in models.json for command paths too.
-  await ensureOpenClawModelsJson(opts?.sourceConfig ?? cfg);
+export async function loadModelRegistry(cfg: OpenClawConfig, opts?: { providerFilter?: string }) {
   const agentDir = resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(agentDir);
-  const registry = discoverModels(authStorage, agentDir);
-  const models = registry.getAll();
+  const authStorage = discoverAuthStorage(agentDir, { readOnly: true });
+  const registry = discoverModels(authStorage, agentDir, {
+    providerFilter: opts?.providerFilter,
+  });
+  const models = registry.getAll().filter(
+    (model) =>
+      !shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: cfg,
+      }),
+  );
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 
   try {
-    const availableModels = loadAvailableModels(registry);
+    const availableModels = loadAvailableModels(registry, cfg);
     availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
   } catch (err) {
     if (!shouldFallbackToAuthHeuristics(err)) {
@@ -126,71 +144,10 @@ export async function loadModelRegistry(
   return { registry, models, availableKeys, availabilityErrorMessage };
 }
 
-export function toModelRow(params: {
-  model?: Model<Api>;
-  key: string;
-  tags: string[];
-  aliases?: string[];
-  availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-  allowProviderAvailabilityFallback?: boolean;
-}): ModelRow {
-  const {
-    model,
-    key,
-    tags,
-    aliases = [],
-    availableKeys,
-    cfg,
-    authStore,
-    allowProviderAvailabilityFallback = false,
-  } = params;
-  if (!model) {
-    return {
-      key,
-      name: key,
-      input: "-",
-      contextWindow: null,
-      local: null,
-      available: null,
-      tags: [...tags, "missing"],
-      missing: true,
-    };
-  }
-
-  const input = model.input.join("+") || "text";
-  const local = isLocalBaseUrl(model.baseUrl);
-  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
-  // Prefer model-level registry availability when present.
-  // Fall back to provider-level auth heuristics only if registry availability isn't available,
-  // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
-  const available =
-    availableKeys !== undefined && !allowProviderAvailabilityFallback
-      ? modelIsAvailable
-      : modelIsAvailable ||
-        (cfg && authStore ? hasAuthForProvider(model.provider, cfg, authStore) : false);
-  const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
-  const mergedTags = new Set(tags);
-  if (aliasTags.length > 0) {
-    for (const tag of mergedTags) {
-      if (tag === "alias" || tag.startsWith("alias:")) {
-        mergedTags.delete(tag);
-      }
-    }
-    for (const tag of aliasTags) {
-      mergedTags.add(tag);
-    }
-  }
-
-  return {
-    key,
-    name: model.name || model.id,
-    input,
-    contextWindow: model.contextWindow ?? null,
-    local,
-    available,
-    tags: Array.from(mergedTags),
-    missing: false,
-  };
+export function toModelRow(params: Parameters<typeof toModelRowBase>[0]): ModelRow {
+  return toModelRowBase({
+    ...params,
+    hasAuthForProvider: ({ provider, cfg, authStore }) =>
+      hasAuthForProvider(provider, cfg, authStore),
+  });
 }

@@ -4,18 +4,18 @@ read_when:
   - You need a beginner-friendly overview of logging
   - You want to configure log levels or formats
   - You are troubleshooting and need to find logs quickly
-title: "Logging"
+title: "Logging overview"
 ---
 
 # Logging
 
-OpenClaw logs in two places:
+OpenClaw has two main log surfaces:
 
 - **File logs** (JSON lines) written by the Gateway.
-- **Console output** shown in terminals and the Control UI.
+- **Console output** shown in terminals and the Gateway Debug UI.
 
-This page explains where logs live, how to read them, and how to configure log
-levels and formats.
+The Control UI **Logs** tab tails the gateway file log. This page explains where
+logs live, how to read them, and how to configure log levels and formats.
 
 ## Where logs live
 
@@ -45,6 +45,12 @@ Use the CLI to tail the gateway log file via RPC:
 openclaw logs --follow
 ```
 
+Useful current options:
+
+- `--local-time`: render timestamps in your local timezone
+- `--url <url>` / `--token <token>` / `--timeout <ms>`: standard Gateway RPC flags
+- `--expect-final`: agent-backed RPC final-response wait flag (accepted here via the shared client layer)
+
 Output modes:
 
 - **TTY sessions**: pretty, colorized, structured log lines.
@@ -53,12 +59,20 @@ Output modes:
 - `--plain`: force plain text in TTY sessions.
 - `--no-color`: disable ANSI colors.
 
+When you pass an explicit `--url`, the CLI does not auto-apply config or
+environment credentials; include `--token` yourself if the target Gateway
+requires auth.
+
 In JSON mode, the CLI emits `type`-tagged objects:
 
 - `meta`: stream metadata (file, cursor, size)
 - `log`: parsed log entry
 - `notice`: truncation / rotation hints
 - `raw`: unparsed log line
+
+If the local loopback Gateway asks for pairing, `openclaw logs` falls back to
+the configured local log file automatically. Explicit `--url` targets do not
+use this fallback.
 
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
@@ -96,6 +110,23 @@ Console logs are **TTY-aware** and formatted for readability:
 
 Console formatting is controlled by `logging.consoleStyle`.
 
+### Gateway WebSocket logs
+
+`openclaw gateway` also has WebSocket protocol logging for RPC traffic:
+
+- normal mode: only interesting results (errors, parse errors, slow calls)
+- `--verbose`: all request/response traffic
+- `--ws-log auto|compact|full`: pick the verbose rendering style
+- `--compact`: alias for `--ws-log compact`
+
+Examples:
+
+```bash
+openclaw gateway
+openclaw gateway --verbose --ws-log compact
+openclaw gateway --verbose --ws-log full
+```
+
 ## Configuring logging
 
 All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
@@ -120,7 +151,8 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 
 You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g. `OPENCLAW_LOG_LEVEL=debug`). The env var takes precedence over the config file, so you can raise verbosity for a single run without editing `openclaw.json`. You can also pass the global CLI option **`--log-level <level>`** (for example, `openclaw --log-level debug gateway run`), which overrides the environment variable for that command.
 
-`--verbose` only affects console output; it does not change file log levels.
+`--verbose` only affects console output and WS log verbosity; it does not change
+file log levels.
 
 ### Console styles
 
@@ -174,6 +206,9 @@ Message flow:
 - `webhook.error`: webhook handler errors.
 - `message.queued`: message enqueued for processing.
 - `message.processed`: outcome + duration + optional error.
+- `message.delivery.started`: outbound delivery attempt started.
+- `message.delivery.completed`: outbound delivery attempt finished + duration/result count.
+- `message.delivery.error`: outbound delivery attempt failed + duration/bounded error category.
 
 Queue + session:
 
@@ -183,6 +218,12 @@ Queue + session:
 - `session.stuck`: session stuck warning + age.
 - `run.attempt`: run retry/attempt metadata.
 - `diagnostic.heartbeat`: aggregate counters (webhooks/queue/session).
+
+Exec:
+
+- `exec.process.completed`: terminal exec process outcome, duration, target, mode,
+  exit code, and failure kind. Command text and working directories are not
+  included.
 
 ### Enable diagnostics (no exporter)
 
@@ -247,7 +288,15 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
       "metrics": true,
       "logs": true,
       "sampleRate": 0.2,
-      "flushIntervalMs": 60000
+      "flushIntervalMs": 60000,
+      "captureContent": {
+        "enabled": false,
+        "inputMessages": false,
+        "outputMessages": false,
+        "toolInputs": false,
+        "toolOutputs": false,
+        "systemPrompt": false
+      }
     }
   }
 }
@@ -261,9 +310,16 @@ Notes:
   counters/histograms (webhooks, queueing, session state, queue depth/wait).
 - Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
   include model usage spans plus webhook/message processing spans when enabled.
+- Raw model/tool content is not exported by default. Use
+  `diagnostics.otel.captureContent` only when your collector and retention policy
+  are approved for prompt, response, tool, or system prompt text.
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
+- Set `OPENCLAW_OTEL_PRELOADED=1` when another preload or host process already
+  registered the global OpenTelemetry SDK. In that mode the plugin does not start
+  or shut down its own SDK, but it still wires OpenClaw diagnostic listeners and
+  honors `diagnostics.otel.traces`, `metrics`, and `logs`.
 
 ### Exported metrics (names + types)
 
@@ -292,6 +348,11 @@ Message flow:
   `openclaw.outcome`)
 - `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`,
   `openclaw.outcome`)
+- `openclaw.message.delivery.started` (counter, attrs: `openclaw.channel`,
+  `openclaw.delivery.kind`)
+- `openclaw.message.delivery.duration_ms` (histogram, attrs:
+  `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`,
+  `openclaw.errorCategory`)
 
 Queues + sessions:
 
@@ -305,12 +366,30 @@ Queues + sessions:
 - `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
 
+Exec:
+
+- `openclaw.exec.duration_ms` (histogram, attrs: `openclaw.exec.target`,
+  `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`)
+
 ### Exported spans (names + key attributes)
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
-  - `openclaw.sessionKey`, `openclaw.sessionId`
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
+- `openclaw.run`
+  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`,
+    `openclaw.model`, `openclaw.errorCategory`
+- `openclaw.model.call`
+  - `gen_ai.system`, `gen_ai.request.model`, `gen_ai.operation.name`,
+    `openclaw.provider`, `openclaw.model`, `openclaw.api`,
+    `openclaw.transport`
+- `openclaw.tool.execution`
+  - `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.errorCategory`,
+    `openclaw.tool.params.*`
+- `openclaw.exec`
+  - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`,
+    `openclaw.failureKind`, `openclaw.exec.command_length`,
+    `openclaw.exec.exit_code`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`
 - `openclaw.webhook.error`
@@ -318,11 +397,16 @@ Queues + sessions:
     `openclaw.error`
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`,
-    `openclaw.messageId`, `openclaw.sessionKey`, `openclaw.sessionId`,
-    `openclaw.reason`
+    `openclaw.messageId`, `openclaw.reason`
+- `openclaw.message.delivery`
+  - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`,
+    `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
-  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`,
-    `openclaw.sessionKey`, `openclaw.sessionId`
+  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
+
+When content capture is explicitly enabled, model/tool spans can also include
+bounded, redacted `openclaw.content.*` attributes for the specific content
+classes you opted into.
 
 ### Sampling + flushing
 
@@ -335,6 +419,8 @@ Queues + sessions:
   `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - If the endpoint already contains `/v1/traces` or `/v1/metrics`, it is used as-is.
 - If the endpoint already contains `/v1/logs`, it is used as-is for logs.
+- `OPENCLAW_OTEL_PRELOADED=1` reuses an externally registered OpenTelemetry SDK
+  for traces/metrics instead of starting a plugin-owned NodeSDK.
 - `diagnostics.otel.logs` enables OTLP log export for the main logger output.
 
 ### Log export behavior
@@ -350,3 +436,8 @@ Queues + sessions:
 - **Logs empty?** Check that the Gateway is running and writing to the file path
   in `logging.file`.
 - **Need more detail?** Set `logging.level` to `debug` or `trace` and retry.
+
+## Related
+
+- [Gateway Logging Internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
+- [Diagnostics](/gateway/configuration-reference#diagnostics) — OpenTelemetry export and cache trace config

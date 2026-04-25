@@ -7,8 +7,6 @@ read_when:
 title: "Presence"
 ---
 
-# Presence
-
 OpenClaw “presence” is a lightweight, best‑effort view of:
 
 - the **Gateway** itself, and
@@ -45,7 +43,7 @@ even before any clients connect.
 Every WS client begins with a `connect` request. On successful handshake the
 Gateway upserts a presence entry for that connection.
 
-#### Why one‑off CLI commands don’t show up
+#### Why one-off CLI commands do not show up
 
 The CLI often connects for short, one‑off commands. To avoid spamming the
 Instances list, `client.mode === "cli"` is **not** turned into a presence entry.
@@ -100,3 +98,8 @@ indicator (Active/Idle/Stale) based on the age of the last update.
   - confirm clients send a stable `client.instanceId` in the handshake
   - confirm periodic beacons use the same `instanceId`
   - check whether the connection‑derived entry is missing `instanceId` (duplicates are expected)
+
+## Related
+
+- [Typing indicators](/concepts/typing-indicators)
+- [Streaming and chunking](/concepts/streaming)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isHeartbeatOnlyResponse,
+  pickDeliverablePayloads,
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
@@ -83,6 +84,27 @@ describe("pickLastDeliverablePayload", () => {
     const normal = { text: "ok", isError: undefined };
     const error = { text: "bad", isError: true as const };
     expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
+  });
+});
+
+describe("pickDeliverablePayloads", () => {
+  it("preserves all successful deliverable payloads", () => {
+    const payloads = [
+      { text: "line 1" },
+      { text: "temporary error", isError: true as const },
+      { text: "line 2" },
+    ];
+
+    expect(pickDeliverablePayloads(payloads)).toEqual([{ text: "line 1" }, { text: "line 2" }]);
+  });
+
+  it("returns only the last error payload when all payloads are errors", () => {
+    const payloads = [
+      { text: "first error", isError: true as const },
+      { text: "last error", isError: true as const },
+    ];
+
+    expect(pickDeliverablePayloads(payloads)).toEqual([{ text: "last error", isError: true }]);
   });
 });
 
