@@ -18,7 +18,7 @@ function looksLikeConnectionBoundId(id: string): boolean {
 }
 
 function deriveReplacementId(type: string | undefined, originalId: string): string {
-  const prefix = type === "reasoning" ? "rs" : type === "function_call" ? "fc" : "msg";
+  const prefix = type === "function_call" ? "fc" : "msg";
   const hex = createHash("sha256").update(originalId).digest("hex").slice(0, 16);
   return `${prefix}_${hex}`;
 }
