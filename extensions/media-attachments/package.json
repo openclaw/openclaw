@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/media-attachments",
+  "version": "2026.4.24",
+  "private": true,
+  "description": "OpenClaw media attachment image operations plugin",
+  "type": "module",
+  "dependencies": {
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
+  }
+}

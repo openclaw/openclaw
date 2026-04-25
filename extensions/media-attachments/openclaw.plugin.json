@@ -1,0 +1,11 @@
+{
+  "id": "media-attachments",
+  "enabledByDefault": true,
+  "name": "Media Attachments",
+  "description": "Prepare and normalize local media attachments.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
