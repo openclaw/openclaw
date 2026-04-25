@@ -2611,6 +2611,93 @@ describe("openai transport stream", () => {
     ]);
   });
 
+  it("treats singular tool_call finish_reason as tool use", async () => {
+    const model = {
+      id: "minimax-m2.5-8bit",
+      name: "MiniMax M2.5 8bit",
+      api: "openai-completions",
+      provider: "mlx-lm",
+      baseUrl: "http://localhost:1234/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-mlx",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: "{}" },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-mlx",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "tool_call",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", id: "call_1", name: "lookup" }),
+    );
+  });
+
   it("keeps streamed tool call arguments intact when reasoning_details repeats", async () => {
     const model = {
       id: "openrouter/qwen/qwen3-235b-a22b",
