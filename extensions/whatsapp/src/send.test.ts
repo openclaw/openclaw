@@ -10,6 +10,7 @@ import type { ActiveWebListener } from "./inbound/types.js";
 const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   controllerListeners: new Map<string, ActiveWebListener>(),
+  runFfmpeg: vi.fn(),
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
@@ -49,6 +50,16 @@ vi.mock("./outbound-media.runtime.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    runFfmpeg: hoisted.runFfmpeg,
+  };
+});
+
 vi.mock("./text-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./text-runtime.js")>("./text-runtime.js");
   return {
@@ -70,6 +81,10 @@ describe("web outbound", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.runFfmpeg.mockReset().mockImplementation(async (args: string[]) => {
+      fsSync.writeFileSync(args.at(-1) ?? "", Buffer.from("opus-output"));
+      return "";
+    });
     hoisted.loadOutboundMediaFromUrl.mockReset().mockImplementation(
       async (
         mediaUrl: string,
@@ -234,6 +249,35 @@ describe("web outbound", () => {
       "+1555",
       "voice note",
       buf,
+      "audio/ogg; codecs=opus",
+    );
+  });
+
+  it.each([
+    { name: "mp3", contentType: "audio/mpeg", fileName: "voice.mp3" },
+    { name: "webm", contentType: "audio/webm", fileName: "voice.webm" },
+  ])("transcodes $name audio to Ogg Opus before sending a PTT voice note", async (media) => {
+    const buf = Buffer.from(media.name);
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: media.contentType,
+      kind: "audio",
+      fileName: media.fileName,
+    });
+
+    await sendMessageWhatsApp("+1555", "voice note", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: `/tmp/${media.fileName}`,
+    });
+
+    expect(hoisted.runFfmpeg).toHaveBeenCalledWith(
+      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
+    );
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "voice note",
+      Buffer.from("opus-output"),
       "audio/ogg; codecs=opus",
     );
   });

@@ -147,6 +147,11 @@ STT and TTS support two-level configuration with priority fallback:
 
 Set `enabled: false` on either to disable.
 
+Inbound QQ voice attachments are exposed to agents as audio media metadata while
+keeping raw voice files out of generic `MediaPaths`. `[[audio_as_voice]]` plain
+text replies synthesize TTS and send a native QQ voice message when TTS is
+configured.
+
 Outbound audio upload/transcode behavior can also be tuned with
 `channels.qqbot.audioFormatPolicy`:
 

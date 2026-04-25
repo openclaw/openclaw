@@ -7,7 +7,7 @@ read_when:
 title: "Text-to-speech"
 ---
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Microsoft, MiniMax, OpenAI, Vydra, xAI, or Xiaomi MiMo.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Gradium, Local CLI, Microsoft, MiniMax, OpenAI, Vydra, xAI, or Xiaomi MiMo.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
@@ -15,6 +15,7 @@ It works anywhere OpenClaw can send audio.
 - **ElevenLabs** (primary or fallback provider)
 - **Google Gemini** (primary or fallback provider; uses Gemini API TTS)
 - **Gradium** (primary or fallback provider; supports voice-note and telephony output)
+- **Local CLI** (primary or fallback provider; runs a configured local TTS command)
 - **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`)
 - **MiniMax** (primary or fallback provider; uses the T2A v2 API)
 - **OpenAI** (primary or fallback provider; also used for summaries)
@@ -50,7 +51,7 @@ If you want OpenAI, ElevenLabs, Google Gemini, Gradium, MiniMax, Vydra, xAI, or 
 - `XAI_API_KEY`
 - `XIAOMI_API_KEY`
 
-Microsoft speech does **not** require an API key.
+Local CLI and Microsoft speech do **not** require an API key.
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
 Auto-summary uses the configured `summaryModel` (or `agents.defaults.model.primary`),
@@ -297,6 +298,35 @@ OpenRouter model provider. Resolution order is
 `messages.tts.providers.openrouter.apiKey` ->
 `models.providers.openrouter.apiKey` -> `OPENROUTER_API_KEY`.
 
+### Local CLI primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "tts-local-cli",
+      providers: {
+        "tts-local-cli": {
+          command: "say",
+          args: ["-o", "{{OutputPath}}", "{{Text}}"],
+          outputFormat: "wav",
+          timeoutMs: 120000,
+        },
+      },
+    },
+  },
+}
+```
+
+Local CLI TTS runs the configured command on the gateway host. `{{Text}}`,
+`{{OutputPath}}`, `{{OutputDir}}`, and `{{OutputBase}}` placeholders are
+expanded in `args`; if no `{{Text}}` placeholder is present, OpenClaw writes the
+spoken text to stdin. `outputFormat` accepts `mp3`, `opus`, or `wav`.
+Voice-note targets are transcoded to Ogg/Opus and telephony output is
+transcoded to raw 16 kHz mono PCM with `ffmpeg`. The legacy provider alias
+`cli` still works, but new config should use `tts-local-cli`.
+
 ### Gradium primary
 
 ```json5
@@ -417,6 +447,12 @@ Then run:
 - `providers.minimax.speed`: playback speed `0.5..2.0` (default 1.0).
 - `providers.minimax.vol`: volume `(0, 10]` (default 1.0; must be greater than 0).
 - `providers.minimax.pitch`: integer pitch shift `-12..12` (default 0). Fractional values are truncated before calling MiniMax T2A because the API rejects non-integer pitch values.
+- `providers.tts-local-cli.command`: local executable or command string for CLI TTS.
+- `providers.tts-local-cli.args`: command arguments; supports `{{Text}}`, `{{OutputPath}}`, `{{OutputDir}}`, and `{{OutputBase}}` placeholders.
+- `providers.tts-local-cli.outputFormat`: expected CLI output format (`mp3`, `opus`, or `wav`; default `mp3` for audio attachments).
+- `providers.tts-local-cli.timeoutMs`: command timeout in milliseconds (default `120000`).
+- `providers.tts-local-cli.cwd`: optional command working directory.
+- `providers.tts-local-cli.env`: optional string environment overrides for the command.
 - `providers.google.model`: Gemini TTS model (default `gemini-3.1-flash-tts-preview`).
 - `providers.google.voiceName`: Gemini prebuilt voice name (default `Kore`; `voice` is also accepted).
 - `providers.google.audioProfile`: natural-language style prompt prepended before the spoken text.
@@ -545,6 +581,9 @@ These override `messages.tts.*` for that host.
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate) for normal audio attachments. For voice-note targets such as Feishu and Telegram, OpenClaw transcodes the MiniMax MP3 to 48kHz Opus with `ffmpeg` before delivery.
 - **Xiaomi MiMo**: MP3 by default, or WAV when configured. For voice-note targets such as Feishu and Telegram, OpenClaw transcodes Xiaomi output to 48kHz Opus with `ffmpeg` before delivery.
+- **Local CLI**: uses the configured `outputFormat`. Voice-note targets are
+  converted to Ogg/Opus and telephony output is converted to raw 16 kHz mono PCM
+  with `ffmpeg`.
 - **Google Gemini**: Gemini API TTS returns raw 24kHz PCM. OpenClaw wraps it as WAV for audio attachments and returns PCM directly for Talk/telephony. Native Opus voice-note format is not supported by this path.
 - **Gradium**: WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
 - **xAI**: MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. OpenClaw uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported by this path.

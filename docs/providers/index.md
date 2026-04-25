@@ -62,6 +62,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
 - [Runway](/providers/runway)
+- [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
@@ -89,6 +90,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [ElevenLabs](/providers/elevenlabs#speech-to-text)
 - [Mistral](/providers/mistral#audio-transcription-voxtral)
 - [OpenAI](/providers/openai#speech-to-text)
+- [SenseAudio](/providers/senseaudio)
 - [xAI](/providers/xai#speech-to-text)
 
 ## Community tools
