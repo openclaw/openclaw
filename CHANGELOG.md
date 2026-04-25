@@ -88,6 +88,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI-compatible: forward `prompt_cache_key` on Completions requests only for providers that opt in with `compat.supportsPromptCacheKey`, keeping default proxy payloads unchanged. Fixes #69272.
 - Providers/OpenAI-compatible: skip null or non-object streaming chunks from custom providers instead of failing the turn after partial output. Fixes #51112.
 - Providers/OpenAI-compatible: treat singular MLX-style `finish_reason: "tool_call"` as tool use instead of a provider error. Fixes #61499.
+- Docs/TTS: clarify that legacy flat TTS provider config blocks are repaired by `openclaw doctor --fix`, not accepted by strict runtime schema on load. Fixes #56220.
 - Plugins/OpenCode: strip unsupported disabled Responses reasoning payloads for OpenCode image understanding. Fixes #70252.
 - Plugins/OpenCode/OpenCode Go: register image understanding metadata so the image tool is available for OpenCode catalog models with vision support. Fixes #70482 and #61789.
 - Providers/ElevenLabs: omit the MP3-only `Accept` header for PCM telephony synthesis, so Voice Call requests for `pcm_22050` no longer receive MP3 audio. Fixes #67340. Thanks @marcchabot.

@@ -353,7 +353,7 @@ Then run:
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
   - `allowProvider` defaults to `false` (provider switching is opt-in).
 - `providers.<id>`: provider-owned settings keyed by speech provider id.
-- Legacy direct provider blocks (`messages.tts.openai`, `messages.tts.elevenlabs`, `messages.tts.microsoft`, `messages.tts.edge`) are auto-migrated to `messages.tts.providers.<id>` on load.
+- Legacy direct provider blocks (`messages.tts.openai`, `messages.tts.elevenlabs`, `messages.tts.microsoft`, `messages.tts.edge`) are repaired by `openclaw doctor --fix`; committed config should use `messages.tts.providers.<id>`.
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
