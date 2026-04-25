@@ -138,6 +138,7 @@ describe("resolveAgentAvatar", () => {
     expect(resolved.kind).toBe("none");
     if (resolved.kind === "none") {
       expect(resolved.reason).toBe("missing");
+      expect(resolved.source).toBe("avatars/missing.png");
     }
   });
 
@@ -173,9 +174,15 @@ describe("resolveAgentAvatar", () => {
 
     const remote = resolveAgentAvatar(cfg, "main");
     expect(remote.kind).toBe("remote");
+    if (remote.kind === "remote") {
+      expect(remote.source).toBe("https://example.com/avatar.png");
+    }
 
     const data = resolveAgentAvatar(cfg, "data");
     expect(data.kind).toBe("data");
+    if (data.kind === "data") {
+      expect(data.source).toBe("data:image/png;base64,aaaa");
+    }
   });
 
   it("resolves local avatar from ui.assistant.avatar when no agents.list identity is set", async () => {

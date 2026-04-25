@@ -181,6 +181,16 @@ export const AgentIdentityResultSchema = Type.Object(
     agentId: NonEmptyString,
     name: Type.Optional(NonEmptyString),
     avatar: Type.Optional(NonEmptyString),
+    avatarSource: Type.Optional(NonEmptyString),
+    avatarStatus: Type.Optional(
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("local"),
+        Type.Literal("remote"),
+        Type.Literal("data"),
+      ]),
+    ),
+    avatarReason: Type.Optional(NonEmptyString),
     emoji: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },

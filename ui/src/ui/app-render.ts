@@ -993,6 +993,9 @@ export function renderApp(state: AppViewState) {
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             assistantAvatar: state.assistantAvatar,
             assistantAvatarUrl: chatAvatarUrl,
+            assistantAvatarSource: state.assistantAvatarSource ?? state.chatAvatarSource,
+            assistantAvatarStatus: state.assistantAvatarStatus ?? state.chatAvatarStatus,
+            assistantAvatarReason: state.assistantAvatarReason ?? state.chatAvatarReason,
             basePath: state.basePath ?? "",
             configObject: configObj,
             savedConfigObject:

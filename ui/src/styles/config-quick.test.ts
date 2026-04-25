@@ -6,6 +6,8 @@ const css = readFileSync(new URL("./config-quick.css", import.meta.url), "utf8")
 describe("config-quick styles", () => {
   it("includes the local user identity quick-settings styles", () => {
     expect(css).toContain(".qs-identity-grid");
+    expect(css).toContain(".qs-identity-card__source");
+    expect(css).toContain(".qs-identity-card__issue");
     expect(css).toContain(".qs-assistant-avatar");
     expect(css).toContain(".qs-user-avatar");
     expect(css).toContain(".qs-personal-actions");

@@ -278,6 +278,45 @@
   line-height: 1.35;
 }
 
+.qs-identity-card__source {
+  display: grid;
+  gap: 3px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  color: var(--muted);
+  font-size: 0.64rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.qs-identity-card__source code {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: normal;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.qs-identity-card__issue {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 7px;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--warning, #f7b955) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning, #f7b955) 10%, transparent);
+  color: color-mix(in srgb, var(--warning, #f7b955) 82%, var(--text) 18%);
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
 .qs-user-avatar,
 .qs-assistant-avatar {
   width: 48px;

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
@@ -134,14 +135,32 @@ const STATIC_ASSET_EXTENSIONS = new Set([
 ]);
 
 export type ControlUiAvatarResolution =
-  | { kind: "none"; reason: string }
-  | { kind: "local"; filePath: string }
-  | { kind: "remote"; url: string }
-  | { kind: "data"; url: string };
+  | { kind: "none"; reason: string; source?: string | null }
+  | { kind: "local"; filePath: string; source?: string | null }
+  | { kind: "remote"; url: string; source?: string | null }
+  | { kind: "data"; url: string; source?: string | null };
 
 type ControlUiAvatarMeta = {
   avatarUrl: string | null;
+  avatarSource: string | null;
+  avatarStatus: ControlUiAvatarResolution["kind"];
+  avatarReason: string | null;
 };
+
+function controlUiAvatarResolutionMeta(resolved: ControlUiAvatarResolution | null): {
+  avatarSource: string | null;
+  avatarStatus: ControlUiAvatarResolution["kind"] | null;
+  avatarReason: string | null;
+} {
+  if (!resolved) {
+    return { avatarSource: null, avatarStatus: null, avatarReason: null };
+  }
+  return {
+    avatarSource: resolved.source ?? null,
+    avatarStatus: resolved.kind,
+    avatarReason: resolved.kind === "none" ? resolved.reason : null,
+  };
+}
 
 function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("X-Frame-Options", "DENY");
@@ -570,13 +589,19 @@ export async function handleControlUiAvatarRequest(
 
   if (url.searchParams.get("meta") === "1") {
     const resolved = opts.resolveAvatar(agentId);
+    const meta = controlUiAvatarResolutionMeta(resolved);
     const avatarUrl =
       resolved.kind === "local"
         ? buildControlUiAvatarUrl(basePath, agentId)
         : resolved.kind === "remote" || resolved.kind === "data"
           ? resolved.url
           : null;
-    sendJson(res, 200, { avatarUrl } satisfies ControlUiAvatarMeta);
+    sendJson(res, 200, {
+      avatarUrl,
+      avatarSource: meta.avatarSource,
+      avatarStatus: meta.avatarStatus ?? resolved.kind,
+      avatarReason: meta.avatarReason,
+    } satisfies ControlUiAvatarMeta);
     return true;
   }
 
@@ -747,6 +772,11 @@ export async function handleControlUiHttpRequest(
       agentId: identity.agentId,
       basePath,
     });
+    const avatarMeta = config
+      ? controlUiAvatarResolutionMeta(
+          resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true }),
+        )
+      : controlUiAvatarResolutionMeta(null);
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -758,6 +788,9 @@ export async function handleControlUiHttpRequest(
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
+      assistantAvatarSource: avatarMeta.avatarSource,
+      assistantAvatarStatus: avatarMeta.avatarStatus,
+      assistantAvatarReason: avatarMeta.avatarReason,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],

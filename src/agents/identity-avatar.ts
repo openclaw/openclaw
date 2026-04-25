@@ -15,10 +15,10 @@ import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
 import { resolveAgentIdentity } from "./identity.js";
 
 export type AgentAvatarResolution =
-  | { kind: "none"; reason: string }
-  | { kind: "local"; filePath: string }
-  | { kind: "remote"; url: string }
-  | { kind: "data"; url: string };
+  | { kind: "none"; reason: string; source?: string }
+  | { kind: "local"; filePath: string; source: string }
+  | { kind: "remote"; url: string; source: string }
+  | { kind: "data"; url: string; source: string };
 
 function resolveAvatarSource(
   cfg: OpenClawConfig,
@@ -90,15 +90,15 @@ export function resolveAgentAvatar(
     return { kind: "none", reason: "missing" };
   }
   if (isAvatarHttpUrl(source)) {
-    return { kind: "remote", url: source };
+    return { kind: "remote", url: source, source };
   }
   if (isAvatarDataUrl(source)) {
-    return { kind: "data", url: source };
+    return { kind: "data", url: source, source };
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const resolved = resolveLocalAvatarPath({ raw: source, workspaceDir });
   if (!resolved.ok) {
-    return { kind: "none", reason: resolved.reason };
+    return { kind: "none", reason: resolved.reason, source };
   }
-  return { kind: "local", filePath: resolved.filePath };
+  return { kind: "local", filePath: resolved.filePath, source };
 }

@@ -47,6 +47,9 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAvatarUrl: null,
+    assistantAvatarSource: null,
+    assistantAvatarStatus: null,
+    assistantAvatarReason: null,
     basePath: "",
     version: "2026.4.22",
     ...overrides,
@@ -89,6 +92,34 @@ describe("renderQuickSettings", () => {
       ),
     ).toBe(false);
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe("blob:nova");
+  });
+
+  it("shows the IDENTITY.md avatar source when the assistant falls back to the logo", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: "assets/avatars/nova-portrait.png",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "missing",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
+      "apple-touch-icon.png",
+    );
+    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
+      "assets/avatars/nova-portrait.png",
+    );
+    expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
+      "File not found",
+    );
   });
 
   it("rejects oversized avatar uploads before reading them", () => {

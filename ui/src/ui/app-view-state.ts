@@ -71,6 +71,9 @@ export type AppViewState = {
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  assistantAvatarReason?: string | null;
   assistantAgentId: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -93,6 +96,9 @@ export type AppViewState = {
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
+  chatAvatarSource?: string | null;
+  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;

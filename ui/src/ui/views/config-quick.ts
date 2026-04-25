@@ -102,6 +102,9 @@ export type QuickSettingsProps = {
   assistantName: string;
   assistantAvatar?: string | null;
   assistantAvatarUrl?: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  assistantAvatarReason?: string | null;
   basePath?: string | null;
   version: string;
 };
@@ -160,6 +163,41 @@ function renderLocalUserAvatarPreview(avatar: string | null | undefined) {
 function isRenderableAssistantPreviewUrl(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.startsWith("blob:") || /^data:image\//i.test(trimmed);
+}
+
+function formatAssistantAvatarSource(value: string | null | undefined): string | null {
+  const source = normalizeOptionalString(value);
+  if (!source) {
+    return null;
+  }
+  if (/^data:image\//i.test(source)) {
+    const header = source.slice(0, source.indexOf(",") > 0 ? source.indexOf(",") : 32);
+    return `${header},...`;
+  }
+  return source.length > 72 ? `${source.slice(0, 34)}...${source.slice(-24)}` : source;
+}
+
+function formatAssistantAvatarIssue(
+  status: QuickSettingsProps["assistantAvatarStatus"],
+  reason: string | null | undefined,
+  _rendered: boolean,
+): string | null {
+  if (status === "remote") {
+    return "Remote URLs are blocked by Control UI image policy";
+  }
+  if (reason === "missing") {
+    return "File not found";
+  }
+  if (reason === "unsupported_extension") {
+    return "Unsupported image type";
+  }
+  if (reason === "outside_workspace") {
+    return "Outside workspace";
+  }
+  if (reason === "too_large") {
+    return "Image is too large";
+  }
+  return reason ? "Cannot render avatar" : null;
 }
 
 function renderAssistantAvatarPreview(props: QuickSettingsProps) {
@@ -535,6 +573,17 @@ function renderPersonalCard(props: QuickSettingsProps) {
     (assistantAvatarUrl && isRenderableAssistantPreviewUrl(assistantAvatarUrl)) ||
     resolveAssistantTextAvatar(props.assistantAvatar),
   );
+  const assistantAvatarSource = formatAssistantAvatarSource(props.assistantAvatarSource);
+  const assistantAvatarIssue = formatAssistantAvatarIssue(
+    props.assistantAvatarStatus ?? null,
+    props.assistantAvatarReason,
+    assistantAvatarRendered,
+  );
+  const assistantAvatarSubtitle = assistantAvatarIssue
+    ? "Fallback avatar"
+    : assistantAvatarRendered
+      ? "From IDENTITY.md"
+      : "Fallback logo";
   return html`
     <div class="qs-card">
       ${renderCardHeader(icons.image, "Personal")}
@@ -556,9 +605,21 @@ function renderPersonalCard(props: QuickSettingsProps) {
             <div class="qs-identity-card__copy">
               <div class="qs-identity-card__eyebrow">Assistant</div>
               <div class="qs-identity-card__title">${assistantName}</div>
-              <div class="qs-identity-card__sub">
-                ${assistantAvatarRendered ? "From IDENTITY.md" : "Fallback logo"}
-              </div>
+              <div class="qs-identity-card__sub">${assistantAvatarSubtitle}</div>
+              ${assistantAvatarSource
+                ? html`
+                    <div
+                      class="qs-identity-card__source"
+                      title=${props.assistantAvatarSource ?? ""}
+                    >
+                      <span>IDENTITY.md</span>
+                      <code>${assistantAvatarSource}</code>
+                    </div>
+                  `
+                : nothing}
+              ${assistantAvatarIssue
+                ? html`<div class="qs-identity-card__issue">${assistantAvatarIssue}</div>`
+                : nothing}
             </div>
           </section>
         </div>

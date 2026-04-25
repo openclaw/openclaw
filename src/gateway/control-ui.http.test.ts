@@ -791,13 +791,20 @@ describe("handleControlUiHttpRequest", () => {
       headers: {
         authorization: "Bearer test-token",
       },
-      resolveAvatar: () => ({ kind: "remote", url: "https://example.com/avatar.png" }),
+      resolveAvatar: () => ({
+        kind: "remote",
+        url: "https://example.com/avatar.png",
+        source: "https://example.com/avatar.png",
+      }),
     });
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
       avatarUrl: "https://example.com/avatar.png",
+      avatarSource: "https://example.com/avatar.png",
+      avatarStatus: "remote",
+      avatarReason: null,
     });
   });
 
