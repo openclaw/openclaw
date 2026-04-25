@@ -198,6 +198,9 @@ diagnostics + the exporter plugin are enabled.
 Model usage:
 
 - `model.usage`: tokens, cost, duration, context, provider/model/channel, session ids.
+  `usage` is provider/turn accounting for cost and telemetry; `context.used`
+  is the current prompt/context snapshot and can be lower than provider
+  `usage.total` when cached input or tool-loop calls are involved.
 
 Message flow:
 
