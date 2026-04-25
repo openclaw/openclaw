@@ -90,6 +90,7 @@ export function createProfileAvailability({
 
   const isTransportAvailable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
+      const { ensureChromeMcpAvailable } = await getChromeMcpModule();
       await ensureChromeMcpAvailable(profile.name, profile.userDataDir, {
         ephemeral: true,
         timeoutMs,

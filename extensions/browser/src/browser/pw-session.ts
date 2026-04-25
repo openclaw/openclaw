@@ -886,22 +886,6 @@ export async function gotoPageWithNavigationGuard(
   }
 }
 
-export async function getPageForTargetId(opts: {
-  cdpUrl: string;
-  targetId?: string;
-}): Promise<Page> {
-  const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
-  try {
-    return await getPageForTargetIdOnce(opts);
-  } catch (err) {
-    if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
-      throw err;
-    }
-    await closePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
-    return await getPageForTargetIdOnce(opts);
-  }
-}
-
 export function refLocator(page: Page, ref: string) {
   const normalized = ref.startsWith("@")
     ? ref.slice(1)
