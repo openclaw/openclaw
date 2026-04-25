@@ -28,6 +28,7 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  senderE164?: string;
 };
 
 type ApplyGroupGatingParams = {
@@ -80,6 +81,7 @@ function recordPendingGroupHistoryEntry(params: {
       timestamp: params.msg.timestamp,
       id: params.msg.id,
       senderJid: senderIdentity.jid ?? params.msg.senderJid,
+      senderE164: senderIdentity.e164 ?? params.msg.senderE164,
     },
   });
 }

@@ -56,6 +56,35 @@ describe("whatsapp inbound context visibility", () => {
     ]);
   });
 
+  it("matches allowlisted group history by cached E.164 when sender JID is a LID", () => {
+    const history = resolveVisibleWhatsAppGroupHistory({
+      history: [
+        {
+          sender: "Alice (+111)",
+          body: "Allowed LID context",
+          senderJid: "alice@lid",
+          senderE164: "+111",
+        },
+        {
+          sender: "Mallory (+999)",
+          body: "Blocked LID context",
+          senderJid: "mallory@lid",
+          senderE164: "+999",
+        },
+      ],
+      mode: "allowlist",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+111"],
+    });
+
+    expect(history).toEqual([
+      expect.objectContaining({
+        sender: "Alice (+111)",
+        body: "Allowed LID context",
+      }),
+    ]);
+  });
+
   it("redacts blocked quoted replies in allowlist mode", () => {
     const reply = resolveVisibleWhatsAppReplyContext({
       msg: makeBlockedQuotedReplyMessage("msg-reply-1"),

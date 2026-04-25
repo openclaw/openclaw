@@ -17,6 +17,7 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  senderE164?: string;
 };
 
 type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
@@ -61,7 +62,10 @@ export function resolveVisibleWhatsAppGroupHistory(params: {
     isSenderAllowed: (entry) =>
       isWhatsAppSupplementalSenderAllowed({
         allowFrom: params.groupAllowFrom,
-        sender: entry.senderJid ? { jid: entry.senderJid } : null,
+        sender:
+          entry.senderJid || entry.senderE164
+            ? { jid: entry.senderJid, e164: entry.senderE164 }
+            : null,
       }),
   }).items;
 }
