@@ -43,8 +43,8 @@ describe("qa model selection runtime", () => {
       provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
     );
 
-    expect(resolveQaPreferredLiveModel()).toBe("openai-codex/gpt-5.4");
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai-codex/gpt-5.4");
+    expect(resolveQaPreferredLiveModel()).toBe("openai/gpt-5.4");
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.4");
   });
 
   it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {

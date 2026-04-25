@@ -3,10 +3,8 @@ summary: "Skills config schema and examples"
 read_when:
   - Adding or modifying skills config
   - Adjusting bundled allowlist or install behavior
-title: "Skills Config"
+title: "Skills config"
 ---
-
-# Skills Config
 
 Most skills loader/install configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific skill visibility lives under
@@ -131,3 +129,9 @@ Use one of:
 - bake the env into your custom sandbox image or remote sandbox environment
 
 Global `env` and `skills.entries.<skill>.env/apiKey` apply to **host** runs only.
+
+## Related
+
+- [Skills](/tools/skills)
+- [Creating skills](/tools/creating-skills)
+- [Slash commands](/tools/slash-commands)

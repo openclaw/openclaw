@@ -3,7 +3,7 @@ summary: "Model providers (LLMs) supported by OpenClaw"
 read_when:
   - You want to choose a model provider
   - You need a quick overview of supported LLM backends
-title: "Provider Directory"
+title: "Provider directory"
 ---
 
 # Model Providers
@@ -40,6 +40,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
 - [GitHub Copilot](/providers/github-copilot)
+- [Gradium](/providers/gradium)
 - [GLM models](/providers/glm)
 - [Google (Gemini)](/providers/google)
 - [Groq (LPU inference)](/providers/groq)
@@ -61,6 +62,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
 - [Runway](/providers/runway)
+- [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
@@ -88,6 +90,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [ElevenLabs](/providers/elevenlabs#speech-to-text)
 - [Mistral](/providers/mistral#audio-transcription-voxtral)
 - [OpenAI](/providers/openai#speech-to-text)
+- [SenseAudio](/providers/senseaudio)
 - [xAI](/providers/xai#speech-to-text)
 
 ## Community tools

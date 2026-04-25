@@ -10,6 +10,7 @@ import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-event
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
   isSuppressedControlReplyLeadFragment,
   isSuppressedControlReplyText,
@@ -671,11 +672,10 @@ export function createAgentEventHandler({
     opts?: { skipChatErrorFinal?: boolean },
   ) => {
     clearPendingTerminalLifecycleError(evt.runId);
-    const delayMs = Math.max(1, Math.min(Math.floor(lifecycleErrorRetryGraceMs), 2_147_483_647));
-    const timer = setTimeout(() => {
+    const timer = setSafeTimeout(() => {
       pendingTerminalLifecycleErrors.delete(evt.runId);
       finalizeLifecycleEvent(evt, opts);
-    }, delayMs);
+    }, lifecycleErrorRetryGraceMs);
     timer.unref?.();
     pendingTerminalLifecycleErrors.set(evt.runId, timer);
   };

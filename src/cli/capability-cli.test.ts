@@ -360,6 +360,37 @@ describe("capability cli", () => {
     );
   });
 
+  it("cleans up bundled MCP runtimes for local model runs", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    expect(mocks.agentCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanupBundleMcpOnRunEnd: true,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("requests bundled MCP runtime cleanup for gateway model runs", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          cleanupBundleMcpOnRunEnd: true,
+        }),
+      }),
+    );
+  });
+
   it("defaults tts status to gateway transport", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -542,6 +573,61 @@ describe("capability cli", () => {
             size: 11,
           }),
         ],
+      }),
+    );
+  });
+
+  it("passes video generation parameters through to runtime", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "minimax",
+      model: "MiniMax-Hailuo-2.3",
+      attempts: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "video",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--model",
+        "minimax/MiniMax-Hailuo-2.3",
+        "--size",
+        "1280x768",
+        "--aspect-ratio",
+        "16:9",
+        "--resolution",
+        "768p",
+        "--duration",
+        "6",
+        "--audio",
+        "--watermark",
+        "--timeout-ms",
+        "300000",
+        "--json",
+      ],
+    });
+
+    expect(mocks.generateVideo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "friendly lobster",
+        modelOverride: "minimax/MiniMax-Hailuo-2.3",
+        size: "1280x768",
+        aspectRatio: "16:9",
+        resolution: "768P",
+        durationSeconds: 6,
+        audio: true,
+        watermark: true,
+        timeoutMs: 300000,
       }),
     );
   });

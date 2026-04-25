@@ -8,6 +8,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 }));
 
 let listThinkingLevelLabels: typeof import("./thinking.js").listThinkingLevelLabels;
+let listThinkingLevelOptions: typeof import("./thinking.js").listThinkingLevelOptions;
 let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
 let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
 let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
@@ -37,6 +38,7 @@ beforeEach(async () => {
 
   ({
     listThinkingLevelLabels,
+    listThinkingLevelOptions,
     listThinkingLevels,
     normalizeReasoningLevel,
     normalizeThinkLevel,
@@ -142,6 +144,19 @@ describe("listThinkingLevels", () => {
 
     expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
     expect(listThinkingLevels("anthropic", "claude-opus-4-7")).toContain("max");
+  });
+
+  it("preserves provider profile ids and labels", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "adaptive", label: "auto" }, { id: "max", label: "maximum" }],
+      defaultLevel: "adaptive",
+    });
+
+    expect(listThinkingLevelOptions("demo", "demo-model")).toEqual([
+      { id: "off", label: "off" },
+      { id: "adaptive", label: "auto" },
+      { id: "max", label: "maximum" },
+    ]);
   });
 
   it("uses provider thinking profiles ahead of legacy hooks", () => {
@@ -259,14 +274,47 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("off");
   });
 
-  it("defaults reasoning-capable catalog models to low", () => {
+  it("defaults reasoning-capable catalog models to medium", () => {
     expect(
       resolveThinkingDefaultForModel({
         provider: "openai",
         model: "gpt-5.4",
         catalog: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
       }),
+    ).toBe("medium");
+  });
+
+  it("remaps implicit reasoning defaults to the strongest supported level at or below medium", () => {
+    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(
+      ({ provider }) => provider === "demo-binary",
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "demo-binary",
+        model: "demo-model",
+        catalog: [{ provider: "demo-binary", id: "demo-model", reasoning: true }],
+      }),
     ).toBe("low");
+  });
+
+  it("keeps catalog reasoning context when remapping implicit reasoning defaults", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "demo-contextual" && context.reasoning
+          ? { levels: [{ id: "off" }, { id: "low" }, { id: "medium" }] }
+          : provider === "demo-contextual"
+            ? { levels: [{ id: "off" }] }
+            : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "demo-contextual",
+        model: "demo-model",
+        catalog: [{ provider: "demo-contextual", id: "demo-model", reasoning: true }],
+      }),
+    ).toBe("medium");
   });
 
   it("defaults to off when no adaptive or reasoning hint is present", () => {

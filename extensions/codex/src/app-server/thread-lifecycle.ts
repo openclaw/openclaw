@@ -4,12 +4,16 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  assertCodexThreadResumeResponse,
+  assertCodexThreadStartResponse,
+} from "./protocol-validators.js";
 import {
   isJsonObject,
+  type CodexDynamicToolSpec,
   type CodexThreadResumeParams,
-  type CodexThreadResumeResponse,
-  type CodexThreadStartResponse,
+  type CodexThreadStartParams,
   type CodexTurnStartParams,
   type CodexUserInput,
   type JsonObject,
@@ -26,9 +30,10 @@ export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
   cwd: string;
-  dynamicTools: JsonValue[];
+  dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  config?: JsonObject;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
   const binding = await readCodexAppServerBinding(params.params.sessionFile);
@@ -48,21 +53,25 @@ export async function startOrResumeThread(params: {
       await clearCodexAppServerBinding(params.params.sessionFile);
     } else {
       try {
-        const response = await params.client.request<CodexThreadResumeResponse>(
-          "thread/resume",
-          buildThreadResumeParams(params.params, {
-            threadId: binding.threadId,
-            appServer: params.appServer,
-            developerInstructions: params.developerInstructions,
-          }),
+        const response = assertCodexThreadResumeResponse(
+          await params.client.request(
+            "thread/resume",
+            buildThreadResumeParams(params.params, {
+              threadId: binding.threadId,
+              appServer: params.appServer,
+              developerInstructions: params.developerInstructions,
+              config: params.config,
+            }),
+          ),
         );
         const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const fallbackModelProvider = resolveCodexAppServerModelProvider(params.params.provider);
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
           authProfileId: boundAuthProfileId,
           model: params.params.modelId,
-          modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+          modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
           createdAt: binding.createdAt,
         });
@@ -72,7 +81,7 @@ export async function startOrResumeThread(params: {
           cwd: params.cwd,
           authProfileId: boundAuthProfileId,
           model: params.params.modelId,
-          modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+          modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
         };
       } catch (error) {
@@ -84,28 +93,32 @@ export async function startOrResumeThread(params: {
     }
   }
 
-  const response = await params.client.request<CodexThreadStartResponse>("thread/start", {
-    model: params.params.modelId,
-    modelProvider: normalizeModelProvider(params.params.provider),
-    cwd: params.cwd,
-    approvalPolicy: params.appServer.approvalPolicy,
-    approvalsReviewer: params.appServer.approvalsReviewer,
-    sandbox: params.appServer.sandbox,
-    ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-    serviceName: "OpenClaw",
-    developerInstructions:
-      params.developerInstructions ?? buildDeveloperInstructions(params.params),
-    dynamicTools: params.dynamicTools,
-    experimentalRawEvents: true,
-    persistExtendedHistory: true,
-  });
+  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
+  const response = assertCodexThreadStartResponse(
+    await params.client.request("thread/start", {
+      model: params.params.modelId,
+      ...(modelProvider ? { modelProvider } : {}),
+      cwd: params.cwd,
+      approvalPolicy: params.appServer.approvalPolicy,
+      approvalsReviewer: params.appServer.approvalsReviewer,
+      sandbox: params.appServer.sandbox,
+      ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
+      serviceName: "OpenClaw",
+      ...(params.config ? { config: params.config } : {}),
+      developerInstructions:
+        params.developerInstructions ?? buildDeveloperInstructions(params.params),
+      dynamicTools: params.dynamicTools,
+      experimentalRawEvents: true,
+      persistExtendedHistory: true,
+    } satisfies CodexThreadStartParams),
+  );
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+    modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     createdAt,
   });
@@ -116,7 +129,7 @@ export async function startOrResumeThread(params: {
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+    modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     createdAt,
     updatedAt: createdAt,
@@ -129,16 +142,19 @@ export function buildThreadResumeParams(
     threadId: string;
     appServer: CodexAppServerRuntimeOptions;
     developerInstructions?: string;
+    config?: JsonObject;
   },
 ): CodexThreadResumeParams {
+  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
   return {
     threadId: options.threadId,
     model: params.modelId,
-    modelProvider: normalizeModelProvider(params.provider),
+    ...(modelProvider ? { modelProvider } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.config ? { config: options.config } : {}),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
@@ -159,13 +175,14 @@ export function buildTurnStartParams(
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
+    sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel),
   };
 }
 
-function fingerprintDynamicTools(dynamicTools: JsonValue[]): string {
+function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
   return JSON.stringify(dynamicTools.map(fingerprintDynamicToolSpec));
 }
 
@@ -202,14 +219,43 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
 }
 
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+  const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
     "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
-    renderCodexPromptOverlay({ modelId: params.modelId }),
+    promptOverlay,
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function renderCodexRuntimePromptOverlay(params: EmbeddedRunAttemptParams): string | undefined {
+  const contribution = params.runtimePlan?.prompt.resolveSystemPromptContribution({
+    config: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    provider: params.provider,
+    modelId: params.modelId,
+    promptMode: "full",
+    agentId: params.agentId,
+  });
+  if (!contribution) {
+    return renderCodexPromptOverlay({
+      config: params.config,
+      providerId: params.provider,
+      modelId: params.modelId,
+    });
+  }
+  return [
+    contribution.stablePrefix,
+    ...Object.values(contribution.sectionOverrides ?? {}),
+    contribution.dynamicSuffix,
+  ]
+    .filter(
+      (section): section is string => typeof section === "string" && section.trim().length > 0,
+    )
+    .join("\n\n");
 }
 
 function buildUserInput(
@@ -217,7 +263,7 @@ function buildUserInput(
   promptText: string = params.prompt,
 ): CodexUserInput[] {
   return [
-    { type: "text", text: promptText },
+    { type: "text", text: promptText, text_elements: [] },
     ...(params.images ?? []).map(
       (image): CodexUserInput => ({
         type: "image",
@@ -227,8 +273,14 @@ function buildUserInput(
   ];
 }
 
-function normalizeModelProvider(provider: string): string {
-  return provider === "codex" || provider === "openai-codex" ? "openai" : provider;
+function resolveCodexAppServerModelProvider(provider: string): string | undefined {
+  const normalized = provider.trim();
+  if (!normalized || normalized === "codex") {
+    // `codex` is OpenClaw's virtual provider; let Codex app-server keep its
+    // native provider/auth selection instead of forcing the legacy OpenAI path.
+    return undefined;
+  }
+  return normalized === "openai-codex" ? "openai" : normalized;
 }
 
 function resolveReasoningEffort(

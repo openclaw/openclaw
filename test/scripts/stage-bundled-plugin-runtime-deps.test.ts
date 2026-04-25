@@ -332,6 +332,64 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'second';\n");
   });
 
+  it("fingerprints regular files when readdir reports symlink-like entries", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+
+    const realReaddirSync = fs.readdirSync.bind(fs);
+    vi.spyOn(fs, "readdirSync").mockImplementation(((target, options) => {
+      const result = realReaddirSync(target, options as never);
+      if (
+        String(target) !== directDir ||
+        typeof options !== "object" ||
+        options === null ||
+        !("withFileTypes" in options) ||
+        options.withFileTypes !== true
+      ) {
+        return result;
+      }
+      return (result as fs.Dirent[]).map((entry) => {
+        if (entry.name !== "package.json") {
+          return entry;
+        }
+        return {
+          ...entry,
+          isSymbolicLink: () => true,
+          isDirectory: () => false,
+          isFile: () => false,
+        } as fs.Dirent;
+      }) as never;
+    }) as typeof fs.readdirSync);
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: () => {
+        installCount += 1;
+        throw new Error("unexpected fallback install");
+      },
+    });
+
+    expect(installCount).toBe(0);
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'direct';\n");
+  });
+
   it("refuses to replace a symlinked plugin node_modules directory", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
@@ -948,6 +1006,66 @@ describe("stageBundledPluginRuntimeDeps", () => {
     );
     expect(fs.existsSync(path.join(pluginDir, "node_modules", "rule-target", "LICENSE"))).toBe(
       true,
+    );
+  });
+
+  it("honors keepDirectories to opt a subtree out of global basename prune", () => {
+    // Regression: tokenjuice ships runtime-loaded rule data under
+    // `dist/rules/tests/*.json`. Without keepDirectories the global `tests`
+    // basename prune would strip that subtree and the plugin would fail to
+    // load with `Cannot find module '../rules/tests/bun-test.json'`.
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "keep-target": "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const depDir = path.join(repoRoot, "node_modules", "keep-target");
+    fs.mkdirSync(path.join(depDir, "dist", "rules", "tests"), { recursive: true });
+    fs.mkdirSync(path.join(depDir, "src", "tests"), { recursive: true });
+    fs.writeFileSync(
+      path.join(depDir, "package.json"),
+      '{ "name": "keep-target", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(depDir, "dist", "rules", "tests", "bun-test.json"),
+      '{"rule":"bun"}\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(depDir, "src", "tests", "legit-test.spec.ts"),
+      "describe('x', () => {});\n",
+      "utf8",
+    );
+
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      stagedRuntimeDepPruneRules: new Map([
+        ["keep-target", { keepDirectories: ["dist/rules/tests"] }],
+      ]),
+    });
+
+    // Opt-in path: preserved intact.
+    expect(
+      fs.existsSync(
+        path.join(
+          pluginDir,
+          "node_modules",
+          "keep-target",
+          "dist",
+          "rules",
+          "tests",
+          "bun-test.json",
+        ),
+      ),
+    ).toBe(true);
+
+    // Unlisted `tests/` directories still get pruned.
+    expect(fs.existsSync(path.join(pluginDir, "node_modules", "keep-target", "src", "tests"))).toBe(
+      false,
     );
   });
 
