@@ -1,10 +1,5 @@
 import { html, nothing } from "lit";
 import { applyMergePatch } from "../../../src/config/merge-patch.ts";
-import {
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -120,9 +115,14 @@ import {
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import "./components/dashboard-header.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "./session-key.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
