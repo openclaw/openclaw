@@ -52,6 +52,8 @@ Docs: https://docs.openclaw.ai
   detection. Closes #33360. Thanks @smartchainark.
 - Subagents/browser: show an actionable `/tools` notice when browser automation is configured but filtered out by the active tool profile, and document that coding-profile agents should use `tools.alsoAllow: ["browser"]` rather than subagent allowlists alone.
 - Control UI/Quick Settings: persist the assistant avatar override to browser local storage (mirroring the user avatar) so uploaded image data URLs no longer fail config validation with "Too big: expected string to have <=200 characters". Also lift the gateway-side `ui.assistant.avatar` length cap to match the user avatar size budget for non-UI clients writing the field directly. Thanks @BunsDev.
+- Plugin SDK: share diagnostic event subscriptions across duplicate source/dist
+  module graphs so legacy root SDK imports still receive runtime diagnostic events.
 - Agents/Bedrock: prevent empty assistant stream-error turns from poisoning
   Converse replay by persisting, repairing, and replaying a non-empty fallback
   block. Fixes #71572. (#71627) Thanks @openperf.
