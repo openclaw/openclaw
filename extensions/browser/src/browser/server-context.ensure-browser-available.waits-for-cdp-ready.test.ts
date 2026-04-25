@@ -88,6 +88,42 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
   });
 
+  it("deduplicates concurrent lazy-start calls to prevent PortInUseError", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
+      setupEnsureBrowserAvailableHarness();
+    isChromeCdpReady.mockResolvedValue(true);
+    mockLaunchedChrome(launchOpenClawChrome, 456);
+
+    const first = profile.ensureBrowserAvailable();
+    const second = profile.ensureBrowserAvailable();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+
+    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("clears the concurrent lazy-start guard after launch failure", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
+      setupEnsureBrowserAvailableHarness();
+    isChromeCdpReady.mockResolvedValue(true);
+    launchOpenClawChrome.mockRejectedValueOnce(
+      new Error("PortInUseError: listen EADDRINUSE 127.0.0.1:18800"),
+    );
+
+    const first = profile.ensureBrowserAvailable();
+    const second = profile.ensureBrowserAvailable();
+    await expect(Promise.all([first, second])).rejects.toThrow("PortInUseError");
+
+    mockLaunchedChrome(launchOpenClawChrome, 789);
+    const retry = profile.ensureBrowserAvailable();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(retry).resolves.toBeUndefined();
+
+    expect(launchOpenClawChrome).toHaveBeenCalledTimes(2);
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
   it("reuses a pre-existing loopback browser after an initial short probe miss", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
