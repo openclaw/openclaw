@@ -633,11 +633,26 @@ List meeting artifacts and attendance after Meet has created conference records:
 ```bash
 openclaw googlemeet artifacts --meeting https://meet.google.com/abc-defg-hij
 openclaw googlemeet attendance --meeting https://meet.google.com/abc-defg-hij
+openclaw googlemeet export --meeting https://meet.google.com/abc-defg-hij --output ./meet-export
 ```
 
 With `--meeting`, `artifacts` and `attendance` use the latest conference record
 by default. Pass `--all-conference-records` when you want every retained record
 for that meeting.
+
+Calendar lookup can resolve the meeting URL from Google Calendar before reading
+Meet artifacts:
+
+```bash
+openclaw googlemeet latest --today
+openclaw googlemeet artifacts --event "Weekly sync"
+openclaw googlemeet attendance --today --format csv --output attendance.csv
+```
+
+`--today` searches today's `primary` calendar for a Calendar event with a
+Google Meet link. Use `--event <query>` to search matching event text, and
+`--calendar <id>` for a non-primary calendar. Calendar lookup requires a fresh
+OAuth login that includes the Calendar events readonly scope.
 
 If you already know the conference record id, address it directly:
 
@@ -654,15 +669,25 @@ openclaw googlemeet artifacts --conference-record conferenceRecords/abc123 \
   --format markdown --output meet-artifacts.md
 openclaw googlemeet attendance --conference-record conferenceRecords/abc123 \
   --format markdown --output meet-attendance.md
+openclaw googlemeet attendance --conference-record conferenceRecords/abc123 \
+  --format csv --output meet-attendance.csv
 ```
 
 `artifacts` returns conference record metadata plus participant, recording,
 transcript, structured transcript-entry, and smart-note resource metadata when
 Google exposes it for the meeting. Use `--no-transcript-entries` to skip
 entry lookup for large meetings. `attendance` expands participants into
-participant-session rows with join/leave timestamps. These commands use the Meet
-REST API only; Google Docs/Drive document body download is intentionally out of
-scope because that requires separate Google Docs/Drive access.
+participant-session rows with first/last seen times, total session duration,
+late/early-leave flags, and duplicate participant resources merged by signed-in
+user or display name. Pass `--no-merge-duplicates` to keep raw participant
+resources separate, `--late-after-minutes` to tune late detection, and
+`--early-before-minutes` to tune early-leave detection.
+
+`export` writes a folder containing `summary.md`, `attendance.csv`,
+`transcript.md`, `artifacts.json`, and `attendance.json`. These commands use the
+Meet REST API only for Meet resources; Google Docs/Drive document body download
+is intentionally out of scope because that requires separate Google Docs/Drive
+access.
 
 Create a fresh Meet space:
 
