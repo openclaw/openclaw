@@ -19,6 +19,7 @@ import {
   resolveThreadFlag,
   type SessionFreshness,
 } from "../../config/sessions/reset.js";
+
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -35,6 +36,7 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+const logger = createSubsystemLogger("auto-reply");
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
@@ -843,7 +845,7 @@ export async function initSessionState(params: {
           nextSessionId: effectiveSessionId,
         });
         void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
-          console.warn("[openclaw] session_end hook failed:", err);
+          logger.warn("[openclaw] session_end hook failed:", err);
         });
         void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
           log.warn("session_end hook failed", { error: String(err) });
@@ -860,7 +862,7 @@ export async function initSessionState(params: {
         resumedFrom: previousSessionEntry?.sessionId,
       });
       void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
-        log.warn("session_start hook failed", { error: String(err) });
+        logger.warn("[openclaw] session_start hook failed:", err);
       });
     }
   }
