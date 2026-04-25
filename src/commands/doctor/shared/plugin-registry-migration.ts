@@ -2,14 +2,16 @@ import fs from "node:fs";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   inspectPersistedInstalledPluginIndex,
-  refreshPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
+  writePersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreInspection,
   type InstalledPluginIndexStoreOptions,
 } from "../../../plugins/installed-plugin-index-store.js";
-import type {
-  InstalledPluginIndex,
-  LoadInstalledPluginIndexParams,
+import {
+  listEnabledInstalledPluginRecords,
+  loadInstalledPluginIndex,
+  type InstalledPluginIndex,
+  type LoadInstalledPluginIndexParams,
 } from "../../../plugins/installed-plugin-index.js";
 
 export const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
@@ -121,10 +123,16 @@ export async function migratePluginRegistryForInstall(
     config,
   };
   const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
-  const current = await refreshPersistedInstalledPluginIndex({
+  const candidateIndex = loadInstalledPluginIndex({
     ...migrationParams,
-    reason: "migration",
+    cache: false,
   });
+  const current: InstalledPluginIndex = {
+    ...candidateIndex,
+    refreshReason: "migration",
+    plugins: listEnabledInstalledPluginRecords(candidateIndex, config),
+  };
+  await writePersistedInstalledPluginIndex(current, params);
   return {
     status: "migrated",
     migrated: true,
