@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
-import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  isTransientUnhandledRejectionError,
+} from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
   runCli: (argv: string[]) => Promise<void>;
@@ -86,6 +89,13 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    if (isTransientUnhandledRejectionError(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
       console.error("[openclaw]", message);
