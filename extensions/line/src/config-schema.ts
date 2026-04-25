@@ -1,4 +1,7 @@
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import {
+  buildChannelConfigSchema,
+  requireOpenAllowFrom,
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 
 const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
@@ -13,7 +16,7 @@ const ThreadBindingsSchema = z
   })
   .strict();
 
-const LineCommonConfigSchema = z.object({
+const LineCommonConfigShape = {
   enabled: z.boolean().optional(),
   channelAccessToken: z.string().optional(),
   channelSecret: z.string().optional(),
@@ -28,7 +31,7 @@ const LineCommonConfigSchema = z.object({
   mediaMaxMb: z.number().optional(),
   webhookPath: z.string().optional(),
   threadBindings: ThreadBindingsSchema.optional(),
-});
+};
 
 const LineGroupConfigSchema = z
   .object({
@@ -40,15 +43,49 @@ const LineGroupConfigSchema = z
   })
   .strict();
 
-const LineAccountConfigSchema = LineCommonConfigSchema.extend({
-  groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-}).strict();
+function requireLineOpenAllowFrom(
+  value: { dmPolicy?: string; allowFrom?: Array<string | number> },
+  ctx: z.RefinementCtx,
+  message: string,
+): void {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message,
+  });
+}
 
-export const LineConfigSchema = LineCommonConfigSchema.extend({
-  accounts: z.record(z.string(), LineAccountConfigSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-  groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-}).strict();
+const LineAccountConfigSchema = z
+  .object({
+    ...LineCommonConfigShape,
+    groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    requireLineOpenAllowFrom(
+      value,
+      ctx,
+      'LINE account dmPolicy="open" requires that account allowFrom to include "*"',
+    );
+  });
+
+export const LineConfigSchema = z
+  .object({
+    ...LineCommonConfigShape,
+    accounts: z.record(z.string(), LineAccountConfigSchema.optional()).optional(),
+    defaultAccount: z.string().optional(),
+    groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    requireLineOpenAllowFrom(
+      value,
+      ctx,
+      'channels.line.dmPolicy="open" requires channels.line.allowFrom to include "*"',
+    );
+  });
 
 export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema);
 
