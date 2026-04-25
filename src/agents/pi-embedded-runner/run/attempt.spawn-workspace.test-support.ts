@@ -193,13 +193,15 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
     async reload() {}
   }
   function ModelRegistry() {}
+  const estimateTokens = (value: unknown) =>
+    Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
 
   return {
     ...actual,
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
     DefaultResourceLoader,
-    estimateTokens: () => 0,
+    estimateTokens,
     generateSummary: async () => "",
     ModelRegistry,
     SessionManager: {
@@ -975,6 +977,7 @@ export async function createContextEngineAttemptRunner(params: {
         })),
       ...(maintain ? { maintain } : {}),
       info: {
+        ...params.contextEngine.info,
         id: infoId,
         name: infoName,
         version: infoVersion,

@@ -1404,7 +1404,13 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
+  const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const bubbleClasses = [
+    "chat-bubble",
+    isToolMessage ? "chat-bubble--tool-shell" : "",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -1421,7 +1427,6 @@ function renderGroupedMessage(
     return nothing;
   }
 
-  const isToolMessage = normalizedRole === "tool" || isToolResult;
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];

@@ -244,6 +244,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           enabled: true,
           dispatch: { enabled: true },
         },
+        session: {
+          sendPolicy: { default: "allow" },
+        },
       } as OpenClawConfig,
       dispatcher,
       replyOptions: { abortSignal: abortController.signal },

@@ -63,8 +63,15 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/sessions: recover main-agent turns interrupted by a gateway restart from stale transcript-lock evidence, avoiding stuck `status: "running"` sessions without broad post-boot transcript scans. Fixes #70555. Thanks @bitloi.
+- Codex approvals: keep command approval responses within Codex app-server `availableDecisions`, including deny/cancel fallbacks for prompts that do not offer `decline`. (#71338) Thanks @Lucenx9.
 - Plugins/Google Meet: include live Chrome-node readiness in `googlemeet setup` and document the Parallels recovery checks, so stale node tokens or disconnected VM browsers are visible before an agent opens a meeting. Thanks @steipete.
+- Context engine: keep safeguard compaction checks active after context-engine windowing and for `ownsCompaction` engines, so large transcripts can compact before prompt submission instead of waiting for provider overflow. Fixes #71325. Thanks @steipete.
+- Approvals: compact structured home-directory paths to `~` across Codex permission prompts and exec approval metadata without repeating them as a separate high-risk warning, while preserving filesystem root and wildcard host warnings. Thanks @steipete.
 - Plugins/runtime deps: isolate the internal npm cache used for bundled plugin runtime-dependency repair and let package updates refresh/verify already-current installs, so failed update or sudo doctor runs can be repaired by rerunning `openclaw update`. Thanks @steipete.
+- Agents/delete: keep `--json` output machine-readable and retain workspaces that overlap another agent's workspace instead of moving shared state to Trash. Fixes #70889 and #70890. (#70897) Thanks @kaseonedge.
+- Browser/screenshot: honor `timeoutMs` through host and node screenshot requests, bound raw CDP screenshot commands, and avoid beyond-viewport CDP capture for ordinary viewport screenshots, so Windows Chrome captures no longer hang past the requested deadline. Fixes #68330. Thanks @Woodylai24.
+- Telegram/model picker: show configured model display names when browsing models through provider buttons, matching typed `/models <provider>` output. Fixes #70560. (#71016) Thanks @iskim77.
 - Plugins/runtime deps: stage bundled plugin runtime dependencies for packaged/global installs in an external runtime root and retain already staged deps across repairs, avoiding package-tree update races and npm pruning after upgrades. Thanks @steipete.
 - Plugins/runtime deps: log bundled plugin runtime-dependency staging before synchronous npm installs start and include elapsed timing afterward, so first boot after upgrades no longer looks hung while dependencies are being repaired. Thanks @steipete.
 - Agents/failover: forward embedded run abort signals into provider-owned model streams, cap implicit LLM idle watchdogs below long run timeouts, and mark 429 responses without usable retry timing as non-retryable so GitHub Copilot rate limits fail over or surface promptly instead of hanging until run timeout. Fixes #71120. Thanks @steipete.

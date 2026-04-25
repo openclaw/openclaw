@@ -317,6 +317,15 @@ describe("detectChangedScope", () => {
       runChangedSmoke: true,
       runControlUiI18n: false,
     });
+    expect(detectChangedScope(["scripts/e2e/agents-delete-shared-workspace-docker.sh"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
     expect(detectChangedScope(["scripts/e2e/plugin-update-unchanged-docker.sh"])).toEqual({
       runNode: true,
       runMacos: false,
