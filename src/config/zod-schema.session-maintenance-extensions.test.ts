@@ -19,6 +19,18 @@ describe("SessionSchema maintenance extensions", () => {
     expect(() => SessionSchema.parse({ parentForkMaxTokens: 0 })).not.toThrow();
   });
 
+  it("accepts adaptive session reset mode", () => {
+    expect(() =>
+      SessionSchema.parse({
+        reset: {
+          mode: "adaptive",
+          atHour: 4,
+          idleMinutes: 60,
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects negative parentForkMaxTokens", () => {
     expect(() =>
       SessionSchema.parse({

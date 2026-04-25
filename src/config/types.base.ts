@@ -121,12 +121,15 @@ export type SessionSendPolicyConfig = {
   rules?: SessionSendPolicyRule[];
 };
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "daily" | "idle" | "adaptive";
 export type SessionResetConfig = {
   mode?: SessionResetMode;
   /** Local hour (0-23) for the daily reset boundary. */
   atHour?: number;
-  /** Sliding idle window (minutes). When set with daily mode, whichever expires first wins. */
+  /**
+   * Sliding idle window (minutes). With daily mode, whichever condition expires first wins.
+   * With adaptive mode, both the daily boundary and idle window must expire.
+   */
   idleMinutes?: number;
 };
 export type SessionResetByTypeConfig = {

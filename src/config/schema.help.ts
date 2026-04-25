@@ -1324,11 +1324,11 @@ export const FIELD_HELP: Record<string, string> = {
   "session.reset":
     "Defines the default reset policy object used when no type-specific or channel-specific override applies. Set this first, then layer resetByType or resetByChannel only where behavior must differ.",
   "session.reset.mode":
-    'Selects reset strategy: "daily" resets at a configured hour and "idle" resets after inactivity windows. Keep one clear mode per policy to avoid surprising context turnover patterns.',
+    'Selects reset strategy: "daily" resets at a configured hour, "idle" resets after inactivity windows, and "adaptive" resets only when both the daily boundary has passed and the session is also idle (preventing mid-conversation resets). Keep one clear mode per policy to avoid surprising context turnover patterns.',
   "session.reset.atHour":
     "Sets local-hour boundary (0-23) for daily reset mode so sessions roll over at predictable times. Use with mode=daily and align to operator timezone expectations for human-readable behavior.",
   "session.reset.idleMinutes":
-    "Sets inactivity window before reset for idle mode and can also act as secondary guard with daily mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
+    "Sets inactivity window before reset for idle mode, can also act as a secondary guard with daily mode, and is required alongside the daily boundary for adaptive mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
   "session.resetByType":
     "Overrides reset behavior by chat type (direct, group, thread) when defaults are not sufficient. Use this when group/thread traffic needs different reset cadence than direct messages.",
   "session.resetByType.direct":
