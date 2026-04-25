@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
@@ -591,6 +591,54 @@ describe("google-meet CLI", () => {
     } finally {
       stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints a dry-run export manifest without writing files", async () => {
+    stubMeetArtifactsApi();
+    const stdout = captureStdout();
+    const parentDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-dry-run-"));
+    const outputDir = path.join(parentDir, "bundle");
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "export",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--include-doc-bodies",
+          "--output",
+          outputDir,
+          "--dry-run",
+        ],
+        { from: "user" },
+      );
+      const payload = JSON.parse(stdout.output());
+      expect(payload).toMatchObject({
+        dryRun: true,
+        manifest: {
+          request: {
+            conferenceRecord: "rec-1",
+            includeDocumentBodies: true,
+          },
+          counts: {
+            attendanceRows: 1,
+            transcriptEntries: 1,
+            warnings: 0,
+          },
+          files: expect.arrayContaining(["summary.md", "manifest.json"]),
+        },
+        tokenSource: "cached-access-token",
+      });
+      expect(existsSync(outputDir)).toBe(false);
+    } finally {
+      stdout.restore();
+      rmSync(parentDir, { recursive: true, force: true });
     }
   });
 
