@@ -374,15 +374,35 @@ describe("doctor state integrity oauth dir checks", () => {
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    fs.writeFileSync(path.join(sessionsDir, "live-session.jsonl"), '{"type":"session"}\n');
     fs.writeFileSync(path.join(sessionsDir, "live-session.trajectory.jsonl"), '{"type":"event"}\n');
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "live-session",
+        updatedAt: 1000,
+      },
+    });
 
     const confirmRuntimeRepair = vi.fn(async () => false);
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
+    expect(stateIntegrityText()).toContain("orphan-session.jsonl");
     expect(stateIntegrityText()).not.toContain("live-session.trajectory.jsonl");
     expect(confirmRuntimeRepair).toHaveBeenCalled();
     expect(fs.existsSync(path.join(sessionsDir, "live-session.trajectory.jsonl"))).toBe(true);
+  });
+
+  it("keeps valid .trajectory session ids eligible for orphan checks", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "debug.trajectory.jsonl"), '{"type":"session"}\n');
+
+    const confirmRuntimeRepair = vi.fn(async () => false);
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    expect(stateIntegrityText()).toContain("Examples: debug.trajectory.jsonl");
+    expect(confirmRuntimeRepair).toHaveBeenCalled();
   });
 
   it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {

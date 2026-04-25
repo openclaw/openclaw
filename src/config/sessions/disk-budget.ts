@@ -12,7 +12,8 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
-  isTrajectorySessionArtifactName,
+  isTrajectoryPointerArtifactName,
+  isTrajectorySidecarTranscriptFileName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
@@ -297,14 +298,17 @@ export async function enforceSessionDiskBudget(params: {
     sessionsDir,
     store: params.store,
   });
+  const sessionTranscriptFileNames = new Set(files.map((file) => file.name));
   const removableFileQueue = files
     .filter(
       (file) =>
         isSessionArchiveArtifactName(file.name) ||
         (isCompactionCheckpointTranscriptFileName(file.name) &&
           !referencedPaths.has(file.canonicalPath)) ||
-        (isTrajectorySessionArtifactName(file.name) && !referencedPaths.has(file.canonicalPath)) ||
-        (isPrimarySessionTranscriptFileName(file.name) && !referencedPaths.has(file.canonicalPath)),
+        ((isTrajectoryPointerArtifactName(file.name) ||
+          isTrajectorySidecarTranscriptFileName(file.name, sessionTranscriptFileNames) ||
+          isPrimarySessionTranscriptFileName(file.name, sessionTranscriptFileNames)) &&
+          !referencedPaths.has(file.canonicalPath)),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   for (const file of removableFileQueue) {

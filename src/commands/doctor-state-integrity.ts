@@ -903,8 +903,15 @@ export async function noteStateIntegrity(
       }
     }
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    const sessionTranscriptFileNames = new Set(
+      sessionDirEntries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+    );
     const orphanTranscriptPaths = sessionDirEntries
-      .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          isPrimarySessionTranscriptFileName(entry.name, sessionTranscriptFileNames),
+      )
       .map((entry) => path.join(sessionsDir, entry.name))
       .filter(
         (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),

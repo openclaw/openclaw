@@ -4,6 +4,7 @@ const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
   /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
+const TRAJECTORY_SIDECAR_SUFFIX = ".trajectory.jsonl";
 
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   const marker = `.${reason}.`;
@@ -52,34 +53,59 @@ export function isTrajectorySessionArtifactName(fileName: string): boolean {
   return isTrajectoryRuntimeArtifactName(fileName) || isTrajectoryPointerArtifactName(fileName);
 }
 
-export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
+export function primarySessionTranscriptForTrajectorySidecar(fileName: string): string | null {
+  if (!fileName.endsWith(TRAJECTORY_SIDECAR_SUFFIX)) {
+    return null;
+  }
+  const sessionId = fileName.slice(0, -TRAJECTORY_SIDECAR_SUFFIX.length);
+  if (!sessionId) {
+    return null;
+  }
+  return `${sessionId}.jsonl`;
+}
+
+export function isTrajectorySidecarTranscriptFileName(
+  fileName: string,
+  primaryTranscriptFileNames?: ReadonlySet<string>,
+): boolean {
+  const primaryFileName = primarySessionTranscriptForTrajectorySidecar(fileName);
+  return Boolean(primaryFileName && primaryTranscriptFileNames?.has(primaryFileName));
+}
+
+export function isPrimarySessionTranscriptFileName(
+  fileName: string,
+  primaryTranscriptFileNames?: ReadonlySet<string>,
+): boolean {
   if (fileName === "sessions.json") {
     return false;
   }
   if (!fileName.endsWith(".jsonl")) {
     return false;
   }
-  if (isTrajectoryRuntimeArtifactName(fileName)) {
-    return false;
-  }
   if (isCompactionCheckpointTranscriptFileName(fileName)) {
     return false;
   }
-  if (fileName.endsWith(".trajectory.jsonl")) {
+  if (isTrajectorySidecarTranscriptFileName(fileName, primaryTranscriptFileNames)) {
     return false;
   }
   return !isSessionArchiveArtifactName(fileName);
 }
 
-export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
-  if (isPrimarySessionTranscriptFileName(fileName)) {
+export function isUsageCountedSessionTranscriptFileName(
+  fileName: string,
+  primaryTranscriptFileNames?: ReadonlySet<string>,
+): boolean {
+  if (isPrimarySessionTranscriptFileName(fileName, primaryTranscriptFileNames)) {
     return true;
   }
   return hasArchiveSuffix(fileName, "reset") || hasArchiveSuffix(fileName, "deleted");
 }
 
-export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
-  if (isPrimarySessionTranscriptFileName(fileName)) {
+export function parseUsageCountedSessionIdFromFileName(
+  fileName: string,
+  primaryTranscriptFileNames?: ReadonlySet<string>,
+): string | null {
+  if (isPrimarySessionTranscriptFileName(fileName, primaryTranscriptFileNames)) {
     return fileName.slice(0, -".jsonl".length);
   }
   for (const reason of ["reset", "deleted"] as const) {

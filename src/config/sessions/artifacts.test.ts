@@ -7,10 +7,12 @@ import {
   isTrajectoryPointerArtifactName,
   isTrajectoryRuntimeArtifactName,
   isTrajectorySessionArtifactName,
+  isTrajectorySidecarTranscriptFileName,
   isUsageCountedSessionTranscriptFileName,
   parseCompactionCheckpointTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
   parseSessionArchiveTimestamp,
+  primarySessionTranscriptForTrajectorySidecar,
 } from "./artifacts.js";
 
 describe("session artifact helpers", () => {
@@ -24,6 +26,7 @@ describe("session artifact helpers", () => {
   });
 
   it("classifies primary transcript files", () => {
+    const transcriptFileNames = new Set(["abc.jsonl", "abc.trajectory.jsonl"]);
     expect(isPrimarySessionTranscriptFileName("abc.jsonl")).toBe(true);
     expect(isPrimarySessionTranscriptFileName("keep.deleted.keep.jsonl")).toBe(true);
     expect(
@@ -31,11 +34,13 @@ describe("session artifact helpers", () => {
         "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
       ),
     ).toBe(false);
-    expect(isPrimarySessionTranscriptFileName("abc.trajectory.jsonl")).toBe(false);
     expect(isPrimarySessionTranscriptFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
-    expect(isPrimarySessionTranscriptFileName("abc.trajectory.jsonl")).toBe(false);
+    expect(isPrimarySessionTranscriptFileName("abc.trajectory.jsonl")).toBe(true);
+    expect(isPrimarySessionTranscriptFileName("abc.trajectory.jsonl", transcriptFileNames)).toBe(
+      false,
+    );
     expect(isPrimarySessionTranscriptFileName("sessions.json")).toBe(false);
   });
 
@@ -45,11 +50,24 @@ describe("session artifact helpers", () => {
     expect(isTrajectorySessionArtifactName("abc.trajectory.jsonl")).toBe(true);
     expect(isTrajectorySessionArtifactName("abc.trajectory-path.json")).toBe(true);
     expect(isTrajectorySessionArtifactName("abc.jsonl")).toBe(false);
+    expect(primarySessionTranscriptForTrajectorySidecar("abc.trajectory.jsonl")).toBe("abc.jsonl");
+    expect(primarySessionTranscriptForTrajectorySidecar("abc.jsonl")).toBeNull();
+    expect(
+      isTrajectorySidecarTranscriptFileName(
+        "abc.trajectory.jsonl",
+        new Set(["abc.jsonl", "abc.trajectory.jsonl"]),
+      ),
+    ).toBe(true);
+    expect(isTrajectorySidecarTranscriptFileName("abc.trajectory.jsonl", new Set())).toBe(false);
   });
 
   it("classifies usage-counted transcript files", () => {
+    const transcriptFileNames = new Set(["abc.jsonl", "abc.trajectory.jsonl"]);
     expect(isUsageCountedSessionTranscriptFileName("abc.jsonl")).toBe(true);
-    expect(isUsageCountedSessionTranscriptFileName("abc.trajectory.jsonl")).toBe(false);
+    expect(
+      isUsageCountedSessionTranscriptFileName("abc.trajectory.jsonl", transcriptFileNames),
+    ).toBe(false);
+    expect(isUsageCountedSessionTranscriptFileName("abc.trajectory.jsonl")).toBe(true);
     expect(
       isUsageCountedSessionTranscriptFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z"),
     ).toBe(true);
@@ -64,12 +82,15 @@ describe("session artifact helpers", () => {
         "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
       ),
     ).toBe(false);
-    expect(isUsageCountedSessionTranscriptFileName("abc.trajectory.jsonl")).toBe(false);
   });
 
   it("parses usage-counted session ids from file names", () => {
+    const transcriptFileNames = new Set(["abc.jsonl", "abc.trajectory.jsonl"]);
     expect(parseUsageCountedSessionIdFromFileName("abc.jsonl")).toBe("abc");
-    expect(parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl")).toBeNull();
+    expect(
+      parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl", transcriptFileNames),
+    ).toBeNull();
+    expect(parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl")).toBe("abc.trajectory");
     expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(
       "abc",
     );
@@ -84,7 +105,6 @@ describe("session artifact helpers", () => {
         "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
       ),
     ).toBeNull();
-    expect(parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl")).toBeNull();
   });
 
   it("parses exact compaction checkpoint transcript file names", () => {

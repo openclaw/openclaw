@@ -240,10 +240,13 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
+    const transcriptFileNames = new Set(
+      entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+    );
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => isUsageCountedSessionTranscriptFileName(name))
+      .filter((name) => isUsageCountedSessionTranscriptFileName(name, transcriptFileNames))
       .map((name) => path.join(dir, name));
   } catch {
     return [];

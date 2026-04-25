@@ -423,10 +423,17 @@ export async function loadCostUsageSummary(params?: {
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const sessionTranscriptFileNames = new Set(
+    entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+  );
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            isUsageCountedSessionTranscriptFileName(entry.name, sessionTranscriptFileNames),
+        )
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -497,11 +504,17 @@ export async function discoverAllSessions(params?: {
 }): Promise<DiscoveredSession[]> {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const sessionTranscriptFileNames = new Set(
+    entries.filter((entry) => entry.isFile()).map((entry) => entry.name),
+  );
 
   const discovered = new Map<string, DiscoveredSession>();
 
   for (const entry of entries) {
-    if (!entry.isFile() || !isUsageCountedSessionTranscriptFileName(entry.name)) {
+    if (
+      !entry.isFile() ||
+      !isUsageCountedSessionTranscriptFileName(entry.name, sessionTranscriptFileNames)
+    ) {
       continue;
     }
 
@@ -517,11 +530,17 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    const sessionId = parseUsageCountedSessionIdFromFileName(entry.name);
+    const sessionId = parseUsageCountedSessionIdFromFileName(
+      entry.name,
+      sessionTranscriptFileNames,
+    );
     if (!sessionId) {
       continue;
     }
-    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(entry.name);
+    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(
+      entry.name,
+      sessionTranscriptFileNames,
+    );
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -560,7 +579,10 @@ export async function discoverAllSessions(params?: {
 
     const existing = discovered.get(sessionId);
     const existingIsPrimary = existing
-      ? isPrimarySessionTranscriptFileName(path.basename(existing.sessionFile))
+      ? isPrimarySessionTranscriptFileName(
+          path.basename(existing.sessionFile),
+          sessionTranscriptFileNames,
+        )
       : false;
     const shouldReplace =
       !existing ||
