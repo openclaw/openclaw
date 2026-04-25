@@ -18,6 +18,7 @@ import {
 import {
   cleanupTempPaths,
   createContextEngineBootstrapAndAssemble,
+  createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
   resetEmbeddedAttemptHarness,
@@ -274,6 +275,81 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(params.silentExpected).toBe(true);
     expect(params.sessionKey).toBe(sessionKey);
+  });
+
+  it("prechecks unwindowed context before submitting a windowed context-engine prompt", async () => {
+    const sessionPrompt = vi.fn(async () => {});
+    const fullHistory = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "large historical context ".repeat(600) }],
+        timestamp: 1,
+      },
+    ] as AgentMessage[];
+    const windowedMessages = [
+      { role: "assistant", content: [{ type: "text", text: "small window" }], timestamp: 2 },
+    ] as AgentMessage[];
+    const assemble = vi.fn(async () => ({
+      messages: windowedMessages,
+      estimatedTokens: 3,
+    }));
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: { assemble },
+      sessionKey,
+      tempPaths,
+      sessionMessages: fullHistory,
+      sessionPrompt,
+      attemptOverrides: {
+        contextTokenBudget: 512,
+      },
+    });
+
+    expect(assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: fullHistory,
+      }),
+    );
+    expect(sessionPrompt).not.toHaveBeenCalled();
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_only" });
+  });
+
+  it("keeps preflight overflow checks active for engines that own compaction", async () => {
+    const sessionPrompt = vi.fn(async () => {});
+    const fullHistory = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "engine-owned large historical context ".repeat(600) }],
+        timestamp: 1,
+      },
+    ] as AgentMessage[];
+    const assemble = vi.fn(async () => ({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "small window" }], timestamp: 2 },
+      ] as AgentMessage[],
+      estimatedTokens: 3,
+    }));
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble,
+        info: {
+          ownsCompaction: true,
+        },
+      },
+      sessionKey,
+      tempPaths,
+      sessionMessages: fullHistory,
+      sessionPrompt,
+      attemptOverrides: {
+        contextTokenBudget: 512,
+      },
+    });
+
+    expect(sessionPrompt).not.toHaveBeenCalled();
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_only" });
   });
 
   it("skips maintenance when afterTurn fails", async () => {
