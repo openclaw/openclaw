@@ -185,12 +185,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.costUsd = event.costUsd;
       record.durationMs = event.durationMs;
       break;
-    case "context.assembled":
-      record.channel = event.channel;
-      record.provider = event.provider;
-      record.model = event.model;
-      record.count = event.messageCount;
-      break;
     case "webhook.received":
       record.channel = event.channel;
       break;
