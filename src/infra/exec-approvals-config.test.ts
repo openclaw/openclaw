@@ -432,12 +432,12 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
       },
     } as unknown as ExecApprovalsFile;
     const resolved = resolveExecApprovalsFromFile({ file });
-    // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("full")
-    expect(resolved.defaults.security).toBe("full");
-    // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("off")
-    expect(resolved.defaults.ask).toBe("off");
+    // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("allowlist")
+    expect(resolved.defaults.security).toBe("allowlist");
+    // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("on-miss")
+    expect(resolved.defaults.ask).toBe("on-miss");
     // Wildcard agent "none" is stripped, so agent inherits resolved defaults
-    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.security).toBe("allowlist");
     // Wildcard agent ask="off" is valid and preserved
     expect(resolved.agent.ask).toBe("off");
   });
