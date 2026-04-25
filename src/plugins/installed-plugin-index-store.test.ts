@@ -30,6 +30,7 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
     migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
+    installRecords: {},
     plugins: [
       {
         pluginId: "demo",

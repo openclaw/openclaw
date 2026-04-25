@@ -372,8 +372,8 @@ describe("installed plugin index", () => {
       env: hermeticEnv(),
     });
 
-    expect(index.plugins[0]).toMatchObject({
-      installRecord: {
+    expect(index.installRecords).toMatchObject({
+      demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@latest",
         installPath: "plugins/demo",
@@ -385,6 +385,8 @@ describe("installed plugin index", () => {
         resolvedAt: "2026-04-25T11:00:00.000Z",
         installedAt: "2026-04-25T11:01:00.000Z",
       },
+    });
+    expect(index.plugins[0]).toMatchObject({
       packageInstall: {
         npm: {
           spec: "@vendor/demo-plugin@1.2.3",
@@ -393,6 +395,7 @@ describe("installed plugin index", () => {
         },
       },
     });
+    expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
@@ -425,7 +428,10 @@ describe("installed plugin index", () => {
 
     expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
-      installRecord: {
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@latest",
         installPath: fixture.rootDir,
@@ -467,7 +473,10 @@ describe("installed plugin index", () => {
 
     expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
-      installRecord: {
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
         source: "npm",
         spec: "@vendor/demo-plugin@1.2.3",
         installPath: fixture.rootDir,
@@ -500,7 +509,10 @@ describe("installed plugin index", () => {
 
     expect(index.plugins[0]).toMatchObject({
       pluginId: "demo",
-      installRecord: {
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
         source: "path",
         sourcePath: "./plugins/demo",
         spec: "@vendor/demo-plugin@1.2.3",

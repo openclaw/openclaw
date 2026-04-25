@@ -165,14 +165,17 @@ describe("config io write", () => {
             stateDir: path.join(home, ".openclaw"),
           }),
         ).resolves.toMatchObject({
+          installRecords: {
+            demo: {
+              source: "npm",
+              spec: "demo@1.0.0",
+              installPath: pluginDir,
+            },
+          },
           plugins: [
             expect.objectContaining({
               pluginId: "demo",
-              installRecord: {
-                source: "npm",
-                spec: "demo@1.0.0",
-                installPath: pluginDir,
-              },
+              installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
             }),
           ],
         });
@@ -182,6 +185,53 @@ describe("config io write", () => {
           plugins: [],
         } satisfies PluginManifestRegistry);
       }
+    });
+  });
+
+  it("migrates shipped plugin install config records even when the manifest is missing", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const pluginDir = path.join(home, ".openclaw", "plugins", "missing");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            plugins: {
+              entries: { missing: { enabled: true } },
+              installs: {
+                missing: {
+                  source: "npm",
+                  spec: "missing-plugin@1.0.0",
+                  installPath: pluginDir,
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const io = createFastConfigIO(home);
+      const cfg = io.loadConfig();
+
+      expect(cfg.plugins?.installs).toBeUndefined();
+      await expect(
+        readPersistedInstalledPluginIndex({
+          stateDir: path.join(home, ".openclaw"),
+        }),
+      ).resolves.toMatchObject({
+        installRecords: {
+          missing: {
+            source: "npm",
+            spec: "missing-plugin@1.0.0",
+            installPath: pluginDir,
+          },
+        },
+        plugins: [],
+      });
     });
   });
 

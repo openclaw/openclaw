@@ -238,8 +238,11 @@ the managed plugin index while keeping the default behavior unpinned.
 
 Plugin install metadata is machine-managed state, not user config. Installs
 and updates write it to `plugins/installs.json` under the active OpenClaw state
-directory. The file includes a do-not-edit warning and is used by
-`openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
+directory. Its top-level `installRecords` map is the durable source of install
+metadata, including records for broken or missing plugin manifests. The
+`plugins` array is the manifest-derived cold registry cache. The file includes a
+do-not-edit warning and is used by `openclaw plugins update`, uninstall,
+diagnostics, and the cold plugin registry.
 
 ### Uninstall
 

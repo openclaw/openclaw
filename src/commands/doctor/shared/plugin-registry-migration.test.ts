@@ -75,6 +75,7 @@ function createCurrentIndex(): InstalledPluginIndex {
     migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
+    installRecords: {},
     plugins: [],
     diagnostics: [],
   };
@@ -268,30 +269,88 @@ describe("plugin registry install migration", () => {
     ).resolves.toMatchObject({
       status: "migrated",
       current: {
+        installRecords: {
+          demo: {
+            source: "npm",
+            spec: "demo@1.0.0",
+            installPath: pluginDir,
+          },
+        },
         plugins: [
           expect.objectContaining({
             pluginId: "demo",
-            installRecord: {
-              source: "npm",
-              spec: "demo@1.0.0",
-              installPath: pluginDir,
-            },
+            installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
           }),
         ],
       },
     });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {
+        demo: {
+          source: "npm",
+          spec: "demo@1.0.0",
+          installPath: pluginDir,
+        },
+      },
       plugins: [
         expect.objectContaining({
           pluginId: "demo",
-          installRecord: {
-            source: "npm",
-            spec: "demo@1.0.0",
-            installPath: pluginDir,
-          },
+          installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
         }),
       ],
+    });
+  });
+
+  it("preserves shipped install records when the plugin manifest cannot be discovered", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "missing");
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        candidates: [],
+        readConfig: async () => ({
+          plugins: {
+            entries: {
+              missing: {
+                enabled: true,
+              },
+            },
+            installs: {
+              missing: {
+                source: "npm",
+                spec: "missing-plugin@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          },
+        }),
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "migrated",
+      current: {
+        installRecords: {
+          missing: {
+            source: "npm",
+            spec: "missing-plugin@1.0.0",
+            installPath: pluginDir,
+          },
+        },
+        plugins: [],
+      },
+    });
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: pluginDir,
+        },
+      },
+      plugins: [],
     });
   });
 

@@ -15,11 +15,29 @@ function cloneInstallRecords(
   return structuredClone(records ?? {});
 }
 
+function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const records: Record<string, PluginInstallRecord> = {};
+  for (const [pluginId, record] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (isRecord(record) && typeof record.source === "string") {
+      records[pluginId] = structuredClone(record) as PluginInstallRecord;
+    }
+  }
+  return records;
+}
+
 export function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   index: unknown,
 ): Record<string, PluginInstallRecord> | null {
   if (!isRecord(index) || !Array.isArray(index.plugins)) {
     return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(index, "installRecords")) {
+    return readRecordMap(index.installRecords) ?? {};
   }
   const records: Record<string, PluginInstallRecord> = {};
   for (const entry of index.plugins) {

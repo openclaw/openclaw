@@ -84,6 +84,8 @@ const InstalledPluginIndexRecordSchema = z
   })
   .passthrough();
 
+const InstalledPluginInstallRecordSchema = z.record(z.string(), z.unknown());
+
 const PluginDiagnosticSchema = z
   .object({
     level: z.union([z.literal("warn"), z.literal("error")]),
@@ -103,13 +105,27 @@ const InstalledPluginIndexSchema = z
     policyHash: z.string(),
     generatedAtMs: z.number(),
     refreshReason: z.string().optional(),
+    installRecords: z.record(z.string(), InstalledPluginInstallRecordSchema).optional(),
     plugins: z.array(InstalledPluginIndexRecordSchema),
     diagnostics: z.array(PluginDiagnosticSchema),
   })
   .passthrough();
 
 function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
-  return safeParseWithSchema(InstalledPluginIndexSchema, value) as InstalledPluginIndex | null;
+  const parsed = safeParseWithSchema(InstalledPluginIndexSchema, value) as
+    | (Omit<InstalledPluginIndex, "installRecords"> & {
+        installRecords?: InstalledPluginIndex["installRecords"];
+      })
+    | null;
+  if (!parsed) {
+    return null;
+  }
+  return {
+    ...parsed,
+    installRecords:
+      parsed.installRecords ??
+      extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex),
+  };
 }
 
 export async function readPersistedInstalledPluginIndex(

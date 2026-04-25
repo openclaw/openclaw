@@ -105,6 +105,7 @@ function createIndex(
     migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
+    installRecords: {},
     plugins: [
       {
         pluginId,

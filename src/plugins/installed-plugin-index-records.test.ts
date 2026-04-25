@@ -75,14 +75,17 @@ describe("plugin index install records store", () => {
     expect(JSON.parse(fs.readFileSync(indexPath, "utf8"))).toMatchObject({
       version: 1,
       generatedAtMs: 1777118400000,
+      installRecords: {
+        twitch: {
+          source: "npm",
+          spec: "@openclaw/plugin-twitch@1.0.0",
+          installPath: "plugins/npm/@openclaw/plugin-twitch",
+        },
+      },
       plugins: [
         {
           pluginId: "twitch",
-          installRecord: {
-            source: "npm",
-            spec: "@openclaw/plugin-twitch@1.0.0",
-            installPath: "plugins/npm/@openclaw/plugin-twitch",
-          },
+          installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
         },
       ],
     });
@@ -91,6 +94,47 @@ describe("plugin index install records store", () => {
         source: "npm",
         spec: "@openclaw/plugin-twitch@1.0.0",
         installPath: "plugins/npm/@openclaw/plugin-twitch",
+      },
+    });
+  });
+
+  it("preserves install records for plugins without a discovered manifest", async () => {
+    const stateDir = makeStateDir();
+
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: path.join(stateDir, "plugins", "missing"),
+        },
+      },
+      {
+        stateDir,
+        candidates: [],
+        now: () => new Date(1777118400000),
+      },
+    );
+
+    expect(
+      JSON.parse(
+        fs.readFileSync(resolveInstalledPluginIndexRecordsStorePath({ stateDir }), "utf8"),
+      ),
+    ).toMatchObject({
+      installRecords: {
+        missing: {
+          source: "npm",
+          spec: "missing-plugin@1.0.0",
+          installPath: path.join(stateDir, "plugins", "missing"),
+        },
+      },
+      plugins: [],
+    });
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
+      missing: {
+        source: "npm",
+        spec: "missing-plugin@1.0.0",
+        installPath: path.join(stateDir, "plugins", "missing"),
       },
     });
   });

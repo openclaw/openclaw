@@ -83,10 +83,11 @@ export type InstalledPluginIndexRecord = {
   packageName?: string;
   packageVersion?: string;
   /**
-   * Actual install record recorded by OpenClaw in the persisted plugin index.
+   * Legacy embedded install record accepted when reading earlier index files.
+   * New index writes keep install records in InstalledPluginIndex.installRecords.
    */
   installRecord?: InstalledPluginInstallRecordInfo;
-  /** Hash of installRecord; used to detect source-changed invalidation. */
+  /** Hash of the top-level installRecords entry; used to detect source-changed invalidation. */
   installRecordHash?: string;
   /**
    * Package-authored openclaw.install metadata. This describes catalog/package
@@ -117,6 +118,7 @@ export type InstalledPluginIndex = {
   policyHash: string;
   generatedAtMs: number;
   refreshReason?: InstalledPluginIndexRefreshReason;
+  installRecords: Readonly<Record<string, InstalledPluginInstallRecordInfo>>;
   plugins: readonly InstalledPluginIndexRecord[];
   diagnostics: readonly PluginDiagnostic[];
 };
@@ -384,9 +386,42 @@ function restoreInstallRecord(
   return structuredClone(record) as PluginInstallRecord;
 }
 
+function normalizeInstallRecordMap(
+  records: Record<string, PluginInstallRecord> | undefined,
+): Record<string, InstalledPluginInstallRecordInfo> {
+  const normalized: Record<string, InstalledPluginInstallRecordInfo> = {};
+  for (const [pluginId, record] of Object.entries(records ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const installRecord = normalizeInstallRecord(record);
+    if (installRecord) {
+      normalized[pluginId] = installRecord;
+    }
+  }
+  return normalized;
+}
+
+function restoreInstallRecordMap(
+  records: Readonly<Record<string, InstalledPluginInstallRecordInfo>> | undefined,
+): Record<string, PluginInstallRecord> {
+  const restored: Record<string, PluginInstallRecord> = {};
+  for (const [pluginId, record] of Object.entries(records ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const installRecord = restoreInstallRecord(record);
+    if (installRecord) {
+      restored[pluginId] = installRecord;
+    }
+  }
+  return restored;
+}
+
 export function extractPluginInstallRecordsFromInstalledPluginIndex(
   index: InstalledPluginIndex | null | undefined,
 ): Record<string, PluginInstallRecord> {
+  if (index && Object.prototype.hasOwnProperty.call(index, "installRecords")) {
+    return restoreInstallRecordMap(index.installRecords);
+  }
   const records: Record<string, PluginInstallRecord> = {};
   for (const plugin of index?.plugins ?? []) {
     const record = restoreInstallRecord(plugin.installRecord);
@@ -501,11 +536,11 @@ function buildInstalledPluginIndex(
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const diagnostics: PluginDiagnostic[] = [...registry.diagnostics];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
-  const installRecords = structuredClone(params.installRecords ?? {});
+  const installRecords = normalizeInstallRecordMap(params.installRecords);
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateByRootDir.get(record.rootDir);
     const packageJsonPath = resolvePackageJsonPath(candidate);
-    const installRecord = normalizeInstallRecord(installRecords[record.id]);
+    const installRecord = installRecords[record.id];
     const packageInstall = describePackageInstallSource(candidate);
     const manifestHash =
       safeHashFile({
@@ -548,7 +583,6 @@ function buildInstalledPluginIndex(
       indexRecord.packageVersion = candidate.packageVersion;
     }
     if (installRecord) {
-      indexRecord.installRecord = installRecord;
       indexRecord.installRecordHash = hashJson(installRecord);
     }
     if (packageInstall) {
@@ -569,6 +603,7 @@ function buildInstalledPluginIndex(
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
     generatedAtMs,
     ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
+    installRecords,
     plugins,
     diagnostics,
   };
@@ -772,6 +807,9 @@ export function diffInstalledPluginIndexInvalidationReasons(
   }
   if (previous.policyHash !== current.policyHash) {
     reasons.add("policy-changed");
+  }
+  if (hashJson(previous.installRecords ?? {}) !== hashJson(current.installRecords ?? {})) {
+    reasons.add("source-changed");
   }
 
   const previousByPluginId = new Map(previous.plugins.map((plugin) => [plugin.pluginId, plugin]));

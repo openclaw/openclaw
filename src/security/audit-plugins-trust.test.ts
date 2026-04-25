@@ -114,9 +114,9 @@ describe("security audit install metadata findings", () => {
       migrationVersion: 1,
       policyHash: "policy",
       generatedAtMs: Date.now(),
-      plugins: Object.entries(records).map(([pluginId, installRecord]) => ({
+      installRecords: records,
+      plugins: Object.keys(records).map((pluginId) => ({
         pluginId,
-        installRecord,
         manifestPath: path.join(stateDir, "extensions", pluginId, "openclaw.plugin.json"),
         manifestHash: "manifest",
         rootDir: path.join(stateDir, "extensions", pluginId),

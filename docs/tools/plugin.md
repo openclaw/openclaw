@@ -305,8 +305,10 @@ immediately loadable after restart.
 OpenClaw keeps a persisted local plugin registry as the cold read model for
 plugin inventory, contribution ownership, and startup planning. Install, update,
 uninstall, enable, and disable flows refresh that registry after changing plugin
-state. If the registry is missing, stale, or invalid, `openclaw plugins registry
---refresh` rebuilds it from the durable plugin index, config policy, and
+state. The same `plugins/installs.json` file keeps durable install metadata in
+top-level `installRecords` and rebuildable manifest metadata in `plugins`. If
+the registry is missing, stale, or invalid, `openclaw plugins registry
+--refresh` rebuilds its manifest view from install records, config policy, and
 manifest/package metadata without loading plugin runtime modules.
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name

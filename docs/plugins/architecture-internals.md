@@ -921,6 +921,8 @@ paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
 surface. The persisted `plugins/installs.json` plugin index is the install
 source of truth and can be refreshed without loading plugin runtime modules.
+Its `installRecords` map is durable even when a plugin manifest is missing or
+invalid; its `plugins` array is a rebuildable manifest/cache view.
 
 ## Context engine plugins
 
