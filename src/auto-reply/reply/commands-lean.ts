@@ -10,12 +10,9 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/pi-embedded-helpers.js";
-import {
-  DEFAULT_MEMORY_ALT_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
-  DEFAULT_USER_FILENAME,
-} from "../../agents/workspace.js";
+import { DEFAULT_MEMORY_FILENAME, DEFAULT_USER_FILENAME } from "../../agents/workspace.js";
 import { logVerbose } from "../../globals.js";
+import { LEGACY_ROOT_MEMORY_FILENAME as DEFAULT_MEMORY_ALT_FILENAME } from "../../memory/root-memory-files.js";
 import { parseSlashCommandActionArgs } from "./commands-slash-parse.js";
 import type { CommandHandler } from "./commands-types.js";
 
