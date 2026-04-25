@@ -130,6 +130,55 @@ describe("deleteSessionsAndRefresh", () => {
     expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("queues refreshes requested during delete without releasing mutation loading", async () => {
+    let resolveDelete: () => void = () => undefined;
+    let signalDeleteStarted: () => void = () => undefined;
+    const deleteStarted = new Promise<void>((resolve) => {
+      signalDeleteStarted = resolve;
+    });
+    const deleteBlocker = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        signalDeleteStarted();
+        await deleteBlocker;
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 2,
+          path: "(multiple)",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const deletePromise = deleteSessionsAndRefresh(state, ["key-a"]);
+    await deleteStarted;
+    expect(state.sessionsLoading).toBe(true);
+
+    await loadSessions(state);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.sessionsLoading).toBe(true);
+
+    resolveDelete();
+    const deleted = await deletePromise;
+
+    expect(deleted).toEqual(["key-a"]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(state.sessionsLoading).toBe(false);
+  });
 });
 
 describe("loadSessions", () => {

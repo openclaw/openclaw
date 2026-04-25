@@ -40,6 +40,7 @@ type LoadSessionsOverrides = {
 type SessionsLoadControl = {
   loading: boolean;
   pending: { overrides?: LoadSessionsOverrides } | null;
+  ownsStateLoading: boolean;
 };
 
 const sessionsLoadControls = new WeakMap<object, SessionsLoadControl>();
@@ -82,7 +83,7 @@ function getSessionsLoadControl(state: SessionsState): SessionsLoadControl {
   const key = state as object;
   let control = sessionsLoadControls.get(key);
   if (!control) {
-    control = { loading: false, pending: null };
+    control = { loading: false, ownsStateLoading: false, pending: null };
     sessionsLoadControls.set(key, control);
   }
   return control;
@@ -167,17 +168,28 @@ async function fetchSessionCompactionCheckpoints(state: SessionsState, key: stri
   }
 }
 
-async function withSessionsLoading(state: SessionsState, run: () => Promise<void>) {
+async function withSessionsLoading(
+  state: SessionsState,
+  run: () => Promise<void>,
+): Promise<boolean> {
   if (state.sessionsLoading) {
-    return;
+    return false;
   }
+  const control = getSessionsLoadControl(state);
   state.sessionsLoading = true;
   state.sessionsError = null;
+  let drainedPendingRefresh = false;
   try {
     await run();
   } finally {
     state.sessionsLoading = false;
+    const pending = takePendingSessionsLoad(control);
+    if (pending && state.client && state.connected) {
+      await loadSessions(state, pending.overrides);
+      drainedPendingRefresh = true;
+    }
   }
+  return drainedPendingRefresh;
 }
 
 async function runCompactionMutation<T>(
@@ -285,8 +297,13 @@ export async function loadSessions(state: SessionsState, overrides?: LoadSession
     control.pending = { overrides };
     return;
   }
+  if (state.sessionsLoading) {
+    control.pending = { overrides };
+    return;
+  }
   const client = state.client;
   control.loading = true;
+  control.ownsStateLoading = true;
   state.sessionsLoading = true;
   state.sessionsError = null;
   let currentOverrides: LoadSessionsOverrides | undefined = overrides;
@@ -303,7 +320,10 @@ export async function loadSessions(state: SessionsState, overrides?: LoadSession
   } finally {
     control.loading = false;
     control.pending = null;
-    state.sessionsLoading = false;
+    if (control.ownsStateLoading) {
+      state.sessionsLoading = false;
+      control.ownsStateLoading = false;
+    }
   }
 }
 
@@ -421,7 +441,7 @@ export async function deleteSessionsAndRefresh(
   }
   const deleted: string[] = [];
   const deleteErrors: string[] = [];
-  await withSessionsLoading(state, async () => {
+  const refreshedDuringDelete = await withSessionsLoading(state, async () => {
     for (const key of keys) {
       try {
         await client.request("sessions.delete", { key, deleteTranscript: true });
@@ -431,7 +451,7 @@ export async function deleteSessionsAndRefresh(
       }
     }
   });
-  if (deleted.length > 0) {
+  if (deleted.length > 0 && !refreshedDuringDelete) {
     await loadSessions(state);
   }
   if (deleteErrors.length > 0) {
