@@ -241,6 +241,46 @@ function pickCliSessionId(
   return undefined;
 }
 
+/**
+ * Claude CLI SessionStart hooks emit `hook_started` and `hook_response` events
+ * that carry a transient per-hook `session_id` which is distinct from the
+ * conversation session that `--resume` operates on. When resuming, the hook
+ * events arrive before the `init` record, so the conversation session_id is
+ * only available from non-hook records. Treat hook records as ineligible for
+ * setting the conversation sessionId.
+ */
+function isTransientClaudeHookRecord(parsed: Record<string, unknown>): boolean {
+  if (parsed.type !== "system") {
+    return false;
+  }
+  const subtype = parsed.subtype;
+  return subtype === "hook_started" || subtype === "hook_response";
+}
+
+/**
+ * Pick the next sessionId to carry forward given a new parsed record. Prefers
+ * session_ids from non-hook records so that transient SessionStart hook
+ * session_ids never replace a real conversation id, while still falling back
+ * to a hook-emitted id when nothing else has provided one (so error-only runs
+ * still surface a handle for logging). Applied uniformly at every CLI output
+ * parsing site so ordering quirks between `hook_*` and `init`/`result` records
+ * can't leak a transient id into persisted state.
+ */
+function nextCliSessionId(
+  parsed: Record<string, unknown>,
+  current: string | undefined,
+  backend: CliBackendConfig,
+): string | undefined {
+  const candidate = pickCliSessionId(parsed, backend);
+  if (!candidate) {
+    return current;
+  }
+  if (!isTransientClaudeHookRecord(parsed)) {
+    return candidate;
+  }
+  return current ?? candidate;
+}
+
 export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {
@@ -252,7 +292,7 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
   let text = "";
   let sawStructuredOutput = false;
   for (const parsed of parsedRecords) {
-    sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
+    sessionId = nextCliSessionId(parsed, sessionId, backend);
     usage = readCliUsage(parsed) ?? usage;
     const nextText =
       collectCliText(parsed.message) ||
@@ -347,7 +387,7 @@ export function createCliJsonlStreamingParser(params: {
   let usage: CliUsage | undefined;
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
-    sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
+    sessionId = nextCliSessionId(parsed, sessionId, params.backend);
     if (!sessionId && typeof parsed.thread_id === "string") {
       sessionId = parsed.thread_id.trim();
     }
@@ -429,9 +469,7 @@ export function parseCliJsonl(
   const texts: string[] = [];
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
-      if (!sessionId) {
-        sessionId = pickCliSessionId(parsed, backend);
-      }
+      sessionId = nextCliSessionId(parsed, sessionId, backend);
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }
