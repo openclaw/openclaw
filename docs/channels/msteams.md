@@ -100,7 +100,7 @@ Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`,
 
 **5. Install the app in Teams**
 
-Select "Install in Teams" from the prompt after creation, or install later:
+`teams app create` will prompt you to install the app — select "Install in Teams". If you skipped it, you can get the link later:
 
 ```bash
 teams app get <teamsAppId> --install-link
