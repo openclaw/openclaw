@@ -568,6 +568,86 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserDoctor).not.toHaveBeenCalled();
   });
 
+  it("passes screenshot timeoutMs to the host browser client", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+      timeoutMs: 12_345,
+    });
+
+    expect(browserActionsMocks.browserScreenshotAction).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        targetId: "tab-1",
+        timeoutMs: 12_345,
+      }),
+    );
+  });
+
+  it("passes screenshot timeoutMs through the node browser proxy", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: { ok: true, path: "/tmp/test.png" },
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "node",
+      targetId: "tab-1",
+      timeoutMs: 12_345,
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 17_345 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          method: "POST",
+          path: "/screenshot",
+          timeoutMs: 12_345,
+          body: expect.objectContaining({
+            targetId: "tab-1",
+            timeoutMs: 12_345,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("uses the screenshot default timeout for node browser proxy requests", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: { ok: true, path: "/tmp/test.png" },
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "node",
+      targetId: "tab-1",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25_000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          timeoutMs: 20_000,
+          body: expect.objectContaining({
+            timeoutMs: 20_000,
+          }),
+        }),
+      }),
+    );
+  });
+
   it("falls back to role refs when a node snapshot cannot provide aria refs", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool

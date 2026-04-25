@@ -11,6 +11,7 @@ import {
   buildAiSnapshotFromChromeMcpSnapshot,
   flattenChromeMcpSnapshotToAriaNodes,
 } from "../chrome-mcp.snapshot.js";
+import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -40,7 +41,7 @@ import {
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
 const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
 
@@ -328,6 +329,11 @@ export function registerBrowserAgentSnapshotRoutes(
       const element = toStringOrEmpty(body.element) || undefined;
       const labels = toBoolean(body.labels) ?? false;
       const type = body.type === "jpeg" ? "jpeg" : "png";
+      const timeoutMsRaw = toNumber(body.timeoutMs);
+      const timeoutMs =
+        timeoutMsRaw !== undefined
+          ? Math.max(1, Math.floor(timeoutMsRaw))
+          : DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
 
       if (fullPage && (ref || element)) {
         return jsonError(res, 400, "fullPage is not supported for element screenshots");
@@ -370,6 +376,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   targetId: tab.targetId,
                   fullPage,
                   format: type,
+                  timeoutMs,
                 });
                 await saveNormalizedScreenshotResponse({
                   res,
@@ -397,6 +404,7 @@ export function registerBrowserAgentSnapshotRoutes(
               uid: ref,
               fullPage,
               format: type,
+              timeoutMs,
             });
             await saveNormalizedScreenshotResponse({
               res,
@@ -433,6 +441,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 targetId: tab.targetId,
                 refs: snap.refs,
                 type,
+                timeoutMs,
               });
               await saveNormalizedScreenshotResponse({
                 res,
@@ -453,6 +462,7 @@ export function registerBrowserAgentSnapshotRoutes(
               element,
               fullPage,
               type,
+              timeoutMs,
             });
             buffer = snap.buffer;
           } else {
@@ -461,6 +471,7 @@ export function registerBrowserAgentSnapshotRoutes(
               fullPage,
               format: type,
               quality: type === "jpeg" ? 85 : undefined,
+              timeoutMs,
             });
           }
 
