@@ -234,23 +234,7 @@ vi.mock("../../media/store.js", async () => {
 const { chatHandlers } = await import("./chat.js");
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 2) {
-  vi.useFakeTimers();
-  try {
-    let lastError: unknown;
-    for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
-      try {
-        assertion();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(stepMs);
-    }
-    throw lastError ?? new Error("assertion did not pass in time");
-  } finally {
-    vi.useRealTimers();
-  }
+  await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
 function createTranscriptFixture(prefix: string) {
@@ -323,6 +307,7 @@ function createChatContext(): Pick<
   | "chatDeltaSentAt"
   | "chatDeltaLastBroadcastLen"
   | "chatAbortedRuns"
+  | "addChatRun"
   | "removeChatRun"
   | "dedupe"
   | "loadGatewayModelCatalog"
@@ -338,14 +323,15 @@ function createChatContext(): Pick<
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
     chatAbortedRuns: new Map(),
+    addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     loadGatewayModelCatalog: async () =>
       mockState.modelCatalog ?? [
         {
           provider: "openai",
-          id: "gpt-5.4",
-          name: "GPT-5.4",
+          id: "gpt-5.5",
+          name: "GPT-5.5",
           input: ["text", "image"],
         },
         {
@@ -1690,6 +1676,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         timestamp: expect.any(Number),
       },
     });
+    const finalBroadcast = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
+    expect(finalBroadcast).toBeUndefined();
   });
 
   it("adds persisted media paths to the user transcript update", async () => {
@@ -2015,12 +2005,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(transcriptUpdate).toMatchObject({
       message: {
         role: "assistant",
-        content: [
-          { type: "text", text: "[[reply_to_current]]Image reply" },
-          { type: "input_image", image_url: "data:image/png;base64,cG5n" },
-        ],
+        content: [{ type: "text", text: "[[reply_to_current]]Image reply" }],
       },
     });
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("data:image/png;base64,cG5n");
   });
 
   it("does not persist sensitive image media into transcript updates", async () => {
@@ -2060,6 +2048,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(JSON.stringify(transcriptUpdate)).not.toContain("input_image");
     expect(JSON.stringify(transcriptUpdate)).not.toContain("data:image/png;base64,cG5n");
+    expect(JSON.stringify(payload?.message)).not.toContain("/api/chat/media/outgoing/");
   });
 
   it("sanitizes replyToId before emitting inline reply directives", async () => {
@@ -2088,7 +2077,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(transcriptUpdate)).not.toContain("[[audio_as_voice]]");
   });
 
-  it("drops image attachments for text-only session models", async () => {
+  it("offloads image attachments for text-only session models", async () => {
     createTranscriptFixture("openclaw-chat-send-text-only-attachments-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -2124,7 +2113,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
+    expect(mockState.lastDispatchCtx?.Body).toMatch(
+      /^describe image\n\[media attached: media:\/\/inbound\//,
+    );
+    expect(mockState.savedMediaCalls).toEqual([
+      expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
+    ]);
   });
 
   it("keeps image attachments for text-only sessions bound to ACP", async () => {
@@ -2232,7 +2227,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
+    expect(mockState.lastDispatchCtx?.Body).toMatch(
+      /^describe image\n\[media attached: media:\/\/inbound\//,
+    );
+    expect(mockState.savedMediaCalls).toEqual([
+      expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
+    ]);
   });
 
   it("passes imageOrder for mixed inline and offloaded chat.send attachments", async () => {

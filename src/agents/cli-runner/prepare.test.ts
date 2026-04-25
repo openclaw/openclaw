@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { __testing as cliBackendsTesting } from "../cli-backends.js";
+import { hashCliSessionText } from "../cli-session.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
@@ -52,11 +53,15 @@ const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
 );
 
-function createCliBackendConfig(opts: { systemPromptOverride?: string } = {}): OpenClawConfig {
+function createCliBackendConfig(
+  params: { systemPromptOverride?: string | null } = {},
+): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        ...(opts.systemPromptOverride ? { systemPromptOverride: opts.systemPromptOverride } : {}),
+        ...(params.systemPromptOverride !== null
+          ? { systemPromptOverride: params.systemPromptOverride ?? "test system prompt" }
+          : {}),
         cliBackends: {
           "test-cli": {
             command: "test-cli",
@@ -75,7 +80,9 @@ function createCliBackendConfig(opts: { systemPromptOverride?: string } = {}): O
 
 function createSessionFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
-  const sessionFile = path.join(dir, "session.jsonl");
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  const sessionFile = path.join(dir, "agents", "main", "sessions", "session-test.jsonl");
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
   fs.writeFileSync(
     sessionFile,
     `${JSON.stringify({
@@ -90,19 +97,41 @@ function createSessionFile() {
   return { dir, sessionFile };
 }
 
+function appendTranscriptEntry(
+  sessionFile: string,
+  entry: {
+    id: string;
+    parentId: string | null;
+    timestamp: string;
+    message: unknown;
+  },
+): void {
+  fs.appendFileSync(
+    sessionFile,
+    `${JSON.stringify({
+      type: "message",
+      id: entry.id,
+      parentId: entry.parentId,
+      timestamp: entry.timestamp,
+      message: entry.message,
+    })}\n`,
+    "utf-8",
+  );
+}
+
 describe("shouldSkipLocalCliCredentialEpoch", () => {
   beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [],
+    });
     setCliRunnerPrepareTestDeps({
       makeBootstrapWarn: vi.fn(() => () => undefined),
       resolveBootstrapContextForRun: vi.fn(async () => ({
         bootstrapFiles: [],
         contextFiles: [],
       })),
-      resolveOpenClawDocsPath: vi.fn(async () => null),
-    });
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: vi.fn(() => undefined),
-      resolveRuntimeCliBackends: vi.fn(() => []),
+      resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
@@ -114,6 +143,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     mockGetGlobalHookRunner.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
+    vi.unstubAllEnvs();
   });
 
   it("skips local cli auth only when a profile-owned execution was prepared", () => {
@@ -151,24 +181,33 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      const sessionManager = SessionManager.open(sessionFile);
-      sessionManager.appendMessage({ role: "user", content: "earlier context", timestamp: 1 });
-      sessionManager.appendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "earlier reply" }],
-        api: "responses",
-        provider: "test-cli",
-        model: "test-model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      appendTranscriptEntry(sessionFile, {
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: "earlier context", timestamp: 1 },
+      });
+      appendTranscriptEntry(sessionFile, {
+        id: "msg-2",
+        parentId: "msg-1",
+        timestamp: new Date(2).toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "earlier reply" }],
+          api: "responses",
+          provider: "test-cli",
+          model: "test-model",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 2,
         },
-        stopReason: "stop",
-        timestamp: 2,
       });
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
@@ -197,7 +236,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         messageChannel: "telegram",
         messageProvider: "acp",
         config: {
-          ...createCliBackendConfig({ systemPromptOverride: "base system" }),
+          ...createCliBackendConfig(),
         },
       });
 
@@ -274,7 +313,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-legacy-merge",
-        config: createCliBackendConfig({ systemPromptOverride: "base system" }),
+        config: createCliBackendConfig({ systemPromptOverride: null }),
       });
 
       expect(context.params.prompt).toBe("prompt prepend\n\nlegacy prepend\n\nlatest ask");
@@ -313,9 +352,66 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.params.prompt).toBe("latest ask");
-      expect(context.systemPrompt).toContain("base extra system");
+      expect(context.systemPrompt).toBe("base extra system");
       expect(context.systemPrompt).not.toContain("hook exploded");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses explicit static prompt text for CLI session reuse hashing", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-static-prompt",
+        extraSystemPrompt: "## Inbound Context\nchannel=telegram",
+        extraSystemPromptStatic: "",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+        },
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.systemPrompt).toContain("## Inbound Context\nchannel=telegram");
+      expect(context.extraSystemPromptHash).toBeUndefined();
+      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores volatile prompt text when static prompt text matches", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const staticPrompt = "## Direct Context\nYou are in a Telegram direct conversation.";
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-volatile-prompt",
+        extraSystemPrompt: `## Inbound Context\nchannel=heartbeat\n\n${staticPrompt}`,
+        extraSystemPromptStatic: staticPrompt,
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: hashCliSessionText(staticPrompt),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
+      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -348,7 +444,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-prepend-helper",
-        config: createCliBackendConfig({ systemPromptOverride: "base system" }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.systemPrompt).toBe("active video task\n\nhook prepend system\n\nhook system");

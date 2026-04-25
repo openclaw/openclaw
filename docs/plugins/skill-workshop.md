@@ -1,14 +1,12 @@
 ---
-title: "Skill Workshop plugin"
 summary: "Experimental capture of reusable procedures as workspace skills with review, approval, quarantine, and hot skill refresh"
+title: "Skill workshop plugin"
 read_when:
   - You want agents to turn corrections or reusable procedures into workspace skills
   - You are configuring procedural skill memory
   - You are debugging skill_workshop tool behavior
   - You are deciding whether to enable automatic skill creation
 ---
-
-# Skill Workshop plugin
 
 Skill Workshop is **experimental**. It is disabled by default, its capture
 heuristics and reviewer prompts may change between releases, and automatic

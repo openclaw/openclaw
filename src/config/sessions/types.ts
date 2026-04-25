@@ -58,6 +58,8 @@ export type AcpSessionRuntimeOptions = {
   runtimeMode?: string;
   /** ACP runtime config option: model id. */
   model?: string;
+  /** ACP runtime config option: thinking/reasoning effort. */
+  thinking?: string;
   /** Working directory override for ACP session turns. */
   cwd?: string;
   /** ACP runtime config option: permission profile id. */
@@ -176,6 +178,8 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /** Session-scoped agent runtime/harness override selected with the model picker. */
+  agentRuntimeOverride?: string;
   /**
    * Tracks whether the persisted model override came from an explicit user
    * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.

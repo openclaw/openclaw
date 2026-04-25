@@ -1,4 +1,3 @@
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
@@ -43,6 +42,7 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
+import { loadCliSessionHistoryMessages } from "./session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
@@ -51,15 +51,10 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
-  resolveOpenClawDocsPath: async (
-    params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
-  ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
+  resolveOpenClawReferencePaths: async (
+    params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
+  ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
 };
-
-function loadCliPromptBuildMessages(sessionFile: string): unknown[] {
-  const entries = SessionManager.open(sessionFile).getEntries();
-  return entries.flatMap((entry) => (entry.type === "message" ? [entry.message as unknown] : []));
-}
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
@@ -100,7 +95,9 @@ export async function prepareCliRunContext(
   }
   const workspaceDir = resolvedWorkspace;
 
-  const backendResolved = resolveCliBackendConfig(params.provider, params.config);
+  const backendResolved = resolveCliBackendConfig(params.provider, params.config, {
+    agentId: params.agentId,
+  });
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
@@ -267,7 +264,7 @@ export async function prepareCliRunContext(
     agentId: sessionAgentId,
     defaultAgentId,
   });
-  const docsPath = await prepareDeps.resolveOpenClawDocsPath({
+  const openClawReferences = await prepareDeps.resolveOpenClawReferencePaths({
     workspaceDir,
     argv1: process.argv[1],
     cwd: process.cwd(),
@@ -291,7 +288,8 @@ export async function prepareCliRunContext(
       extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,
-      docsPath: docsPath ?? undefined,
+      docsPath: openClawReferences.docsPath ?? undefined,
+      sourcePath: openClawReferences.sourcePath ?? undefined,
       skillsPrompt,
       tools: [],
       contextFiles,
@@ -315,7 +313,13 @@ export async function prepareCliRunContext(
     try {
       const hookResult = await resolvePromptBuildHookResult({
         prompt: params.prompt,
-        messages: loadCliPromptBuildMessages(params.sessionFile),
+        messages: loadCliSessionHistoryMessages({
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        }),
         hookCtx: {
           runId: params.runId,
           agentId: sessionAgentId,

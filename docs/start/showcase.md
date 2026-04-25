@@ -1,13 +1,11 @@
 ---
+summary: "Community-built projects and integrations powered by OpenClaw"
 title: "Showcase"
 description: "Real-world OpenClaw projects from the community"
-summary: "Community-built projects and integrations powered by OpenClaw"
 read_when:
   - Looking for real OpenClaw usage examples
   - Updating community project highlights
 ---
-
-# Showcase
 
 OpenClaw projects are not toy demos. People are shipping PR review loops, mobile apps, home automation, voice systems, devtools, and memory-heavy workflows from the channels they already use — chat-native builds on Telegram, WhatsApp, Discord, and terminals; real automation for booking, shopping, and support without waiting for an API; and physical-world integrations with printers, vacuums, cameras, and home systems.
 
@@ -378,3 +376,8 @@ Full astronomy gear marketplace. Built with and around the OpenClaw ecosystem.
     We'll add standout projects to this page.
   </Step>
 </Steps>
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [OpenClaw](/start/openclaw)

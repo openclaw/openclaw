@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -381,6 +382,51 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
+  it("keeps tool summary on incomplete side-effect terminal results", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
+          toolMetas: [{ toolName: "write", meta: "path=out.txt" }],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            provider: "openai",
+            model: "mock-1",
+            stopReason: "stop",
+            content: [],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:tool-side-effect-terminal",
+        sessionKey: "agent:test:tool-side-effect-terminal",
+        sessionFile: path.join(workspaceDir, "tool-side-effect-terminal.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "write the file",
+        provider: "openai",
+        model: "mock-1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:tool-side-effect-terminal",
+        enqueue: async (task) => await task(),
+      });
+
+      expect(result.meta.toolSummary).toMatchObject({
+        calls: 1,
+        tools: ["write"],
+      });
+      expect(
+        classifyEmbeddedPiRunResultForModelFallback({
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          result,
+        }),
+      ).toBeNull();
+    });
+  });
+
   it("falls back on OpenRouter-style no-endpoints assistant errors", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
@@ -396,6 +442,27 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       expect(result.provider).toBe("groq");
       expect(result.model).toBe("mock-2");
       expect(result.attempts[0]?.reason).toBe("model_not_found");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
+  it("falls back on timeout errors using defaults-only model fallbacks", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess("LLM request timed out.");
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:timeout-defaults-fallback",
+        runId: "run:timeout-defaults-fallback",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("timeout");
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
       expectOpenAiThenGroqAttemptOrder();

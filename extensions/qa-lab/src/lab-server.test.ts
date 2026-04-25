@@ -179,19 +179,22 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
   throw new Error("runner catalog stayed loading");
 }
 
-async function waitForFile(filePath: string, timeoutMs = 5_000) {
+async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      return await readFile(filePath, "utf8");
+      const content = await readFile(filePath, "utf8");
+      if (content === expected) {
+        return content;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-      await sleep(10);
     }
+    await sleep(10);
   }
-  throw new Error(`file did not appear: ${filePath}`);
+  throw new Error(`file did not reach expected content: ${filePath}`);
 }
 
 async function createQaLabRepoRootFixture(params?: {
@@ -505,9 +508,9 @@ describe("qa-lab server", () => {
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf8");`,
         "process.stdout.write(JSON.stringify({",
         "  models: [{",
-        '    key: "openai/gpt-5.4",',
-        '    name: "GPT-5.4",',
-        '    input: "openai/gpt-5.4",',
+        '    key: "openai/gpt-5.5",',
+        '    name: "GPT-5.5",',
+        '    input: "openai/gpt-5.5",',
         "    available: true,",
         "    missing: false,",
         "  }],",
@@ -584,11 +587,11 @@ describe("qa-lab server", () => {
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
-    expect(await waitForFile(markerPath)).toBe("0");
+    expect(await waitForFileContent(markerPath, "0")).toBe("0");
 
     await lab.stop();
     stopped = true;
-    expect(await waitForFile(stoppedPath)).toBe("terminated");
+    expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {
@@ -723,7 +726,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -744,7 +747,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -793,7 +796,7 @@ describe("qa-lab server", () => {
         expect.objectContaining({
           flowId: "flow-1",
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           captureOrigin: "shared-fetch",
         }),
         expect.objectContaining({
@@ -825,7 +828,7 @@ describe("qa-lab server", () => {
     );
     expect(coverage.coverage.models).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ value: "gpt-5.4", count: 2 }),
+        expect.objectContaining({ value: "gpt-5.5", count: 2 }),
         expect.objectContaining({ value: "kimi-k2.5:cloud", count: 1 }),
       ]),
     );

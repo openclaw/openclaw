@@ -3,10 +3,8 @@ summary: "Inbound channel location parsing (Telegram/WhatsApp/Matrix) and contex
 read_when:
   - Adding or modifying channel location parsing
   - Using location context fields in agent prompts or tools
-title: "Channel Location Parsing"
+title: "Channel location parsing"
 ---
-
-# Channel location parsing
 
 OpenClaw normalizes shared locations from chat channels into:
 
@@ -65,3 +63,9 @@ The prompt renderer treats `LocationName`, `LocationAddress`, and `LocationCapti
 - **Telegram**: venues map to `LocationName/LocationAddress`; live locations use `live_period`.
 - **WhatsApp**: `locationMessage.comment` and `liveLocationMessage.caption` populate `LocationCaption`.
 - **Matrix**: `geo_uri` is parsed as a pin location; altitude is ignored and `LocationIsLive` is always false.
+
+## Related
+
+- [Location command (nodes)](/nodes/location-command)
+- [Camera capture](/nodes/camera)
+- [Media understanding](/nodes/media-understanding)

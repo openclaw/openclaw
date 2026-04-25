@@ -5,11 +5,7 @@ read_when:
 title: "Microsoft Teams"
 ---
 
-# Microsoft Teams
-
-> "Abandon all hope, ye who enter here."
-
-Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
+Text and DM attachments are supported; channel and group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
 ## Bundled plugin
 
@@ -57,15 +53,9 @@ Minimal config (client secret):
 }
 ```
 
-For production deployments, consider using [federated authentication](#federated-authentication-certificate--managed-identity) (certificate or managed identity) instead of client secrets.
+For production deployments, consider using [federated authentication](#federated-authentication) (certificate or managed identity) instead of client secrets.
 
 Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom` (or use `groupPolicy: "open"` to allow any member, mention-gated).
-
-## Goals
-
-- Talk to OpenClaw via Teams DMs, group chats, or channels.
-- Keep routing deterministic: replies always go back to the channel they arrived on.
-- Default to safe channel behavior (mentions required unless configured otherwise).
 
 ## Config writes
 
@@ -85,7 +75,7 @@ Disable with:
 
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
 - `channels.msteams.allowFrom` should use stable AAD object IDs.
-- UPNs/display names are mutable; direct matching is disabled by default and only enabled with `channels.msteams.dangerouslyAllowNameMatching: true`.
+- Do not rely on UPN/display-name matching for allowlists — they can change. OpenClaw disables direct name matching by default; opt in explicitly with `channels.msteams.dangerouslyAllowNameMatching: true`.
 - The wizard can resolve names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
@@ -182,8 +172,6 @@ Before configuring OpenClaw, create an Azure Bot resource and capture its creden
     Azure Bot → **Channels** → click **Microsoft Teams** → Configure → Save. Accept the Terms of Service.
   </Step>
 </Steps>
-
-<a id="federated-authentication-certificate--managed-identity"></a>
 
 ## Federated authentication
 
@@ -374,60 +362,16 @@ This is often easier than hand-editing JSON manifests.
 2. Find the bot in Teams and send a DM
 3. Check gateway logs for incoming activity
 
-## Setup (minimal text-only)
+<Accordion title="Environment variable overrides">
 
-1. **Ensure the Microsoft Teams plugin is available**
-   - Current packaged OpenClaw releases already bundle it.
-   - Older/custom installs can add it manually:
-     - From npm: `openclaw plugins install @openclaw/msteams`
-     - From a local checkout: `openclaw plugins install ./path/to/local/msteams-plugin`
+Any of the bot/auth config keys can also be set via env vars:
 
-2. **Bot registration**
-   - Create an Azure Bot (see above) and note:
-     - App ID
-     - Client secret (App password)
-     - Tenant ID (single-tenant)
+- `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`
+- `MSTEAMS_AUTH_TYPE` (`"secret"` or `"federated"`)
+- `MSTEAMS_CERTIFICATE_PATH`, `MSTEAMS_CERTIFICATE_THUMBPRINT` (federated + certificate)
+- `MSTEAMS_USE_MANAGED_IDENTITY`, `MSTEAMS_MANAGED_IDENTITY_CLIENT_ID` (federated + managed identity; client ID only for user-assigned)
 
-3. **Teams app manifest**
-   - Include a `bot` entry with `botId = <App ID>`.
-   - Scopes: `personal`, `team`, `groupChat`.
-   - `supportsFiles: true` (required for personal scope file handling).
-   - Add RSC permissions (below).
-   - Create icons: `outline.png` (32x32) and `color.png` (192x192).
-   - Zip all three files together: `manifest.json`, `outline.png`, `color.png`.
-
-4. **Configure OpenClaw**
-
-   ```json5
-   {
-     channels: {
-       msteams: {
-         enabled: true,
-         appId: "<APP_ID>",
-         appPassword: "<APP_PASSWORD>",
-         tenantId: "<TENANT_ID>",
-         webhook: { port: 3978, path: "/api/messages" },
-       },
-     },
-   }
-   ```
-
-   You can also use environment variables instead of config keys:
-   - `MSTEAMS_APP_ID`
-   - `MSTEAMS_APP_PASSWORD`
-   - `MSTEAMS_TENANT_ID`
-   - `MSTEAMS_AUTH_TYPE` (optional: `"secret"` or `"federated"`)
-   - `MSTEAMS_CERTIFICATE_PATH` (federated + certificate)
-   - `MSTEAMS_CERTIFICATE_THUMBPRINT` (optional, not required for auth)
-   - `MSTEAMS_USE_MANAGED_IDENTITY` (federated + managed identity)
-   - `MSTEAMS_MANAGED_IDENTITY_CLIENT_ID` (user-assigned MI only)
-
-5. **Bot endpoint**
-   - Set the Azure Bot Messaging Endpoint to:
-     - `https://<host>:3978/api/messages` (or your chosen path/port).
-
-6. **Run the gateway**
-   - The Teams channel starts automatically when the bundled or manually installed plugin is available and `msteams` config exists with credentials.
+</Accordion>
 
 ## Member info action
 
@@ -956,8 +900,20 @@ Bots have limited support in private channels:
 
 ## Related
 
-- [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Security](/gateway/security) — access model and hardening
+<CardGroup cols={2}>
+  <Card title="Channels overview" icon="list" href="/channels">
+    All supported channels.
+  </Card>
+  <Card title="Pairing" icon="link" href="/channels/pairing">
+    DM authentication and pairing flow.
+  </Card>
+  <Card title="Groups" icon="users" href="/channels/groups">
+    Group chat behavior and mention gating.
+  </Card>
+  <Card title="Channel routing" icon="route" href="/channels/channel-routing">
+    Session routing for messages.
+  </Card>
+  <Card title="Security" icon="shield" href="/gateway/security">
+    Access model and hardening.
+  </Card>
+</CardGroup>

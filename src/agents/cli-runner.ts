@@ -1,7 +1,11 @@
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
@@ -10,13 +14,19 @@ import {
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
-function loadCliHookHistoryMessages(sessionFile: string): unknown[] {
-  try {
-    const entries = SessionManager.open(sessionFile).getEntries();
-    return entries.flatMap((entry) => (entry.type === "message" ? [entry.message as unknown] : []));
-  } catch {
-    return [];
-  }
+function buildHandledReplyPayloads(reply?: ReplyPayload) {
+  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
+  return [
+    {
+      text: normalized.text,
+      mediaUrl: normalized.mediaUrl,
+      mediaUrls: normalized.mediaUrls,
+      replyToId: normalized.replyToId,
+      audioAsVoice: normalized.audioAsVoice,
+      isError: normalized.isError,
+      isReasoning: normalized.isReasoning,
+    },
+  ];
 }
 
 function buildCliHookUserMessage(prompt: string): unknown {
@@ -52,9 +62,54 @@ function buildCliHookAssistantMessage(params: {
 }
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
+  // Cron gate must fire before prepareCliRunContext — that call allocates
+  // backend resources released only by runPreparedCliAgent's try…finally.
+  if (params.trigger === "cron") {
+    const startedAt = Date.now();
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("before_agent_reply")) {
+      const hookContext = {
+        runId: params.runId,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider,
+      } as const;
+      const hookResult = await hookRunner.runBeforeAgentReply(
+        { cleanedBody: params.prompt },
+        hookContext,
+      );
+      if (hookResult?.handled) {
+        return {
+          payloads: buildHandledReplyPayloads(hookResult.reply),
+          meta: {
+            durationMs: Date.now() - startedAt,
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider: params.provider,
+              model: params.model ?? "",
+            },
+            finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+            finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+          },
+        };
+      }
+    }
+  }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
   const context = await prepareCliRunContext(params);
-  return runPreparedCliAgent(context);
+  try {
+    return await runPreparedCliAgent(context);
+  } finally {
+    if (params.cleanupCliLiveSessionOnRunEnd === true) {
+      const { closeClaudeLiveSessionForContext } =
+        await import("./cli-runner/claude-live-session.js");
+      closeClaudeLiveSessionForContext(context);
+    }
+  }
 }
 
 export async function runPreparedCliAgent(
@@ -62,7 +117,20 @@ export async function runPreparedCliAgent(
 ): Promise<EmbeddedPiRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
-  const historyMessages = loadCliHookHistoryMessages(params.sessionFile);
+  const hookRunner = getGlobalHookRunner();
+  const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
+  const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
+  const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
+  const historyMessages =
+    hasLlmInputHooks || hasAgentEndHooks
+      ? loadCliSessionHistoryMessages({
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        })
+      : [];
   const llmInputEvent = {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -84,11 +152,42 @@ export async function runPreparedCliAgent(
     channelId: params.messageChannel ?? params.messageProvider,
   } as const;
 
-  const runCliAttempt = async (cliSessionIdToUse?: string) => {
-    runAgentHarnessLlmInputHook({
-      event: llmInputEvent,
-      ctx: hookContext,
-    });
+  const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [
+    ...buildAgentHookConversationMessages({
+      historyMessages,
+      currentTurnMessages: [
+        buildCliHookUserMessage(params.prompt),
+        ...(lastAssistant ? [lastAssistant] : []),
+      ],
+    }),
+  ];
+
+  const buildFailedAgentEndEvent = (error: string) => ({
+    messages: buildAgentEndMessages(),
+    success: false,
+    error,
+    durationMs: Date.now() - context.started,
+  });
+
+  const toCliRunFailure = (error: unknown): never => {
+    if (isFailoverError(error)) {
+      throw error;
+    }
+    const message = formatErrorMessage(error);
+    if (isFailoverErrorMessage(message, { provider: params.provider })) {
+      const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
+      const status = resolveFailoverStatus(reason);
+      throw new FailoverError(message, {
+        reason,
+        provider: params.provider,
+        model: context.modelId,
+        status,
+      });
+    }
+    throw error;
+  };
+
+  const executeCliAttempt = async (cliSessionIdToUse?: string) => {
     const output = await executePreparedCliRun(context, cliSessionIdToUse);
     const assistantText = output.text.trim();
     const assistantTexts = assistantText ? [assistantText] : [];
@@ -101,18 +200,22 @@ export async function runPreparedCliAgent(
             usage: output.usage,
           })
         : undefined;
-    runAgentHarnessLlmOutputHook({
-      event: {
-        runId: params.runId,
-        sessionId: params.sessionId,
-        provider: params.provider,
-        model: context.modelId,
-        assistantTexts,
-        ...(lastAssistant ? { lastAssistant } : {}),
-        ...(output.usage ? { usage: output.usage } : {}),
-      },
-      ctx: hookContext,
-    });
+    if (assistantText.length > 0 && hasLlmOutputHooks) {
+      runAgentHarnessLlmOutputHook({
+        event: {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: context.modelId,
+          resolvedRef: `${params.provider}/${context.modelId}`,
+          assistantTexts,
+          ...(lastAssistant ? { lastAssistant } : {}),
+          ...(output.usage ? { usage: output.usage } : {}),
+        },
+        ctx: hookContext,
+        hookRunner,
+      });
+    }
     return { output, assistantText, lastAssistant };
   };
 
@@ -193,20 +296,24 @@ export async function runPreparedCliAgent(
 
   // Try with the provided CLI session ID first
   try {
+    runAgentHarnessLlmInputHook({
+      event: llmInputEvent,
+      ctx: hookContext,
+      hookRunner,
+    });
     try {
-      const { output, lastAssistant } = await runCliAttempt(context.reusableCliSession.sessionId);
+      const { output, lastAssistant } = await executeCliAttempt(
+        context.reusableCliSession.sessionId,
+      );
       const effectiveCliSessionId = output.sessionId ?? context.reusableCliSession.sessionId;
       runAgentHarnessAgentEndHook({
         event: {
-          messages: [
-            ...historyMessages,
-            buildCliHookUserMessage(params.prompt),
-            ...(lastAssistant ? [lastAssistant] : []),
-          ],
+          messages: buildAgentEndMessages(lastAssistant),
           success: true,
           durationMs: Date.now() - context.started,
         },
         ctx: hookContext,
+        hookRunner,
       });
       return buildCliRunResult({ output, effectiveCliSessionId });
     } catch (err) {
@@ -219,64 +326,43 @@ export async function runPreparedCliAgent(
           // We'll need to modify the caller to handle this case
 
           // For now, retry without the session ID to create a new session
-          const { output, lastAssistant } = await runCliAttempt(undefined);
-          const effectiveCliSessionId = output.sessionId;
-          runAgentHarnessAgentEndHook({
-            event: {
-              messages: [
-                ...historyMessages,
-                buildCliHookUserMessage(params.prompt),
-                ...(lastAssistant ? [lastAssistant] : []),
-              ],
-              success: true,
-              durationMs: Date.now() - context.started,
-            },
-            ctx: hookContext,
-          });
-          return buildCliRunResult({ output, effectiveCliSessionId });
+          try {
+            const { output, lastAssistant } = await executeCliAttempt(undefined);
+            const effectiveCliSessionId = output.sessionId;
+            runAgentHarnessAgentEndHook({
+              event: {
+                messages: buildAgentEndMessages(lastAssistant),
+                success: true,
+                durationMs: Date.now() - context.started,
+              },
+              ctx: hookContext,
+              hookRunner,
+            });
+            return buildCliRunResult({ output, effectiveCliSessionId });
+          } catch (retryErr) {
+            const retryMessage = formatErrorMessage(retryErr);
+            runAgentHarnessAgentEndHook({
+              event: buildFailedAgentEndEvent(retryMessage),
+              ctx: hookContext,
+              hookRunner,
+            });
+            return toCliRunFailure(retryErr);
+          }
         }
         runAgentHarnessAgentEndHook({
-          event: {
-            messages: [...historyMessages, buildCliHookUserMessage(params.prompt)],
-            success: false,
-            error: formatErrorMessage(err),
-            durationMs: Date.now() - context.started,
-          },
+          event: buildFailedAgentEndEvent(formatErrorMessage(err)),
           ctx: hookContext,
+          hookRunner,
         });
         throw err;
       }
       const message = formatErrorMessage(err);
-      if (isFailoverErrorMessage(message, { provider: params.provider })) {
-        const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
-        const status = resolveFailoverStatus(reason);
-        const failoverError = new FailoverError(message, {
-          reason,
-          provider: params.provider,
-          model: context.modelId,
-          status,
-        });
-        runAgentHarnessAgentEndHook({
-          event: {
-            messages: [...historyMessages, buildCliHookUserMessage(params.prompt)],
-            success: false,
-            error: message,
-            durationMs: Date.now() - context.started,
-          },
-          ctx: hookContext,
-        });
-        throw failoverError;
-      }
       runAgentHarnessAgentEndHook({
-        event: {
-          messages: [...historyMessages, buildCliHookUserMessage(params.prompt)],
-          success: false,
-          error: message,
-          durationMs: Date.now() - context.started,
-        },
+        event: buildFailedAgentEndEvent(message),
         ctx: hookContext,
+        hookRunner,
       });
-      throw err;
+      return toCliRunFailure(err);
     }
   } finally {
     await context.preparedBackend.cleanup?.();

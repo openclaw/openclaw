@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
+import { loadPluginInstallRecords } from "../plugins/install-ledger-store.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
@@ -420,7 +421,7 @@ export async function collectPluginsTrustFindings(params: {
     }
   }
 
-  const pluginInstalls = params.cfg.plugins?.installs ?? {};
+  const pluginInstalls = await loadPluginInstallRecords({ config: params.cfg });
   const npmPluginInstalls = Object.entries(pluginInstalls).filter(
     ([, record]) => record?.source === "npm",
   );

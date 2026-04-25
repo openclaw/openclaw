@@ -130,7 +130,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           makeUserInput(
             "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
@@ -159,7 +159,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           makeUserInput(
             "Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.",
@@ -178,7 +178,7 @@ describe("qa mock openai server", () => {
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);
     expect(await debugResponse.json()).toMatchObject({
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       prompt:
         "ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.",
       allInputText: expect.stringContaining("ok do it."),
@@ -285,7 +285,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           {
             role: "user",
@@ -312,7 +312,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: false,
-        model: "gpt-5.4-alt",
+        model: "gpt-5.5-alt",
         input: [
           {
             role: "user",
@@ -344,8 +344,8 @@ describe("qa mock openai server", () => {
     const requests = await fetch(`${server.baseUrl}/debug/requests`);
     expect(requests.status).toBe(200);
     expect((await requests.json()) as Array<{ model?: string }>).toMatchObject([
-      { model: "gpt-5.4" },
-      { model: "gpt-5.4-alt" },
+      { model: "gpt-5.5" },
+      { model: "gpt-5.5-alt" },
     ]);
   });
 
@@ -365,7 +365,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           {
             role: "user",
@@ -402,7 +402,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: true,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
       }),
     });
@@ -414,7 +414,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: true,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           { role: "user", content: [{ type: "input_text", text: prompt }] },
           {
@@ -433,7 +433,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: true,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           { role: "user", content: [{ type: "input_text", text: prompt }] },
           {
@@ -451,7 +451,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: true,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           { role: "user", content: [{ type: "input_text", text: prompt }] },
           {
@@ -472,7 +472,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           { role: "user", content: [{ type: "input_text", text: prompt }] },
           {
@@ -508,7 +508,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           {
             role: "user",
@@ -538,7 +538,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           {
             role: "user",
@@ -681,6 +681,32 @@ describe("qa mock openai server", () => {
     expect(body).toContain("QA_SUBAGENT_CHILD_FIXED");
   });
 
+  it("records planned sessions_spawn arguments for forked-context QA assertions", async () => {
+    const server = await startMockServer();
+
+    await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          'Forked subagent context QA check. Use sessions_spawn task="Report the visible code" label=qa-fork-context context=fork mode=run.',
+        ),
+      ],
+    });
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    expect(await debugResponse.json()).toMatchObject({
+      plannedToolName: "sessions_spawn",
+      plannedToolArgs: {
+        task: "Report the visible code",
+        label: "qa-fork-context",
+        context: "fork",
+        mode: "run",
+      },
+    });
+  });
+
   it("surfaces sessions_spawn tool errors instead of echoing child-task markers", async () => {
     const server = await startMockServer();
 
@@ -808,7 +834,9 @@ describe("qa mock openai server", () => {
       }),
     });
     expect(memory.status).toBe(200);
-    expect(await memory.text()).toContain('"name":"memory_search"');
+    const memoryText = await memory.text();
+    expect(memoryText).toContain('"name":"memory_search"');
+    expect(memoryText).toContain('\\"corpus\\":\\"sessions\\"');
 
     const memoryFollowup = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -1381,7 +1409,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: false,
-        model: "mock-openai/gpt-5.4",
+        model: "mock-openai/gpt-5.5",
         input: [
           {
             role: "user",
@@ -1431,7 +1459,7 @@ describe("qa mock openai server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         stream: false,
-        model: "mock-openai/gpt-5.4",
+        model: "mock-openai/gpt-5.5",
         input: [
           {
             role: "user",
@@ -1518,7 +1546,7 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: false,
-        model: "gpt-5.4-alt",
+        model: "gpt-5.5-alt",
         input: [
           {
             role: "user",
@@ -1604,7 +1632,7 @@ describe("qa mock openai server", () => {
     const body = (await response.json()) as { data: Array<{ id: string }> };
     const ids = body.data.map((entry) => entry.id);
     expect(ids).toContain("claude-opus-4-6");
-    expect(ids).toContain("gpt-5.4");
+    expect(ids).toContain("gpt-5.5");
   });
 
   it("dispatches an Anthropic /v1/messages read tool call for source discovery prompts", async () => {
@@ -2134,7 +2162,7 @@ describe("qa mock openai server", () => {
 
     const toolPlan = await expectResponsesText(server, {
       stream: true,
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       input: [makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT)],
     });
     expect(toolPlan).toContain('"name":"read"');
@@ -2145,7 +2173,7 @@ describe("qa mock openai server", () => {
         output?: Array<{ type?: string; id?: string; summary?: Array<{ text?: string }> }>;
       }>(server, {
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT),
           {
@@ -2169,7 +2197,7 @@ describe("qa mock openai server", () => {
         output?: Array<{ content?: Array<{ text?: string }> }>;
       }>(server, {
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT),
           makeUserInput(QA_REASONING_ONLY_RETRY_INSTRUCTION),
@@ -2196,7 +2224,7 @@ describe("qa mock openai server", () => {
     ]);
   });
 
-  it("scripts the GPT-5.4 thinking visibility switch prompts", async () => {
+  it("scripts the GPT-5.5 thinking visibility switch prompts", async () => {
     const server = await startMockServer();
 
     expect(
@@ -2204,7 +2232,7 @@ describe("qa mock openai server", () => {
         output?: Array<{ type?: string; content?: Array<{ text?: string }> }>;
       }>(server, {
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [makeUserInput(QA_THINKING_VISIBILITY_OFF_PROMPT)],
       }),
     ).toMatchObject({
@@ -2226,7 +2254,7 @@ describe("qa mock openai server", () => {
         }>;
       }>(server, {
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [makeUserInput(QA_THINKING_VISIBILITY_MAX_PROMPT)],
       }),
     ).toMatchObject({
@@ -2249,7 +2277,7 @@ describe("qa mock openai server", () => {
 
     const toolPlan = await expectResponsesText(server, {
       stream: true,
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       input: [makeUserInput(QA_REASONING_ONLY_SIDE_EFFECT_PROMPT)],
     });
     expect(toolPlan).toContain('"name":"write"');
@@ -2260,7 +2288,7 @@ describe("qa mock openai server", () => {
         output?: Array<{ type?: string; id?: string }>;
       }>(server, {
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           makeUserInput(QA_REASONING_ONLY_SIDE_EFFECT_PROMPT),
           {
@@ -2283,7 +2311,7 @@ describe("qa mock openai server", () => {
 
     const toolPlan = await expectResponsesText(server, {
       stream: true,
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       input: [makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT)],
     });
     expect(toolPlan).toContain('"name":"read"');
@@ -2293,7 +2321,7 @@ describe("qa mock openai server", () => {
         output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
       }>(server, {
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT),
           {
@@ -2315,7 +2343,7 @@ describe("qa mock openai server", () => {
         output?: Array<{ content?: Array<{ text?: string }> }>;
       }>(server, {
         stream: false,
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         input: [
           makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT),
           makeUserInput(QA_EMPTY_RESPONSE_RETRY_INSTRUCTION),
@@ -2339,7 +2367,7 @@ describe("qa mock openai server", () => {
 
     await expectResponsesText(server, {
       stream: true,
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       input: [makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT)],
     });
 
@@ -2347,7 +2375,7 @@ describe("qa mock openai server", () => {
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
       stream: false,
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       input: [
         makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT),
         {
@@ -2362,7 +2390,7 @@ describe("qa mock openai server", () => {
       output?: Array<{ content?: Array<{ text?: string }> }>;
     }>(server, {
       stream: false,
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       input: [
         makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT),
         makeUserInput(QA_EMPTY_RESPONSE_RETRY_INSTRUCTION),
@@ -2378,9 +2406,9 @@ describe("qa mock openai server", () => {
 
 describe("resolveProviderVariant", () => {
   it("tags prefix-qualified openai models", () => {
-    expect(resolveProviderVariant("openai/gpt-5.4")).toBe("openai");
-    expect(resolveProviderVariant("openai:gpt-5.4")).toBe("openai");
-    expect(resolveProviderVariant("openai-codex/gpt-5.4")).toBe("openai");
+    expect(resolveProviderVariant("openai/gpt-5.5")).toBe("openai");
+    expect(resolveProviderVariant("openai:gpt-5.5")).toBe("openai");
+    expect(resolveProviderVariant("openai-codex/gpt-5.5")).toBe("openai");
   });
 
   it("tags prefix-qualified anthropic models", () => {
@@ -2390,8 +2418,8 @@ describe("resolveProviderVariant", () => {
   });
 
   it("tags bare model names by prefix", () => {
-    expect(resolveProviderVariant("gpt-5.4")).toBe("openai");
-    expect(resolveProviderVariant("gpt-5.4-alt")).toBe("openai");
+    expect(resolveProviderVariant("gpt-5.5")).toBe("openai");
+    expect(resolveProviderVariant("gpt-5.5-alt")).toBe("openai");
     expect(resolveProviderVariant("gpt-4.5")).toBe("openai");
     expect(resolveProviderVariant("o1-preview")).toBe("openai");
     expect(resolveProviderVariant("claude-opus-4-6")).toBe("anthropic");
@@ -2399,7 +2427,7 @@ describe("resolveProviderVariant", () => {
   });
 
   it("handles case drift and whitespace", () => {
-    expect(resolveProviderVariant("  OpenAI/GPT-5.4  ")).toBe("openai");
+    expect(resolveProviderVariant("  OpenAI/GPT-5.5  ")).toBe("openai");
     expect(resolveProviderVariant("ANTHROPIC/CLAUDE-OPUS-4-6")).toBe("anthropic");
   });
 
@@ -2425,7 +2453,7 @@ describe("qa mock openai server provider variant tagging", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "openai/gpt-5.4",
+        model: "openai/gpt-5.5",
         stream: false,
         input: [{ role: "user", content: [{ type: "input_text", text: "Heartbeat check" }] }],
       }),
@@ -2435,7 +2463,7 @@ describe("qa mock openai server provider variant tagging", () => {
       model: string;
       providerVariant: string;
     };
-    expect(debug.model).toBe("openai/gpt-5.4");
+    expect(debug.model).toBe("openai/gpt-5.5");
     expect(debug.providerVariant).toBe("openai");
   });
 

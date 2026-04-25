@@ -19,6 +19,8 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
@@ -36,6 +38,7 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
 import {
+  findOpenAIStrictToolSchemaDiagnostics,
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForInventory,
   resolveOpenAIStrictToolSetting,
@@ -46,6 +49,7 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+const log = createSubsystemLogger("openai-transport");
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -80,8 +84,8 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
   reasoningEffort?: OpenAIReasoningEffort;
 };
 
-type OpenAIModeModel = Model<Api> & {
-  compat?: Record<string, unknown>;
+type OpenAIModeModel = Omit<Model<Api>, "compat"> & {
+  compat?: ModelCompatConfig;
 };
 
 type MutableAssistantOutput = {
@@ -347,27 +351,53 @@ function convertResponsesMessages(
 
 function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
+  model: OpenAIModeModel,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = resolveOpenAIStrictToolFlagForInventory(tools, options?.strict);
-  if (strict === undefined) {
-    return tools.map((tool) => ({
-      type: "function",
+  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(tools, options?.strict, {
+    transport: "responses",
+    model,
+  });
+  return tools.map((tool): FunctionTool => {
+    const base = {
+      type: "function" as const,
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
-    })) as unknown as FunctionTool[];
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true) as Record<
+        string,
+        unknown
+      >,
+    };
+    return strict === undefined ? (base as FunctionTool) : { ...base, strict };
+  });
+}
+
+function resolveOpenAIStrictToolFlagWithDiagnostics(
+  tools: NonNullable<Context["tools"]>,
+  strictSetting: boolean | null | undefined,
+  context: { transport: "responses" | "completions"; model: OpenAIModeModel },
+): boolean | undefined {
+  const strict = resolveOpenAIStrictToolFlagForInventory(tools, strictSetting);
+  if (strictSetting === true && strict === false && log.isEnabled("debug", "any")) {
+    const diagnostics = findOpenAIStrictToolSchemaDiagnostics(tools);
+    const sample = diagnostics.slice(0, 5).map((entry) => ({
+      tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
+      violations: entry.violations.slice(0, 8),
+    }));
+    log.debug(
+      `OpenAI ${context.transport} tool schema strict mode downgraded to strict=false for ` +
+        `${context.model.provider ?? "unknown"}/${context.model.id ?? "unknown"} ` +
+        `because ${diagnostics.length} tool schema(s) are not strict-compatible`,
+      {
+        transport: context.transport,
+        provider: context.model.provider,
+        model: context.model.id,
+        incompatibleToolCount: diagnostics.length,
+        sample,
+      },
+    );
   }
-  return tools.map((tool) => ({
-    type: "function",
-    name: tool.name,
-    description: tool.description,
-    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict) as Record<
-      string,
-      unknown
-    >,
-    strict,
-  }));
+  return strict;
 }
 
 async function processResponsesStream(
@@ -798,12 +828,24 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
   return params.effort;
 }
 
+function isOpenAICodexResponsesModel(model: Model<Api>): boolean {
+  return model.provider === "openai-codex" && model.api === "openai-codex-responses";
+}
+
+function buildOpenAICodexResponsesInstructions(context: Context): string | undefined {
+  if (!context.systemPrompt) {
+    return undefined;
+  }
+  return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
 ) {
+  const isCodexResponses = isOpenAICodexResponsesModel(model);
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
@@ -811,7 +853,7 @@ export function buildOpenAIResponsesParams(
     model,
     context,
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
-    { supportsDeveloperRole },
+    { includeSystemPrompt: !isCodexResponses, supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
@@ -823,6 +865,7 @@ export function buildOpenAIResponsesParams(
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
+    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
     ...(metadata ? { metadata } : {}),
   };
   if (options?.maxTokens) {
@@ -835,7 +878,7 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    params.tools = convertResponsesTools(context.tools, {
+    params.tools = convertResponsesTools(context.tools, model as OpenAIModeModel, {
       strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
         transport: "stream",
       }),
@@ -1262,7 +1305,11 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     appendTextDeltaInternal(text);
   };
-  for await (const chunk of responseStream) {
+  for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+    if (!rawChunk || typeof rawChunk !== "object") {
+      continue;
+    }
+    const chunk = rawChunk as ChatCompletionChunk;
     output.responseId ||= chunk.id;
     if (chunk.usage) {
       output.usage = parseTransportChunkUsage(chunk.usage, model);
@@ -1492,6 +1539,7 @@ function getCompat(model: OpenAIModeModel): {
   openRouterRouting: Record<string, unknown>;
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
+  supportsPromptCacheKey: boolean;
   requiresStringContent: boolean;
   visibleReasoningDetailTypes: string[];
 } {
@@ -1505,31 +1553,25 @@ function getCompat(model: OpenAIModeModel): {
       : detected.supportsReasoningEffort;
   return {
     supportsStore,
-    supportsDeveloperRole:
-      (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
+    supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
     supportsReasoningEffort,
     reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
-    supportsUsageInStreaming:
-      (compat.supportsUsageInStreaming as boolean | undefined) ?? detected.supportsUsageInStreaming,
+    supportsUsageInStreaming: compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
     maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,
-    requiresToolResultName:
-      (compat.requiresToolResultName as boolean | undefined) ?? detected.requiresToolResultName,
+    requiresToolResultName: compat.requiresToolResultName ?? detected.requiresToolResultName,
     requiresAssistantAfterToolResult:
-      (compat.requiresAssistantAfterToolResult as boolean | undefined) ??
-      detected.requiresAssistantAfterToolResult,
-    requiresThinkingAsText:
-      (compat.requiresThinkingAsText as boolean | undefined) ?? detected.requiresThinkingAsText,
+      compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
+    requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
     thinkingFormat: (compat.thinkingFormat as string | undefined) ?? detected.thinkingFormat,
     openRouterRouting: (compat.openRouterRouting as Record<string, unknown> | undefined) ?? {},
     vercelGatewayRouting:
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
       detected.vercelGatewayRouting,
-    supportsStrictMode:
-      (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
-    requiresStringContent: (compat.requiresStringContent as boolean | undefined) ?? false,
+    supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
+    supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
+    requiresStringContent: compat.requiresStringContent ?? false,
     visibleReasoningDetailTypes:
-      (compat.visibleReasoningDetailTypes as string[] | undefined) ??
-      detected.visibleReasoningDetailTypes,
+      compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
   };
 }
 
@@ -1537,6 +1579,7 @@ type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;
   stream: true;
+  instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
@@ -1563,12 +1606,16 @@ function convertTools(
   compat: ReturnType<typeof getCompat>,
   model: OpenAIModeModel,
 ) {
-  const strict = resolveOpenAIStrictToolFlagForInventory(
+  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(
     tools,
     resolveOpenAIStrictToolSetting(model, {
       transport: "stream",
       supportsStrictMode: compat?.supportsStrictMode,
     }),
+    {
+      transport: "completions",
+      model,
+    },
   );
   return tools.map((tool) => ({
     type: "function",
@@ -1681,6 +1728,7 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const compatDetection = detectOpenAICompletionsCompat(model);
   const completionsContext = context.systemPrompt
     ? {
         ...context,
@@ -1689,6 +1737,7 @@ export function buildOpenAICompletionsParams(
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
@@ -1699,6 +1748,9 @@ export function buildOpenAICompletionsParams(
   };
   if (compat.supportsStore) {
     params.store = false;
+  }
+  if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
+    params.prompt_cache_key = options.sessionId;
   }
   if (options?.maxTokens) {
     if (compat.maxTokensField === "max_tokens") {
@@ -1714,6 +1766,12 @@ export function buildOpenAICompletionsParams(
     params.tools = convertTools(context.tools, compat, model);
     if (options?.toolChoice) {
       params.tool_choice = options.toolChoice;
+    } else if (
+      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      Array.isArray(params.tools) &&
+      params.tools.length > 0
+    ) {
+      params.tool_choice = "auto";
     }
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
@@ -1775,6 +1833,7 @@ function mapStopReason(reason: string | null) {
     case "length":
       return { stopReason: "length" };
     case "function_call":
+    case "tool_call":
     case "tool_calls":
       return { stopReason: "toolUse" };
     case "content_filter":

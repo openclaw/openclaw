@@ -3,11 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-  type OpenClawConfig,
-} from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -129,6 +125,10 @@ vi.mock("../config/sessions.js", () => ({
   resolveStorePath: hoisted.resolveStorePathMock,
 }));
 
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => hoisted.state.cfg,
+}));
+
 vi.mock("../config/sessions/transcript.js", () => ({
   resolveSessionTranscriptFile: hoisted.resolveSessionTranscriptFileMock,
 }));
@@ -181,7 +181,6 @@ function replaceSpawnConfig(next: OpenClawConfig): void {
     delete current[key];
   }
   Object.assign(current, next);
-  setRuntimeConfigSnapshot(hoisted.state.cfg);
 }
 
 function createSessionBindingCapabilities(): SessionBindingAdapterCapabilities {
@@ -657,7 +656,6 @@ describe("spawnAcpDirect", () => {
 
   afterEach(() => {
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
-    clearRuntimeConfigSnapshot();
   });
 
   it("spawns ACP session, binds a new thread, and dispatches initial task", async () => {
@@ -718,12 +716,13 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
-  it("passes model override into ACP session initialization", async () => {
+  it("passes model and thinking overrides into ACP session initialization", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
         agentId: "codex",
         model: "openai-codex/gpt-5.4",
+        thinking: "high",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -737,6 +736,7 @@ describe("spawnAcpDirect", () => {
         agent: "codex",
         runtimeOptions: {
           model: "openai-codex/gpt-5.4",
+          thinking: "high",
         },
       }),
     );
