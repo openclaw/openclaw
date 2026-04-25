@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpElement,
   buildChromeMcpArgs,
+  ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
   navigateChromeMcpPage,
@@ -184,6 +185,72 @@ describe("chrome MCP page parsing", () => {
     });
 
     expect(result).toBe(123);
+  });
+
+  it("does not cache an ephemeral availability probe before the next real attach", async () => {
+    let factoryCalls = 0;
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      session.client.close = closeMock as typeof session.client.close;
+      closeMocks.push(closeMock);
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(factoryCalls).toBe(1);
+    expect(closeMocks[0]).toHaveBeenCalledTimes(1);
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+
+    expect(factoryCalls).toBe(2);
+    expect(closeMocks[1]).not.toHaveBeenCalled();
+    expect(tabs).toHaveLength(2);
+  });
+
+  it("does not poison the next real attach after an ephemeral no-page probe", async () => {
+    let factoryCalls = 0;
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      session.client.close = closeMock as typeof session.client.close;
+      closeMocks.push(closeMock);
+      if (factoryCalls === 1) {
+        const callTool = vi.fn(async ({ name }: ToolCall) => {
+          if (name === "list_pages") {
+            return {
+              content: [{ type: "text", text: "No page selected" }],
+              isError: true,
+            };
+          }
+          throw new Error(`unexpected tool ${name}`);
+        });
+        session.client.callTool = callTool as typeof session.client.callTool;
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      listChromeMcpTabs("chrome-live", undefined, {
+        ephemeral: true,
+      }),
+    ).rejects.toThrow(/No page selected/);
+
+    expect(factoryCalls).toBe(1);
+    expect(closeMocks[0]).toHaveBeenCalledTimes(1);
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+
+    expect(factoryCalls).toBe(2);
+    expect(closeMocks[1]).not.toHaveBeenCalled();
+    expect(tabs).toHaveLength(2);
   });
 
   it("surfaces MCP tool errors instead of JSON parse noise", async () => {
