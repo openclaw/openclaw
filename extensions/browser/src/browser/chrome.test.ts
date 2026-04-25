@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { rawDataToString } from "../infra/ws.js";
 import {
   parseBrowserMajorVersion,
   resolveGoogleChromeExecutableForPlatform,
@@ -56,7 +57,7 @@ async function withMockChromeCdpServer(params: {
   run: (baseUrl: string) => Promise<void>;
 }) {
   const server = createServer((req, res) => {
-    if (req.url === "/json/version") {
+    if (req.url?.startsWith("/json/version")) {
       const addr = server.address() as AddressInfo;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
@@ -71,7 +72,7 @@ async function withMockChromeCdpServer(params: {
   });
   const wss = new WebSocketServer({ noServer: true });
   server.on("upgrade", (req, socket, head) => {
-    if (req.url !== params.wsPath) {
+    if (!req.url?.startsWith(params.wsPath)) {
       socket.destroy();
       return;
     }
@@ -630,6 +631,37 @@ describe("browser chrome helpers", () => {
     });
   });
 
+  it("uses HTTP discovery before readiness checks for a bare ws:// CDP URL", async () => {
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/READY",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (raw) => {
+            const message = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
+            if (message.method === "Browser.getVersion" && message.id === 1) {
+              ws.send(
+                JSON.stringify({
+                  id: 1,
+                  result: { product: "Chrome/Mock" },
+                }),
+              );
+            }
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        const url = new URL(baseUrl);
+        const wsOnlyBase = `ws://${url.host}?token=abc`;
+        await expect(isChromeCdpReady(wsOnlyBase, 300, 400)).resolves.toBe(true);
+        const diagnostic = await diagnoseChromeCdp(wsOnlyBase, 300, 400);
+        expect(diagnostic).toMatchObject({
+          ok: true,
+          wsUrl: `ws://${url.host}/devtools/browser/READY?token=abc`,
+        });
+      },
+    });
+  });
+
   it("reports unreachable when a bare ws:// CDP URL points at a server with no /json/version and refuses WS", async () => {
     // Negative counterpart to the #68027 happy path — a bare ws URL
     // pointed at a port that neither serves /json/version nor accepts
@@ -659,6 +691,36 @@ describe("browser chrome helpers", () => {
     const port = (wss.address() as AddressInfo).port;
     try {
       await expect(isChromeReachable(`ws://127.0.0.1:${port}`, 500)).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    }
+  });
+
+  it("falls back to a direct WS readiness check when /json/version has no debugger URL", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({}),
+      } as unknown as Response),
+    );
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    wss.on("connection", (ws) => {
+      ws.on("message", (raw) => {
+        const message = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
+        if (message.method === "Browser.getVersion" && message.id === 1) {
+          ws.send(JSON.stringify({ id: 1, result: { product: "Browserless/Mock" } }));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    const port = (wss.address() as AddressInfo).port;
+    try {
+      await expect(isChromeCdpReady(`ws://127.0.0.1:${port}`, 500, 500)).resolves.toBe(true);
+      await expect(diagnoseChromeCdp(`ws://127.0.0.1:${port}`, 500, 500)).resolves.toMatchObject({
+        ok: true,
+        wsUrl: `ws://127.0.0.1:${port}`,
+      });
     } finally {
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     }
