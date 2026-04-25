@@ -109,7 +109,7 @@ export const directoryHandlers: GatewayRequestHandlers = {
       const result = await fn({ cfg, accountId, runtime: defaultRuntime });
       respond(true, result ?? null, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }
   },
 
@@ -145,7 +145,7 @@ export const directoryHandlers: GatewayRequestHandlers = {
       });
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }
   },
 
@@ -181,7 +181,7 @@ export const directoryHandlers: GatewayRequestHandlers = {
       });
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }
   },
 };
