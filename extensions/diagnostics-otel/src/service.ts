@@ -97,6 +97,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const tracesEnabled = otel.traces !== false;
       const metricsEnabled = otel.metrics !== false;
       const logsEnabled = otel.logs === true;
+
+      if (preloaded && !tracesEnabled) {
+        trace.disable();
+        ctx.logger.info("diagnostics-otel: traces disabled by config, global tracer provider unregistered");
+      }
+
       if (!tracesEnabled && !metricsEnabled && !logsEnabled) {
         return;
       }

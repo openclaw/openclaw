@@ -32,9 +32,8 @@ process.env.OPENCLAW_OTEL_PRELOADED = "1";
 const shutdown = () => {
   sdk.shutdown()
     .then(() => console.log("OTel SDK shut down"))
-    .catch((err) => console.log("Error shutting down OTel SDK", err))
-    .finally(() => process.exit(0));
+    .catch((err) => console.log("Error shutting down OTel SDK", err));
 };
 
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);

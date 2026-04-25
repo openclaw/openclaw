@@ -43,6 +43,7 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { redactSensitiveText } from "../logging/redact.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
 
@@ -521,7 +522,7 @@ export async function runExecProcess(opts: {
   const tracer = trace.getTracer("openclaw");
   const span = tracer.startSpan("openclaw.exec", {
     attributes: {
-      "openclaw.exec.command": opts.command,
+      "openclaw.exec.command": redactSensitiveText(opts.command, { mode: "tools" }),
       "openclaw.exec.workdir": opts.workdir,
       "openclaw.exec.target": opts.sandbox ? "sandbox" : "host",
     },
