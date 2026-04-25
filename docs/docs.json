@@ -1165,6 +1165,7 @@
                       "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
+                      "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
                   },

@@ -748,6 +748,7 @@ describe("runSetupWizard", () => {
       {
         pluginId: "legacy-plugin",
         code: "legacy-before-agent-start",
+        compatCode: "legacy-before-agent-start",
         severity: "warn",
         message:
           "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",

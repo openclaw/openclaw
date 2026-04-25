@@ -15,6 +15,7 @@ export function createCompatibilityNotice(
     return {
       pluginId: params.pluginId,
       code: params.code,
+      compatCode: "legacy-before-agent-start",
       severity: "warn",
       message: LEGACY_BEFORE_AGENT_START_MESSAGE,
     };
@@ -23,6 +24,7 @@ export function createCompatibilityNotice(
   return {
     pluginId: params.pluginId,
     code: params.code,
+    compatCode: "hook-only-plugin-shape",
     severity: "info",
     message: HOOK_ONLY_MESSAGE,
   };
