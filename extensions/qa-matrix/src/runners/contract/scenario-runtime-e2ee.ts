@@ -458,10 +458,11 @@ async function createMatrixQaCliSelfVerificationRuntime(params: {
     OPENCLAW_DISABLE_AUTO_UPDATE: "1",
     OPENCLAW_STATE_DIR: stateDir,
   };
-  const run = async (args: string[], timeoutMs = params.context.timeoutMs) =>
+  const run = async (args: string[], timeoutMs = params.context.timeoutMs, stdin?: string) =>
     await runMatrixQaOpenClawCli({
       args,
       env,
+      stdin,
       timeoutMs,
     });
   const start = (args: string[], timeoutMs = params.context.timeoutMs) =>
@@ -1227,17 +1228,20 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
         userId: cliDevice.userId,
       });
       try {
-        const restoreResult = await cli.run([
-          "matrix",
-          "verify",
-          "backup",
-          "restore",
-          "--account",
-          accountId,
-          "--recovery-key",
-          encodedRecoveryKey,
-          "--json",
-        ]);
+        const restoreResult = await cli.run(
+          [
+            "matrix",
+            "verify",
+            "backup",
+            "restore",
+            "--account",
+            accountId,
+            "--recovery-key-stdin",
+            "--json",
+          ],
+          context.timeoutMs,
+          `${encodedRecoveryKey}\n`,
+        );
         const restoreArtifacts = await writeMatrixQaCliOutputArtifacts({
           label: "verify-backup-restore",
           result: restoreResult,
@@ -1310,8 +1314,9 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
             cliSas,
             owner: ownerSas,
           });
-          await session.writeStdin("yes\n");
           await owner.confirmVerificationSas(ownerSas.id);
+          await session.writeStdin("yes\n");
+          session.endStdin();
           const completedCli = await session.wait();
           const selfVerificationArtifacts = await writeMatrixQaCliOutputArtifacts({
             label: "verify-self",

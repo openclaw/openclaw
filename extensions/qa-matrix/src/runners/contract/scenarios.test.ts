@@ -3107,8 +3107,10 @@ describe("matrix live qa scenarios", () => {
           "Verification id: verification-1\nCompleted: yes\nDevice verified by owner: yes\nCross-signing verified: yes\n",
       });
       const kill = vi.fn();
+      const endStdin = vi.fn();
       startMatrixQaOpenClawCli.mockReturnValue({
         args: ["matrix", "verify", "self", "--account", "cli"],
+        endStdin,
         kill,
         output: vi.fn(() => ({ stderr: "", stdout: "" })),
         wait,
@@ -3116,7 +3118,7 @@ describe("matrix live qa scenarios", () => {
         writeStdin,
       });
       let cliAccountConfigDuringRun: Record<string, unknown> | null = null;
-      runMatrixQaOpenClawCli.mockImplementation(async ({ args, env }) => {
+      runMatrixQaOpenClawCli.mockImplementation(async ({ args, env, stdin }) => {
         if (!cliAccountConfigDuringRun && env.OPENCLAW_CONFIG_PATH) {
           const cliConfig = JSON.parse(
             await readFile(String(env.OPENCLAW_CONFIG_PATH), "utf8"),
@@ -3158,10 +3160,8 @@ describe("matrix live qa scenarios", () => {
             }),
           };
         }
-        if (
-          joined ===
-          "matrix verify backup restore --account cli --recovery-key encoded-recovery-key --json"
-        ) {
+        if (joined === "matrix verify backup restore --account cli --recovery-key-stdin --json") {
+          expect(stdin).toBe("encoded-recovery-key\n");
           return {
             args,
             exitCode: 0,
@@ -3216,6 +3216,7 @@ describe("matrix live qa scenarios", () => {
       ]);
       expect(waitForOutput).toHaveBeenCalledTimes(2);
       expect(writeStdin).toHaveBeenCalledWith("yes\n");
+      expect(endStdin).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
       expect(runMatrixQaOpenClawCli).toHaveBeenCalledTimes(2);
@@ -3227,12 +3228,12 @@ describe("matrix live qa scenarios", () => {
           "restore",
           "--account",
           "cli",
-          "--recovery-key",
-          "encoded-recovery-key",
+          "--recovery-key-stdin",
           "--json",
         ],
         ["matrix", "verify", "status", "--account", "cli", "--json"],
       ]);
+      expect(runMatrixQaOpenClawCli.mock.calls[0]?.[0].stdin).toBe("encoded-recovery-key\n");
       const cliEnv = startMatrixQaOpenClawCli.mock.calls[0]?.[0].env;
       expect(cliEnv?.OPENCLAW_STATE_DIR).toContain("openclaw-matrix-cli-qa-");
       expect(cliEnv?.OPENCLAW_CONFIG_PATH).toContain("openclaw-matrix-cli-qa-");

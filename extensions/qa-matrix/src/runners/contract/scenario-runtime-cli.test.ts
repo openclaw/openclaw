@@ -7,6 +7,7 @@ import {
   redactMatrixQaCliOutput,
   resolveMatrixQaOpenClawCliEntryPath,
   runMatrixQaOpenClawCli,
+  startMatrixQaOpenClawCli,
 } from "./scenario-runtime-cli.js";
 
 describe("Matrix QA CLI runtime", () => {
@@ -68,6 +69,73 @@ describe("Matrix QA CLI runtime", () => {
       });
       expect(result.exitCode).toBe(7);
       expect(result.stdout).toContain('"success":false');
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("can pass stdin to CLI commands", async () => {
+    const root = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-stdin-"));
+    try {
+      await mkdir(path.join(root, "dist"));
+      await writeFile(
+        path.join(root, "dist", "index.mjs"),
+        [
+          "let input = '';",
+          "process.stdin.setEncoding('utf8');",
+          "process.stdin.on('data', (chunk) => { input += chunk; });",
+          "process.stdin.on('end', () => {",
+          "  process.stdout.write(JSON.stringify({ input: input.trim() }));",
+          "});",
+        ].join("\n"),
+      );
+      const result = await runMatrixQaOpenClawCli({
+        args: ["matrix", "verify", "backup", "restore", "--recovery-key-stdin", "--json"],
+        cwd: root,
+        env: process.env,
+        stdin: "stdin-recovery-key\n",
+        timeoutMs: 5_000,
+      });
+      expect(result.stdout).toContain('"input":"stdin-recovery-key"');
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("can close stdin after interactive CLI prompts", async () => {
+    const root = await mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-interactive-"),
+    );
+    try {
+      await mkdir(path.join(root, "dist"));
+      await writeFile(
+        path.join(root, "dist", "index.mjs"),
+        [
+          "let input = '';",
+          "process.stdin.setEncoding('utf8');",
+          "process.stdin.on('data', (chunk) => { input += chunk; process.stdout.write('prompt answered\\n'); });",
+          "process.stdin.on('end', () => {",
+          "  process.stdout.write(JSON.stringify({ input: input.trim(), ended: true }));",
+          "});",
+        ].join("\n"),
+      );
+      const session = startMatrixQaOpenClawCli({
+        args: ["matrix", "verify", "self"],
+        cwd: root,
+        env: process.env,
+        timeoutMs: 5_000,
+      });
+      await session.writeStdin("yes\n");
+      await session.waitForOutput(
+        (output) => output.text.includes("prompt answered"),
+        "interactive prompt acknowledgement",
+        5_000,
+      );
+      session.endStdin();
+      const result = await session.wait();
+
+      expect(result.stdout).toContain('"input":"yes"');
+      expect(result.stdout).toContain('"ended":true');
     } finally {
       await rm(root, { force: true, recursive: true });
     }

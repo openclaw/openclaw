@@ -303,10 +303,12 @@ async function runMatrixQaCliJson<T>(params: {
   decode?: (payload: unknown) => T;
   label: string;
   runtime: MatrixQaCliRuntime;
+  stdin?: string;
   timeoutMs: number;
 }) {
   const result = await params.runtime.run(params.args, {
     allowNonZero: params.allowNonZero,
+    stdin: params.stdin,
     timeoutMs: params.timeoutMs,
   });
   const artifacts = await writeMatrixQaCliArtifacts({
@@ -696,12 +698,12 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
         "restore",
         "--account",
         "external-key",
-        "--recovery-key",
-        setup.encodedRecoveryKey,
+        "--recovery-key-stdin",
         "--json",
       ],
       label: "restore-with-external-key",
       runtime: cli,
+      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "external recovery-key");
@@ -711,13 +713,14 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
         "matrix",
         "verify",
         "device",
-        setup.encodedRecoveryKey,
+        "--recovery-key-stdin",
         "--account",
         "external-key",
         "--json",
       ],
       label: "verify-device-diagnostics",
       runtime: cli,
+      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     const backupKeyLoaded =
@@ -835,12 +838,12 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
         "restore",
         "--account",
         "stored-key",
-        "--recovery-key",
-        setup.encodedRecoveryKey,
+        "--recovery-key-stdin",
         "--json",
       ],
       label: "initial-restore-stores-key",
       runtime: cli,
+      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "initial stored-key");
@@ -976,12 +979,12 @@ export async function runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario(
         "restore",
         "--account",
         "stale-key",
-        "--recovery-key",
-        setup.encodedRecoveryKey,
+        "--recovery-key-stdin",
         "--json",
       ],
       label: "restore-with-stale-key",
       runtime: cli,
+      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreFailed(restored.payload, "stale recovery-key restore");
@@ -1078,12 +1081,12 @@ async function waitForMatrixQaNonEmptyCliBackupRestore(params: {
         "restore",
         "--account",
         params.accountId,
-        "--recovery-key",
-        params.recoveryKey,
+        "--recovery-key-stdin",
         "--json",
       ],
       label: params.label,
       runtime: params.cli,
+      stdin: `${params.recoveryKey}\n`,
       timeoutMs: Math.max(1, remainingMs),
     });
     last = restored;
@@ -1197,12 +1200,12 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
         "restore",
         "--account",
         "corrupt-idb",
-        "--recovery-key",
-        setup.encodedRecoveryKey,
+        "--recovery-key-stdin",
         "--json",
       ],
       label: "initial-restore-before-corruption",
       runtime: cli,
+      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "corrupt-idb initial restore");
@@ -1219,12 +1222,12 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
         "restore",
         "--account",
         "corrupt-idb",
-        "--recovery-key",
-        setup.encodedRecoveryKey,
+        "--recovery-key-stdin",
         "--json",
       ],
       label: "restore-after-idb-corruption",
       runtime: cli,
+      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(repaired.payload, "corrupt-idb recovery");
@@ -1273,12 +1276,12 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
         "restore",
         "--account",
         "deleted-device",
-        "--recovery-key",
-        setup.encodedRecoveryKey,
+        "--recovery-key-stdin",
         "--json",
       ],
       label: "restore-before-device-delete",
       runtime: cli,
+      stdin: `${setup.encodedRecoveryKey}\n`,
       timeoutMs: context.timeoutMs,
     });
     assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "deleted-device preflight");
@@ -1454,12 +1457,12 @@ export async function runMatrixQaE2eeWrongAccountRecoveryKeyScenario(
           "restore",
           "--account",
           "wrong-account",
-          "--recovery-key",
-          driverSetup.encodedRecoveryKey,
+          "--recovery-key-stdin",
           "--json",
         ],
         label: "restore-with-wrong-account-key",
         runtime: cli,
+        stdin: `${driverSetup.encodedRecoveryKey}\n`,
         timeoutMs: context.timeoutMs,
       });
       assertMatrixQaCliBackupRestoreFailed(restored.payload, "wrong-account recovery-key restore");

@@ -17,6 +17,7 @@ export type MatrixQaCliRunResult = {
 
 export type MatrixQaCliSession = {
   args: string[];
+  endStdin: () => void;
   output: () => { stderr: string; stdout: string };
   wait: () => Promise<MatrixQaCliRunResult>;
   waitForOutput: (
@@ -95,6 +96,7 @@ export function startMatrixQaOpenClawCli(params: {
   args: string[];
   cwd?: string;
   env: NodeJS.ProcessEnv;
+  stdin?: string;
   timeoutMs: number;
 }): MatrixQaCliSession {
   const cwd = params.cwd ?? process.cwd();
@@ -150,6 +152,9 @@ export function startMatrixQaOpenClawCli(params: {
 
   child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
   child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  if (params.stdin !== undefined) {
+    child.stdin.end(params.stdin);
+  }
   child.on("error", (error) => {
     clearTimeout(timeout);
     finish(
@@ -177,6 +182,11 @@ export function startMatrixQaOpenClawCli(params: {
 
   return {
     args: params.args,
+    endStdin: () => {
+      if (!child.stdin.destroyed) {
+        child.stdin.end();
+      }
+    },
     output: readOutput,
     wait: async () =>
       await new Promise<MatrixQaCliRunResult>((resolve, reject) => {
@@ -230,6 +240,7 @@ export async function runMatrixQaOpenClawCli(params: {
   args: string[];
   cwd?: string;
   env: NodeJS.ProcessEnv;
+  stdin?: string;
   timeoutMs: number;
 }): Promise<MatrixQaCliRunResult> {
   return await startMatrixQaOpenClawCli(params).wait();
@@ -327,12 +338,13 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
     },
     run: async (
       args: string[],
-      opts: { allowNonZero?: boolean; timeoutMs: number },
+      opts: { allowNonZero?: boolean; stdin?: string; timeoutMs: number },
     ): Promise<MatrixQaCliRunResult> =>
       await runMatrixQaOpenClawCli({
         allowNonZero: opts.allowNonZero,
         args,
         env,
+        stdin: opts.stdin,
         timeoutMs: opts.timeoutMs,
       }),
     start: (args: string[], opts: { allowNonZero?: boolean; timeoutMs: number }) =>
