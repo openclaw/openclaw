@@ -131,3 +131,74 @@ describe("chunkDiscordText", () => {
     expect(second).toContain("  11. indented line");
   });
 });
+
+describe("splitLongLine — CJK boundaries", () => {
+  it("splits an all-CJK paragraph at a CJK character boundary", () => {
+    const text = "漢".repeat(101);
+
+    const chunks = chunkDiscordText(text, { maxChars: 100, maxLines: 50 });
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.every((chunk) => chunk.length <= 100)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks[0]).toBe("漢".repeat(100));
+    expect(chunks[1]).toBe("漢");
+    expect(chunks.every((chunk) => /^[漢]+$/.test(chunk))).toBe(true);
+  });
+
+  it("prefers CJK terminal punctuation over a later CJK character boundary", () => {
+    const text = `${"漢".repeat(80)}。${"字".repeat(70)}`;
+
+    const chunks = chunkDiscordText(text, { maxChars: 100, maxLines: 50 });
+
+    expect(chunks.every((chunk) => chunk.length <= 100)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks[0]).toBe(`${"漢".repeat(80)}。`);
+    expect(chunks[1]).toBe("字".repeat(70));
+  });
+
+  it("treats a fullwidth right paren as CJK closing punctuation", () => {
+    const text = `${"漢".repeat(90)}）${"字".repeat(50)}`;
+
+    const chunks = chunkDiscordText(text, { maxChars: 100, maxLines: 50 });
+
+    expect(chunks.every((chunk) => chunk.length <= 100)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks[0]).toBe(`${"漢".repeat(90)}）`);
+    expect(chunks[1]).toBe("字".repeat(50));
+  });
+
+  it("keeps whitespace as the highest-priority break point", () => {
+    const text = `${"漢".repeat(70)}。${"字".repeat(19)} ${"語".repeat(60)}`;
+
+    const chunks = chunkDiscordText(text, { maxChars: 100, maxLines: 50 });
+
+    expect(chunks.every((chunk) => chunk.length <= 100)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks[0]).toBe(`${"漢".repeat(70)}。${"字".repeat(19)}`);
+    expect(chunks[1]).toBe(` ${"語".repeat(60)}`);
+  });
+
+  it("does not use CJK punctuation inside the 20 percent min-progress guard", () => {
+    const tinyPunctuationPrefix = `${"a".repeat(10)}。`;
+    const text = `${tinyPunctuationPrefix}${"b".repeat(130)}`;
+
+    const chunks = chunkDiscordText(text, { maxChars: 100, maxLines: 50 });
+
+    expect(chunks.every((chunk) => chunk.length <= 100)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks[0]).not.toBe(tinyPunctuationPrefix);
+    expect(chunks[0]).toBe(text.slice(0, 100));
+  });
+
+  it("preserves pure ASCII whitespace splitting behavior", () => {
+    const text = `${"a".repeat(70)} ${"b".repeat(60)}`;
+
+    const chunks = chunkDiscordText(text, { maxChars: 100, maxLines: 50 });
+
+    expect(chunks.every((chunk) => chunk.length <= 100)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks[0]).toBe("a".repeat(70));
+    expect(chunks[1]).toBe(` ${"b".repeat(60)}`);
+  });
+});

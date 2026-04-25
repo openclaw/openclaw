@@ -23,6 +23,20 @@ const DEFAULT_MAX_CHARS = 2000;
 const DEFAULT_MAX_LINES = 17;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
+/**
+ * Regex matching CJK terminal/closing punctuation marks.
+ * Includes U+FF09 (）) per prior Codex review feedback in #39399.
+ */
+const CJK_PUNCTUATION_RE = /[、。〉》」』】〕〗〙〛〞〟！），．：；？］｝｠｡｣､･]/u;
+
+/**
+ * Regex matching CJK ideograph characters across Unified, Ext-A, Compat, and
+ * Ext-B blocks, plus Hiragana / Katakana / Hangul syllables. Hex codepoints
+ * are used (with `u` flag) to avoid the surrogate-block bleed that inline
+ * literal ranges hit when the regex has no `u` flag.
+ */
+const CJK_CHAR_RE = /[㐀-䶿一-鿿豈-﫿\u{20000}-\u{2A6DF}぀-ゟ゠-ヿ가-힣]/u;
+
 function countLines(text: string) {
   if (!text) {
     return 0;
@@ -63,6 +77,34 @@ function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
   return `${text}${closeLine}`;
 }
 
+function findBreakIndex(window: string): number {
+  let whitespaceIdx = -1;
+  let cjkPunctuationIdx = -1;
+  let cjkCharIdx = -1;
+
+  for (let i = window.length - 1; i >= 0; i--) {
+    const ch = window[i];
+    if (whitespaceIdx < 0 && /\s/.test(ch)) {
+      whitespaceIdx = i;
+      break;
+    }
+    if (cjkPunctuationIdx < 0 && CJK_PUNCTUATION_RE.test(ch)) {
+      if (i + 1 > window.length * 0.2) cjkPunctuationIdx = i;
+    }
+    if (cjkCharIdx < 0 && CJK_CHAR_RE.test(ch)) {
+      if (i + 1 > window.length * 0.2) cjkCharIdx = i + 1;
+    }
+    if (cjkPunctuationIdx >= 0 && cjkCharIdx >= 0) break;
+  }
+
+  if (whitespaceIdx > 0) return whitespaceIdx;
+  if (cjkPunctuationIdx > 0 && cjkPunctuationIdx + 1 <= window.length) {
+    return cjkPunctuationIdx + 1;
+  }
+  if (cjkCharIdx > 0 && cjkCharIdx <= window.length) return cjkCharIdx;
+  return -1;
+}
+
 function splitLongLine(
   line: string,
   maxChars: number,
@@ -81,19 +123,17 @@ function splitLongLine(
       continue;
     }
     const window = remaining.slice(0, limit);
-    let breakIdx = -1;
-    for (let i = window.length - 1; i >= 0; i--) {
-      if (/\s/.test(window[i])) {
-        breakIdx = i;
-        break;
-      }
-    }
+    const breakIdx = findBreakIndex(window);
+
     if (breakIdx <= 0) {
-      breakIdx = limit;
+      // No suitable break point found — hard split at the limit.
+      out.push(remaining.slice(0, limit));
+      remaining = remaining.slice(limit);
+    } else {
+      out.push(remaining.slice(0, breakIdx));
+      // Keep the separator for the next segment so words don't get glued together.
+      remaining = remaining.slice(breakIdx);
     }
-    out.push(remaining.slice(0, breakIdx));
-    // Keep the separator for the next segment so words don't get glued together.
-    remaining = remaining.slice(breakIdx);
   }
   if (remaining.length) {
     out.push(remaining);
