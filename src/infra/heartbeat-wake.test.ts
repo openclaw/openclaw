@@ -1,4 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockedLogger } = vi.hoisted(() => ({
+  mockedLogger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => mockedLogger,
+}));
+
 import {
   hasHeartbeatWakeHandler,
   hasPendingHeartbeatWake,
@@ -46,6 +60,51 @@ describe("heartbeat-wake", () => {
     resetHeartbeatWakeStateForTests();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    mockedLogger.info.mockReset();
+    mockedLogger.warn.mockReset();
+    mockedLogger.error.mockReset();
+    mockedLogger.debug.mockReset();
+  });
+
+  it("logs queued, replaced, and coalesced wake requests", () => {
+    requestHeartbeatNow({ reason: "interval", agentId: "main", sessionKey: "agent:default:main" });
+    requestHeartbeatNow({
+      reason: "exec-event",
+      agentId: "main",
+      sessionKey: "agent:default:main",
+    });
+    requestHeartbeatNow({ reason: "retry", agentId: "main", sessionKey: "agent:default:main" });
+
+    expect(mockedLogger.info).toHaveBeenNthCalledWith(
+      1,
+      "heartbeat: wake requested",
+      expect.objectContaining({
+        event: "heartbeat.wake.requested",
+        action: "queued",
+        reason: "interval",
+        agentId: "main",
+        sessionKey: "agent:default:main",
+      }),
+    );
+    expect(mockedLogger.info).toHaveBeenNthCalledWith(
+      2,
+      "heartbeat: wake requested",
+      expect.objectContaining({
+        action: "replaced",
+        replacement: "higher-priority",
+        reason: "exec-event",
+        previousReason: "interval",
+      }),
+    );
+    expect(mockedLogger.info).toHaveBeenNthCalledWith(
+      3,
+      "heartbeat: wake requested",
+      expect.objectContaining({
+        action: "coalesced",
+        reason: "retry",
+        previousReason: "exec-event",
+      }),
+    );
   });
 
   it("coalesces multiple wake requests into one run", async () => {

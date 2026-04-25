@@ -1,9 +1,12 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isHeartbeatActionWakeReason,
   normalizeHeartbeatWakeReason,
   resolveHeartbeatReasonKind,
 } from "./heartbeat-reason.js";
+
+const log = createSubsystemLogger("gateway/heartbeat");
 
 export type HeartbeatRunResult =
   | { status: "ran"; durationMs: number }
@@ -38,6 +41,16 @@ type PendingWakeReason = {
   sessionKey?: string;
   heartbeat?: { target?: string };
 };
+
+type QueuePendingWakeOutcome =
+  | { action: "queued"; next: PendingWakeReason }
+  | {
+      action: "replaced";
+      next: PendingWakeReason;
+      previous: PendingWakeReason;
+      replacement: "higher-priority" | "newer-same-priority";
+    }
+  | { action: "coalesced"; next: PendingWakeReason; previous: PendingWakeReason };
 
 let handler: HeartbeatWakeHandler | null = null;
 let handlerGeneration = 0;
@@ -108,7 +121,7 @@ function queuePendingWakeReason(params?: {
   agentId?: string;
   sessionKey?: string;
   heartbeat?: { target?: string };
-}) {
+}): QueuePendingWakeOutcome {
   const requestedAt = params?.requestedAt ?? Date.now();
   const normalizedReason = normalizeWakeReason(params?.reason);
   const normalizedAgentId = normalizeWakeTarget(params?.agentId);
@@ -128,7 +141,7 @@ function queuePendingWakeReason(params?: {
   const previous = pendingWakes.get(wakeTargetKey);
   if (!previous) {
     pendingWakes.set(wakeTargetKey, next);
-    return;
+    return { action: "queued", next };
   }
   const merged =
     (next.heartbeat ?? previous.heartbeat)
@@ -136,11 +149,23 @@ function queuePendingWakeReason(params?: {
       : next;
   if (next.priority > previous.priority) {
     pendingWakes.set(wakeTargetKey, merged);
-    return;
+    return {
+      action: "replaced",
+      next: merged,
+      previous,
+      replacement: "higher-priority",
+    };
   }
   if (next.priority === previous.priority && next.requestedAt >= previous.requestedAt) {
     pendingWakes.set(wakeTargetKey, merged);
+    return {
+      action: "replaced",
+      next: merged,
+      previous,
+      replacement: "newer-same-priority",
+    };
   }
+  return { action: "coalesced", next, previous };
 }
 
 function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
@@ -272,11 +297,24 @@ export function requestHeartbeatNow(opts?: {
   sessionKey?: string;
   heartbeat?: { target?: string };
 }) {
-  queuePendingWakeReason({
+  const outcome = queuePendingWakeReason({
     reason: opts?.reason,
     agentId: opts?.agentId,
     sessionKey: opts?.sessionKey,
     heartbeat: opts?.heartbeat,
+  });
+  log.info("heartbeat: wake requested", {
+    event: "heartbeat.wake.requested",
+    action: outcome.action,
+    replacement: outcome.action === "replaced" ? outcome.replacement : undefined,
+    reason: outcome.next.reason,
+    agentId: outcome.next.agentId ?? null,
+    sessionKey: outcome.next.sessionKey ?? null,
+    previousReason: "previous" in outcome ? outcome.previous.reason : undefined,
+    previousAgentId: "previous" in outcome ? (outcome.previous.agentId ?? null) : undefined,
+    previousSessionKey: "previous" in outcome ? (outcome.previous.sessionKey ?? null) : undefined,
+    coalesceMs: opts?.coalesceMs ?? DEFAULT_COALESCE_MS,
+    pendingWakeCount: pendingWakes.size,
   });
   schedule(opts?.coalesceMs ?? DEFAULT_COALESCE_MS, "normal");
 }
