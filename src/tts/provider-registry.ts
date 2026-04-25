@@ -23,11 +23,10 @@ function getAllSpeechProviders(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
     cfg,
   });
   // Also include built-in providers that aren't provided by plugins
-  const builtinIds = new Set(BUILTIN_SPEECH_PROVIDER_BUILDERS.map((b) => b().id));
   const pluginIds = new Set(pluginProviders.map((p) => p.id));
   const missingBuiltins = BUILTIN_SPEECH_PROVIDER_BUILDERS
-    .filter((b) => !pluginIds.has(b().id))
-    .map((b) => b());
+    .map((b) => b())
+    .filter((b) => !pluginIds.has(b.id));
   return [...pluginProviders, ...missingBuiltins];
 }
 
