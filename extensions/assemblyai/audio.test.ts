@@ -206,7 +206,7 @@ describe("transcribeAssemblyAIAudio", () => {
     ).rejects.toThrow("AssemblyAI transcript error: audio too short");
   });
 
-  it("poll timeout is bounded by caller deadline", async () => {
+  it("times out when deadline is exhausted during polling", async () => {
     const fetchFn = withFetchPreconnect(
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url =
@@ -223,22 +223,23 @@ describe("transcribeAssemblyAIAudio", () => {
             headers: { "content-type": "application/json" },
           });
         }
-        return new Response(
-          JSON.stringify({ id: "timeout-id", status: "completed", text: "done" }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        // Always return "processing" to force timeout
+        return new Response(JSON.stringify({ id: "timeout-id", status: "processing" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       },
     );
 
-    // With a short timeout, the poll timeout should be capped by remaining deadline
-    const result = await transcribeAssemblyAIAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.mp3",
-      apiKey: "key", // pragma: allowlist secret
-      timeoutMs: 30_000,
-      fetchFn,
-    });
-
-    expect(result.text).toBe("done");
+    // Very short timeout so deadline is hit after first poll interval
+    await expect(
+      transcribeAssemblyAIAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "voice.mp3",
+        apiKey: "key", // pragma: allowlist secret
+        timeoutMs: 1_500,
+        fetchFn,
+      }),
+    ).rejects.toThrow("timed out");
   });
 });

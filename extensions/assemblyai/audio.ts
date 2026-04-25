@@ -34,6 +34,8 @@ export async function transcribeAssemblyAIAudio(
   const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_ASSEMBLYAI_BASE_URL);
   const allowPrivate = Boolean(params.baseUrl?.trim());
   const model = params.model?.trim() || DEFAULT_ASSEMBLYAI_MODEL;
+  // Anchor deadline at function entry so all three phases share one budget
+  const deadline = Date.now() + params.timeoutMs;
 
   const authHeaders = new Headers(params.headers);
   if (!authHeaders.has("authorization")) {
@@ -47,7 +49,7 @@ export async function transcribeAssemblyAIAudio(
     url: `${baseUrl}/upload`,
     headers: uploadHeaders,
     body: new Uint8Array(params.buffer),
-    timeoutMs: params.timeoutMs,
+    timeoutMs: Math.max(0, deadline - Date.now()),
     fetchFn,
     allowPrivateNetwork: allowPrivate,
   });
@@ -75,7 +77,7 @@ export async function transcribeAssemblyAIAudio(
   const { response: createRes, release: releaseCreate } = await fetchWithTimeoutGuarded(
     `${baseUrl}/transcript`,
     { method: "POST", headers: createHeaders, body: JSON.stringify(transcriptBody) },
-    params.timeoutMs,
+    Math.max(0, deadline - Date.now()),
     fetchFn,
     allowPrivate ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
   );
@@ -91,7 +93,6 @@ export async function transcribeAssemblyAIAudio(
   }
 
   // Step 3: Poll until completed or error (deadline-bounded)
-  const deadline = Date.now() + params.timeoutMs;
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
     const now = Date.now();
     if (now >= deadline) {
