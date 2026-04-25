@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 
 type EdgeTTSDeps = {
   EdgeTTS: new (config: ConstructorParameters<typeof EdgeTTS>[0]) => {
-    ttsPromise: (text: string, outputPath: string) => Promise<void>;
+    ttsPromise: (text: string, outputPath: string) => Promise<unknown>;
   };
 };
 
