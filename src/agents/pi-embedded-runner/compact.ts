@@ -810,6 +810,12 @@ export async function compactEmbeddedPiSessionDirect(
         config: params.config,
         contextWindowTokens: ctxInfo.tokens,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        missingToolResultText:
+          model.api === "openai-responses" ||
+          model.api === "azure-openai-responses" ||
+          model.api === "openai-codex-responses"
+            ? "aborted"
+            : undefined,
         allowedToolNames,
       });
       checkpointSnapshot = captureCompactionCheckpointSnapshot({
@@ -965,6 +971,11 @@ export async function compactEmbeddedPiSessionDirect(
           const limited = transcriptPolicy.repairToolUseResultPairing
             ? sanitizeToolUseResultPairing(truncated, {
                 erroredAssistantResultPolicy: "drop",
+                ...(model.api === "openai-responses" ||
+                model.api === "azure-openai-responses" ||
+                model.api === "openai-codex-responses"
+                  ? { missingToolResultText: "aborted" }
+                  : {}),
               })
             : truncated;
           if (limited.length > 0) {

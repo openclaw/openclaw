@@ -75,6 +75,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/tools: allow `POST /tools/invoke` to reach plugin-backed catalog tools such as `browser` when no core implementation exists, while still preferring built-in tools for real core names. Thanks @chat2way.
 - Browser/security: require `operator.admin` for the `browser.request` gateway method, matching the host/browser-node control authority exposed by that route. Thanks @RichardCao.
 - Browser/profiles: allow local managed profiles to override `browser.executablePath`, so different profiles can launch different Chromium-based browsers. Thanks @nobrainer-tech.
+- Agents/replay: repair displaced or missing tool results before strict provider replay, use Codex-compatible `aborted` outputs for OpenAI Responses history, and drop partial aborted/error transport turns before retries.
 - Reply media: allow sandboxed replies to deliver OpenClaw-managed `media/outbound` and `media/tool-*` attachments without treating them as sandbox escapes, while keeping alias-escape checks on the managed media root. Fixes #71138. Thanks @mayor686, @truffle-dev, and @neeravmakwana.
 - CLI/agent: keep `openclaw agent --json` stdout reserved for the JSON response by routing gateway, plugin, and embedded-fallback diagnostics to stderr before execution starts. Fixes #71319.
 - Agents/Gemini: retry reasoning-only, empty, and planning-only Gemini turns instead of letting sessions silently stall. Fixes #71074. (#71362) Thanks @neeravmakwana.
