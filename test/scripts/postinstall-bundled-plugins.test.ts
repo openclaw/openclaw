@@ -330,22 +330,23 @@ describe("bundled plugin postinstall", () => {
   });
 
   it("honors plugin registry postinstall migration disable env", async () => {
-    const migratePluginRegistryForInstall = vi.fn(async () => ({
-      status: "disabled",
-      migrated: false,
-      preflight: {
-        deprecationWarnings: [],
-      },
-    }));
+    const importModule = vi.fn(async () => {
+      throw new Error("dist migration module should not import when migration is disabled");
+    });
     await expect(
       runPluginRegistryPostinstallMigration({
         packageRoot: "/pkg",
         env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "1" },
         existsSync: vi.fn(() => true),
-        importModule: vi.fn(async () => ({ migratePluginRegistryForInstall })),
+        importModule,
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).resolves.toMatchObject({ status: "disabled" });
+    ).resolves.toMatchObject({
+      status: "disabled",
+      migrated: false,
+      reason: "disabled-env",
+    });
+    expect(importModule).not.toHaveBeenCalled();
   });
 
   it("prunes stale dist files from packaged installs", async () => {

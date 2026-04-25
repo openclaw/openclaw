@@ -281,6 +281,43 @@ describe("installed plugin index", () => {
     ).toEqual(["demo"]);
   });
 
+  it("uses runtime plugin id normalization for legacy enablement aliases", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "openai",
+      configSchema: { type: "object" },
+      providers: ["openai"],
+    });
+
+    const config = {
+      plugins: {
+        entries: {
+          "openai-codex": {
+            enabled: false,
+          },
+        },
+      },
+    };
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "openai",
+          origin: "bundled",
+        }),
+      ],
+      config,
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "openai",
+      enabled: false,
+    });
+    expect(listEnabledInstalledPluginRecords(index, config)).toEqual([]);
+  });
+
   it("records the config install ledger separately from package install intent", () => {
     const fixture = createRichPluginFixture();
 
