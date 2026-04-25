@@ -347,13 +347,15 @@ Then run:
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
 - `provider`: speech provider id such as `"elevenlabs"`, `"google"`, `"gradium"`, `"microsoft"`, `"minimax"`, `"openai"`, `"vydra"`, or `"xai"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw uses the first configured speech provider in registry auto-select order.
-- Legacy `provider: "edge"` still works and is normalized to `microsoft`.
+- Legacy `provider: "edge"` config is repaired by `openclaw doctor --fix` and
+  rewritten to `provider: "microsoft"`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
   - `allowProvider` defaults to `false` (provider switching is opt-in).
 - `providers.<id>`: provider-owned settings keyed by speech provider id.
 - Legacy direct provider blocks (`messages.tts.openai`, `messages.tts.elevenlabs`, `messages.tts.microsoft`, `messages.tts.edge`) are repaired by `openclaw doctor --fix`; committed config should use `messages.tts.providers.<id>`.
+- Legacy `messages.tts.providers.edge` is also repaired by `openclaw doctor --fix`; committed config should use `messages.tts.providers.microsoft`.
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
@@ -402,7 +404,8 @@ Then run:
 - `providers.microsoft.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `providers.microsoft.proxy`: proxy URL for Microsoft speech requests.
 - `providers.microsoft.timeoutMs`: request timeout override (ms).
-- `edge.*`: legacy alias for the same Microsoft settings.
+- `edge.*`: legacy alias for the same Microsoft settings. Run
+  `openclaw doctor --fix` to rewrite persisted config to `providers.microsoft`.
 
 ## Model-driven overrides (default on)
 
