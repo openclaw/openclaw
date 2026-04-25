@@ -602,6 +602,54 @@ describe("feishuPlugin actions", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("rejects nested select option values even when parent select value is structured", async () => {
+    const partiallyStructuredSelectCard = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "select_static",
+                placeholder: { tag: "plain_text", content: "Pick one" },
+                value: {
+                  oc: "ocf1",
+                  k: "quick",
+                  a: "feishu.quick_actions.help",
+                  q: "/help",
+                  c: { u: "ou_user_1", h: "oc_group_1", e: Date.now() + 60_000 },
+                },
+                options: [
+                  {
+                    text: { tag: "plain_text", content: "Option A" },
+                    value: { command: "help" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          card: partiallyStructuredSelectCard,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu card actions must use structured interaction envelopes.");
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("rejects non-object card action values", async () => {
     const legacyStringValueCard = {
       schema: "2.0",
@@ -665,6 +713,62 @@ describe("feishuPlugin actions", () => {
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects card payloads with too many properties", async () => {
+    const hugeBodyElement: Record<string, unknown> = {};
+    for (let i = 0; i < 2_001; i += 1) {
+      hugeBodyElement[`k${i}`] = i;
+    }
+
+    const oversizedCard = {
+      schema: "2.0",
+      body: {
+        elements: [hugeBodyElement],
+      },
+    };
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          card: oversizedCard,
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu card payload contains too many properties.");
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("drops poisoned prototype keys while keeping valid card content", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    const poisonedCard = JSON.parse(
+      '{"schema":"2.0","__proto__":{"polluted":true},"body":{"elements":[{"tag":"markdown","content":"hello"}]}}',
+    ) as Record<string, unknown>;
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        card: poisonedCard,
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sentCard = sendCardFeishuMock.mock.calls.at(-1)?.[0]?.card as
+      | Record<string, unknown>
+      | undefined;
+    expect(sentCard).toBeDefined();
+    expect(sentCard?.polluted).toBeUndefined();
+    expect(sentCard?.schema).toBe("2.0");
   });
 
   it("falls back to text send when card payload is empty", async () => {

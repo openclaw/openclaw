@@ -84,6 +84,8 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
 
 const FEISHU_CARD_SCAN_MAX_DEPTH = 50;
 const FEISHU_CARD_SCAN_MAX_NODES = 10_000;
+const FEISHU_CARD_SCAN_MAX_KEYS_PER_OBJECT = 2_000;
+const FEISHU_CARD_POISON_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 function isStructuredFeishuCardActionValue(actionValue: unknown): boolean {
   if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
@@ -151,17 +153,26 @@ function containsUnstructuredFeishuCardActionValue(root: unknown): boolean {
     seen.add(value);
 
     const hasActionValue =
-      (withinActionItems || withinOverflowOptions) && "value" in value && value.value !== undefined;
+      (withinActionItems || withinOverflowOptions) &&
+      Object.prototype.hasOwnProperty.call(value, "value") &&
+      value.value !== undefined;
     if (hasActionValue && !isStructuredFeishuCardActionValue(value.value)) {
       return true;
     }
 
-    for (const [key, child] of Object.entries(value)) {
+    const entries = Object.entries(value);
+    if (entries.length > FEISHU_CARD_SCAN_MAX_KEYS_PER_OBJECT) {
+      throw new Error("Feishu card payload contains too many properties.");
+    }
+
+    for (const [key, child] of entries) {
       stack.push({
         value: child,
         depth: depth + 1,
-        withinOverflowOptions: value.tag === "overflow" && key === "options",
-        withinActionItems: value.tag === "action" && key === "actions",
+        withinOverflowOptions:
+          withinOverflowOptions || (typeof value.tag === "string" && value.tag === "overflow" && key === "options"),
+        withinActionItems:
+          withinActionItems || (typeof value.tag === "string" && value.tag === "action" && key === "actions"),
       });
     }
   }
@@ -220,9 +231,20 @@ function normalizeFeishuCardNode(
     return undefined;
   }
 
-  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Object.keys(value);
+  if (keys.length > FEISHU_CARD_SCAN_MAX_KEYS_PER_OBJECT) {
+    throw new Error("Feishu card payload contains too many properties.");
+  }
+
   const normalizedRecord: Record<string, unknown> = {};
-  for (const [key, descriptor] of Object.entries(descriptors)) {
+  for (const key of keys) {
+    if (FEISHU_CARD_POISON_KEYS.has(key)) {
+      continue;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable) {
+      continue;
+    }
     if ("get" in descriptor || "set" in descriptor) {
       return undefined;
     }
