@@ -881,7 +881,7 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
   - `--renderer-process-limit=2` can be changed with
     `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>`; set `0` to use Chromium's
     default process limit.
-  - plus `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+  - plus `--no-sandbox` when `noSandbox` is enabled.
   - Defaults are the container image baseline; use a custom browser image with a custom
     entrypoint to change container defaults.
 

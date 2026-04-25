@@ -393,7 +393,7 @@ for containerized workloads. Current container defaults include:
 - `--no-zygote`
 - `--metrics-recording-only`
 - `--renderer-process-limit=2`
-- `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+- `--no-sandbox` when `noSandbox` is enabled.
 - The three graphics hardening flags (`--disable-3d-apis`,
   `--disable-software-rasterizer`, `--disable-gpu`) are optional and are useful
   when containers lack GPU support. Set `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0`
