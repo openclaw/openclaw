@@ -306,6 +306,47 @@ describe("GatewayBrowserClient", () => {
     expect(signedPayload).toContain("|stored-device-token|nonce-1");
   });
 
+  it("rejects timed-out requests, closes the stale socket, and clears the pending entry", async () => {
+    vi.useFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    const { ws } = await startConnect(client);
+    const requestPromise = client.request("chat.send", { message: "hello" }, { timeoutMs: 25 });
+    const requestId = (JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string }).id;
+    const rejected = expect(requestPromise).rejects.toThrow("chat.send timed out after 25ms");
+
+    await vi.advanceTimersByTimeAsync(25);
+    await rejected;
+    expect(ws.readyState).toBe(3);
+
+    ws.emitMessage({
+      type: "res",
+      id: requestId,
+      ok: true,
+      payload: { status: "started" },
+    });
+  });
+
+  it("reconnects after a timed-out request closes the socket", async () => {
+    vi.useFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    const { ws } = await startConnect(client);
+    const requestPromise = client.request("chat.send", { message: "hello" }, { timeoutMs: 25 });
+    const rejected = expect(requestPromise).rejects.toThrow("chat.send timed out after 25ms");
+
+    await vi.advanceTimersByTimeAsync(25);
+    await rejected;
+    ws.emitClose(4000, "chat.send timeout");
+
+    await vi.advanceTimersByTimeAsync(800);
+    expect(wsInstances).toHaveLength(2);
+  });
+
   it("ignores cached operator device tokens that do not include read access", async () => {
     localStorage.clear();
     storeDeviceAuthToken({

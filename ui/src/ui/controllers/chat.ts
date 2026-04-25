@@ -18,6 +18,7 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
+const CHAT_SEND_TIMEOUT_MS = 15_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
@@ -461,13 +462,17 @@ async function requestChatSend(
   state: ChatState,
   params: { message: string; attachments?: ChatAttachment[]; runId: string },
 ) {
-  await state.client!.request("chat.send", {
-    sessionKey: state.sessionKey,
-    message: params.message,
-    deliver: false,
-    idempotencyKey: params.runId,
-    attachments: buildApiAttachments(params.attachments),
-  });
+  await state.client!.request(
+    "chat.send",
+    {
+      sessionKey: state.sessionKey,
+      message: params.message,
+      deliver: false,
+      idempotencyKey: params.runId,
+      attachments: buildApiAttachments(params.attachments),
+    },
+    { timeoutMs: CHAT_SEND_TIMEOUT_MS },
+  );
 }
 
 type AssistantMessageNormalizationOptions = {

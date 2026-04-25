@@ -131,6 +131,7 @@ export type GatewayHelloOk = {
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
+  timeoutId?: number;
 };
 
 type SelectedConnectAuth = {
@@ -370,6 +371,9 @@ export class GatewayBrowserClient {
 
   private flushPending(err: Error) {
     for (const [, p] of this.pending) {
+      if (typeof p.timeoutId === "number") {
+        window.clearTimeout(p.timeoutId);
+      }
       p.reject(err);
     }
     this.pending.clear();
@@ -618,14 +622,41 @@ export class GatewayBrowserClient {
     };
   }
 
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number },
+  ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("gateway not connected"));
     }
     const id = generateUUID();
     const frame = { type: "req", id, method, params };
     const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
+      const pending: Pending = {
+        resolve: (v) => {
+          if (typeof pending.timeoutId === "number") {
+            window.clearTimeout(pending.timeoutId);
+          }
+          resolve(v as T);
+        },
+        reject: (err) => {
+          if (typeof pending.timeoutId === "number") {
+            window.clearTimeout(pending.timeoutId);
+          }
+          reject(err);
+        },
+      };
+      if (typeof options?.timeoutMs === "number" && options.timeoutMs > 0) {
+        pending.timeoutId = window.setTimeout(() => {
+          this.pending.delete(id);
+          pending.reject(new Error(`${method} timed out after ${options.timeoutMs}ms`));
+          if (this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.close(4000, `${method} timeout`);
+          }
+        }, options.timeoutMs);
+      }
+      this.pending.set(id, pending);
     });
     this.ws.send(JSON.stringify(frame));
     return p;

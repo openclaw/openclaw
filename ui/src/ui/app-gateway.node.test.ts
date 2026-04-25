@@ -753,6 +753,33 @@ describe("connectGateway", () => {
     },
   );
 
+  it("uses assistant session.message as a fallback when the chat final event is missed", async () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-session-message";
+    host.chatStream = "waiting for final";
+    emitToolResultEvent(client);
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done from transcript" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    await Promise.resolve();
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(host.toolStreamOrder).toHaveLength(0);
+  });
+
   it("clears tracked BTW terminal runs after reconnect hello", () => {
     const host = createHost();
 

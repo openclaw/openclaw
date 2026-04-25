@@ -487,6 +487,7 @@ describe("handleSendChat", () => {
         deliver: false,
         idempotencyKey: expect.any(String),
       }),
+      { timeoutMs: 15_000 },
     );
     expect(host.chatQueue).toEqual([]);
     expect(host.chatRunId).toBe("run-main");
@@ -515,6 +516,7 @@ describe("handleSendChat", () => {
         message: "/btw summarize this",
         deliver: false,
       }),
+      { timeoutMs: 15_000 },
     );
     expect(host.chatRunId).toBeNull();
     expect(host.chatMessages).toEqual([]);
@@ -626,13 +628,17 @@ describe("handleSendChat", () => {
 
     await steerQueuedChatMessage(host, "queued-1");
 
-    expect(request).toHaveBeenCalledWith("chat.send", {
-      sessionKey: "agent:main:main",
-      message: "tighten the plan",
-      deliver: false,
-      idempotencyKey: expect.any(String),
-      attachments: undefined,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      {
+        sessionKey: "agent:main:main",
+        message: "tighten the plan",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+        attachments: undefined,
+      },
+      { timeoutMs: 15_000 },
+    );
     expect(host.chatRunId).toBe("run-1");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatQueue).toEqual([

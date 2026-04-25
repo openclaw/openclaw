@@ -624,6 +624,29 @@ describe("loadChatHistory", () => {
 });
 
 describe("sendChatMessage", () => {
+  it("uses a bounded timeout for chat.send", async () => {
+    const request = vi.fn().mockResolvedValue({ status: "started", runId: "run-1" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "hello");
+
+    expect(result).toMatch(/.+/);
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      {
+        sessionKey: "main",
+        message: "hello",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+        attachments: undefined,
+      },
+      { timeoutMs: 15_000 },
+    );
+  });
+
   it("formats structured non-auth connect failures for chat send", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({

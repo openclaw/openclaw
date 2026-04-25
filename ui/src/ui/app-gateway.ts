@@ -488,9 +488,18 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
 }
 
+function isAssistantSessionMessage(payload: { message?: unknown } | undefined): boolean {
+  const message = payload?.message;
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role = (message as { role?: unknown }).role;
+  return typeof role === "string" && role.trim().toLowerCase() === "assistant";
+}
+
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string } | undefined,
+  payload: { sessionKey?: string; message?: unknown } | undefined,
 ) {
   applySessionsChangedEvent(host as unknown as SessionsState, payload);
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
@@ -505,6 +514,22 @@ function handleSessionMessageGatewayEvent(
   // first LLM delta arrives.
   if (host.chatRunId) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    if (isAssistantSessionMessage(payload)) {
+      const completedRunId = host.chatRunId;
+      void loadChatHistory(host as unknown as ChatState).finally(() => {
+        if (host.chatRunId !== completedRunId) {
+          return;
+        }
+        host.chatRunId = null;
+        (host as unknown as { chatStream: string | null }).chatStream = null;
+        (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+        deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+        resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+        void flushChatQueueForEvent(
+          host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
+        );
+      });
+    }
     return;
   }
   deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
