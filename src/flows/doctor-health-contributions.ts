@@ -223,6 +223,15 @@ async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Prom
   });
 }
 
+async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
+  ctx.cfg = await maybeRepairPluginRegistryState({
+    config: ctx.cfg,
+    env: process.env,
+    prompter: ctx.prompter,
+  });
+}
+
 async function runBundledPluginRuntimeDepsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairBundledPluginRuntimeDeps } =
     await import("../commands/doctor-bundled-plugin-runtime-deps.js");
@@ -547,6 +556,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
       run: runLegacyPluginManifestHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:plugin-registry",
+      label: "Plugin registry",
+      run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",

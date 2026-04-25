@@ -20,6 +20,9 @@ Docs: https://docs.openclaw.ai
 - CLI/Crestodian: open interactive Crestodian in the full OpenClaw TUI shell instead of a basic readline prompt.
 - CLI/Crestodian: shorten the startup greeting to the active planner/model, config state, Gateway probe result, and next debug action instead of dumping every discovered backend.
 - Plugins: migrate the local plugin registry automatically during package install/update, preserving legacy config and install-ledger state while indexing existing plugin manifests for the new cold registry path. Thanks @vincentkoc.
+- Plugins/doctor: make `openclaw doctor --fix` move legacy `plugins.installs`
+  config records into the managed plugin install ledger and refresh the cold
+  registry index when needed. Thanks @vincentkoc.
 - Diagnostics/OTEL: align model-call GenAI span attributes with OpenTelemetry stability opt-in semantics, keeping legacy `gen_ai.system` by default while emitting `gen_ai.provider.name` under `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`. Thanks @vincentkoc.
 - Plugins/CLI: add `openclaw plugins registry` for explicit persisted-registry inspection and `--refresh` repair without making normal startup rescan plugin locations. Thanks @vincentkoc.
 - Plugins/CLI: make `openclaw plugins list` read the cold persisted registry snapshot by default, leaving module-aware diagnostics to `plugins doctor` and `plugins inspect`. Thanks @vincentkoc.

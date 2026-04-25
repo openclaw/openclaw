@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import { writePersistedPluginInstallLedger } from "./install-ledger-store.js";
 import {
   diffInstalledPluginIndexInvalidationReasons,
   getInstalledPluginRecord,
@@ -408,6 +409,42 @@ describe("installed plugin index", () => {
         shasum: "abc123",
         resolvedAt: "2026-04-25T11:00:00.000Z",
         installedAt: "2026-04-25T11:01:00.000Z",
+      },
+    });
+  });
+
+  it("indexes persisted install ledger records from an explicit state directory", async () => {
+    const fixture = createRichPluginFixture();
+    const stateDir = makeTempDir();
+    await writePersistedPluginInstallLedger(
+      {
+        demo: {
+          source: "npm",
+          spec: "@vendor/demo-plugin@1.2.3",
+          installPath: fixture.rootDir,
+          resolvedName: "@vendor/demo-plugin",
+          resolvedVersion: "1.2.3",
+          integrity: "sha512-installed",
+        },
+      },
+      { stateDir },
+    );
+
+    const index = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      env: hermeticEnv(),
+      stateDir,
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "demo",
+      installRecord: {
+        source: "npm",
+        spec: "@vendor/demo-plugin@1.2.3",
+        installPath: fixture.rootDir,
+        resolvedName: "@vendor/demo-plugin",
+        resolvedVersion: "1.2.3",
+        integrity: "sha512-installed",
       },
     });
   });

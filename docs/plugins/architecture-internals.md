@@ -920,6 +920,9 @@ source-plane diagnostics without adding a second raw filesystem-path disclosure
 surface. Legacy `plugins.installs` config entries are still read as a
 compatibility fallback while the state-managed `plugins/installs.json` ledger
 becomes the install source of truth.
+`openclaw doctor --fix` migrates those legacy config entries into the managed
+ledger and refreshes the cold registry index without loading plugin runtime
+modules.
 
 ## Context engine plugins
 

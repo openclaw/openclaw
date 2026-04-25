@@ -139,6 +139,8 @@ export type LoadInstalledPluginIndexParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+  pluginInstallLedgerFilePath?: string;
   cache?: boolean;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
@@ -473,6 +475,8 @@ function buildInstalledPluginIndex(
   const installRecords = loadPluginInstallRecordsSync({
     config: params.config,
     env: params.env,
+    stateDir: params.stateDir,
+    filePath: params.pluginInstallLedgerFilePath,
   });
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateByRootDir.get(record.rootDir);

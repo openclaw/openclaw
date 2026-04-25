@@ -266,6 +266,7 @@ openclaw plugins info <id>                 # inspect alias
 openclaw plugins doctor                    # diagnostics
 openclaw plugins registry                  # inspect persisted registry state
 openclaw plugins registry --refresh        # rebuild persisted registry
+openclaw doctor --fix                      # repair registry/ledger migration state
 
 openclaw plugins install <package>         # install (ClawHub first, then npm)
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
@@ -279,7 +280,7 @@ openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id-or-npm-spec> # update one plugin
 openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
-openclaw plugins uninstall <id>          # remove config/install records
+openclaw plugins uninstall <id>          # remove config and install ledger records
 openclaw plugins uninstall <id> --keep-files
 openclaw plugins marketplace list <source>
 openclaw plugins marketplace list <source> --json
@@ -307,6 +308,9 @@ uninstall, enable, and disable flows refresh that registry after changing plugin
 state. If the registry is missing, stale, or invalid, `openclaw plugins registry
 --refresh` rebuilds it from the durable install ledger, config policy, and
 manifest/package metadata without loading plugin runtime modules.
+If a machine still has legacy `plugins.installs` records in config, run
+`openclaw doctor --fix` to move them into the managed
+`plugins/installs.json` ledger and remove the config copy.
 
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name

@@ -431,10 +431,12 @@ export async function collectPluginsTrustFindings(params: {
       .map(([pluginId, record]) => `${pluginId} (${record.spec})`);
     if (unpinned.length > 0) {
       findings.push({
+        // Keep the legacy checkId stable for downstream audit consumers while
+        // plugin install metadata moves from config to the managed ledger.
         checkId: "plugins.installs_unpinned_npm_specs",
         severity: "warn",
-        title: "Plugin installs include unpinned npm specs",
-        detail: `Unpinned plugin install records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
+        title: "Plugin install ledger includes unpinned npm specs",
+        detail: `Unpinned plugin install ledger records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
       });
@@ -449,8 +451,8 @@ export async function collectPluginsTrustFindings(params: {
       findings.push({
         checkId: "plugins.installs_missing_integrity",
         severity: "warn",
-        title: "Plugin installs are missing integrity metadata",
-        detail: `Plugin install records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
+        title: "Plugin install ledger is missing integrity metadata",
+        detail: `Plugin install ledger records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Reinstall or update plugins to refresh install metadata with resolved integrity hashes.",
       });
@@ -475,7 +477,7 @@ export async function collectPluginsTrustFindings(params: {
       findings.push({
         checkId: "plugins.installs_version_drift",
         severity: "warn",
-        title: "Plugin install records drift from installed package versions",
+        title: "Plugin install ledger records drift from installed package versions",
         detail: `Detected plugin install metadata drift:\n${pluginVersionDrift.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Run `openclaw plugins update --all` (or reinstall affected plugins) to refresh install metadata.",
