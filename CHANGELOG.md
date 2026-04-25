@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - Subagents: fall back to direct completion delivery when the parent announce turn finishes without a visible payload, so child results still reach channel-backed requester sessions.
 - Browser/Playwright: ignore benign already-handled route races during guarded navigation so browser-page tasks no longer fail when Playwright tears down a route mid-flight. (#68708) Thanks @Steady-ai.
 - Browser/CLI: lazy-load browser command groups and plugin runtime services so `openclaw browser --help` can render without loading the full browser automation stack. Fixes #65400. (#65460, #66640) Thanks @pandego and @Tianworld.
+- Browser/CLI: serve precomputed `openclaw browser --help` text from CLI startup metadata, avoiding the full plugin/config startup path for the common help invocation.
 - Browser/downloads: seed managed Chrome profiles with OpenClaw download prefs and capture unmanaged click-triggered downloads under the guarded downloads directory, while explicit download waiters still own their target file. (#64558) Thanks @Pearcekieser.
 - Browser/Chrome: stop passing redundant `--disable-setuid-sandbox` when `browser.noSandbox` is enabled; `--no-sandbox` remains the effective sandbox opt-out. (#67939) Thanks @sebykrueger.
 - Browser/client: stop telling agents to permanently avoid the browser after transient timeout or cancellation failures; keep the no-retry hint for persistent unavailable/rate-limit cases. (#46505) Thanks @jriff.
