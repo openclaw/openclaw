@@ -551,6 +551,43 @@ describe("installed plugin index", () => {
     ]);
   });
 
+  it("does not mark enabled-only migration snapshots stale for omitted disabled plugins", () => {
+    const enabledFixture = createRichPluginFixture();
+    const disabledFixture = createRichPluginFixture();
+    writePluginManifest(disabledFixture.rootDir, {
+      id: "disabled-demo",
+      name: "Disabled Demo",
+      configSchema: { type: "object" },
+      providers: ["disabled-demo"],
+    });
+    const current = loadInstalledPluginIndex({
+      candidates: [
+        enabledFixture.candidate,
+        {
+          ...disabledFixture.candidate,
+          idHint: "disabled-demo",
+        },
+      ],
+      config: {
+        plugins: {
+          entries: {
+            "disabled-demo": {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+    const migratedEnabledOnly = {
+      ...current,
+      refreshReason: "migration" as const,
+      plugins: current.plugins.filter((plugin) => plugin.enabled),
+    };
+
+    expect(diffInstalledPluginIndexInvalidationReasons(migratedEnabledOnly, current)).toEqual([]);
+  });
+
   it("marks disabled plugins without dropping their cold contributions", () => {
     const fixture = createRichPluginFixture();
 

@@ -731,6 +731,10 @@ export function diffInstalledPluginIndexInvalidationReasons(
   }
   for (const pluginId of currentByPluginId.keys()) {
     if (!previousByPluginId.has(pluginId)) {
+      const currentPlugin = currentByPluginId.get(pluginId);
+      if (currentPlugin?.enabled === false) {
+        continue;
+      }
       reasons.add("source-changed");
     }
   }
