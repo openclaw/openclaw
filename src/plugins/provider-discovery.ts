@@ -56,7 +56,11 @@ function sortedValues(values: Iterable<string>): string[] {
 export function resolveInstalledPluginProviderContributionIds(
   params: ResolveInstalledPluginProviderContributionIdsParams = {},
 ): string[] {
-  const index = params.index ?? loadPluginRegistrySnapshot(params);
+  const registryParams =
+    params.candidates && params.preferPersisted === undefined
+      ? { ...params, preferPersisted: false }
+      : params;
+  const index = params.index ?? loadPluginRegistrySnapshot(registryParams);
   return sortedValues(
     listPluginContributionIds({
       index,

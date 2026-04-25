@@ -723,6 +723,9 @@ function storeSourceCheckoutRuntimeDepsCache(params: {
 function createNestedNpmInstallEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const nextEnv = { ...env };
   delete nextEnv.NPM_CONFIG_CACHE;
+  delete nextEnv.NPM_CONFIG_GLOBAL;
+  delete nextEnv.NPM_CONFIG_LOCATION;
+  delete nextEnv.NPM_CONFIG_PREFIX;
   delete nextEnv.npm_config_cache;
   delete nextEnv.npm_config_global;
   delete nextEnv.npm_config_location;
@@ -1126,6 +1129,14 @@ function shouldCleanBundledRuntimeDepsInstallExecutionRoot(params: {
   return installExecutionRoot.startsWith(`${installRoot}${path.sep}`);
 }
 
+function writeBundledRuntimeDepsInstallManifest(installExecutionRoot: string): void {
+  fs.writeFileSync(
+    path.join(installExecutionRoot, "package.json"),
+    `${JSON.stringify({ name: "openclaw-runtime-deps-install", private: true }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 export function installBundledRuntimeDeps(params: {
   installRoot: string;
   installExecutionRoot?: string;
@@ -1144,13 +1155,11 @@ export function installBundledRuntimeDeps(params: {
   try {
     fs.mkdirSync(params.installRoot, { recursive: true });
     fs.mkdirSync(installExecutionRoot, { recursive: true });
-    if (isolatedExecutionRoot) {
-      fs.writeFileSync(
-        path.join(installExecutionRoot, "package.json"),
-        `${JSON.stringify({ name: "openclaw-runtime-deps-install", private: true }, null, 2)}\n`,
-        "utf8",
-      );
-    }
+    // Always make npm see an OpenClaw-owned package root. The package-level
+    // doctor repair path installs directly in the external stage dir; without a
+    // manifest, npm can honor a user's global prefix config and write under
+    // $HOME/node_modules instead of our managed stage.
+    writeBundledRuntimeDepsInstallManifest(installExecutionRoot);
     const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
       cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
     });

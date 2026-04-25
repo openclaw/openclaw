@@ -65,8 +65,12 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
         {
           PATH: "/usr/bin:/bin",
           NPM_CONFIG_CACHE: "/Users/alice/.npm-uppercase",
+          NPM_CONFIG_GLOBAL: "true",
+          NPM_CONFIG_LOCATION: "global",
+          NPM_CONFIG_PREFIX: "/Users/alice",
           npm_config_cache: "/Users/alice/.npm",
           npm_config_global: "true",
+          npm_config_location: "global",
           npm_config_prefix: "/opt/homebrew",
         },
         { cacheDir: "/opt/openclaw/runtime-cache" },
@@ -170,6 +174,7 @@ describe("installBundledRuntimeDeps", () => {
   });
 
   it("uses the npm cmd shim on Windows", () => {
+    const installRoot = makeTempDir();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(fs, "existsSync").mockImplementation(
       (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
@@ -184,7 +189,7 @@ describe("installBundledRuntimeDeps", () => {
     });
 
     installBundledRuntimeDeps({
-      installRoot: "C:\\openclaw",
+      installRoot,
       missingSpecs: ["acpx@0.5.3"],
       env: {
         npm_config_prefix: "C:\\prefix",
@@ -197,7 +202,7 @@ describe("installBundledRuntimeDeps", () => {
       expect.any(String),
       ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "--ignore-scripts", "acpx@0.5.3"],
       expect.objectContaining({
-        cwd: "C:\\openclaw",
+        cwd: installRoot,
         env: expect.objectContaining({
           npm_config_legacy_peer_deps: "true",
           npm_config_package_lock: "false",
@@ -286,10 +291,20 @@ describe("installBundledRuntimeDeps", () => {
       env: {
         HOME: "/Users/alice",
         NPM_CONFIG_CACHE: "/Users/alice/.npm-uppercase",
+        NPM_CONFIG_GLOBAL: "true",
+        NPM_CONFIG_LOCATION: "global",
+        NPM_CONFIG_PREFIX: "/Users/alice",
         npm_config_cache: "/Users/alice/.npm",
+        npm_config_global: "true",
+        npm_config_location: "global",
+        npm_config_prefix: "/opt/homebrew",
       },
     });
 
+    expect(JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8"))).toEqual({
+      name: "openclaw-runtime-deps-install",
+      private: true,
+    });
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(Array),
@@ -307,6 +322,12 @@ describe("installBundledRuntimeDeps", () => {
       expect.objectContaining({
         env: expect.not.objectContaining({
           NPM_CONFIG_CACHE: expect.any(String),
+          NPM_CONFIG_GLOBAL: expect.any(String),
+          NPM_CONFIG_LOCATION: expect.any(String),
+          NPM_CONFIG_PREFIX: expect.any(String),
+          npm_config_global: expect.any(String),
+          npm_config_location: expect.any(String),
+          npm_config_prefix: expect.any(String),
         }),
       }),
     );

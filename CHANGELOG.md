@@ -61,6 +61,12 @@ Docs: https://docs.openclaw.ai
 
 - iOS/macOS Talk Mode: allow `talk.speechLocale` to set the speech
   recognition locale for non-English voice conversations. Fixes #44688.
+- Plugins/providers: honor explicit plugin candidate lists instead of reading a
+  persisted registry snapshot from local state, keeping candidate-scoped
+  provider discovery hermetic.
+- Plugins/doctor: keep bundled plugin runtime-dependency repairs inside the
+  managed OpenClaw stage even when user npm prefix/global config points npm at
+  `$HOME/node_modules`. Fixes #71730.
 - Plugins/Voice Call: treat missing provider credentials as setup-incomplete
   during Gateway startup and log the missing keys as a warning instead of a
   runtime startup error, while keeping explicit command/tool errors when used. Thanks
