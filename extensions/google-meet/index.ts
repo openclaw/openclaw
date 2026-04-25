@@ -3,18 +3,12 @@ import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-r
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
-import { registerGoogleMeetCli } from "./src/cli.js";
 import {
   resolveGoogleMeetConfig,
   type GoogleMeetConfig,
   type GoogleMeetMode,
   type GoogleMeetTransport,
 } from "./src/config.js";
-import {
-  createAndJoinMeetFromParams,
-  createMeetFromParams,
-  shouldJoinCreatedMeet,
-} from "./src/create.js";
 import {
   buildGoogleMeetPreflightReport,
   fetchGoogleMeetArtifacts,
@@ -23,7 +17,6 @@ import {
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
-import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
 
@@ -244,10 +237,34 @@ function resolveOptionalPositiveInteger(value: unknown): number | undefined {
   return parsed;
 }
 
+function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
+  return raw.join !== false && raw.join !== "false";
+}
+
+async function createMeetFromParams(params: {
+  config: GoogleMeetConfig;
+  runtime: OpenClawPluginApi["runtime"];
+  raw: Record<string, unknown>;
+}) {
+  const create = await import("./src/create.js");
+  return create.createMeetFromParams(params);
+}
+
+async function createAndJoinMeetFromParams(params: {
+  config: GoogleMeetConfig;
+  runtime: OpenClawPluginApi["runtime"];
+  raw: Record<string, unknown>;
+  ensureRuntime: () => Promise<GoogleMeetRuntime>;
+}) {
+  const create = await import("./src/create.js");
+  return create.createAndJoinMeetFromParams(params);
+}
+
 async function resolveGoogleMeetTokenFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
 ) {
+  const { resolveGoogleMeetAccessToken } = await import("./src/oauth.js");
   return resolveGoogleMeetAccessToken({
     clientId: normalizeOptionalString(raw.clientId) ?? config.oauth.clientId,
     clientSecret: normalizeOptionalString(raw.clientSecret) ?? config.oauth.clientSecret,
@@ -661,12 +678,14 @@ export default definePluginEntry({
     });
 
     api.registerCli(
-      ({ program }) =>
+      async ({ program }) => {
+        const { registerGoogleMeetCli } = await import("./src/cli.js");
         registerGoogleMeetCli({
           program,
           config,
           ensureRuntime,
-        }),
+        });
+      },
       {
         commands: ["googlemeet"],
         descriptors: [
