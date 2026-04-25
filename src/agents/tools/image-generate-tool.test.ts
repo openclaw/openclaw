@@ -705,6 +705,26 @@ describe("createImageGenerateTool", () => {
   it("passes web_fetch SSRF policy to remote reference images", async () => {
     stubImageGenerationProviders();
     stubEditedImageFlow({ width: 1024, height: 1024 });
+    const defaultTool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
+          },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await defaultTool.execute("call-edit-rfc2544-default", {
+      prompt: "Use this reference.",
+      image: "http://198.18.0.153/reference.png",
+    });
+    expect(webMedia.loadWebMedia).toHaveBeenLastCalledWith(
+      "http://198.18.0.153/reference.png",
+      expect.not.objectContaining({ ssrfPolicy: expect.anything() }),
+    );
+
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
         config: {
