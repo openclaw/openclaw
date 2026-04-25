@@ -878,6 +878,107 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports message delivery spans and metrics with low-cardinality attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "message.delivery.started",
+      channel: "matrix",
+      deliveryKind: "text",
+      sessionKey: "session-secret",
+    });
+    emitDiagnosticEvent({
+      type: "message.delivery.completed",
+      channel: "matrix",
+      deliveryKind: "text",
+      durationMs: 25,
+      resultCount: 1,
+      sessionKey: "session-secret",
+    });
+    emitDiagnosticEvent({
+      type: "message.delivery.error",
+      channel: "discord",
+      deliveryKind: "media",
+      durationMs: 40,
+      errorCategory: "TypeError",
+      sessionKey: "session-secret",
+    });
+    await flushDiagnosticEvents();
+
+    expect(
+      telemetryState.counters.get("openclaw.message.delivery.started")?.add,
+    ).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "matrix",
+      "openclaw.delivery.kind": "text",
+    });
+    expect(
+      telemetryState.histograms.get("openclaw.message.delivery.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      25,
+      expect.objectContaining({
+        "openclaw.channel": "matrix",
+        "openclaw.delivery.kind": "text",
+        "openclaw.outcome": "completed",
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.message.delivery.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      40,
+      expect.objectContaining({
+        "openclaw.channel": "discord",
+        "openclaw.delivery.kind": "media",
+        "openclaw.outcome": "error",
+        "openclaw.errorCategory": "TypeError",
+      }),
+    );
+
+    const deliverySpanCalls = telemetryState.tracer.startSpan.mock.calls.filter(
+      (call) => call[0] === "openclaw.message.delivery",
+    );
+    expect(deliverySpanCalls).toHaveLength(2);
+    expect(deliverySpanCalls[0]?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.channel": "matrix",
+        "openclaw.delivery.kind": "text",
+        "openclaw.outcome": "completed",
+        "openclaw.delivery.result_count": 1,
+      },
+      startTime: expect.any(Number),
+    });
+    expect(deliverySpanCalls[1]?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.channel": "discord",
+        "openclaw.delivery.kind": "media",
+        "openclaw.outcome": "error",
+        "openclaw.errorCategory": "TypeError",
+      },
+      startTime: expect.any(Number),
+    });
+    for (const call of deliverySpanCalls) {
+      expect(call[1]).toEqual({
+        attributes: expect.not.objectContaining({
+          "openclaw.sessionKey": expect.anything(),
+          "openclaw.messageId": expect.anything(),
+          "openclaw.conversationId": expect.anything(),
+          "openclaw.content": expect.anything(),
+          "openclaw.to": expect.anything(),
+        }),
+        startTime: expect.any(Number),
+      });
+    }
+    const errorSpan = telemetryState.spans.find(
+      (span) => span.name === "openclaw.message.delivery" && span.setStatus.mock.calls.length > 0,
+    );
+    expect(errorSpan?.setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "TypeError",
+    });
+    await service.stop?.(ctx);
+  });
+
   test("does not export model or tool content unless capture is explicitly enabled", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });

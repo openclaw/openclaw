@@ -206,6 +206,9 @@ Message flow:
 - `webhook.error`: webhook handler errors.
 - `message.queued`: message enqueued for processing.
 - `message.processed`: outcome + duration + optional error.
+- `message.delivery.started`: outbound delivery attempt started.
+- `message.delivery.completed`: outbound delivery attempt finished + duration/result count.
+- `message.delivery.error`: outbound delivery attempt failed + duration/bounded error category.
 
 Queue + session:
 
@@ -345,6 +348,11 @@ Message flow:
   `openclaw.outcome`)
 - `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`,
   `openclaw.outcome`)
+- `openclaw.message.delivery.started` (counter, attrs: `openclaw.channel`,
+  `openclaw.delivery.kind`)
+- `openclaw.message.delivery.duration_ms` (histogram, attrs:
+  `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`,
+  `openclaw.errorCategory`)
 
 Queues + sessions:
 
@@ -390,6 +398,9 @@ Exec:
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`,
     `openclaw.messageId`, `openclaw.reason`
+- `openclaw.message.delivery`
+  - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`,
+    `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
   - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
 
