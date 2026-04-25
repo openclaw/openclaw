@@ -6,8 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Diagnostics/OTEL: emit bounded exec-process diagnostics and export them as `openclaw.exec` spans without exposing command text, working directories, or container identifiers. (#71451) Thanks @vincentkoc.
-- Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#71450) Thanks @vincentkoc.
+- Diagnostics/OTEL: emit bounded exec-process diagnostics and export them as `openclaw.exec` spans without exposing command text, working directories, or container identifiers. (#71451) Thanks @vincentkoc and @jlapenna.
+- Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#71450) Thanks @vincentkoc and @jlapenna.
 - Control UI: refine the agent Tool Access panel with compact live-tool chips, collapsible tool groups, direct per-tool toggles, and clearer runtime/source provenance. (#71405) Thanks @BunsDev.
 - Memory-core/hybrid search: expose raw `vectorScore` and `textScore` alongside the combined `score` on hybrid memory search results, so callers can inspect vector-versus-text retrieval contribution before temporal decay or MMR reordering. Fixes #68166. (#68286) Thanks @ajfonthemove.
 
@@ -22,7 +22,7 @@ Docs: https://docs.openclaw.ai
 - MCP: retire one-shot embedded bundled MCP runtimes at run end, skip bundle-MCP startup when a runtime tool allowlist cannot reach bundle-MCP tools, and add `mcp.sessionIdleTtlMs` idle eviction for leaked session runtimes. Fixes #71106, #71110, #70389, and #70808.
 - MCP/config reload: hot-apply `mcp.*` changes by disposing cached session MCP runtimes, and dispose bundled MCP runtimes during gateway shutdown so removed `mcp.servers` entries reap child processes promptly. Fixes #60656.
 - Gateway/restart continuation: durably hand restart continuations to a session-delivery queue before deleting the restart sentinel, recover queued continuation work after crashy restarts, and fall back to a session-only wake when no channel route survives reboot. (#70780) Thanks @fuller-stack-dev.
-- Agents/tool-result pruning: harden the tool-result character estimator and context-pruning loops against malformed `{ type: "text" }` blocks created by void or undefined tool handler results, serializing non-string text payloads for size accounting so they cannot bypass trimming as zero-sized. Fixes #34979. (#51267) Thanks @cgdusek.
+- Agents/tool-result pruning: harden the tool-result character estimator and context-pruning loops against malformed `{ type: "text" }` blocks created by void or undefined tool handler results, serializing non-string text payloads for size accounting so they cannot bypass trimming as zero-sized. Fixes #34979. (#51267) Thanks @cgdusek, @alvinttang, and @coffeexcoin.
 - Daemon/service-env: add Nix Home Manager profile bin directories to generated gateway service PATHs on macOS and Linux, honoring `NIX_PROFILES` right-to-left precedence and falling back to `~/.nix-profile/bin` when unset. Fixes #44402. (#59935) Thanks @jerome-benoit.
 
 ## 2026.4.24 (Unreleased)
