@@ -47,6 +47,7 @@ describe("minimax music generation provider", () => {
     const provider = buildMinimaxMusicGenerationProvider();
     const result = await provider.generateMusic({
       provider: "minimax",
+      model: "",
       prompt: "upbeat dance-pop with female vocals",
       cfg: {},
       lyrics: "our city wakes",
