@@ -15,7 +15,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
-const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.5+";
+const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.6";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 type MinimaxBaseResp = {
@@ -125,7 +125,7 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
     id: "minimax",
     label: "MiniMax",
     defaultModel: DEFAULT_MINIMAX_MUSIC_MODEL,
-    models: [DEFAULT_MINIMAX_MUSIC_MODEL, "music-2.5", "music-2.0"],
+    models: [DEFAULT_MINIMAX_MUSIC_MODEL, "music-2.6-free", "music-cover", "music-cover-free"],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
         provider: "minimax",
