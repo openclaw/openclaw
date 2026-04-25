@@ -99,7 +99,7 @@ export function createProfileSelectionOps({
 
     if (capabilities.usesChromeMcp) {
       const { focusChromeMcpTab } = await getChromeMcpModule();
-      await focusChromeMcpTab(profile.name, resolvedTargetId, profile.userDataDir);
+      await focusChromeMcpTab(profile.name, resolvedTargetId, profile);
       const profileState = getProfileState();
       profileState.lastTargetId = resolvedTargetId;
       return;
@@ -136,7 +136,7 @@ export function createProfileSelectionOps({
 
     if (capabilities.usesChromeMcp) {
       const { closeChromeMcpTab } = await getChromeMcpModule();
-      await closeChromeMcpTab(profile.name, resolvedTargetId, profile.userDataDir);
+      await closeChromeMcpTab(profile.name, resolvedTargetId, profile);
       return;
     }
 

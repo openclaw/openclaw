@@ -7,6 +7,7 @@ import {
   navigateChromeMcpPage,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
+  type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import {
   buildAiSnapshotFromChromeMcpSnapshot,
@@ -57,11 +58,13 @@ function browserNavigationPolicyForProfile(ctx: BrowserRouteContext, profileCtx:
 
 async function collectChromeMcpSnapshotUrls(params: {
   profileName: string;
+  profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
 }): Promise<Array<{ text: string; url: string }>> {
   const result = await evaluateChromeMcpScript({
     profileName: params.profileName,
+    profile: params.profile,
     userDataDir: params.userDataDir,
     targetId: params.targetId,
     fn: `() => {
@@ -102,11 +105,13 @@ function appendSnapshotUrls(snapshot: string, urls: Array<{ text: string; url: s
 
 async function clearChromeMcpOverlay(params: {
   profileName: string;
+  profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
 }): Promise<void> {
   await evaluateChromeMcpScript({
     profileName: params.profileName,
+    profile: params.profile,
     userDataDir: params.userDataDir,
     targetId: params.targetId,
     fn: `() => {
@@ -118,6 +123,7 @@ async function clearChromeMcpOverlay(params: {
 
 async function renderChromeMcpLabels(params: {
   profileName: string;
+  profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
   refs: string[];
@@ -125,6 +131,7 @@ async function renderChromeMcpLabels(params: {
   const refList = JSON.stringify(params.refs);
   const result = await evaluateChromeMcpScript({
     profileName: params.profileName,
+    profile: params.profile,
     userDataDir: params.userDataDir,
     targetId: params.targetId,
     args: params.refs,
@@ -265,7 +272,7 @@ export function registerBrowserAgentSnapshotRoutes(
             await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
             const result = await navigateChromeMcpPage({
               profileName: profileCtx.profile.name,
-              userDataDir: profileCtx.profile.userDataDir,
+              profile: profileCtx.profile,
               targetId: tab.targetId,
               url,
             });
@@ -369,20 +376,20 @@ export function registerBrowserAgentSnapshotRoutes(
             if (labels) {
               const snapshot = await takeChromeMcpSnapshot({
                 profileName: profileCtx.profile.name,
-                userDataDir: profileCtx.profile.userDataDir,
+                profile: profileCtx.profile,
                 targetId: tab.targetId,
               });
               const built = buildAiSnapshotFromChromeMcpSnapshot({ root: snapshot });
               const labelResult = await renderChromeMcpLabels({
                 profileName: profileCtx.profile.name,
-                userDataDir: profileCtx.profile.userDataDir,
+                profile: profileCtx.profile,
                 targetId: tab.targetId,
                 refs: Object.keys(built.refs),
               });
               try {
                 const buffer = await takeChromeMcpScreenshot({
                   profileName: profileCtx.profile.name,
-                  userDataDir: profileCtx.profile.userDataDir,
+                  profile: profileCtx.profile,
                   targetId: tab.targetId,
                   fullPage,
                   format: type,
@@ -401,7 +408,7 @@ export function registerBrowserAgentSnapshotRoutes(
               } finally {
                 await clearChromeMcpOverlay({
                   profileName: profileCtx.profile.name,
-                  userDataDir: profileCtx.profile.userDataDir,
+                  profile: profileCtx.profile,
                   targetId: tab.targetId,
                 });
               }
@@ -409,7 +416,7 @@ export function registerBrowserAgentSnapshotRoutes(
             }
             const buffer = await takeChromeMcpScreenshot({
               profileName: profileCtx.profile.name,
-              userDataDir: profileCtx.profile.userDataDir,
+              profile: profileCtx.profile,
               targetId: tab.targetId,
               uid: ref,
               fullPage,
@@ -531,7 +538,7 @@ export function registerBrowserAgentSnapshotRoutes(
           }
           const snapshot = await takeChromeMcpSnapshot({
             profileName: profileCtx.profile.name,
-            userDataDir: profileCtx.profile.userDataDir,
+            profile: profileCtx.profile,
             targetId: tab.targetId,
           });
           if (plan.format === "aria") {
@@ -559,7 +566,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   built.snapshot,
                   await collectChromeMcpSnapshotUrls({
                     profileName: profileCtx.profile.name,
-                    userDataDir: profileCtx.profile.userDataDir,
+                    profile: profileCtx.profile,
                     targetId: tab.targetId,
                   }),
                 ),
@@ -569,14 +576,14 @@ export function registerBrowserAgentSnapshotRoutes(
             const refs = Object.keys(builtWithUrls.refs);
             const labelResult = await renderChromeMcpLabels({
               profileName: profileCtx.profile.name,
-              userDataDir: profileCtx.profile.userDataDir,
+              profile: profileCtx.profile,
               targetId: tab.targetId,
               refs,
             });
             try {
               const labeled = await takeChromeMcpScreenshot({
                 profileName: profileCtx.profile.name,
-                userDataDir: profileCtx.profile.userDataDir,
+                profile: profileCtx.profile,
                 targetId: tab.targetId,
                 format: "png",
               });
@@ -606,7 +613,7 @@ export function registerBrowserAgentSnapshotRoutes(
             } finally {
               await clearChromeMcpOverlay({
                 profileName: profileCtx.profile.name,
-                userDataDir: profileCtx.profile.userDataDir,
+                profile: profileCtx.profile,
                 targetId: tab.targetId,
               });
             }

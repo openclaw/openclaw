@@ -103,6 +103,8 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   userDataDir?: string;
+  mcpCommand?: string;
+  mcpArgs?: string[];
   color: string;
   driver: "openclaw" | "existing-session";
   executablePath?: string;
@@ -178,6 +180,37 @@ function normalizeExecutablePath(raw: string | undefined): string | undefined {
     return value;
   }
   return path.resolve(value.replace(/^~(?=$|[\\/])/, os.homedir()));
+}
+
+function normalizeExistingSessionCdpUrl(
+  raw: string | undefined,
+  profileName: string,
+): { cdpUrl: string; cdpHost: string; cdpIsLoopback: boolean } | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`browser.profiles.${profileName}.cdpUrl must be a valid URL.`);
+  }
+
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
+    throw new Error(`browser.profiles.${profileName}.cdpUrl must use http, https, ws, or wss.`);
+  }
+
+  const normalized =
+    parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.toString().replace(/\/$/, "")
+      : parsed.toString();
+  return {
+    cdpUrl: normalized,
+    cdpHost: parsed.hostname,
+    cdpIsLoopback: isLoopbackHost(parsed.hostname),
+  };
 }
 
 function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
@@ -442,13 +475,16 @@ export function resolveProfile(
   const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
 
   if (driver === "existing-session") {
+    const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);
     return {
       name: profileName,
       cdpPort: 0,
-      cdpUrl: "",
-      cdpHost: "",
-      cdpIsLoopback: true,
+      cdpUrl: existingSessionCdp?.cdpUrl ?? "",
+      cdpHost: existingSessionCdp?.cdpHost ?? "",
+      cdpIsLoopback: existingSessionCdp?.cdpIsLoopback ?? true,
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
+      mcpCommand: normalizeOptionalString(profile.mcpCommand),
+      mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
       color: profile.color,
       driver,
       executablePath,

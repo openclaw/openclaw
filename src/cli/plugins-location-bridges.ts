@@ -8,7 +8,7 @@ function buildBridgeFromPersistedBundledRecord(
   // Relocation is derived from the previous persisted registry, not a hardcoded
   // table. A plugin moving from bundled to npm keeps the same plugin id; the old
   // registry row is the proof that this user actually had it bundled/enabled.
-  if (record.origin !== "bundled" || record.enabled === false) {
+  if (record.origin !== "bundled" || !record.enabled) {
     return null;
   }
   const npmSpec = record.packageInstall?.npm?.spec;
@@ -19,7 +19,7 @@ function buildBridgeFromPersistedBundledRecord(
     bundledPluginId: record.pluginId,
     pluginId: record.pluginId,
     npmSpec,
-    ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(record.enabledByDefault ? { enabledByDefault: true } : {}),
     channelIds: record.contributions.channels,
   };
 }

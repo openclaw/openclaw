@@ -90,7 +90,7 @@ export function createProfileAvailability({
     if (capabilities.usesChromeMcp) {
       // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
       const { listChromeMcpTabs } = await getChromeMcpModule();
-      await listChromeMcpTabs(profile.name, profile.userDataDir);
+      await listChromeMcpTabs(profile.name, profile);
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -105,7 +105,7 @@ export function createProfileAvailability({
   const isTransportAvailable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
-      await ensureChromeMcpAvailable(profile.name, profile.userDataDir, {
+      await ensureChromeMcpAvailable(profile.name, profile, {
         ephemeral: true,
         timeoutMs,
       });
@@ -218,7 +218,7 @@ export function createProfileAvailability({
     while (Date.now() < deadlineMs) {
       try {
         const { listChromeMcpTabs } = await getChromeMcpModule();
-        await listChromeMcpTabs(profile.name, profile.userDataDir);
+        await listChromeMcpTabs(profile.name, profile);
         return;
       } catch (err) {
         lastError = err;
@@ -239,7 +239,7 @@ export function createProfileAvailability({
         );
       }
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
-      await ensureChromeMcpAvailable(profile.name, profile.userDataDir);
+      await ensureChromeMcpAvailable(profile.name, profile);
       await waitForChromeMcpReadyAfterAttach();
       return;
     }

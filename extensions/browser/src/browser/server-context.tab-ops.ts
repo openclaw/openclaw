@@ -144,7 +144,7 @@ export function createProfileTabOps({
   const readTabs = async (): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
       const { listChromeMcpTabs } = await getChromeMcpModule();
-      return await listChromeMcpTabs(profile.name, profile.userDataDir);
+      return await listChromeMcpTabs(profile.name, profile);
     }
 
     if (capabilities.usesPersistentPlaywright) {
@@ -231,7 +231,7 @@ export function createProfileTabOps({
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
       const { openChromeMcpTab } = await getChromeMcpModule();
-      const page = await openChromeMcpTab(profile.name, url, profile.userDataDir);
+      const page = await openChromeMcpTab(profile.name, url, profile);
       const profileState = getProfileState();
       profileState.lastTargetId = page.targetId;
       await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });
