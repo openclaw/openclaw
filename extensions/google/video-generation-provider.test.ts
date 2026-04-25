@@ -130,7 +130,7 @@ describe("google video generation provider", () => {
       durationSeconds: 3,
     });
 
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         httpOptions: expect.objectContaining({
           baseUrl: "https://generativelanguage.googleapis.com",
@@ -167,7 +167,7 @@ describe("google video generation provider", () => {
       durationSeconds: 3,
     });
 
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         httpOptions: expect.objectContaining({
           baseUrl: "https://proxy.example.com/v1beta/route",
@@ -206,7 +206,7 @@ describe("google video generation provider", () => {
       durationSeconds: 3,
     });
 
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         httpOptions: expect.objectContaining({
           baseUrl: "https://generativelanguage.googleapis.com",

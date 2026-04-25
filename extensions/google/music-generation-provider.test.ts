@@ -120,7 +120,7 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         httpOptions: expect.objectContaining({
           baseUrl: "https://generativelanguage.googleapis.com",
@@ -160,7 +160,7 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         httpOptions: expect.objectContaining({
           baseUrl: "https://proxy.example.com/v1beta/route",
@@ -202,7 +202,7 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         httpOptions: expect.objectContaining({
           baseUrl: "https://generativelanguage.googleapis.com",
@@ -238,7 +238,7 @@ describe("google music generation provider", () => {
       instrumental: true,
     });
 
-    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+    expect(createGoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         httpOptions: expect.not.objectContaining({
           baseUrl: expect.anything(),
