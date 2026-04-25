@@ -351,14 +351,77 @@ export function createSessionMcpRuntime(params: {
     async callTool(serverName, toolName, input) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
+      const args = isMcpConfigRecord(input) ? input : {};
+      const attemptCallTool = async () => {
+        const session = sessions.get(serverName);
+        if (!session) {
+          throw new Error(`bundle-mcp server "${serverName}" is not connected`);
+        }
+        return (await session.client.callTool({
+          name: toolName,
+          arguments: args,
+        })) as CallToolResult;
+      };
+      // Streamable-HTTP servers can lose their session (idle reap, redeploy,
+      // network blip). The MCP SDK client does not auto-reinitialize, so we
+      // detect the well-known JSON-RPC -32000 / "Server not initialized" error
+      // and transparently rebuild the connection once before retrying.
+      // SSE and stdio transports are unaffected.
+      const isStreamableSessionLost = (error: unknown): boolean => {
+        const session = sessions.get(serverName);
+        if (!session || session.transportType !== "streamable-http") return false;
+        const msg = String((error as Error)?.message ?? error ?? "");
+        return (
+          msg.includes("Server not initialized") ||
+          msg.includes("Session not found") ||
+          msg.includes("Mcp-Session-Id header is required") ||
+          /HTTP\s*4(?:00|04)/i.test(msg)
+        );
+      };
+      const reconnectStreamableSession = async (): Promise<boolean> => {
+        const current = sessions.get(serverName);
+        if (!current) return false;
+        const rawServer = loaded.mcpServers[serverName];
+        if (!rawServer) return false;
+        await disposeSession(current).catch(() => {});
+        sessions.delete(serverName);
+        const resolved = resolveMcpTransport(serverName, rawServer);
+        if (!resolved) return false;
+        const client = new Client(
+          { name: "openclaw-bundle-mcp", version: "0.0.0" },
+          {},
+        );
+        const nextSession = {
+          serverName,
+          client,
+          transport: resolved.transport,
+          transportType: resolved.transportType,
+          detachStderr: resolved.detachStderr,
+        };
+        sessions.set(serverName, nextSession);
+        try {
+          await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+          return true;
+        } catch (connectError) {
+          logWarn(
+            `bundle-mcp: reconnect failed for "${serverName}": ${redactErrorUrls(connectError)}`,
+          );
+          await disposeSession(nextSession).catch(() => {});
+          sessions.delete(serverName);
+          return false;
+        }
+      };
+      try {
+        return await attemptCallTool();
+      } catch (error) {
+        if (!isStreamableSessionLost(error)) throw error;
+        logWarn(
+          `bundle-mcp: streamable-http session lost for "${serverName}" (${redactErrorUrls(error)}); reinitializing and retrying once.`,
+        );
+        const reconnected = await reconnectStreamableSession();
+        if (!reconnected) throw error;
+        return await attemptCallTool();
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
     },
     async dispose() {
       if (disposed) {
