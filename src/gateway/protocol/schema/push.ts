@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 const ApnsEnvironmentSchema = Type.String({ enum: ["sandbox", "production"] });
@@ -22,6 +22,7 @@ export const PushTestResultSchema = Type.Object(
     tokenSuffix: Type.String(),
     topic: Type.String(),
     environment: ApnsEnvironmentSchema,
+    transport: Type.String({ enum: ["direct", "relay"] }),
   },
   { additionalProperties: false },
 );

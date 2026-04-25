@@ -1,32 +1,52 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
-const resolveAuthProfileOrderMock = vi.hoisted(() => vi.fn());
-const resolveAuthProfileDisplayLabelMock = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({
+  ensureAuthProfileStore: vi.fn(),
+  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
+  resolveAuthProfileOrder: vi.fn(),
+  resolveAuthProfileDisplayLabel: vi.fn(),
+  resolveUsableCustomProviderApiKey: vi.fn(() => null),
+  resolveEnvApiKey: vi.fn(() => null),
+  readCodexCliCredentialsCached: vi.fn<() => unknown>(() => null),
+}));
 
 vi.mock("./auth-profiles.js", () => ({
-  ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
-  resolveAuthProfileOrder: (...args: unknown[]) => resolveAuthProfileOrderMock(...args),
-  resolveAuthProfileDisplayLabel: (...args: unknown[]) =>
-    resolveAuthProfileDisplayLabelMock(...args),
+  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthProfileOrder: mocks.resolveAuthProfileOrder,
+  resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
 }));
 
 vi.mock("./model-auth.js", () => ({
-  resolveUsableCustomProviderApiKey: () => null,
-  resolveEnvApiKey: () => null,
+  resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
+  resolveEnvApiKey: mocks.resolveEnvApiKey,
 }));
 
-const { resolveModelAuthLabel } = await import("./model-auth-label.js");
+vi.mock("./cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
+}));
+
+let resolveModelAuthLabel: typeof import("./model-auth-label.js").resolveModelAuthLabel;
 
 describe("resolveModelAuthLabel", () => {
-  beforeEach(() => {
-    ensureAuthProfileStoreMock.mockReset();
-    resolveAuthProfileOrderMock.mockReset();
-    resolveAuthProfileDisplayLabelMock.mockReset();
+  beforeEach(async () => {
+    if (!resolveModelAuthLabel) {
+      ({ resolveModelAuthLabel } = await import("./model-auth-label.js"));
+    }
+    mocks.ensureAuthProfileStore.mockReset();
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
+    mocks.resolveAuthProfileOrder.mockReset();
+    mocks.resolveAuthProfileDisplayLabel.mockReset();
+    mocks.resolveUsableCustomProviderApiKey.mockReset();
+    mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
+    mocks.resolveEnvApiKey.mockReset();
+    mocks.resolveEnvApiKey.mockReturnValue(null);
+    mocks.readCodexCliCredentialsCached.mockReset();
+    mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   });
 
   it("does not include token value in label for token profiles", () => {
-    ensureAuthProfileStoreMock.mockReturnValue({
+    mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
         "github-copilot:default": {
@@ -37,8 +57,8 @@ describe("resolveModelAuthLabel", () => {
         },
       },
     } as never);
-    resolveAuthProfileOrderMock.mockReturnValue(["github-copilot:default"]);
-    resolveAuthProfileDisplayLabelMock.mockReturnValue("github-copilot:default");
+    mocks.resolveAuthProfileOrder.mockReturnValue(["github-copilot:default"]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("github-copilot:default");
 
     const label = resolveModelAuthLabel({
       provider: "github-copilot",
@@ -53,7 +73,7 @@ describe("resolveModelAuthLabel", () => {
 
   it("does not include api-key value in label for api-key profiles", () => {
     const shortSecret = "abc123"; // pragma: allowlist secret
-    ensureAuthProfileStoreMock.mockReturnValue({
+    mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
         "openai:default": {
@@ -63,8 +83,8 @@ describe("resolveModelAuthLabel", () => {
         },
       },
     } as never);
-    resolveAuthProfileOrderMock.mockReturnValue(["openai:default"]);
-    resolveAuthProfileDisplayLabelMock.mockReturnValue("openai:default");
+    mocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openai:default");
 
     const label = resolveModelAuthLabel({
       provider: "openai",
@@ -78,7 +98,7 @@ describe("resolveModelAuthLabel", () => {
   });
 
   it("shows oauth type with profile label", () => {
-    ensureAuthProfileStoreMock.mockReturnValue({
+    mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
         "anthropic:oauth": {
@@ -87,8 +107,8 @@ describe("resolveModelAuthLabel", () => {
         },
       },
     } as never);
-    resolveAuthProfileOrderMock.mockReturnValue(["anthropic:oauth"]);
-    resolveAuthProfileDisplayLabelMock.mockReturnValue("anthropic:oauth");
+    mocks.resolveAuthProfileOrder.mockReturnValue(["anthropic:oauth"]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("anthropic:oauth");
 
     const label = resolveModelAuthLabel({
       provider: "anthropic",
@@ -97,5 +117,51 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (anthropic:oauth)");
+  });
+
+  it("shows codex cli auth for codex provider without auth profiles", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.readCodexCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "token",
+      refresh: "refresh",
+      expires: Date.now() + 60_000,
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "codex",
+      cfg: {},
+    });
+
+    expect(label).toBe("oauth (codex-cli)");
+  });
+
+  it("can skip external auth profile overlays for status labels", () => {
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:oauth": {
+          type: "oauth",
+          provider: "anthropic",
+        },
+      },
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue(["anthropic:oauth"]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("anthropic:oauth");
+
+    const label = resolveModelAuthLabel({
+      provider: "anthropic",
+      cfg: {},
+      includeExternalProfiles: false,
+    });
+
+    expect(label).toBe("oauth (anthropic:oauth)");
+    expect(mocks.loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledOnce();
+    expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
   });
 });

@@ -2,12 +2,12 @@
 summary: "macOS app flow for controlling a remote OpenClaw gateway over SSH"
 read_when:
   - Setting up or debugging remote mac control
-title: "Remote Control"
+title: "Remote control"
 ---
 
 # Remote OpenClaw (macOS ⇄ remote host)
 
-This flow lets the macOS app act as a full remote control for a OpenClaw gateway running on another host (desktop/server). It’s the app’s **Remote over SSH** (remote run) feature. All features—health checks, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from _Settings → General_.
+This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). It’s the app’s **Remote over SSH** (remote run) feature. All features—health checks, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from _Settings → General_.
 
 ## Modes
 
@@ -57,7 +57,7 @@ Remote mode supports two transports:
 
 - Prefer loopback binds on the remote host and connect via SSH or Tailscale.
 - SSH tunneling uses strict host-key checking; trust the host key first so it exists in `~/.ssh/known_hosts`.
-- If you bind the Gateway to a non-loopback interface, require token/password auth.
+- If you bind the Gateway to a non-loopback interface, require valid Gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - See [Security](/gateway/security) and [Tailscale](/gateway/tailscale).
 
 ## WhatsApp login flow (remote)
@@ -82,3 +82,8 @@ openclaw nodes notify --node <id> --title "Ping" --body "Remote gateway ready" -
 ```
 
 There is no global “default sound” toggle in the app anymore; callers choose a sound (or none) per request.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Remote access](/gateway/remote)

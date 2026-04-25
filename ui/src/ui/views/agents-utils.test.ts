@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentLogoUrl,
+  buildAgentContext,
   resolveConfiguredCronModelSuggestions,
+  resolveAgentAvatarUrl,
+  resolveChatAvatarRenderUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";
@@ -96,5 +100,125 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("agentLogoUrl", () => {
+  it("keeps base-mounted control UI logo paths absolute to the mount", () => {
+    expect(agentLogoUrl("/ui")).toBe("/ui/favicon.svg");
+    expect(agentLogoUrl("/apps/openclaw/")).toBe("/apps/openclaw/favicon.svg");
+  });
+
+  it("uses a route-relative fallback before basePath bootstrap finishes", () => {
+    expect(agentLogoUrl("")).toBe("favicon.svg");
+  });
+});
+
+describe("resolveAgentAvatarUrl", () => {
+  it("prefers a runtime avatar URL over non-URL identity avatars", () => {
+    expect(
+      resolveAgentAvatarUrl(
+        { identity: { avatar: "A", avatarUrl: "/avatar/main" } },
+        {
+          agentId: "main",
+          avatar: "A",
+          name: "Main",
+        },
+      ),
+    ).toBe("/avatar/main");
+  });
+
+  it("ignores remote http avatars so the control UI falls back to a local badge", () => {
+    expect(
+      resolveAgentAvatarUrl({
+        identity: { avatarUrl: "https://example.com/avatar.png" },
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores protocol-relative avatars so the control UI cannot be tricked into a cross-origin fetch", () => {
+    expect(
+      resolveAgentAvatarUrl({
+        identity: { avatarUrl: "//evil.example/avatar.png" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for initials or emoji avatar values without a URL", () => {
+    expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
+    expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
+  });
+});
+
+describe("resolveChatAvatarRenderUrl", () => {
+  it("accepts a blob: URL produced by an authenticated avatar fetch", () => {
+    expect(
+      resolveChatAvatarRenderUrl("blob:http://localhost/uuid-123", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("blob:http://localhost/uuid-123");
+  });
+
+  it("falls back to the config-sanitized avatar when no blob candidate is present", () => {
+    expect(
+      resolveChatAvatarRenderUrl(null, {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
+  });
+
+  it("rejects remote URLs passed as the render candidate", () => {
+    expect(
+      resolveChatAvatarRenderUrl("https://example.com/avatar.png", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
+  });
+});
+
+describe("buildAgentContext", () => {
+  it("falls back to agent payload workspace/model when config form is unavailable", () => {
+    const context = buildAgentContext(
+      {
+        id: "main",
+        workspace: "/tmp/agent-workspace",
+        model: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["openai-codex/gpt-5.2-codex"],
+        },
+      },
+      null,
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.workspace).toBe("/tmp/agent-workspace");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+    expect(context.isDefault).toBe(true);
+  });
+
+  it("uses configured defaults when agent-specific overrides are absent", () => {
+    const context = buildAgentContext(
+      { id: "main" },
+      {
+        agents: {
+          defaults: {
+            workspace: "/tmp/default-workspace",
+            model: {
+              primary: "openai/gpt-5.5",
+              fallbacks: ["openai-codex/gpt-5.2-codex"],
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.workspace).toBe("/tmp/default-workspace");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
   });
 });

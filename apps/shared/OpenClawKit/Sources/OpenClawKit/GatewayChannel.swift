@@ -112,6 +112,7 @@ public struct GatewayConnectOptions: Sendable {
 public enum GatewayAuthSource: String, Sendable {
     case deviceToken = "device-token"
     case sharedToken = "shared-token"
+    case bootstrapToken = "bootstrap-token"
     case password = "password"
     case none = "none"
 }
@@ -130,6 +131,22 @@ private let defaultOperatorConnectScopes: [String] = [
     "operator.approvals",
     "operator.pairing",
 ]
+
+private extension String {
+    var nilIfEmpty: String? {
+        self.isEmpty ? nil : self
+    }
+}
+
+private struct SelectedConnectAuth: Sendable {
+    let authToken: String?
+    let authBootstrapToken: String?
+    let authDeviceToken: String?
+    let authPassword: String?
+    let signatureToken: String?
+    let storedToken: String?
+    let authSource: GatewayAuthSource
+}
 
 private enum GatewayConnectErrorCodes {
     static let authTokenMismatch = GatewayConnectAuthDetailCode.authTokenMismatch.rawValue
@@ -154,6 +171,7 @@ public actor GatewayChannelActor {
     private var connectWaiters: [CheckedContinuation<Void, Error>] = []
     private var url: URL
     private var token: String?
+    private var bootstrapToken: String?
     private var password: String?
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
@@ -185,6 +203,7 @@ public actor GatewayChannelActor {
     public init(
         url: URL,
         token: String?,
+        bootstrapToken: String? = nil,
         password: String? = nil,
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
@@ -193,6 +212,7 @@ public actor GatewayChannelActor {
     {
         self.url = url
         self.token = token
+        self.bootstrapToken = bootstrapToken
         self.password = password
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
@@ -398,39 +418,24 @@ public actor GatewayChannelActor {
         }
         let includeDeviceIdentity = options.includeDeviceIdentity
         let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
-        let storedToken =
-            (includeDeviceIdentity && identity != nil)
-                ? DeviceAuthStore.loadToken(deviceId: identity!.deviceId, role: role)?.token
-                : nil
-        let shouldUseDeviceRetryToken =
-            includeDeviceIdentity && self.pendingDeviceTokenRetry &&
-            storedToken != nil && self.token != nil && self.isTrustedDeviceRetryEndpoint()
-        if shouldUseDeviceRetryToken {
+        let selectedAuth = self.selectConnectAuth(
+            role: role,
+            includeDeviceIdentity: includeDeviceIdentity,
+            deviceId: identity?.deviceId)
+        if selectedAuth.authDeviceToken != nil && self.pendingDeviceTokenRetry {
             self.pendingDeviceTokenRetry = false
         }
-        // Keep shared credentials explicit when provided. Device token retry is attached
-        // only on a bounded second attempt after token mismatch.
-        let authToken = self.token ?? (includeDeviceIdentity ? storedToken : nil)
-        let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
-        let authSource: GatewayAuthSource
-        if authDeviceToken != nil || (self.token == nil && storedToken != nil) {
-            authSource = .deviceToken
-        } else if authToken != nil {
-            authSource = .sharedToken
-        } else if self.password != nil {
-            authSource = .password
-        } else {
-            authSource = .none
-        }
-        self.lastAuthSource = authSource
-        self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public)")
-        if let authToken {
+        self.lastAuthSource = selectedAuth.authSource
+        self.logger.info("gateway connect auth=\(selectedAuth.authSource.rawValue, privacy: .public)")
+        if let authToken = selectedAuth.authToken {
             var auth: [String: ProtoAnyCodable] = ["token": ProtoAnyCodable(authToken)]
-            if let authDeviceToken {
+            if let authDeviceToken = selectedAuth.authDeviceToken {
                 auth["deviceToken"] = ProtoAnyCodable(authDeviceToken)
             }
             params["auth"] = ProtoAnyCodable(auth)
-        } else if let password = self.password {
+        } else if let authBootstrapToken = selectedAuth.authBootstrapToken {
+            params["auth"] = ProtoAnyCodable(["bootstrapToken": ProtoAnyCodable(authBootstrapToken)])
+        } else if let password = selectedAuth.authPassword {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
@@ -443,7 +448,7 @@ public actor GatewayChannelActor {
                 role: role,
                 scopes: scopes,
                 signedAtMs: signedAtMs,
-                token: authToken,
+                token: selectedAuth.signatureToken,
                 nonce: connectNonce,
                 platform: platform,
                 deviceFamily: InstanceIdentity.deviceFamily)
@@ -472,14 +477,14 @@ public actor GatewayChannelActor {
         } catch {
             let shouldRetryWithDeviceToken = self.shouldRetryWithStoredDeviceToken(
                 error: error,
-                explicitGatewayToken: self.token,
-                storedToken: storedToken,
-                attemptedDeviceTokenRetry: authDeviceToken != nil)
+                explicitGatewayToken: self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                storedToken: selectedAuth.storedToken,
+                attemptedDeviceTokenRetry: selectedAuth.authDeviceToken != nil)
             if shouldRetryWithDeviceToken {
                 self.pendingDeviceTokenRetry = true
                 self.deviceTokenRetryBudgetUsed = true
                 self.backoffMs = min(self.backoffMs, 250)
-            } else if authDeviceToken != nil,
+            } else if selectedAuth.authDeviceToken != nil,
                 let identity,
                 self.shouldClearStoredDeviceTokenAfterRetry(error)
             {
@@ -488,6 +493,124 @@ public actor GatewayChannelActor {
             }
             throw error
         }
+    }
+
+    private func selectConnectAuth(
+        role: String,
+        includeDeviceIdentity: Bool,
+        deviceId: String?
+    ) -> SelectedConnectAuth {
+        let explicitToken = self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let explicitBootstrapToken =
+            self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let storedToken =
+            (includeDeviceIdentity && deviceId != nil)
+                ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)?.token
+                : nil
+        let shouldUseDeviceRetryToken =
+            includeDeviceIdentity && self.pendingDeviceTokenRetry &&
+            storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
+        let authToken =
+            explicitToken ??
+                // A freshly scanned setup code should force the bootstrap pairing path instead of
+                // silently reusing an older stored device token.
+                (includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
+                    ? storedToken
+                    : nil)
+        let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
+        let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
+        let authSource: GatewayAuthSource
+        if authDeviceToken != nil || (explicitToken == nil && authToken != nil) {
+            authSource = .deviceToken
+        } else if authToken != nil {
+            authSource = .sharedToken
+        } else if authBootstrapToken != nil {
+            authSource = .bootstrapToken
+        } else if explicitPassword != nil {
+            authSource = .password
+        } else {
+            authSource = .none
+        }
+        return SelectedConnectAuth(
+            authToken: authToken,
+            authBootstrapToken: authBootstrapToken,
+            authDeviceToken: authDeviceToken,
+            authPassword: explicitPassword,
+            signatureToken: authToken ?? authBootstrapToken,
+            storedToken: storedToken,
+            authSource: authSource)
+    }
+
+    private func shouldPersistBootstrapHandoffTokens() -> Bool {
+        guard self.lastAuthSource == .bootstrapToken else { return false }
+        let scheme = self.url.scheme?.lowercased()
+        if scheme == "wss" {
+            return true
+        }
+        if let host = self.url.host, LoopbackHost.isLoopback(host) {
+            return true
+        }
+        return false
+    }
+
+    private func filteredBootstrapHandoffScopes(role: String, scopes: [String]) -> [String]? {
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch normalizedRole {
+        case "node":
+            return []
+        case "operator":
+            let allowedOperatorScopes: Set<String> = [
+                "operator.approvals",
+                "operator.read",
+                "operator.talk.secrets",
+                "operator.write",
+            ]
+            return Array(Set(scopes.filter { allowedOperatorScopes.contains($0) })).sorted()
+        default:
+            return nil
+        }
+    }
+
+    private func persistBootstrapHandoffToken(
+        deviceId: String,
+        role: String,
+        token: String,
+        scopes: [String]
+    ) {
+        guard let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes) else {
+            return
+        }
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceId,
+            role: role,
+            token: token,
+            scopes: filteredScopes)
+    }
+
+    private func persistIssuedDeviceToken(
+        authSource: GatewayAuthSource,
+        deviceId: String,
+        role: String,
+        token: String,
+        scopes: [String]
+    ) {
+        if authSource == .bootstrapToken {
+            guard self.shouldPersistBootstrapHandoffTokens() else {
+                return
+            }
+            self.persistBootstrapHandoffToken(
+                deviceId: deviceId,
+                role: role,
+                token: token,
+                scopes: scopes)
+            return
+        }
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceId,
+            role: role,
+            token: token,
+            scopes: scopes)
     }
 
     private func handleConnectResponse(
@@ -501,11 +624,31 @@ public actor GatewayChannelActor {
             let detailCode = details?["code"]?.value as? String
             let canRetryWithDeviceToken = details?["canRetryWithDeviceToken"]?.value as? Bool ?? false
             let recommendedNextStep = details?["recommendedNextStep"]?.value as? String
+            let requestId = details?["requestId"]?.value as? String
+            let reason = details?["reason"]?.value as? String
+            let owner = details?["owner"]?.value as? String
+            let title = details?["title"]?.value as? String
+            let userMessage = details?["userMessage"]?.value as? String
+            let actionLabel = details?["actionLabel"]?.value as? String
+            let actionCommand = details?["actionCommand"]?.value as? String
+            let docsURLString = details?["docsUrl"]?.value as? String
+            let retryableOverride = details?["retryable"]?.value as? Bool
+            let pauseReconnectOverride = details?["pauseReconnect"]?.value as? Bool
             throw GatewayConnectAuthError(
                 message: msg,
                 detailCodeRaw: detailCode,
                 canRetryWithDeviceToken: canRetryWithDeviceToken,
-                recommendedNextStepRaw: recommendedNextStep)
+                recommendedNextStepRaw: recommendedNextStep,
+                requestId: requestId,
+                detailsReason: reason,
+                ownerRaw: owner,
+                titleOverride: title,
+                userMessageOverride: userMessage,
+                actionLabel: actionLabel,
+                actionCommand: actionCommand,
+                docsURLString: docsURLString,
+                retryableOverride: retryableOverride,
+                pauseReconnectOverride: pauseReconnectOverride)
         }
         guard let payload = res.payload else {
             throw NSError(
@@ -520,17 +663,36 @@ public actor GatewayChannelActor {
         } else if let tick = ok.policy["tickIntervalMs"]?.value as? Int {
             self.tickIntervalMs = Double(tick)
         }
-        if let auth = ok.auth,
-           let deviceToken = auth["deviceToken"]?.value as? String {
-            let authRole = auth["role"]?.value as? String ?? role
-            let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
-                .compactMap { $0.value as? String } ?? []
-            if let identity {
-                _ = DeviceAuthStore.storeToken(
+        if let auth = ok.auth, let identity {
+            if let deviceToken = auth["deviceToken"]?.value as? String {
+                let authRole = auth["role"]?.value as? String ?? role
+                let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
+                    .compactMap { $0.value as? String } ?? []
+                self.persistIssuedDeviceToken(
+                    authSource: self.lastAuthSource,
                     deviceId: identity.deviceId,
                     role: authRole,
                     token: deviceToken,
                     scopes: scopes)
+            }
+            if self.shouldPersistBootstrapHandoffTokens(),
+               let tokenEntries = auth["deviceTokens"]?.value as? [ProtoAnyCodable]
+            {
+                for entry in tokenEntries {
+                    guard let rawEntry = entry.value as? [String: ProtoAnyCodable],
+                          let deviceToken = rawEntry["deviceToken"]?.value as? String,
+                          let authRole = rawEntry["role"]?.value as? String
+                    else {
+                        continue
+                    }
+                    let scopes = (rawEntry["scopes"]?.value as? [ProtoAnyCodable])?
+                        .compactMap { $0.value as? String } ?? []
+                    self.persistBootstrapHandoffToken(
+                        deviceId: identity.deviceId,
+                        role: authRole,
+                        token: deviceToken,
+                        scopes: scopes)
+                }
             }
         }
         self.lastTick = Date()
@@ -892,7 +1054,8 @@ public actor GatewayChannelActor {
             return (id: id, data: data)
         } catch {
             self.logger.error(
-                "gateway \(kind) encode failed \(method, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                "gateway \(kind) encode failed \(method, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
             throw error
         }
     }

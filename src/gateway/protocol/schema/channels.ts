@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
 export const TalkModeParamsSchema = Type.Object(
@@ -16,16 +16,54 @@ export const TalkConfigParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-const TalkProviderConfigSchema = Type.Object(
+export const TalkSpeakParamsSchema = Type.Object(
   {
+    text: NonEmptyString,
     voiceId: Type.Optional(Type.String()),
-    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
     modelId: Type.Optional(Type.String()),
     outputFormat: Type.Optional(Type.String()),
-    apiKey: Type.Optional(SecretInputSchema),
+    speed: Type.Optional(Type.Number()),
+    rateWpm: Type.Optional(Type.Integer({ minimum: 1 })),
+    stability: Type.Optional(Type.Number()),
+    similarity: Type.Optional(Type.Number()),
+    style: Type.Optional(Type.Number()),
+    speakerBoost: Type.Optional(Type.Boolean()),
+    seed: Type.Optional(Type.Integer({ minimum: 0 })),
+    normalize: Type.Optional(Type.String()),
+    language: Type.Optional(Type.String()),
+    latencyTier: Type.Optional(Type.Integer({ minimum: 0 })),
   },
-  { additionalProperties: true },
+  { additionalProperties: false },
 );
+
+export const TalkRealtimeSessionParamsSchema = Type.Object(
+  {
+    sessionKey: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeSessionResultSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    clientSecret: NonEmptyString,
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+const talkProviderFieldSchemas = {
+  apiKey: Type.Optional(SecretInputSchema),
+};
+
+const TalkProviderConfigSchema = Type.Object(talkProviderFieldSchemas, {
+  additionalProperties: true,
+});
 
 const ResolvedTalkConfigSchema = Type.Object(
   {
@@ -35,29 +73,11 @@ const ResolvedTalkConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-const LegacyTalkConfigSchema = Type.Object(
-  {
-    voiceId: Type.Optional(Type.String()),
-    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
-    modelId: Type.Optional(Type.String()),
-    outputFormat: Type.Optional(Type.String()),
-    apiKey: Type.Optional(SecretInputSchema),
-    interruptOnSpeech: Type.Optional(Type.Boolean()),
-    silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
-  },
-  { additionalProperties: false },
-);
-
-const NormalizedTalkConfigSchema = Type.Object(
+const TalkConfigSchema = Type.Object(
   {
     provider: Type.Optional(Type.String()),
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     resolved: ResolvedTalkConfigSchema,
-    voiceId: Type.Optional(Type.String()),
-    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
-    modelId: Type.Optional(Type.String()),
-    outputFormat: Type.Optional(Type.String()),
-    apiKey: Type.Optional(SecretInputSchema),
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },
@@ -68,7 +88,7 @@ export const TalkConfigResultSchema = Type.Object(
   {
     config: Type.Object(
       {
-        talk: Type.Optional(Type.Union([LegacyTalkConfigSchema, NormalizedTalkConfigSchema])),
+        talk: Type.Optional(TalkConfigSchema),
         session: Type.Optional(
           Type.Object(
             {
@@ -88,6 +108,18 @@ export const TalkConfigResultSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSpeakResultSchema = Type.Object(
+  {
+    audioBase64: NonEmptyString,
+    provider: NonEmptyString,
+    outputFormat: Type.Optional(Type.String()),
+    voiceCompatible: Type.Optional(Type.Boolean()),
+    mimeType: Type.Optional(Type.String()),
+    fileExtension: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -114,10 +146,12 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     reconnectAttempts: Type.Optional(Type.Integer({ minimum: 0 })),
     lastConnectedAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastError: Type.Optional(Type.String()),
+    healthState: Type.Optional(Type.String()),
     lastStartAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastTransportActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
     busy: Type.Optional(Type.Boolean()),
     activeRuns: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -173,6 +207,14 @@ export const ChannelsLogoutParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChannelsStartParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    accountId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const WebLoginStartParamsSchema = Type.Object(
   {
     force: Type.Optional(Type.Boolean()),
@@ -183,10 +225,16 @@ export const WebLoginStartParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const QrDataUrlSchema = Type.String({
+  maxLength: 16_384,
+  pattern: "^data:image/png;base64,",
+});
+
 export const WebLoginWaitParamsSchema = Type.Object(
   {
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     accountId: Type.Optional(Type.String()),
+    currentQrDataUrl: Type.Optional(QrDataUrlSchema),
   },
   { additionalProperties: false },
 );

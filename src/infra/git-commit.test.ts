@@ -1,19 +1,22 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+
+const tempDirs = createTrackedTempDirs();
 
 async function makeTempDir(label: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
+  return await tempDirs.make(`openclaw-${label}-`);
 }
 
 async function makeFakeGitRepo(
   root: string,
   options: {
     head: string;
+    packedRefs?: Record<string, string>;
     refs?: Record<string, string>;
     gitdir?: string;
     commondir?: string;
@@ -28,37 +31,50 @@ async function makeFakeGitRepo(
   }
   await fs.mkdir(gitdir, { recursive: true });
   await fs.writeFile(path.join(gitdir, "HEAD"), options.head, "utf-8");
+  const refsBase = options.commondir ? path.resolve(gitdir, options.commondir) : gitdir;
+  await fs.mkdir(refsBase, { recursive: true });
   if (options.commondir) {
     await fs.writeFile(path.join(gitdir, "commondir"), options.commondir, "utf-8");
   }
   for (const [refPath, commit] of Object.entries(options.refs ?? {})) {
-    const targetPath = path.join(gitdir, refPath);
+    const targetPath = path.join(refsBase, refPath);
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, `${commit}\n`, "utf-8");
+  }
+  const packedRefsEntries = Object.entries(options.packedRefs ?? {});
+  if (packedRefsEntries.length > 0) {
+    const packedRefsContents = [
+      "# pack-refs with: peeled fully-peeled sorted",
+      ...packedRefsEntries.map(([refPath, commit]) => `${commit} ${refPath}`),
+    ].join("\n");
+    await fs.writeFile(path.join(refsBase, "packed-refs"), `${packedRefsContents}\n`, "utf-8");
   }
 }
 
 describe("git commit resolution", () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
+  let __testing: (typeof import("./git-commit.js"))["__testing"];
 
-  beforeEach(async () => {
-    process.chdir(repoRoot);
+  beforeAll(async () => {
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:module");
+    ({ resolveCommitHash, __testing } = await import("./git-commit.js"));
+  });
+
+  beforeEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    vi.resetModules();
-    const { __testing } = await import("./git-commit.js");
     __testing.clearCachedGitCommits();
   });
 
   afterEach(async () => {
-    process.chdir(repoRoot);
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    vi.resetModules();
-    const { __testing } = await import("./git-commit.js");
     __testing.clearCachedGitCommits();
+    await tempDirs.cleanup();
   });
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {
@@ -87,9 +103,8 @@ describe("git commit resolution", () => {
       .trim()
       .slice(0, 7);
 
-    process.chdir(otherRepo);
-    const { resolveCommitHash } = await import("./git-commit.js");
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
+    vi.spyOn(process, "cwd").mockReturnValue(otherRepo);
 
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoHead);
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherHead);
@@ -103,7 +118,6 @@ describe("git commit resolution", () => {
       .trim()
       .slice(0, 7);
 
-    const { resolveCommitHash } = await import("./git-commit.js");
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
 
     expect(
@@ -119,7 +133,6 @@ describe("git commit resolution", () => {
 
   it("caches build-info fallback results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-build-info-cache");
-    const { resolveCommitHash } = await import("./git-commit.js");
     const readBuildInfoCommit = vi.fn(() => "deadbee");
 
     expect(resolveCommitHash({ cwd: temp, env: {}, readers: { readBuildInfoCommit } })).toBe(
@@ -135,7 +148,6 @@ describe("git commit resolution", () => {
 
   it("caches package.json fallback results per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-package-json-cache");
-    const { resolveCommitHash } = await import("./git-commit.js");
     const readPackageJsonCommit = vi.fn(() => "badc0ff");
 
     expect(
@@ -171,8 +183,6 @@ describe("git commit resolution", () => {
       .trim()
       .slice(0, 7);
 
-    const { resolveCommitHash } = await import("./git-commit.js");
-
     expect(() =>
       resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} }),
     ).not.toThrow();
@@ -203,8 +213,6 @@ describe("git commit resolution", () => {
     );
     const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "entry.js")).href;
 
-    const { resolveCommitHash } = await import("./git-commit.js");
-
     expect(
       resolveCommitHash({
         moduleUrl,
@@ -229,11 +237,27 @@ describe("git commit resolution", () => {
       head: "89abcdef0123456789abcdef0123456789abcdef\n",
     });
 
-    const { resolveCommitHash } = await import("./git-commit.js");
-
     expect(resolveCommitHash({ cwd: repoA, env: {} })).toBe("0123456");
     expect(resolveCommitHash({ cwd: repoB, env: {} })).toBe("89abcde");
     expect(resolveCommitHash({ cwd: repoA, env: {} })).toBe("0123456");
+  });
+
+  it("reads packed refs from the common git dir for worktree-style checkouts", async () => {
+    const temp = await makeTempDir("git-commit-packed-refs");
+    const checkoutRoot = path.join(temp, "checkout");
+    const commonGitDir = path.join(temp, "git-common");
+    const worktreeGitDir = path.join(commonGitDir, "worktrees", "checkout");
+
+    await makeFakeGitRepo(checkoutRoot, {
+      gitdir: worktreeGitDir,
+      commondir: "../..",
+      head: "ref: refs/heads/main\n",
+      packedRefs: {
+        "refs/heads/main": "0123456789abcdef0123456789abcdef01234567",
+      },
+    });
+
+    expect(resolveCommitHash({ cwd: checkoutRoot, env: {} })).toBe("0123456");
   });
 
   it("caches deterministic null results per resolved search directory", async () => {
@@ -243,7 +267,6 @@ describe("git commit resolution", () => {
       head: "not-a-commit\n",
     });
 
-    const { resolveCommitHash } = await import("./git-commit.js");
     const readGitCommit = vi.fn(() => null);
 
     expect(resolveCommitHash({ cwd: repoRoot, env: {}, readers: { readGitCommit } })).toBeNull();
@@ -259,7 +282,6 @@ describe("git commit resolution", () => {
     await makeFakeGitRepo(repoRoot, {
       head: "0123456789abcdef0123456789abcdef01234567\n",
     });
-    const { resolveCommitHash } = await import("./git-commit.js");
     const readGitCommit = vi.fn(() => {
       const error = Object.assign(new Error(`EACCES: permission denied`), {
         code: "EACCES",
@@ -296,8 +318,6 @@ describe("git commit resolution", () => {
 
   it("formats env-provided commit strings consistently", async () => {
     const temp = await makeTempDir("git-commit-env");
-    const { resolveCommitHash } = await import("./git-commit.js");
-
     expect(resolveCommitHash({ cwd: temp, env: { GIT_COMMIT: "ABCDEF0123456789" } })).toBe(
       "abcdef0",
     );
@@ -310,8 +330,6 @@ describe("git commit resolution", () => {
 
   it("rejects unsafe HEAD refs and accepts valid refs", async () => {
     const temp = await makeTempDir("git-commit-refs");
-    const { resolveCommitHash } = await import("./git-commit.js");
-
     const absoluteRepo = path.join(temp, "absolute");
     await makeFakeGitRepo(absoluteRepo, { head: "ref: /tmp/evil\n" });
     expect(resolveCommitHash({ cwd: absoluteRepo, env: {} })).toBeNull();
@@ -349,8 +367,6 @@ describe("git commit resolution", () => {
       commondir: "../common-git",
     });
 
-    const { resolveCommitHash } = await import("./git-commit.js");
-
     expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("bbbbbbb");
   });
 
@@ -364,8 +380,6 @@ describe("git commit resolution", () => {
         [longRefName]: "cccccccccccccccccccccccccccccccccccccccc",
       },
     });
-
-    const { resolveCommitHash } = await import("./git-commit.js");
 
     expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBe("ccccccc");
   });

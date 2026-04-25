@@ -17,9 +17,11 @@ function makeSnapshot(windows: ProviderUsageSnapshot["windows"]): ProviderUsageS
 }
 
 describe("provider-usage.format", () => {
-  it("returns null summary for errored or empty snapshots", () => {
-    expect(formatUsageWindowSummary({ ...makeSnapshot([]), error: "HTTP 401" })).toBeNull();
-    expect(formatUsageWindowSummary(makeSnapshot([]))).toBeNull();
+  it.each([
+    { snapshot: { ...makeSnapshot([]), error: "HTTP 401" } as ProviderUsageSnapshot, now },
+    { snapshot: makeSnapshot([]), now },
+  ])("returns null summary for empty or errored snapshots", ({ snapshot, now: currentNow }) => {
+    expect(formatUsageWindowSummary(snapshot, { now: currentNow })).toBeNull();
   });
 
   it("formats reset windows across now/minute/hour/day/date buckets", () => {
@@ -54,6 +56,18 @@ describe("provider-usage.format", () => {
     expect(summary).toBe("A 90% left · B 80% left");
   });
 
+  it("treats non-positive max windows as all windows and clamps overused percentages", () => {
+    const summary = formatUsageWindowSummary(
+      makeSnapshot([
+        { label: "Over", usedPercent: 120, resetAt: now + 60_000 },
+        { label: "Under", usedPercent: -10 },
+      ]),
+      { now, maxWindows: 0, includeResets: true },
+    );
+
+    expect(summary).toBe("Over 0% left ⏱1m · Under 100% left");
+  });
+
   it("formats summary line from highest-usage window and provider cap", () => {
     const summary: UsageSummary = {
       updatedAt: now,
@@ -79,32 +93,73 @@ describe("provider-usage.format", () => {
     );
   });
 
-  it("formats report output for empty, error, no-data, and plan entries", () => {
-    expect(formatUsageReportLines({ updatedAt: now, providers: [] })).toEqual([
-      "Usage: no provider usage available.",
-    ]);
+  it("returns null summary line when providers are errored or have no windows", () => {
+    expect(
+      formatUsageSummaryLine({
+        updatedAt: now,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [],
+            error: "HTTP 401",
+          },
+          {
+            provider: "zai",
+            displayName: "z.ai",
+            windows: [],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
 
-    const summary: UsageSummary = {
-      updatedAt: now,
-      providers: [
-        {
-          provider: "openai-codex",
-          displayName: "Codex",
-          windows: [],
-          error: "Token expired",
-          plan: "Plus",
-        },
-        {
-          provider: "xiaomi",
-          displayName: "Xiaomi",
-          windows: [],
-        },
-      ],
-    };
-    expect(formatUsageReportLines(summary)).toEqual([
-      "Usage:",
-      "  Codex (Plus): Token expired",
-      "  Xiaomi: no data",
-    ]);
+  it.each([
+    {
+      name: "formats empty reports",
+      summary: { updatedAt: now, providers: [] } as UsageSummary,
+      opts: undefined,
+      expected: ["Usage: no provider usage available."],
+    },
+    {
+      name: "formats error, no-data, and plan entries",
+      summary: {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "openai-codex",
+            displayName: "Codex",
+            windows: [],
+            error: "Token expired",
+            plan: "Plus",
+          },
+          {
+            provider: "xiaomi",
+            displayName: "Xiaomi",
+            windows: [],
+          },
+        ],
+      } as UsageSummary,
+      opts: undefined,
+      expected: ["Usage:", "  Codex (Plus): Token expired", "  Xiaomi: no data"],
+    },
+    {
+      name: "formats detailed report lines with reset windows",
+      summary: {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            plan: "Pro",
+            windows: [{ label: "Daily", usedPercent: 25, resetAt: now + 2 * 60 * 60_000 }],
+          },
+        ],
+      } as UsageSummary,
+      opts: { now },
+      expected: ["Usage:", "  Claude (Pro)", "    Daily: 75% left · resets 2h"],
+    },
+  ])("$name", ({ summary, opts, expected }) => {
+    expect(formatUsageReportLines(summary, opts)).toEqual(expected);
   });
 });

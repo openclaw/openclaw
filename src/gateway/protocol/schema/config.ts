@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 const ConfigSchemaLookupPathString = Type.String({
@@ -6,6 +6,16 @@ const ConfigSchemaLookupPathString = Type.String({
   maxLength: 1024,
   pattern: "^[A-Za-z0-9_./\\[\\]\\-*]+$",
 });
+
+const ConfigDeliveryContextSchema = Type.Object(
+  {
+    channel: Type.Optional(Type.String()),
+    to: Type.Optional(Type.String()),
+    accountId: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  },
+  { additionalProperties: false },
+);
 
 export const ConfigGetParamsSchema = Type.Object({}, { additionalProperties: false });
 
@@ -22,6 +32,7 @@ const ConfigApplyLikeParamsSchema = Type.Object(
     raw: NonEmptyString,
     baseHash: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(Type.String()),
+    deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
     note: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
@@ -43,6 +54,7 @@ export const ConfigSchemaLookupParamsSchema = Type.Object(
 export const UpdateRunParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
+    deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
     note: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),

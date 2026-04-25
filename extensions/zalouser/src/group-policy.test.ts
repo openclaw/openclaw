@@ -23,9 +23,21 @@ describe("zalouser group policy helpers", () => {
     ).toEqual(["123", "group:123", "chan-1", "Team Alpha", "team-alpha", "*"]);
   });
 
+  it("builds id-only candidates when name matching is disabled", () => {
+    expect(
+      buildZalouserGroupCandidates({
+        groupId: "123",
+        groupChannel: "chan-1",
+        groupName: "Team Alpha",
+        includeGroupIdAlias: true,
+        allowNameMatching: false,
+      }),
+    ).toEqual(["123", "group:123", "*"]);
+  });
+
   it("finds the first matching group entry", () => {
     const groups = {
-      "group:123": { allow: true },
+      "group:123": { enabled: true },
       "team-alpha": { requireMention: false },
       "*": { requireMention: true },
     };
@@ -37,12 +49,12 @@ describe("zalouser group policy helpers", () => {
         includeGroupIdAlias: true,
       }),
     );
-    expect(entry).toEqual({ allow: true });
+    expect(entry).toEqual({ enabled: true });
   });
 
   it("evaluates allow/enable flags", () => {
-    expect(isZalouserGroupEntryAllowed({ allow: true, enabled: true })).toBe(true);
-    expect(isZalouserGroupEntryAllowed({ allow: false })).toBe(false);
+    expect(isZalouserGroupEntryAllowed({ enabled: true })).toBe(true);
+    expect(isZalouserGroupEntryAllowed({ allow: false } as never)).toBe(false);
     expect(isZalouserGroupEntryAllowed({ enabled: false })).toBe(false);
     expect(isZalouserGroupEntryAllowed(undefined)).toBe(false);
   });

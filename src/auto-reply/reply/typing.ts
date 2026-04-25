@@ -1,5 +1,6 @@
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
 import { createTypingStartGuard } from "../../channels/typing-start-guard.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type TypingController = {
@@ -29,6 +30,18 @@ export function createTypingController(params: {
     silentToken = SILENT_REPLY_TOKEN,
     log,
   } = params;
+  if (!onReplyStart && !onCleanup) {
+    return {
+      onReplyStart: async () => {},
+      startTypingLoop: async () => {},
+      startTypingOnText: async () => {},
+      refreshTypingTtl: () => {},
+      isActive: () => false,
+      markRunComplete: () => {},
+      markDispatchIdle: () => {},
+      cleanup: () => {},
+    };
+  }
   let started = false;
   let active = false;
   let runComplete = false;
@@ -169,7 +182,7 @@ export function createTypingController(params: {
     if (sealed) {
       return;
     }
-    const trimmed = text?.trim();
+    const trimmed = normalizeOptionalString(text);
     if (!trimmed) {
       return;
     }
