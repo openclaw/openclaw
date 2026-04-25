@@ -554,6 +554,7 @@ module.exports = {
     const pluginDir = makeTempDir();
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
 
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -588,6 +589,9 @@ module.exports = {
     id: "discovery-cli-metadata-channel",
     name: "Discovery CLI Metadata Channel",
     description: "discovery cli metadata channel",
+    setRuntime() {
+      require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf-8");
+    },
     plugin: {
       id: "discovery-cli-metadata-channel",
       meta: {
@@ -646,6 +650,7 @@ module.exports = {
 
     expect(fs.readFileSync(modeMarker, "utf-8")).toBe("discovery");
     expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
       "discovery-cli-metadata-channel",
     );
