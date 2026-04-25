@@ -485,6 +485,23 @@ describe("sanitizeChatHistoryMessages", () => {
       timestamp: 3,
     });
   });
+
+  it("applies caller-provided maxChars to injected assistant broadcasts", () => {
+    const result = sanitizeInjectedAssistantMessageForChatBroadcast(
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible reply" }],
+        timestamp: 4,
+      },
+      5,
+    );
+
+    expect(result).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "visib\n...(truncated)..." }],
+      timestamp: 4,
+    });
+  });
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {

@@ -1255,11 +1255,12 @@ export function sanitizeChatHistoryMessages(
 
 export function sanitizeInjectedAssistantMessageForChatBroadcast(
   message: Record<string, unknown>,
+  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
 ): Record<string, unknown> | null {
   const displayMessage = stripInlineDirectiveTagsFromMessageForDisplay(
     stripEnvelopeFromMessage(message) as Record<string, unknown>,
   );
-  const sanitized = sanitizeChatHistoryMessages([displayMessage]);
+  const sanitized = sanitizeChatHistoryMessages([displayMessage], maxChars);
   if (sanitized.length === 0) {
     return null;
   }
@@ -2834,7 +2835,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     // Broadcast to webchat for immediate UI update
-    const visibleMessage = sanitizeInjectedAssistantMessageForChatBroadcast(appended.message);
+    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, undefined);
+    const visibleMessage = sanitizeInjectedAssistantMessageForChatBroadcast(
+      appended.message,
+      effectiveMaxChars,
+    );
     if (!visibleMessage) {
       respond(true, { ok: true, messageId: appended.messageId });
       return;

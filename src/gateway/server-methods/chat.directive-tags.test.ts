@@ -701,6 +701,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
   });
 
+  it("chat.inject uses gateway.webchat.chatHistoryMaxChars for live broadcast text", async () => {
+    createTranscriptFixture("openclaw-chat-inject-config-maxchars-");
+    mockState.config = {
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 5,
+        },
+      },
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: {
+        sessionKey: "main",
+        message: "visible reply",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
+    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+    expect(chatCall?.[0]).toBe("chat");
+    expect(extractFirstTextBlock(chatCall?.[1])).toBe("visib\n...(truncated)...");
+  });
+
   it("chat.inject broadcasts and routes on the canonical session key", async () => {
     createTranscriptFixture("openclaw-chat-inject-canonical-key-");
     mockState.sessionEntry = {
