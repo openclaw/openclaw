@@ -79,14 +79,19 @@ function createProfileContext(
     getProfileState,
   });
 
-  const { ensureBrowserAvailable, isHttpReachable, isReachable, stopRunningBrowser } =
-    createProfileAvailability({
-      opts,
-      profile,
-      state,
-      getProfileState,
-      setProfileRunning,
-    });
+  const {
+    ensureBrowserAvailable,
+    isHttpReachable,
+    isTransportAvailable,
+    isReachable,
+    stopRunningBrowser,
+  } = createProfileAvailability({
+    opts,
+    profile,
+    state,
+    getProfileState,
+    setProfileRunning,
+  });
 
   const { ensureTabAvailable, focusTab, closeTab } = createProfileSelectionOps({
     profile,
@@ -110,6 +115,7 @@ function createProfileContext(
     ensureBrowserAvailable,
     ensureTabAvailable,
     isHttpReachable,
+    isTransportAvailable,
     isReachable,
     listTabs,
     openTab,
@@ -173,9 +179,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
       if (capabilities.usesChromeMcp) {
         try {
-          running = await profileCtx.isReachable(300);
+          running = await profileCtx.isTransportAvailable(300);
           if (running) {
-            const tabs = await profileCtx.listTabs();
+            const tabs = await profileCtx.listTabs().catch(() => [] as BrowserTab[]);
             tabCount = tabs.filter((t) => t.type === "page").length;
           }
         } catch {
@@ -251,6 +257,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
     ensureTabAvailable: (targetId) => getDefaultContext().ensureTabAvailable(targetId),
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
+    isTransportAvailable: (timeoutMs) => getDefaultContext().isTransportAvailable(timeoutMs),
     isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
     listTabs: () => getDefaultContext().listTabs(),
     openTab: (url, opts) => getDefaultContext().openTab(url, opts),
