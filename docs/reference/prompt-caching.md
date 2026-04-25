@@ -338,9 +338,9 @@ Defaults:
 Related docs:
 
 - [Anthropic](/providers/anthropic)
-- [Token Use and Costs](/reference/token-use)
-- [Session Pruning](/concepts/session-pruning)
-- [Gateway Configuration Reference](/gateway/configuration-reference)
+- [Token use and costs](/reference/token-use)
+- [Session pruning](/concepts/session-pruning)
+- [Gateway configuration reference](/gateway/configuration-reference)
 
 ## Related
 

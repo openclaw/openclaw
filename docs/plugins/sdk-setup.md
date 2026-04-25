@@ -566,6 +566,6 @@ startup installs; keep using the explicit plugin installer.
 
 ## Related
 
-- [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` and `defineChannelPluginEntry`
-- [Plugin Manifest](/plugins/manifest) -- full manifest schema reference
-- [Building Plugins](/plugins/building-plugins) -- step-by-step getting started guide
+- [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry`
+- [Plugin manifest](/plugins/manifest) — full manifest schema reference
+- [Building plugins](/plugins/building-plugins) — step-by-step getting started guide

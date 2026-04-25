@@ -693,11 +693,11 @@ turn for that agent must be a Codex-supported OpenAI model.
 
 ## Related
 
-- [Agent Harness Plugins](/plugins/sdk-agent-harness)
+- [Agent harness plugins](/plugins/sdk-agent-harness)
 - [Agent runtimes](/concepts/agent-runtimes)
-- [Model Providers](/concepts/model-providers)
+- [Model providers](/concepts/model-providers)
 - [OpenAI provider](/providers/openai)
 - [Status](/cli/status)
 - [Plugin hooks](/plugins/hooks)
-- [Configuration Reference](/gateway/configuration-reference)
+- [Configuration reference](/gateway/configuration-reference)
 - [Testing](/help/testing-live#live-codex-app-server-harness-smoke)

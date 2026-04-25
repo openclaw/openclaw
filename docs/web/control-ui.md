@@ -318,7 +318,7 @@ Trusted-proxy note:
   device identity
 - this does **not** extend to node-role Control UI sessions
 - same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see
-  [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
+  [Trusted proxy auth](/gateway/trusted-proxy-auth)
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 

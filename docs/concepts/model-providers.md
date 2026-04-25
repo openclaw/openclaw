@@ -7,7 +7,7 @@ title: "Model providers"
 ---
 
 This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
-For model selection rules, see [/concepts/models](/concepts/models).
+For model selection rules, see [Models](/concepts/models).
 
 ## Quick rules
 
@@ -160,7 +160,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - [Qwen Cloud](/providers/qwen): Qwen Cloud provider surface plus Alibaba DashScope and Coding Plan endpoint mapping
 - [MiniMax](/providers/minimax): MiniMax Coding Plan OAuth or API key access
-- [GLM Models](/providers/glm): Z.AI Coding Plan or general API endpoints
+- [GLM models](/providers/glm): Z.AI Coding Plan or general API endpoints
 
 ### OpenCode
 
@@ -646,11 +646,11 @@ openclaw models set opencode/claude-opus-4-6
 openclaw models list
 ```
 
-See also: [/gateway/configuration](/gateway/configuration) for full configuration examples.
+See also: [Configuration](/gateway/configuration) for full configuration examples.
 
 ## Related
 
 - [Models](/concepts/models) — model configuration and aliases
-- [Model Failover](/concepts/model-failover) — fallback chains and retry behavior
-- [Configuration Reference](/gateway/config-agents#agent-defaults) — model config keys
+- [Model failover](/concepts/model-failover) — fallback chains and retry behavior
+- [Configuration reference](/gateway/config-agents#agent-defaults) — model config keys
 - [Providers](/providers) — per-provider setup guides

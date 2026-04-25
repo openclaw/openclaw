@@ -427,7 +427,7 @@ Defaults:
 
 All control endpoints accept `?profile=<name>`; the CLI uses `--browser-profile`.
 
-## Existing-session via Chrome DevTools MCP
+## Existing session via Chrome DevTools MCP
 
 OpenClaw can also attach to a running Chromium-based browser profile through the
 official Chrome DevTools MCP server. This reuses the tabs and login state
