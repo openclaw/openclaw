@@ -123,4 +123,32 @@ describe("createFailoverDecisionLogger", () => {
       (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
     ).not.toContain("to=openai/gpt-5.4");
   });
+
+  it("omits raw HTML from consoleMessage for Cloudflare challenge errors", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const cfChallengeRawError =
+      '403 <!DOCTYPE html><html><body><div id="cf-browser-verification"></div></body></html>';
+
+    const logDecision = createFailoverDecisionLogger({
+      stage: "assistant",
+      runId: "run:cf-challenge",
+      rawError: cfChallengeRawError,
+      failoverReason: "auth",
+      profileFailureReason: "auth",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      profileId: "openai-codex:p1",
+      fallbackConfigured: false,
+      timedOut: false,
+      aborted: false,
+    });
+
+    logDecision("surface_error");
+
+    const consoleMsg =
+      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage ?? "";
+    expect(consoleMsg).not.toContain("rawError=");
+    expect(consoleMsg).not.toContain("<html>");
+    expect(consoleMsg).not.toContain("cf-browser-verification");
+  });
 });
