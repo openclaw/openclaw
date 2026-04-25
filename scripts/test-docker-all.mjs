@@ -26,6 +26,7 @@ const DEFAULT_RESOURCE_LIMITS = {
   "live:claude": 4,
   "live:codex": 4,
   "live:gemini": 4,
+  "live:opencode": 4,
   npm: 10,
   service: 7,
 };
@@ -68,6 +69,9 @@ function liveProviderResource(provider) {
   }
   if (provider === "google-gemini-cli" || provider === "gemini") {
     return "live:gemini";
+  }
+  if (provider === "opencode") {
+    return "live:opencode";
   }
   if (provider === "openai") {
     return "live:openai";
@@ -316,6 +320,17 @@ const exclusiveLanes = [
     {
       cacheKey: "acp-bind-gemini",
       provider: "google-gemini-cli",
+      resources: ["npm"],
+      timeoutMs: LIVE_ACP_TIMEOUT_MS,
+      weight: 3,
+    },
+  ),
+  liveLane(
+    "live-acp-bind-opencode",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:opencode",
+    {
+      cacheKey: "acp-bind-opencode",
+      provider: "opencode",
       resources: ["npm"],
       timeoutMs: LIVE_ACP_TIMEOUT_MS,
       weight: 3,
