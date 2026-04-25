@@ -311,6 +311,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
       await streaming.close(text, { note: finalNote });
+      // Track the raw streamed text so the duplicate-final check in deliver()
+      // can skip the redundant text delivery that arrives after onIdle closes
+      // the streaming card.
+      if (streamText) {
+        deliveredFinalTexts.add(streamText);
+      }
     }
     streaming = null;
     streamingStartPromise = null;
