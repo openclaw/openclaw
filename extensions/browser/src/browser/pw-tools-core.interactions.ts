@@ -592,6 +592,35 @@ export async function clickViaPlaywright(opts: {
   }
 }
 
+export async function clickCoordsViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  x: number;
+  y: number;
+  doubleClick?: boolean;
+  button?: "left" | "right" | "middle";
+  delayMs?: number;
+  timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<void> {
+  const page = await getRestoredPageForTarget(opts);
+  const previousUrl = page.url();
+  await assertInteractionNavigationCompletedSafely({
+    action: async () => {
+      await page.mouse.click(opts.x, opts.y, {
+        button: opts.button,
+        clickCount: opts.doubleClick ? 2 : 1,
+        delay: resolveBoundedDelayMs(opts.delayMs, "clickCoords delayMs", ACT_MAX_CLICK_DELAY_MS),
+      });
+    },
+    cdpUrl: opts.cdpUrl,
+    page,
+    previousUrl,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
+  });
+}
+
 export async function hoverViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1239,6 +1268,19 @@ async function executeSingleAction(
         modifiers: action.modifiers as Array<
           "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
         >,
+        delayMs: action.delayMs,
+        timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+      });
+      break;
+    case "clickCoords":
+      await clickCoordsViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        x: action.x,
+        y: action.y,
+        doubleClick: action.doubleClick,
+        button: action.button as "left" | "right" | "middle" | undefined,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,
