@@ -136,6 +136,7 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
       "DEFAULT_UPLOAD_DIR",
       "ResolvedBrowserConfig",
       "ResolvedBrowserProfile",
+      "ResolvedBrowserTabCleanupConfig",
       "resolveBrowserConfig",
       "resolveProfile",
     ],
