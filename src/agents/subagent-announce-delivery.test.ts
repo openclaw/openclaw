@@ -22,8 +22,8 @@ const slackThreadOrigin = {
   threadId: "171.222",
 } as const;
 
-function createGatewayMock() {
-  return vi.fn(async () => ({}) as Record<string, unknown>) as unknown as typeof runtimeCallGateway;
+function createGatewayMock(response: Record<string, unknown> = {}) {
+  return vi.fn(async () => response) as unknown as typeof runtimeCallGateway;
 }
 
 function createSendMessageMock() {
@@ -185,8 +185,63 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("uses a direct thread fallback for dormant completion events with child output", async () => {
-    const callGateway = createGatewayMock();
+  it("keeps announce-agent delivery primary for dormant completion events with child output", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "requester voice completion" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-1",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          deliver: true,
+          channel: "slack",
+          accountId: "acct-1",
+          to: "channel:C123",
+          threadId: "171.222",
+          bestEffortDeliver: true,
+          internalEvents: expect.any(Array),
+        }),
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("uses a direct thread fallback when announce-agent delivery fails", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("UNAVAILABLE: gateway lost final output");
+    }) as unknown as typeof runtimeCallGateway;
     const sendMessage = createSendMessageMock();
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
@@ -217,7 +272,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "direct-thread-fallback",
       }),
     );
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",
@@ -228,6 +283,51 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
         bestEffort: true,
         idempotencyKey: "announce-thread-fallback-1",
+      }),
+    );
+  });
+
+  it("uses a direct thread fallback when announce-agent returns no visible output", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-empty",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "child completion output",
+        idempotencyKey: "announce-thread-fallback-empty",
       }),
     );
   });
