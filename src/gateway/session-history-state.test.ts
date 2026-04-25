@@ -355,4 +355,26 @@ describe("SessionHistorySseState", () => {
     expect(historyText(snapshot)).toEqual(["好了吗"]);
     expect(snapshot.history.messages).toHaveLength(1);
   });
+
+  test("strips quote-wrapped ACP Codex gateway restart block while preserving smoke request", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        userTextMessage(
+          [
+            "\u201dSystem: [2026-04-25 17:20:30 GMT+8] Gateway restart restart ok (gateway.restart)",
+            "System: 已写入 ACP Codex 专用模型映射并重启 Gateway；回来后我会跑真实 smoke。",
+            "System: Reason: 加载 ACPX Codex adapter 专用模型映射：codex-acp 使用 gpt-5.4/medium，保持全局 main/coder/enterprise 模型不变。",
+            "System: Run: openclaw doctor --non-interactive",
+            "",
+            "[Sat 2026-04-25 17:21 GMT+8] 跑真实 assistant output smoke，不只看 session created。\u201c",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(historyText(snapshot)).toEqual([
+      "跑真实 assistant output smoke，不只看 session created。",
+    ]);
+    expect(snapshot.history.messages).toHaveLength(1);
+  });
 });
