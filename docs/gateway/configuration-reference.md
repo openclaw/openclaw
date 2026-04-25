@@ -186,9 +186,14 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
-- `plugins.installs`: CLI-managed install metadata used by `openclaw plugins update`.
-  - Includes `source`, `spec`, `sourcePath`, `installPath`, `version`, `resolvedName`, `resolvedVersion`, `resolvedSpec`, `integrity`, `shasum`, `resolvedAt`, `installedAt`.
-  - Treat `plugins.installs.*` as managed state; prefer CLI commands over manual edits.
+- `plugins.installs`: deprecated compatibility fallback for legacy
+  CLI-managed install metadata. New plugin installs write the managed
+  `plugins/installs.json` state ledger instead.
+  - Legacy records include `source`, `spec`, `sourcePath`, `installPath`,
+    `version`, `resolvedName`, `resolvedVersion`, `resolvedSpec`, `integrity`,
+    `shasum`, `resolvedAt`, `installedAt`.
+  - Treat `plugins.installs.*` as managed state; prefer CLI commands over
+    manual edits.
 
 See [Plugins](/tools/plugin).
 

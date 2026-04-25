@@ -32,6 +32,11 @@ export const listMarketplacePlugins: Mock<ListMarketplacePluginsFn> = vi.fn();
 export const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallShortcutFn> = vi.fn();
 export const enablePluginInConfig: UnknownMock = vi.fn();
 export const recordPluginInstall: UnknownMock = vi.fn();
+export const loadPluginInstallRecords: AsyncUnknownMock = vi.fn(async ({ config }) => {
+  const cfg = config as OpenClawConfig | undefined;
+  return structuredClone(cfg?.plugins?.installs ?? {});
+});
+export const writePersistedPluginInstallLedger: AsyncUnknownMock = vi.fn(async () => undefined);
 export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
@@ -150,6 +155,35 @@ vi.mock("../plugins/installs.js", () => ({
       ...args,
     )) as (typeof import("../plugins/installs.js"))["recordPluginInstall"],
 }));
+
+vi.mock("../plugins/install-ledger-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/install-ledger-store.js")>();
+  return {
+    ...actual,
+    loadPluginInstallRecords: ((...args: unknown[]) =>
+      invokeMock<unknown[], unknown>(loadPluginInstallRecords, ...args)) as (
+      ...args: unknown[]
+    ) => unknown,
+    writePersistedPluginInstallLedger: ((...args: unknown[]) =>
+      invokeMock<unknown[], unknown>(writePersistedPluginInstallLedger, ...args)) as (
+      ...args: unknown[]
+    ) => unknown,
+    recordPluginInstallInRecords: (
+      records: Record<string, unknown>,
+      update: { pluginId: string; installedAt?: string } & Record<string, unknown>,
+    ) => {
+      const { pluginId, ...record } = update;
+      return {
+        ...records,
+        [pluginId]: {
+          ...(records[pluginId] as Record<string, unknown> | undefined),
+          ...record,
+          installedAt: update.installedAt ?? "2026-04-25T00:00:00.000Z",
+        },
+      };
+    },
+  };
+});
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   clearPluginManifestRegistryCache: () => clearPluginManifestRegistryCache(),
@@ -424,6 +458,8 @@ export function resetPluginsCliTestState() {
   resolveMarketplaceInstallShortcut.mockReset();
   enablePluginInConfig.mockReset();
   recordPluginInstall.mockReset();
+  loadPluginInstallRecords.mockReset();
+  writePersistedPluginInstallLedger.mockReset();
   clearPluginManifestRegistryCache.mockReset();
   loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
@@ -482,6 +518,11 @@ export function resetPluginsCliTestState() {
   recordPluginInstall.mockImplementation(
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
+  loadPluginInstallRecords.mockImplementation(async ({ config }) => {
+    const cfg = config as OpenClawConfig | undefined;
+    return structuredClone(cfg?.plugins?.installs ?? {});
+  });
+  writePersistedPluginInstallLedger.mockResolvedValue(undefined);
   loadPluginManifestRegistry.mockReturnValue({
     plugins: [],
     diagnostics: [],

@@ -17,6 +17,11 @@ import {
 } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  PLUGIN_INSTALLS_CONFIG_PATH,
+  withoutPluginInstallRecords,
+  writePersistedPluginInstallLedger,
+} from "../../plugins/install-ledger-store.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -250,9 +255,19 @@ export async function channelsCapabilitiesCommand(
           });
           if (resolved.configChanged) {
             cfg = resolved.cfg;
+            const shouldMovePluginInstalls = Boolean(
+              cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
+            );
+            if (shouldMovePluginInstalls) {
+              await writePersistedPluginInstallLedger(cfg.plugins?.installs ?? {});
+              cfg = withoutPluginInstallRecords(cfg);
+            }
             await replaceConfigFile({
               nextConfig: cfg,
               baseHash: (await sourceSnapshotPromise)?.hash,
+              ...(shouldMovePluginInstalls
+                ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
+                : {}),
             });
           }
           return resolved.plugin ? [resolved.plugin] : null;

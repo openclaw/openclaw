@@ -7,6 +7,7 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { listPluginCompatRecords, type PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import { loadPluginInstallRecordsSync } from "./install-ledger-store.js";
 import {
   describePluginInstallSource,
   type PluginInstallSourceInfo,
@@ -82,9 +83,8 @@ export type InstalledPluginIndexRecord = {
   packageName?: string;
   packageVersion?: string;
   /**
-   * Actual install ledger entry recorded by OpenClaw under
-   * cfg.plugins.installs[pluginId]. This is the durable source of truth for
-   * what onboarding/update installed.
+   * Actual install ledger entry recorded by OpenClaw in the plugin install
+   * ledger. Legacy cfg.plugins.installs is only a compatibility fallback.
    */
   installRecord?: InstalledPluginInstallRecordInfo;
   /** Hash of installRecord; used to detect source-changed invalidation. */
@@ -470,10 +470,14 @@ function buildInstalledPluginIndex(
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const diagnostics: PluginDiagnostic[] = [...registry.diagnostics];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
+  const installRecords = loadPluginInstallRecordsSync({
+    config: params.config,
+    env: params.env,
+  });
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateByRootDir.get(record.rootDir);
     const packageJsonPath = resolvePackageJsonPath(candidate);
-    const installRecord = normalizeInstallRecord(params.config?.plugins?.installs?.[record.id]);
+    const installRecord = normalizeInstallRecord(installRecords[record.id]);
     const packageInstall = describePackageInstallSource(candidate);
     const manifestHash =
       safeHashFile({
