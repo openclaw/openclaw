@@ -41,7 +41,7 @@ function mergeInstallRecords(
 ): Record<string, PluginInstallRecord> {
   return {
     ...legacyRecords,
-    ...(ledgerRecords ?? {}),
+    ...ledgerRecords,
   };
 }
 
