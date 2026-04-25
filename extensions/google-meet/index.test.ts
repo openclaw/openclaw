@@ -202,8 +202,9 @@ describe("google-meet plugin", () => {
 
   it("uses a provider-safe flat tool parameter schema", () => {
     const { tools } = setup();
-    const tool = tools[0] as { parameters: unknown };
+    const tool = tools[0] as { description?: string; parameters: unknown };
 
+    expect(tool.description).toContain("recover_current_tab");
     expect(JSON.stringify(tool.parameters)).not.toContain("anyOf");
     expect(tool.parameters).toMatchObject({
       type: "object",
@@ -222,6 +223,7 @@ describe("google-meet plugin", () => {
             "speak",
             "test_speech",
           ],
+          description: expect.stringContaining("recover_current_tab"),
         },
         transport: { type: "string", enum: ["chrome", "chrome-node", "twilio"] },
         mode: { type: "string", enum: ["realtime", "transcribe"] },
