@@ -6,11 +6,6 @@
       "class": "core-runtime",
       "risk": ["protocol-client"]
     },
-    "@anthropic-ai/vertex-sdk": {
-      "owner": "provider:anthropic-vertex",
-      "class": "default-runtime-initially",
-      "risk": ["provider-sdk"]
-    },
     "@clack/prompts": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -47,13 +42,18 @@
       "risk": ["protocol-client", "network"]
     },
     "@mozilla/readability": {
-      "owner": "capability:web-extract-local",
-      "class": "default-runtime-initially",
+      "owner": "plugin:web-readability",
+      "class": "plugin-runtime",
+      "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
     "@napi-rs/canvas": {
-      "owner": "capability:document-and-image-rendering",
-      "class": "default-runtime-initially",
+      "owner": "plugin:document-extract",
+      "class": "optional-peer-runtime",
+      "activation": [
+        "input_file.application_pdf.image_fallback",
+        "plugins.entries.document-extract.enabled"
+      ],
       "risk": ["native", "parser", "untrusted-files"]
     },
     "@vincentkoc/qrcode-tui": {
@@ -127,8 +127,9 @@
       "risk": ["archive-parser", "untrusted-files"]
     },
     "linkedom": {
-      "owner": "capability:web-extract-local",
-      "class": "default-runtime-initially",
+      "owner": "plugin:web-readability",
+      "class": "plugin-runtime",
+      "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
     "markdown-it": {
@@ -152,8 +153,9 @@
       "risk": ["terminal-rendering"]
     },
     "pdfjs-dist": {
-      "owner": "capability:document-extract",
-      "class": "default-runtime-initially",
+      "owner": "plugin:document-extract",
+      "class": "plugin-runtime",
+      "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
       "risk": ["parser", "untrusted-files"]
     },
     "proxy-agent": {

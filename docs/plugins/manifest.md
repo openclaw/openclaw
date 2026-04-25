@@ -148,7 +148,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                            |
 | `nonSecretAuthMarkers`               | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                              |
 | `commandAliases`                     | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                                              |
-| `providerAuthEnvVars`                | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                                           |
+| `providerAuthEnvVars`                | No       | `Record<string, string[]>`       | Deprecated compatibility env metadata for provider auth/status lookup. Prefer `setup.providers[].envVars` for new plugins; OpenClaw still reads this during the deprecation window.                                               |
 | `providerAuthAliases`                | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                        |
 | `channelEnvVars`                     | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                                          |
 | `providerAuthChoices`                | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                     |
@@ -168,6 +168,8 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice.
 OpenClaw reads this before provider runtime loads.
+Provider setup flow prefers these manifest choices, then falls back to runtime
+wizard metadata and install-catalog choices for compatibility.
 
 | Field                 | Required | Type                                            | What it means                                                                                            |
 | --------------------- | -------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -327,10 +329,34 @@ narrows the candidate plugin and setup still needs richer setup-time runtime
 hooks, set `requiresRuntime: true` and keep `setup-api` in place as the
 fallback execution path.
 
+OpenClaw also includes `setup.providers[].envVars` in generic provider auth and
+env-var lookups. `providerAuthEnvVars` remains supported through a compatibility
+adapter during the deprecation window, but non-bundled plugins that still use it
+receive a manifest diagnostic. New plugins should put setup/status env metadata
+on `setup.providers[].envVars`.
+
+OpenClaw can also derive simple setup choices from `setup.providers[].authMethods`
+when no setup entry is available, or when `setup.requiresRuntime: false`
+declares setup runtime unnecessary. Explicit `providerAuthChoices` entries stay
+preferred for custom labels, CLI flags, onboarding scope, and assistant metadata.
+
+Set `requiresRuntime: false` only when those descriptors are sufficient for the
+setup surface. OpenClaw treats explicit `false` as a descriptor-only contract
+and will not execute `setup-api` or `openclaw.setupEntry` for setup lookup. If
+a descriptor-only plugin still ships one of those setup runtime entries,
+OpenClaw reports an additive diagnostic and continues ignoring it. Omitted
+`requiresRuntime` keeps legacy fallback behavior so existing plugins that added
+descriptors without the flag do not break.
+
 Because setup lookup can execute plugin-owned `setup-api` code, normalized
 `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across
 discovered plugins. Ambiguous ownership fails closed instead of picking a
 winner from discovery order.
+
+When setup runtime does execute, setup registry diagnostics report descriptor
+drift if `setup-api` registers a provider or CLI backend that the manifest
+descriptors do not declare, or if a descriptor has no matching runtime
+registration. These diagnostics are additive and do not reject legacy plugins.
 
 ### setup.providers reference
 
@@ -385,7 +411,7 @@ read without importing the plugin runtime.
 ```json
 {
   "contracts": {
-    "embeddedExtensionFactories": ["pi"],
+    "agentToolResultMiddleware": ["pi", "codex"],
     "externalAuthProviders": ["acme-ai"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
@@ -403,20 +429,28 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                     |
-| -------------------------------- | ---------- | ----------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Embedded runtime ids a bundled plugin may register factories for. |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.   |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                             |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.             |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                     |
-| `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                   |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                   |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                   |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                          |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                         |
-| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks.    |
+| Field                            | Type       | What it means                                                         |
+| -------------------------------- | ---------- | --------------------------------------------------------------------- |
+| `embeddedExtensionFactories`     | `string[]` | Deprecated embedded extension factory ids.                            |
+| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for. |
+| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.       |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                 |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                 |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                         |
+| `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                       |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                    |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                       |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                       |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                              |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                             |
+| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks.        |
+
+`contracts.embeddedExtensionFactories` is retained for bundled compatibility
+code that still needs direct Pi embedded-runner events. New bundled
+tool-result transforms should declare `contracts.agentToolResultMiddleware`
+and register with `api.registerAgentToolResultMiddleware(...)` instead.
+External plugins cannot register tool-result middleware because the seam can
+rewrite high-trust tool output before the model sees it.
 
 Provider plugins that implement `resolveExternalAuthProfiles` should declare
 `contracts.externalAuthProviders`. Plugins without the declaration still run
@@ -469,7 +503,20 @@ Each provider entry can include:
 ## channelConfigs reference
 
 Use `channelConfigs` when a channel plugin needs cheap config metadata before
-runtime loads.
+runtime loads. Read-only channel setup/status discovery can use this metadata
+directly for configured external channels when no setup entry is available, or
+when `setup.requiresRuntime: false` declares setup runtime unnecessary.
+
+For a channel plugin, `configSchema` and `channelConfigs` describe different
+paths:
+
+- `configSchema` validates `plugins.entries.<plugin-id>.config`
+- `channelConfigs.<channel-id>.schema` validates `channels.<channel-id>`
+
+Non-bundled plugins that declare `channels[]` should also declare matching
+`channelConfigs` entries. Without them, OpenClaw can still load the plugin, but
+cold-path config schema, setup, and Control UI surfaces cannot know the
+channel-owned option shape until plugin runtime executes.
 
 ```json
 {
@@ -708,7 +755,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
 - `providerDiscoveryEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
-- Env-var metadata (`providerAuthEnvVars`, `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
+- Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).
 - If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).
 

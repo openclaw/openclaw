@@ -324,6 +324,7 @@ export type ChannelLoginWithQrStartResult = {
 export type ChannelLoginWithQrWaitResult = {
   connected: boolean;
   message: string;
+  qrDataUrl?: string;
 };
 
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
@@ -348,6 +349,7 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   loginWithQrWait?: (params: {
     accountId?: string;
     timeoutMs?: number;
+    currentQrDataUrl?: string;
   }) => Promise<ChannelLoginWithQrWaitResult>;
   logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
 };

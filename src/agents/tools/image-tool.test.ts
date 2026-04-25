@@ -638,6 +638,33 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("does not treat configured MiniMax M2.7 chat metadata as the image model", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
+        models: {
+          mode: "merge",
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [makeModelDefinition("MiniMax-M2.7", ["text"])],
+            },
+          },
+        },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
+        fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
+      });
+      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+    });
+  });
+
   it("pairs minimax-portal primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
@@ -1380,6 +1407,68 @@ describe("image tool MiniMax VLM routing", () => {
         image: `data:image/png;base64,${pngB64}`,
       }),
     ).rejects.toThrow(/MiniMax VLM API error/i);
+  });
+});
+
+describe("image tool managed inbound media", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
+  });
+
+  async function withManagedInboundPng(
+    run: (params: { stateDir: string; mediaId: string; mediaPath: string }) => Promise<void>,
+  ) {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-managed-inbound-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "claim-check-test.png";
+    const mediaPath = path.join(inboundDir, mediaId);
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(mediaPath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      await run({ stateDir, mediaId, mediaPath });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  }
+
+  it("resolves media://inbound refs", async () => {
+    await withManagedInboundPng(async ({ mediaId }) => {
+      installImageUnderstandingProviderStubs();
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expectImageToolExecOk(tool, `media://inbound/${mediaId}`);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("allows managed inbound absolute paths when workspaceOnly is enabled", async () => {
+    await withManagedInboundPng(async ({ mediaPath }) => {
+      installImageUnderstandingProviderStubs();
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expectImageToolExecOk(tool, mediaPath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 });
 

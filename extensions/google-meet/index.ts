@@ -10,6 +10,11 @@ import {
   type GoogleMeetMode,
   type GoogleMeetTransport,
 } from "./src/config.js";
+import {
+  createAndJoinMeetFromParams,
+  createMeetFromParams,
+  shouldJoinCreatedMeet,
+} from "./src/create.js";
 import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
@@ -35,7 +40,7 @@ const googleMeetConfigSchema = {
     },
     defaultMode: {
       label: "Default Mode",
-      help: "Realtime voice is the default.",
+      help: "Realtime starts the duplex voice model loop. Transcribe joins/observes without the realtime talk-back bridge.",
     },
     "chrome.audioBackend": {
       label: "Chrome Audio Backend",
@@ -134,6 +139,7 @@ const GoogleMeetToolSchema = Type.Object({
   action: Type.String({
     enum: [
       "join",
+      "create",
       "status",
       "setup_status",
       "resolve_space",
@@ -142,13 +148,25 @@ const GoogleMeetToolSchema = Type.Object({
       "speak",
       "test_speech",
     ],
-    description: "Google Meet action to run",
+    description:
+      "Google Meet action to run. create creates a meeting and joins it by default; pass join=false to only mint a meeting URL.",
   }),
+  join: Type.Optional(
+    Type.Boolean({
+      description: "For action=create, set false to create the URL without joining.",
+    }),
+  ),
   url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
   transport: Type.Optional(
     Type.String({ enum: ["chrome", "chrome-node", "twilio"], description: "Join transport" }),
   ),
-  mode: Type.Optional(Type.String({ enum: ["realtime", "transcribe"], description: "Join mode" })),
+  mode: Type.Optional(
+    Type.String({
+      enum: ["realtime", "transcribe"],
+      description:
+        "Join mode. realtime starts live listen/talk-back through the realtime voice model; transcribe joins without the realtime talk-back bridge.",
+    }),
+  ),
   dialInNumber: Type.Optional(Type.String({ description: "Meet dial-in number for Twilio" })),
   pin: Type.Optional(Type.String({ description: "Meet phone PIN for Twilio" })),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
@@ -257,6 +275,28 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.create",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          respond(
+            true,
+            shouldJoinCreatedMeet(raw)
+              ? await createAndJoinMeetFromParams({
+                  config,
+                  runtime: api.runtime,
+                  raw,
+                  ensureRuntime,
+                })
+              : await createMeetFromParams({ config, runtime: api.runtime, raw }),
+          );
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.status",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -356,6 +396,18 @@ export default definePluginEntry({
                   dtmfSequence: normalizeOptionalString(raw.dtmfSequence),
                   message: normalizeOptionalString(raw.message),
                 }),
+              );
+            }
+            case "create": {
+              return json(
+                shouldJoinCreatedMeet(raw)
+                  ? await createAndJoinMeetFromParams({
+                      config,
+                      runtime: api.runtime,
+                      raw,
+                      ensureRuntime,
+                    })
+                  : await createMeetFromParams({ config, runtime: api.runtime, raw }),
               );
             }
             case "test_speech": {

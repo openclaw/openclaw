@@ -25,9 +25,15 @@ FROM e2e-runner AS deps
 
 COPY --chown=appuser:appuser package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY --chown=appuser:appuser ui/package.json ./ui/package.json
-COPY --chown=appuser:appuser extensions ./extensions
 COPY --chown=appuser:appuser patches ./patches
 COPY --chown=appuser:appuser scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
+RUN --mount=type=bind,source=extensions,target=/tmp/extensions,readonly \
+    find /tmp/extensions -mindepth 2 -maxdepth 2 -name package.json -print | \
+    while IFS= read -r manifest; do \
+      dest="${manifest#/tmp/}"; \
+      mkdir -p "$(dirname "$dest")"; \
+      cp "$manifest" "$dest"; \
+    done
 
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/home/appuser/.local/share/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile
@@ -42,7 +48,7 @@ COPY --chown=appuser:appuser docs ./docs
 COPY --chown=appuser:appuser packages ./packages
 COPY --chown=appuser:appuser skills ./skills
 COPY --chown=appuser:appuser ui ./ui
-COPY --chown=appuser:appuser extensions ./extensions
+COPY --link --chown=appuser:appuser extensions ./extensions
 COPY --chown=appuser:appuser vendor/a2ui/renderers/lit ./vendor/a2ui/renderers/lit
 COPY --chown=appuser:appuser apps/shared/OpenClawKit/Sources/OpenClawKit/Resources ./apps/shared/OpenClawKit/Sources/OpenClawKit/Resources
 COPY --chown=appuser:appuser apps/shared/OpenClawKit/Tools/CanvasA2UI ./apps/shared/OpenClawKit/Tools/CanvasA2UI

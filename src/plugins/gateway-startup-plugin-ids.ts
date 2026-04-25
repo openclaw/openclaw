@@ -52,9 +52,11 @@ function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
     plugin.cliBackends.length > 0 ||
     plugin.contracts?.speechProviders?.length ||
     plugin.contracts?.mediaUnderstandingProviders?.length ||
+    plugin.contracts?.documentExtractors?.length ||
     plugin.contracts?.imageGenerationProviders?.length ||
     plugin.contracts?.videoGenerationProviders?.length ||
     plugin.contracts?.musicGenerationProviders?.length ||
+    plugin.contracts?.webContentExtractors?.length ||
     plugin.contracts?.webFetchProviders?.length ||
     plugin.contracts?.webSearchProviders?.length ||
     plugin.contracts?.memoryEmbeddingProviders?.length ||

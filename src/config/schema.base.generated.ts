@@ -233,6 +233,58 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
               },
+              captureContent: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                        title: "OpenTelemetry Content Capture Enabled",
+                        description:
+                          "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+                      },
+                      inputMessages: {
+                        type: "boolean",
+                        title: "OpenTelemetry Input Messages Capture",
+                        description:
+                          "Capture model input message text on OTEL spans when content capture is enabled.",
+                      },
+                      outputMessages: {
+                        type: "boolean",
+                        title: "OpenTelemetry Output Messages Capture",
+                        description:
+                          "Capture model output message text on OTEL spans when content capture is enabled.",
+                      },
+                      toolInputs: {
+                        type: "boolean",
+                        title: "OpenTelemetry Tool Inputs Capture",
+                        description:
+                          "Capture tool input text on OTEL spans when content capture is enabled.",
+                      },
+                      toolOutputs: {
+                        type: "boolean",
+                        title: "OpenTelemetry Tool Outputs Capture",
+                        description:
+                          "Capture tool output text on OTEL spans when content capture is enabled.",
+                      },
+                      systemPrompt: {
+                        type: "boolean",
+                        title: "OpenTelemetry System Prompt Capture",
+                        description:
+                          "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+                title: "OpenTelemetry Content Capture",
+                description:
+                  "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+              },
             },
             additionalProperties: false,
             title: "OpenTelemetry",
@@ -691,6 +743,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Browser Profile Driver",
                   description:
                     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+                },
+                headless: {
+                  type: "boolean",
+                  title: "Browser Profile Headless Mode",
+                  description:
+                    "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
                 },
                 attachOnly: {
                   type: "boolean",
@@ -3029,22 +3087,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   runtime: {
                     type: "string",
-                    title: "Default Embedded Harness Runtime",
+                    title: "Default Agent Runtime",
                     description:
-                      "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+                      "Embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime uses built-in OpenClaw Pi.",
                   },
                   fallback: {
                     type: "string",
                     enum: ["pi", "none"],
                     title: "Default Embedded Harness Fallback",
                     description:
-                      "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+                      "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
                   },
                 },
                 additionalProperties: false,
-                title: "Default Embedded Harness",
+                title: "Default Agent Runtime Settings",
                 description:
-                  "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+                  "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
               },
               model: {
                 anyOf: [
@@ -5784,22 +5842,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   properties: {
                     runtime: {
                       type: "string",
-                      title: "Agent Embedded Harness Runtime",
+                      title: "Agent Runtime",
                       description:
-                        "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+                        "Per-agent embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime inherits the default OpenClaw Pi behavior.",
                     },
                     fallback: {
                       type: "string",
                       enum: ["pi", "none"],
                       title: "Agent Embedded Harness Fallback",
                       description:
-                        "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+                        "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
                     },
                   },
                   additionalProperties: false,
                   title: "Agent Embedded Harness",
                   description:
-                    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+                    "Per-agent embedded harness policy override. Use runtime=codex to force Codex for one agent while defaults stay in auto mode.",
                 },
                 model: {
                   anyOf: [
@@ -22705,6 +22763,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
                     },
+                    allowConversationAccess: {
+                      type: "boolean",
+                      title: "Allow Conversation Access Hooks",
+                      description:
+                        "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Plugin Hook Policy",
@@ -23380,6 +23444,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
       tags: ["observability", "performance"],
     },
+    "diagnostics.otel.captureContent": {
+      label: "OpenTelemetry Content Capture",
+      help: "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.enabled": {
+      label: "OpenTelemetry Content Capture Enabled",
+      help: "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.inputMessages": {
+      label: "OpenTelemetry Input Messages Capture",
+      help: "Capture model input message text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.outputMessages": {
+      label: "OpenTelemetry Output Messages Capture",
+      help: "Capture model output message text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.toolInputs": {
+      label: "OpenTelemetry Tool Inputs Capture",
+      help: "Capture tool input text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.toolOutputs": {
+      label: "OpenTelemetry Tool Outputs Capture",
+      help: "Capture tool output text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.systemPrompt": {
+      label: "OpenTelemetry System Prompt Capture",
+      help: "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
+      tags: ["observability"],
+    },
     "diagnostics.cacheTrace.enabled": {
       label: "Cache Trace Enabled",
       help: "Log cache trace snapshots for embedded agent runs (default: false).",
@@ -23496,18 +23595,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["performance"],
     },
     "agents.defaults.embeddedHarness": {
-      label: "Default Embedded Harness",
-      help: "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+      label: "Default Agent Runtime Settings",
+      help: "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedHarness.runtime": {
-      label: "Default Embedded Harness Runtime",
-      help: "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      label: "Default Agent Runtime",
+      help: "Embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime uses built-in OpenClaw Pi.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedHarness.fallback": {
       label: "Default Embedded Harness Fallback",
-      help: "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+      help: "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
       tags: ["reliability"],
     },
     "agents.list": {
@@ -23552,17 +23651,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.list.*.embeddedHarness": {
       label: "Agent Embedded Harness",
-      help: "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+      help: "Per-agent embedded harness policy override. Use runtime=codex to force Codex for one agent while defaults stay in auto mode.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.runtime": {
-      label: "Agent Embedded Harness Runtime",
-      help: "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      label: "Agent Runtime",
+      help: "Per-agent embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime inherits the default OpenClaw Pi behavior.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.fallback": {
       label: "Agent Embedded Harness Fallback",
-      help: "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+      help: "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
       tags: ["reliability"],
     },
     "gateway.port": {
@@ -23855,6 +23954,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.profiles.*.driver": {
       label: "Browser Profile Driver",
       help: 'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+      tags: ["storage"],
+    },
+    "browser.profiles.*.headless": {
+      label: "Browser Profile Headless Mode",
+      help: "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
       tags: ["storage"],
     },
     "browser.profiles.*.attachOnly": {
@@ -27240,6 +27344,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Hook Policy",
       help: "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
       tags: ["advanced"],
+    },
+    "plugins.entries.*.hooks.allowConversationAccess": {
+      label: "Allow Conversation Access Hooks",
+      help: "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+      tags: ["access"],
     },
     "plugins.entries.*.hooks.allowPromptInjection": {
       label: "Allow Prompt Injection Hooks",

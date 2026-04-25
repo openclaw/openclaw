@@ -7,6 +7,10 @@ import {
 } from "../../media-understanding/defaults.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
   describeImageWithModel,
@@ -404,17 +408,16 @@ export function createImageTool(options?: {
           throw new Error("image required (empty string in array)");
         }
 
+        const normalizedRef = normalizeMediaReferenceSource(imageRaw);
+
         // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
         // agent/model contexts, images can be referenced as pseudo-URIs like
         // `image:0` (e.g. "first image in the prompt"). We don't have access to a
         // shared image registry here, so fail gracefully instead of attempting to
         // `fs.readFile("image:0")` and producing a noisy ENOENT.
-        const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
-        const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
-        const isFileUrl = /^file:/i.test(imageRaw);
-        const isHttpUrl = /^https?:\/\//i.test(imageRaw);
-        const isDataUrl = /^data:/i.test(imageRaw);
-        if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
+        const refInfo = classifyMediaReferenceSource(normalizedRef);
+        const { isDataUrl, isFileUrl, isHttpUrl } = refInfo;
+        if (refInfo.hasUnsupportedScheme) {
           return {
             content: [
               {
@@ -435,10 +438,10 @@ export function createImageTool(options?: {
 
         const resolvedImage = (() => {
           if (sandboxConfig) {
-            return imageRaw;
+            return normalizedRef;
           }
-          if (imageRaw.startsWith("~")) {
-            return resolveUserPath(imageRaw);
+          if (normalizedRef.startsWith("~")) {
+            return resolveUserPath(normalizedRef);
           }
           // Resolve relative paths against workspaceDir so agents can reference
           // workspace-relative paths (e.g. "inbox/photo.png") without needing to
@@ -447,13 +450,13 @@ export function createImageTool(options?: {
             !isDataUrl &&
             !isFileUrl &&
             !isHttpUrl &&
-            !looksLikeWindowsDrivePath &&
-            !isAbsolute(imageRaw) &&
+            !refInfo.looksLikeWindowsDrivePath &&
+            !isAbsolute(normalizedRef) &&
             options?.workspaceDir
           ) {
-            return resolve(options.workspaceDir, imageRaw);
+            return resolve(options.workspaceDir, normalizedRef);
           }
-          return imageRaw;
+          return normalizedRef;
         })();
         const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
           ? { resolved: "" }
