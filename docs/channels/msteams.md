@@ -7,8 +7,6 @@ title: "Microsoft Teams"
 
 # Microsoft Teams
 
-> "Abandon all hope, ye who enter here."
-
 Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
 ## Bundled plugin
@@ -43,7 +41,11 @@ teams login
 teams status   # verify you're logged in and see your tenant info
 ```
 
+> **Note:** The Teams CLI is currently in preview. Commands and flags may change between releases.
+
 **2. Start a tunnel** (Teams can't reach localhost)
+
+Install and authenticate the devtunnel CLI if you haven't already ([getting started guide](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/get-started)).
 
 ```bash
 # One-time setup (persistent URL across sessions):
@@ -54,6 +56,8 @@ devtunnel port create my-openclaw-bot -p 3978 --protocol auto
 devtunnel host my-openclaw-bot
 # Your endpoint: https://<tunnel-id>.devtunnels.ms/api/messages
 ```
+
+> **Note:** `--allow-anonymous` is required because Teams can't authenticate with devtunnels. Each incoming bot request is still validated by the Teams SDK automatically.
 
 Alternatives: `ngrok http 3978` or `tailscale funnel 3978` (but these may change URLs each session).
 
@@ -72,6 +76,8 @@ This single command:
 - Builds and uploads a Teams app manifest (with icons)
 - Registers the bot (Teams-managed by default — no Azure subscription needed)
 - Writes `CLIENT_ID`, `CLIENT_SECRET`, and `TENANT_ID` to your `.teams_env` file
+
+The output will show a **Teams App ID** — note this for later steps. It also offers to install the app in Teams directly.
 
 **4. Configure OpenClaw** using the credentials from `.teams_env`:
 
@@ -93,9 +99,10 @@ Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`,
 
 **5. Install the app in Teams**
 
+Select "Install in Teams" from the prompt after creation, or install later:
+
 ```bash
 teams app get <teamsAppId> --install-link
-# Open the link in your browser to install
 ```
 
 **6. Verify everything works**
