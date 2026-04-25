@@ -109,7 +109,10 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
   bootstrapPromptWarningSignature?: string;
-  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+  execOverrides?: Pick<
+    ExecToolDefaults,
+    "host" | "security" | "ask" | "node" | "notifyOnExit" | "notifyOnExitEmptySuccess"
+  >;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
   runId: string;
