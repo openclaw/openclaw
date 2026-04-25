@@ -8,10 +8,30 @@ import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandb
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
+const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
+const browserControlAuthMock = vi.hoisted(() => ({
+  ensureBrowserControlAuth: vi.fn(async () => ({ auth: { token: "test-browser-token" } })),
+  resolveBrowserControlAuth: vi.fn(() => ({ token: "test-browser-token" })),
+}));
+const browserProfilesMock = vi.hoisted(() => ({
+  DEFAULT_BROWSER_EVALUATE_ENABLED: true,
+  resolveBrowserConfig: vi.fn(() => ({
+    evaluateEnabled: true,
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+  })),
+}));
 
 vi.mock("./sandbox/registry.js", () => ({
   updateRegistry: updateRegistryMock,
 }));
+
+vi.mock("./sandbox/browser.js", () => ({
+  ensureSandboxBrowser: ensureSandboxBrowserMock,
+}));
+
+vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
+
+vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
 vi.mock("../infra/skills-remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
@@ -167,6 +187,60 @@ describe("resolveSandboxContext", () => {
       expect(result?.runtimeId).toBe("test-runtime");
       expect(result?.containerName).toBe("test-runtime");
       expect(result?.backend?.id).toBe("test-backend");
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
+  it("passes the resolved browser SSRF policy to sandbox browser setup", async () => {
+    ensureSandboxBrowserMock.mockClear();
+    const restore = registerSandboxBackend("test-browser-backend", async () => ({
+      id: "test-browser-backend",
+      runtimeId: "test-browser-runtime",
+      runtimeLabel: "Test Browser Runtime",
+      workdir: "/workspace",
+      capabilities: { browser: true },
+      buildExecSpec: async () => ({
+        argv: ["test-browser-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed",
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    try {
+      const cfg: OpenClawConfig = {
+        browser: {
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+        },
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-browser-backend",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+              browser: { enabled: true },
+            },
+          },
+        },
+      };
+
+      await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:worker:browser",
+        workspaceDir: "/tmp/openclaw-test",
+      });
+
+      expect(ensureSandboxBrowserMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+        }),
+      );
     } finally {
       restore();
     }
