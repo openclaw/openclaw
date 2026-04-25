@@ -423,6 +423,53 @@ describe("gateway hot reload", () => {
     );
   }
 
+  it("defers channel hot reload until active work drains", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      hoisted.providerManager.stopChannel.mockClear();
+      hoisted.providerManager.startChannel.mockClear();
+      hoisted.activeEmbeddedRunCount.value = 1;
+      vi.useFakeTimers();
+      try {
+        const reloadPromise = onHotReload?.(
+          {
+            changedPaths: ["channels.discord.token"],
+            restartGateway: false,
+            restartReasons: [],
+            hotReasons: ["channels.discord.token"],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartChannels: new Set(["discord"]),
+            noopPaths: [],
+          },
+          {
+            gateway: { reload: { deferralTimeoutMs: 60_000 } },
+            channels: { discord: { token: "token" } },
+          },
+        );
+
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(500);
+        expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
+        expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
+
+        hoisted.activeEmbeddedRunCount.value = 0;
+        await vi.advanceTimersByTimeAsync(500);
+        await reloadPromise;
+      } finally {
+        vi.useRealTimers();
+        hoisted.activeEmbeddedRunCount.value = 0;
+      }
+
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
+    });
+  });
+
   it("applies hot reload actions and emits restart signal", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
