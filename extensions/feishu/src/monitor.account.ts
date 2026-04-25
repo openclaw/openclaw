@@ -156,7 +156,9 @@ export async function resolveReactionSyntheticEvent(
 }
 
 function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
-  return value === "group" || value === "private" || value === "p2p" ? value : undefined;
+  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
+    ? value
+    : undefined;
 }
 
 type RegisterEventHandlersContext = {
