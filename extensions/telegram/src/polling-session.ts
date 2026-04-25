@@ -234,7 +234,7 @@ export class TelegramPollingSession {
         runtime: this.opts.runtime,
         fn: () =>
           // Grammy's deleteWebhook type omits the signal parameter; cast needed.
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (bot.api.deleteWebhook as any)(
             { drop_pending_updates: false },
             telegramApiTimeoutSignal(startupBudgetMs),
@@ -287,7 +287,7 @@ export class TelegramPollingSession {
         runtime: this.opts.runtime,
         fn: () =>
           // Grammy's deleteWebhook type omits the signal parameter; cast needed.
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (bot.api.deleteWebhook as any)(
             { drop_pending_updates: false },
             telegramApiTimeoutSignal(BACKGROUND_WEBHOOK_CLEANUP_TIMEOUT_MS),
