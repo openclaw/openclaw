@@ -78,7 +78,6 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
-  /** Called after normalization but before deliver. Return null to cancel or a modified payload. */
   beforeDeliver?: ReplyDispatchBeforeDeliver;
 };
 
@@ -259,7 +258,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           deliverPayload = await options.beforeDeliver(normalized, { kind });
           if (!deliverPayload) {
             cancelledCounts[kind] += 1;
-            queuedCounts[kind] -= 1;
             return;
           }
         }

@@ -761,7 +761,6 @@ export const dispatchTelegramMessage = async ({
         cfg,
         dispatcherOptions: {
           ...replyPipeline,
-          // Telegram delivery already runs message_sending in deliverReplies().
           beforeDeliver: async (payload) => payload,
           deliver: async (payload, info) => {
             if (isDispatchSuperseded()) {
