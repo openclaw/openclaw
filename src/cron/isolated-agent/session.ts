@@ -5,6 +5,7 @@ import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
+import { archiveRemovedSessionTranscripts } from "../../config/sessions/store.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -88,4 +89,68 @@ export function resolveCronSession(params: {
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };
+}
+
+/**
+ * Snapshot of a prior session entry's identity at the time a rotation is
+ * about to happen, for feeding into `archivePriorIsolatedEntryAfterRotation`
+ * once the rotation is persisted.
+ */
+export type PriorIsolatedEntryForArchival = {
+  sessionId: string;
+  sessionFile?: string;
+};
+
+/**
+ * Snapshot the prior entry's sessionId + sessionFile so the transcript can be
+ * archived after rotation. Call BEFORE writing the new entry — once the store
+ * is overwritten, the prior identity is gone. Returns undefined when there's
+ * no rotation (non-`isNewSession` or no prior entry), making archival a no-op.
+ */
+export function capturePriorIsolatedEntryForArchival(params: {
+  store: Record<string, SessionEntry>;
+  sessionKey: string;
+  isNewSession: boolean;
+}): PriorIsolatedEntryForArchival | undefined {
+  if (!params.isNewSession) {
+    return undefined;
+  }
+  const prior = params.store[params.sessionKey];
+  if (!prior?.sessionId) {
+    return undefined;
+  }
+  return { sessionId: prior.sessionId, sessionFile: prior.sessionFile };
+}
+
+/**
+ * Rename the captured prior transcript to `<file>.reset.<ts>`. Call AFTER
+ * the new entry is persisted: `archiveRemovedSessionTranscripts` skips any
+ * sessionId still referenced in the store, so a post-update store ensures
+ * the prior file is archived only when genuinely orphaned. No-op on
+ * undefined. Uses `reason: "reset"` (retention via
+ * `maintenance.resetArchiveRetentionMs`) rather than `"deleted"` because
+ * the store entry persists — only the transcript is rolling. Errors are
+ * not caught; callers wrap in try/catch with their own logger.
+ */
+export async function archivePriorIsolatedEntryAfterRotation(params: {
+  priorEntryForArchival: PriorIsolatedEntryForArchival | undefined;
+  store: Record<string, SessionEntry>;
+  storePath: string;
+}): Promise<void> {
+  const prior = params.priorEntryForArchival;
+  if (!prior) {
+    return;
+  }
+  const referencedSessionIds = new Set(
+    Object.values(params.store)
+      .map((entry) => entry?.sessionId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  await archiveRemovedSessionTranscripts({
+    removedSessionFiles: new Map([[prior.sessionId, prior.sessionFile]]),
+    referencedSessionIds,
+    storePath: params.storePath,
+    reason: "reset",
+    restrictToStoreDir: true,
+  });
 }

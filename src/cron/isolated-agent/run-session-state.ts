@@ -1,7 +1,16 @@
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { resolveCronSession } from "./session.js";
+import {
+  archivePriorIsolatedEntryAfterRotation,
+  capturePriorIsolatedEntryForArchival,
+  type PriorIsolatedEntryForArchival,
+  type resolveCronSession,
+} from "./session.js";
+
+type PersistCronSessionLogger = {
+  warn: (message: string, context?: Record<string, unknown>) => void;
+};
 
 type MutableSessionStore = Record<string, SessionEntry>;
 
@@ -25,7 +34,20 @@ export function createPersistCronSessionEntry(params: {
   agentSessionKey: string;
   runSessionKey: string;
   updateSessionStore: UpdateSessionStore;
+  log?: PersistCronSessionLogger;
 }): PersistCronSessionEntry {
+  // Capture before persist. In the cron: prefix case (runSessionKey is
+  // `...:run:<id>`), the session-reaper only archives the run-key entry's
+  // file on retention — this is the only path that reaches the prior
+  // agentSessionKey transcript.
+  const priorEntryForArchival: PriorIsolatedEntryForArchival | undefined =
+    capturePriorIsolatedEntryForArchival({
+      store: params.cronSession.store,
+      sessionKey: params.agentSessionKey,
+      isNewSession: params.cronSession.isNewSession,
+    });
+  let archivedPrior = false;
+
   return async () => {
     if (params.isFastTestEnv) {
       return;
@@ -40,6 +62,25 @@ export function createPersistCronSessionEntry(params: {
         store[params.runSessionKey] = params.cronSession.sessionEntry;
       }
     });
+
+    // Once-flag: persist is called multiple times per run (pre-run, skills
+    // refresh, finalize); only the first call should attempt the archive.
+    if (!archivedPrior) {
+      archivedPrior = true;
+      try {
+        await archivePriorIsolatedEntryAfterRotation({
+          priorEntryForArchival,
+          store: params.cronSession.store,
+          storePath: params.cronSession.storePath,
+        });
+      } catch (err) {
+        params.log?.warn("cron: failed to archive rotated isolated session transcript", {
+          err: String(err),
+          agentSessionKey: params.agentSessionKey,
+          priorSessionId: priorEntryForArchival?.sessionId,
+        });
+      }
+    }
   };
 }
 
