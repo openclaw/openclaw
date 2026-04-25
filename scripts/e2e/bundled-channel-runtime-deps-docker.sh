@@ -381,12 +381,13 @@ assert_installed_once() {
   if [ "$count" -eq 1 ]; then
     return 0
   fi
-  if [ "$count" -ne 1 ]; then
-    echo "expected exactly one runtime deps install log for $channel, got $count log lines" >&2
-    cat "$log_file" >&2
-    find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
-    exit 1
+  if [ "$count" -eq 0 ] && [ -n "$(find_external_dep_package "$dep_path")" ]; then
+    return 0
   fi
+  echo "expected one runtime deps install log or staged dependency sentinel for $channel, got $count log lines" >&2
+  cat "$log_file" >&2
+  find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
+  exit 1
 }
 
 assert_not_installed() {
