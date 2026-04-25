@@ -249,6 +249,10 @@ const TOOLING_TEST_TARGETS = new Map([
 ]);
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
+  ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
+  ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
   [
     "src/auto-reply/reply/dispatch-from-config.ts",
