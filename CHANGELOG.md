@@ -370,6 +370,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/status: report fresh Claude CLI native auth instead of stale stored `anthropic:claude-cli` profile expiry when local Claude credentials are current. Fixes #71256. Thanks @matthiasjanke.
 - Packaged installs: preserve package-root runtime dependencies and their exported subpaths when bundled plugin runtime mirrors fall back to copying shared chunks, fixing Windows npm updates that could fail to load copied `dist` modules.
 - Heartbeat: clamp oversized scheduler delays through the shared safe timer helper, preventing `every` values over Node's timeout cap from becoming a 1 ms crash loop. Fixes #71414. (#71478) Thanks @hclsys.
 - Agents/heartbeat: stop injecting the heartbeat system prompt into non-heartbeat runs, preventing ordinary user replies from being suppressed as `HEARTBEAT_OK` acknowledgments. Fixes #69079. (#69278) Thanks @stainlu.
