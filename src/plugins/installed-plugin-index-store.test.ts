@@ -27,7 +27,7 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 2,
+    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
     plugins: [
@@ -91,7 +91,7 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
 
     expect(resolveInstalledPluginIndexStorePath({ stateDir })).toBe(
-      path.join(stateDir, "plugins", "installed-index.json"),
+      path.join(stateDir, "plugins", "installs.json"),
     );
   });
 

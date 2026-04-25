@@ -62,8 +62,8 @@ const {
       )[value],
   ),
 }));
-const { loadPluginInstallRecordsSyncMock } = vi.hoisted(() => ({
-  loadPluginInstallRecordsSyncMock: vi.fn(() => ({})),
+const { loadInstalledPluginIndexInstallRecordsSyncMock } = vi.hoisted(() => ({
+  loadInstalledPluginIndexInstallRecordsSyncMock: vi.fn(() => ({})),
 }));
 let secretResolve: typeof import("./resolve.js");
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
@@ -105,13 +105,13 @@ vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
 }));
 
-vi.mock("../plugins/install-ledger-store.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/install-ledger-store.js")>(
-    "../plugins/install-ledger-store.js",
-  );
+vi.mock("../plugins/installed-plugin-index-records.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../plugins/installed-plugin-index-records.js")
+  >("../plugins/installed-plugin-index-records.js");
   return {
     ...actual,
-    loadPluginInstallRecordsSync: loadPluginInstallRecordsSyncMock,
+    loadInstalledPluginIndexInstallRecordsSync: loadInstalledPluginIndexInstallRecordsSyncMock,
   };
 });
 
@@ -335,8 +335,8 @@ describe("runtime web tools resolution", () => {
     resolveManifestContractOwnerPluginIdMock.mockClear();
     resolveManifestContractPluginIdsMock.mockClear();
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock.mockClear();
-    loadPluginInstallRecordsSyncMock.mockReset();
-    loadPluginInstallRecordsSyncMock.mockReturnValue({});
+    loadInstalledPluginIndexInstallRecordsSyncMock.mockReset();
+    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({});
   });
 
   afterEach(() => {
@@ -1089,8 +1089,8 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("uses runtime web search discovery when the managed plugin install ledger is populated", async () => {
-    loadPluginInstallRecordsSyncMock.mockReturnValue({
+  it("uses runtime web search discovery when the managed plugin index install records is populated", async () => {
+    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
       "external-search": {
         source: "npm",
         spec: "@openclaw/external-search",
@@ -1141,8 +1141,8 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("uses runtime web fetch discovery when the managed plugin install ledger is populated", async () => {
-    loadPluginInstallRecordsSyncMock.mockReturnValue({
+  it("uses runtime web fetch discovery when the managed plugin index install records is populated", async () => {
+    loadInstalledPluginIndexInstallRecordsSyncMock.mockReturnValue({
       "external-fetch": {
         source: "npm",
         spec: "@openclaw/external-fetch",

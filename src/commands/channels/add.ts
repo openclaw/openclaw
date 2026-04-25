@@ -10,8 +10,8 @@ import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import {
   PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../../plugins/install-ledger-store.js";
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -251,7 +251,7 @@ export async function channelsAddCommand(
       ? withoutPluginInstallRecords(nextConfig)
       : nextConfig;
     if (shouldMovePluginInstalls) {
-      await writePersistedPluginInstallLedger(nextConfig.plugins?.installs ?? {});
+      await writePersistedInstalledPluginIndexInstallRecords(nextConfig.plugins?.installs ?? {});
     }
     await replaceConfigFile({
       nextConfig: writtenConfig,
@@ -402,7 +402,7 @@ export async function channelsAddCommand(
     ? withoutPluginInstallRecords(nextConfig)
     : nextConfig;
   if (shouldMovePluginInstalls) {
-    await writePersistedPluginInstallLedger(nextConfig.plugins?.installs ?? {});
+    await writePersistedInstalledPluginIndexInstallRecords(nextConfig.plugins?.installs ?? {});
   }
   await replaceConfigFile({
     nextConfig: writtenConfig,

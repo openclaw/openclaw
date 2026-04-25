@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
-import { loadPluginInstallRecords } from "../plugins/install-ledger-store.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
@@ -421,7 +421,9 @@ export async function collectPluginsTrustFindings(params: {
     }
   }
 
-  const pluginInstalls = await loadPluginInstallRecords({ config: params.cfg });
+  const pluginInstalls = await loadInstalledPluginIndexInstallRecords({
+    stateDir: params.stateDir,
+  });
   const npmPluginInstalls = Object.entries(pluginInstalls).filter(
     ([, record]) => record?.source === "npm",
   );
@@ -431,12 +433,10 @@ export async function collectPluginsTrustFindings(params: {
       .map(([pluginId, record]) => `${pluginId} (${record.spec})`);
     if (unpinned.length > 0) {
       findings.push({
-        // Keep the legacy checkId stable for downstream audit consumers while
-        // plugin install metadata moves from config to the managed ledger.
-        checkId: "plugins.installs_unpinned_npm_specs",
+        checkId: "plugins.index_unpinned_npm_specs",
         severity: "warn",
-        title: "Plugin install ledger includes unpinned npm specs",
-        detail: `Unpinned plugin install ledger records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
+        title: "Plugin index includes unpinned npm specs",
+        detail: `Unpinned plugin index install records:\n${unpinned.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
       });
@@ -449,10 +449,10 @@ export async function collectPluginsTrustFindings(params: {
       .map(([pluginId]) => pluginId);
     if (missingIntegrity.length > 0) {
       findings.push({
-        checkId: "plugins.installs_missing_integrity",
+        checkId: "plugins.index_missing_integrity",
         severity: "warn",
-        title: "Plugin install ledger is missing integrity metadata",
-        detail: `Plugin install ledger records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
+        title: "Plugin index is missing integrity metadata",
+        detail: `Plugin index records missing integrity:\n${missingIntegrity.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Reinstall or update plugins to refresh install metadata with resolved integrity hashes.",
       });
@@ -475,9 +475,9 @@ export async function collectPluginsTrustFindings(params: {
     }
     if (pluginVersionDrift.length > 0) {
       findings.push({
-        checkId: "plugins.installs_version_drift",
+        checkId: "plugins.index_version_drift",
         severity: "warn",
-        title: "Plugin install ledger records drift from installed package versions",
+        title: "Plugin index records drift from installed package versions",
         detail: `Detected plugin install metadata drift:\n${pluginVersionDrift.map((entry) => `- ${entry}`).join("\n")}`,
         remediation:
           "Run `openclaw plugins update --all` (or reinstall affected plugins) to refresh install metadata.",

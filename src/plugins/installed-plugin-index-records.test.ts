@@ -3,24 +3,45 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginCandidate } from "./discovery.js";
 import {
-  loadPluginInstallRecords,
-  loadPluginInstallRecordsSync,
-  PLUGIN_INSTALL_LEDGER_WARNING,
-  readPersistedPluginInstallLedger,
+  loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+  readPersistedInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
   removePluginInstallRecordFromRecords,
-  resolvePluginInstallLedgerStorePath,
+  resolveInstalledPluginIndexRecordsStorePath,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "./install-ledger-store.js";
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "./installed-plugin-index-records.js";
 
 const tempDirs: string[] = [];
 
 function makeStateDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-ledger-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-index-records-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function createPluginCandidate(stateDir: string, pluginId: string): PluginCandidate {
+  const rootDir = path.join(stateDir, "plugins", pluginId);
+  fs.mkdirSync(rootDir, { recursive: true });
+  const source = path.join(rootDir, "index.ts");
+  fs.writeFileSync(source, "export function register() {}\n", "utf8");
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: pluginId,
+      configSchema: { type: "object" },
+    }),
+    "utf8",
+  );
+  return {
+    idHint: pluginId,
+    source,
+    rootDir,
+    origin: "global",
+  };
 }
 
 afterEach(() => {
@@ -29,11 +50,12 @@ afterEach(() => {
   }
 });
 
-describe("plugin install ledger store", () => {
+describe("plugin index install records store", () => {
   it("writes machine-managed install records outside config", async () => {
     const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "twitch");
 
-    await writePersistedPluginInstallLedger(
+    await writePersistedInstalledPluginIndexInstallRecords(
       {
         twitch: {
           source: "npm",
@@ -43,51 +65,52 @@ describe("plugin install ledger store", () => {
       },
       {
         stateDir,
+        candidates: [candidate],
         now: () => new Date(1777118400000),
       },
     );
 
-    const ledgerPath = resolvePluginInstallLedgerStorePath({ stateDir });
-    expect(ledgerPath).toBe(path.join(stateDir, "plugins", "installs.json"));
-    expect(JSON.parse(fs.readFileSync(ledgerPath, "utf8"))).toEqual({
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    expect(indexPath).toBe(path.join(stateDir, "plugins", "installs.json"));
+    expect(JSON.parse(fs.readFileSync(indexPath, "utf8"))).toMatchObject({
       version: 1,
-      warning: PLUGIN_INSTALL_LEDGER_WARNING,
-      updatedAtMs: 1777118400000,
-      records: {
-        twitch: {
-          source: "npm",
-          spec: "@openclaw/plugin-twitch@1.0.0",
-          installPath: "plugins/npm/@openclaw/plugin-twitch",
+      generatedAtMs: 1777118400000,
+      plugins: [
+        {
+          pluginId: "twitch",
+          installRecord: {
+            source: "npm",
+            spec: "@openclaw/plugin-twitch@1.0.0",
+            installPath: "plugins/npm/@openclaw/plugin-twitch",
+          },
         },
+      ],
+    });
+    await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
+      twitch: {
+        source: "npm",
+        spec: "@openclaw/plugin-twitch@1.0.0",
+        installPath: "plugins/npm/@openclaw/plugin-twitch",
       },
     });
   });
 
-  it("prefers persisted records over legacy config installs", async () => {
+  it("reads persisted records from the plugin index", async () => {
     const stateDir = makeStateDir();
-    await writePersistedPluginInstallLedger(
+    const candidate = createPluginCandidate(stateDir, "persisted");
+    await writePersistedInstalledPluginIndexInstallRecords(
       {
         persisted: {
           source: "npm",
           spec: "persisted@1.0.0",
         },
       },
-      { stateDir },
+      { stateDir, candidates: [candidate] },
     );
 
     await expect(
-      loadPluginInstallRecords({
+      loadInstalledPluginIndexInstallRecords({
         stateDir,
-        config: {
-          plugins: {
-            installs: {
-              legacy: {
-                source: "npm",
-                spec: "legacy@1.0.0",
-              },
-            },
-          },
-        },
       }),
     ).resolves.toEqual({
       persisted: {
@@ -97,29 +120,14 @@ describe("plugin install ledger store", () => {
     });
   });
 
-  it("falls back to legacy config installs when no ledger exists", () => {
+  it("returns an empty record map when no plugin index exists", () => {
     const stateDir = makeStateDir();
 
     expect(
-      loadPluginInstallRecordsSync({
+      loadInstalledPluginIndexInstallRecordsSync({
         stateDir,
-        config: {
-          plugins: {
-            installs: {
-              legacy: {
-                source: "path",
-                sourcePath: "./plugins/legacy",
-              },
-            },
-          },
-        },
       }),
-    ).toEqual({
-      legacy: {
-        source: "path",
-        sourcePath: "./plugins/legacy",
-      },
-    });
+    ).toEqual({});
   });
 
   it("updates and removes records without mutating caller state", async () => {
@@ -150,7 +158,7 @@ describe("plugin install ledger store", () => {
     expect(removePluginInstallRecordFromRecords(withInstall, "demo")).toEqual(records);
   });
 
-  it("strips legacy installs from config writes", () => {
+  it("strips transient install records from config writes", () => {
     expect(
       withoutPluginInstallRecords({
         plugins: {
@@ -171,28 +179,19 @@ describe("plugin install ledger store", () => {
     });
   });
 
-  it("ignores invalid persisted ledgers and falls back to config", async () => {
+  it("ignores invalid persisted plugin index files", async () => {
     const stateDir = makeStateDir();
     fs.mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
     fs.writeFileSync(
-      resolvePluginInstallLedgerStorePath({ stateDir }),
+      resolveInstalledPluginIndexRecordsStorePath({ stateDir }),
       JSON.stringify({ version: 999, records: {} }),
     );
 
-    await expect(readPersistedPluginInstallLedger({ stateDir })).resolves.toBeNull();
+    await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toBeNull();
     await expect(
-      loadPluginInstallRecords({
+      loadInstalledPluginIndexInstallRecords({
         stateDir,
-        config: {
-          plugins: {
-            installs: {
-              legacy: { source: "npm", spec: "legacy@1.0.0" },
-            },
-          },
-        },
       }),
-    ).resolves.toEqual({
-      legacy: { source: "npm", spec: "legacy@1.0.0" },
-    });
+    ).resolves.toEqual({});
   });
 });

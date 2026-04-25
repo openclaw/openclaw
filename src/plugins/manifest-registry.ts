@@ -16,7 +16,7 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
-import { loadPluginInstallRecordsSync } from "./install-ledger-store.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import {
   clearPluginManifestRegistryCache,
@@ -538,10 +538,7 @@ function matchesInstalledPluginRecord(params: {
   if (params.candidate.origin !== "global") {
     return false;
   }
-  const record = loadPluginInstallRecordsSync({
-    config: params.config,
-    env: params.env,
-  })[params.pluginId];
+  const record = loadInstalledPluginIndexInstallRecordsSync({ env: params.env })[params.pluginId];
   if (!record) {
     return false;
   }

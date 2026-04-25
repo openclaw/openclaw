@@ -9,13 +9,13 @@ import {
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
+import { installPluginFromNpmSpec } from "../plugins/install.js";
 import {
-  loadPluginInstallRecords,
+  loadInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../plugins/install-ledger-store.js";
-import { installPluginFromNpmSpec } from "../plugins/install.js";
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "../plugins/installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -146,8 +146,10 @@ async function persistOnboardingPluginInstallRecord(params: {
   cfg: OpenClawConfig;
   install: Parameters<typeof recordPluginInstallInRecords>[1];
 }) {
-  const records = await loadPluginInstallRecords({ config: params.cfg });
-  await writePersistedPluginInstallLedger(recordPluginInstallInRecords(records, params.install));
+  const records = await loadInstalledPluginIndexInstallRecords();
+  await writePersistedInstalledPluginIndexInstallRecords(
+    recordPluginInstallInRecords(records, params.install),
+  );
 }
 
 async function refreshRegistryAfterOnboardingPluginInstall(params: {

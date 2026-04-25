@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { loadPluginInstallRecordsSync } from "../plugins/install-ledger-store.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -128,10 +128,7 @@ async function hasCustomWebProviderPluginRisk(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<boolean> {
-  const installRecords = loadPluginInstallRecordsSync({
-    config: params.config,
-    env: params.env,
-  });
+  const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   if (Object.keys(installRecords).length > 0) {
     return true;
   }

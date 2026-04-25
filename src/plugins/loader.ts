@@ -63,7 +63,7 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { loadPluginInstallRecordsSync } from "./install-ledger-store.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlers,
   listPluginInteractiveHandlers,
@@ -1217,7 +1217,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const shouldInstallBundledRuntimeDeps = options.installBundledRuntimeDeps !== false;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
-  const installRecords = loadPluginInstallRecordsSync({ config: cfg, env });
+  const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: trustNormalized,
@@ -1930,10 +1930,7 @@ function buildProvenanceIndex(params: {
   }
 
   const installRules = new Map<string, InstallTrackingRule>();
-  const installs = loadPluginInstallRecordsSync({
-    config: params.config,
-    env: params.env,
-  });
+  const installs = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   for (const [pluginId, install] of Object.entries(installs)) {
     const rule: InstallTrackingRule = {
       trackedWithoutPaths: false,

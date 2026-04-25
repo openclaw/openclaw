@@ -9,8 +9,8 @@ import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import {
   PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../../plugins/install-ledger-store.js";
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -181,7 +181,7 @@ export async function channelsRemoveCommand(
     next.plugins?.installs && Object.keys(next.plugins.installs).length > 0,
   );
   if (shouldMovePluginInstalls) {
-    await writePersistedPluginInstallLedger(next.plugins?.installs ?? {});
+    await writePersistedInstalledPluginIndexInstallRecords(next.plugins?.installs ?? {});
     next = withoutPluginInstallRecords(next);
   }
   await replaceConfigFile({

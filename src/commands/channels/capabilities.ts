@@ -21,8 +21,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   PLUGIN_INSTALLS_CONFIG_PATH,
   withoutPluginInstallRecords,
-  writePersistedPluginInstallLedger,
-} from "../../plugins/install-ledger-store.js";
+  writePersistedInstalledPluginIndexInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -260,7 +260,7 @@ export async function channelsCapabilitiesCommand(
               cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
             );
             if (shouldMovePluginInstalls) {
-              await writePersistedPluginInstallLedger(cfg.plugins?.installs ?? {});
+              await writePersistedInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
               cfg = withoutPluginInstallRecords(cfg);
             }
             await replaceConfigFile({

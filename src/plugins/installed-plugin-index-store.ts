@@ -5,6 +5,7 @@ import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-f
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import {
   diffInstalledPluginIndexInvalidationReasons,
+  extractPluginInstallRecordsFromInstalledPluginIndex,
   INSTALLED_PLUGIN_INDEX_WARNING,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -16,7 +17,7 @@ import {
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 
-export const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installed-index.json");
+export const INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installs.json");
 
 export type InstalledPluginIndexStoreOptions = {
   env?: NodeJS.ProcessEnv;
@@ -157,7 +158,11 @@ export async function inspectPersistedInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndexStoreInspection> {
   const persisted = await readPersistedInstalledPluginIndex(params);
-  const current = loadInstalledPluginIndex(params);
+  const current = loadInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
   if (!persisted) {
     return {
       state: "missing",

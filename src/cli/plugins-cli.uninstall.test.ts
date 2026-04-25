@@ -12,7 +12,7 @@ import {
   runtimeLogs,
   uninstallPlugin,
   writeConfigFile,
-  writePersistedPluginInstallLedger,
+  writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
@@ -103,7 +103,7 @@ describe("plugins cli uninstall", () => {
         deleteFiles: false,
       }),
     );
-    expect(writePersistedPluginInstallLedger).toHaveBeenCalledWith({});
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({});
     expect(writeConfigFile).toHaveBeenCalledWith({
       plugins: {
         entries: {},

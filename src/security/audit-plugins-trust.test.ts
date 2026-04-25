@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
 
@@ -88,7 +91,6 @@ vi.mock("./audit-tool-policy.js", () => ({
 
 describe("security audit install metadata findings", () => {
   let fixtureRoot = "";
-  let sharedInstallMetadataStateDir = "";
   let caseId = 0;
 
   const makeTmpDir = async (label: string) => {
@@ -101,10 +103,50 @@ describe("security audit install metadata findings", () => {
     return await collectPluginsTrustFindings({ cfg, stateDir });
   };
 
+  const writePluginIndexInstallRecords = async (
+    stateDir: string,
+    records: Record<string, PluginInstallRecord>,
+  ) => {
+    const index: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "2026.4.25",
+      compatRegistryVersion: "compat",
+      migrationVersion: 1,
+      policyHash: "policy",
+      generatedAtMs: Date.now(),
+      plugins: Object.entries(records).map(([pluginId, installRecord]) => ({
+        pluginId,
+        installRecord,
+        manifestPath: path.join(stateDir, "extensions", pluginId, "openclaw.plugin.json"),
+        manifestHash: "manifest",
+        rootDir: path.join(stateDir, "extensions", pluginId),
+        origin: "global" as const,
+        enabled: true,
+        contributions: {
+          providers: [],
+          channels: [],
+          channelConfigs: [],
+          setupProviders: [],
+          cliBackends: [],
+          modelCatalogProviders: [],
+          commandAliases: [],
+          contracts: [],
+        },
+        startup: {
+          sidecar: true,
+          memory: false,
+          deferConfiguredChannelFullLoadUntilAfterListen: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      })),
+      diagnostics: [],
+    };
+    await writePersistedInstalledPluginIndex(index, { stateDir });
+  };
+
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-install-"));
-    sharedInstallMetadataStateDir = path.join(fixtureRoot, "shared-install-metadata-state");
-    await fs.mkdir(sharedInstallMetadataStateDir, { recursive: true });
   });
 
   afterAll(async () => {
@@ -122,17 +164,16 @@ describe("security audit install metadata findings", () => {
     }> = [
       {
         name: "warns on unpinned npm install specs and missing integrity metadata",
-        run: async () =>
-          runInstallMetadataAudit(
+        run: async () => {
+          const stateDir = await makeTmpDir("unpinned-plugin-index");
+          await writePluginIndexInstallRecords(stateDir, {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+            },
+          });
+          return runInstallMetadataAudit(
             {
-              plugins: {
-                installs: {
-                  "voice-call": {
-                    source: "npm",
-                    spec: "@openclaw/voice-call",
-                  },
-                },
-              },
               hooks: {
                 internal: {
                   installs: {
@@ -144,29 +185,29 @@ describe("security audit install metadata findings", () => {
                 },
               },
             },
-            sharedInstallMetadataStateDir,
-          ),
+            stateDir,
+          );
+        },
         expectedPresent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
+          "plugins.index_unpinned_npm_specs",
+          "plugins.index_missing_integrity",
           "hooks.installs_unpinned_npm_specs",
           "hooks.installs_missing_integrity",
         ],
       },
       {
         name: "does not warn on pinned npm install specs with integrity metadata",
-        run: async () =>
-          runInstallMetadataAudit(
+        run: async () => {
+          const stateDir = await makeTmpDir("pinned-plugin-index");
+          await writePluginIndexInstallRecords(stateDir, {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call@1.2.3",
+              integrity: "sha512-plugin",
+            },
+          });
+          return runInstallMetadataAudit(
             {
-              plugins: {
-                installs: {
-                  "voice-call": {
-                    source: "npm",
-                    spec: "@openclaw/voice-call@1.2.3",
-                    integrity: "sha512-plugin",
-                  },
-                },
-              },
               hooks: {
                 internal: {
                   installs: {
@@ -179,30 +220,30 @@ describe("security audit install metadata findings", () => {
                 },
               },
             },
-            sharedInstallMetadataStateDir,
-          ),
+            stateDir,
+          );
+        },
         expectedAbsent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
+          "plugins.index_unpinned_npm_specs",
+          "plugins.index_missing_integrity",
           "hooks.installs_unpinned_npm_specs",
           "hooks.installs_missing_integrity",
         ],
       },
       {
         name: "warns when install records drift from installed package versions",
-        run: async () =>
-          runInstallMetadataAudit(
+        run: async () => {
+          const stateDir = await makeTmpDir("drift-plugin-index");
+          await writePluginIndexInstallRecords(stateDir, {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call@1.2.3",
+              integrity: "sha512-plugin",
+              resolvedVersion: "1.2.3",
+            },
+          });
+          return runInstallMetadataAudit(
             {
-              plugins: {
-                installs: {
-                  "voice-call": {
-                    source: "npm",
-                    spec: "@openclaw/voice-call@1.2.3",
-                    integrity: "sha512-plugin",
-                    resolvedVersion: "1.2.3",
-                  },
-                },
-              },
               hooks: {
                 internal: {
                   installs: {
@@ -216,9 +257,10 @@ describe("security audit install metadata findings", () => {
                 },
               },
             },
-            sharedInstallMetadataStateDir,
-          ),
-        expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
+            stateDir,
+          );
+        },
+        expectedPresent: ["plugins.index_version_drift", "hooks.installs_version_drift"],
       },
     ];
 

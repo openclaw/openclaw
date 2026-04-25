@@ -148,12 +148,15 @@ vi.mock("../plugins/update.js", () => ({
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
 }));
 
-vi.mock("../plugins/install-ledger-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/install-ledger-store.js")>();
+vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>();
   return {
     ...actual,
-    loadPluginInstallRecords: vi.fn(async ({ config }) => config?.plugins?.installs ?? {}),
-    writePersistedPluginInstallLedger: vi.fn(async () => undefined),
+    loadInstalledPluginIndexInstallRecords: vi.fn(
+      async ({ config }) => config?.plugins?.installs ?? {},
+    ),
+    writePersistedInstalledPluginIndexInstallRecords: vi.fn(async () => undefined),
   };
 });
 

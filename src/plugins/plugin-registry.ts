@@ -11,6 +11,7 @@ import {
 } from "./installed-plugin-index-store.js";
 import {
   getInstalledPluginRecord,
+  extractPluginInstallRecordsFromInstalledPluginIndex,
   isInstalledPluginEnabled,
   listInstalledPluginContributionIds,
   listInstalledPluginRecords,
@@ -200,7 +201,14 @@ export function loadPluginRegistrySnapshotWithMetadata(
   }
 
   return {
-    snapshot: loadInstalledPluginIndex(params),
+    snapshot: loadInstalledPluginIndex({
+      ...params,
+      installRecords:
+        params.installRecords ??
+        extractPluginInstallRecordsFromInstalledPluginIndex(
+          persistedReadsEnabled ? readPersistedInstalledPluginIndexSync(params) : null,
+        ),
+    }),
     source: "derived",
     diagnostics,
   };
