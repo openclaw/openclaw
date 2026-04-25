@@ -175,6 +175,35 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
+  it("keeps agent and command bodies independently overridable", () => {
+    const ctx = buildWhatsAppInboundContext({
+      bodyForAgent: "spoken transcript",
+      combinedBody: "spoken transcript",
+      commandBody: "<media:audio>",
+      conversationId: "+1000",
+      msg: makeMsg({
+        body: "<media:audio>",
+        mediaPath: "/tmp/voice.ogg",
+        mediaType: "audio/ogg; codecs=opus",
+      }),
+      rawBody: "<media:audio>",
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+      transcript: "spoken transcript",
+    });
+
+    expect(ctx).toMatchObject({
+      Body: "spoken transcript",
+      BodyForAgent: "spoken transcript",
+      BodyForCommands: "<media:audio>",
+      CommandBody: "<media:audio>",
+      RawBody: "<media:audio>",
+      Transcript: "spoken transcript",
+    });
+  });
+
   it("falls back SenderId to SenderE164 when sender id is missing", () => {
     const ctx = buildWhatsAppInboundContext({
       combinedBody: "hi",
