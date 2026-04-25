@@ -173,6 +173,23 @@ describe("custom theme import helpers", () => {
         themeId: "cmlhfpjhw000004l4f4ax3m7z",
       }),
     ).toThrow("Unsupported tweakcn token");
+
+    payload.cssVars.light.background = 'image-set("https://example.com/pixel.png" 1x)';
+    expect(() =>
+      normalizeImportedCustomTheme(payload, {
+        sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+        themeId: "cmlhfpjhw000004l4f4ax3m7z",
+      }),
+    ).toThrow("Unsupported tweakcn token");
+
+    payload.cssVars.light.background = "oklch(0.98 0.01 120)";
+    payload.cssVars.theme["font-sans"] = "var(--attacker-font)";
+    expect(() =>
+      normalizeImportedCustomTheme(payload, {
+        sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+        themeId: "cmlhfpjhw000004l4f4ax3m7z",
+      }),
+    ).toThrow("Unsupported tweakcn token");
   });
 
   it("builds stable CSS blocks for custom dark and light themes", () => {

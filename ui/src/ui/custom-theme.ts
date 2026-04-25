@@ -11,6 +11,23 @@ const DEFAULT_FONT_BODY =
   '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const DEFAULT_MONO =
   '"JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace';
+const FORBIDDEN_CSS_VALUE_PARTS = [
+  "url(",
+  "image(",
+  "image-set(",
+  "-webkit-image-set(",
+  "cross-fade(",
+  "element(",
+  "-moz-element(",
+  "paint(",
+  "@import",
+  "expression(",
+] as const;
+const SAFE_COLOR_KEYWORDS = new Set(["black", "white", "transparent", "currentcolor"]);
+const SAFE_COLOR_FUNCTION_PATTERN =
+  /^(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch)\([a-z0-9+\-.,/%\s]+\)$/i;
+const SAFE_HEX_COLOR_PATTERN = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const SAFE_FONT_FAMILY_PATTERN = /^[a-z0-9\s,'"._-]+(?:,\s*[a-z0-9\s'"._-]+)*$/i;
 
 const MODE_TOKEN_ORDER = [
   "bg",
@@ -170,14 +187,10 @@ function requireSafeCssValue(value: unknown, label: string) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   const lowered = normalized.toLowerCase();
-  if (
-    lowered.includes("url(") ||
-    lowered.includes("@import") ||
-    lowered.includes("expression(") ||
-    normalized.includes("/*") ||
-    normalized.includes("*/") ||
-    normalized.includes("\\")
-  ) {
+  if (FORBIDDEN_CSS_VALUE_PARTS.some((part) => lowered.includes(part))) {
+    throw new Error(`Unsupported tweakcn token: ${label}`);
+  }
+  if (normalized.includes("/*") || normalized.includes("*/") || normalized.includes("\\")) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   for (const char of normalized) {
@@ -198,6 +211,38 @@ function requireSafeCssValue(value: unknown, label: string) {
   return normalized;
 }
 
+function requireSafeExternalColorValue(value: unknown, label: string) {
+  const normalized = requireSafeCssValue(value, label);
+  const lowered = normalized.toLowerCase();
+  if (
+    SAFE_COLOR_KEYWORDS.has(lowered) ||
+    SAFE_HEX_COLOR_PATTERN.test(normalized) ||
+    SAFE_COLOR_FUNCTION_PATTERN.test(normalized)
+  ) {
+    return normalized;
+  }
+  throw new Error(`Unsupported tweakcn token: ${label}`);
+}
+
+function requireSafeFontFamilyValue(value: unknown, label: string) {
+  const normalized = requireSafeCssValue(value, label);
+  if (
+    normalized.includes("(") ||
+    normalized.includes(")") ||
+    !SAFE_FONT_FAMILY_PATTERN.test(normalized)
+  ) {
+    throw new Error(`Unsupported tweakcn token: ${label}`);
+  }
+  return normalized;
+}
+
+function requireSafeExternalModeValue(value: unknown, label: string) {
+  if (label === "font-sans" || label === "font-mono") {
+    return requireSafeFontFamilyValue(value, label);
+  }
+  return requireSafeExternalColorValue(value, label);
+}
+
 function makeTokenMap(entries: Array<[ModeTokenName, string]>): ThemeTokenMap {
   return Object.fromEntries(entries) as ThemeTokenMap;
 }
@@ -208,7 +253,10 @@ function normalizeStoredTokenMap(value: Record<string, string> | undefined): The
   }
   const entries: Array<[ModeTokenName, string]> = [];
   for (const key of MODE_TOKEN_ORDER) {
-    const normalized = requireSafeCssValue(value[key], key);
+    const normalized =
+      key === "font-body" || key === "font-display" || key === "mono"
+        ? requireSafeFontFamilyValue(value[key], key)
+        : requireSafeCssValue(value[key], key);
     entries.push([key, normalized]);
   }
   return makeTokenMap(entries);
@@ -222,14 +270,16 @@ function resolveModeVar(
 ) {
   const themeValue = normalizeOptionalString(theme[key]);
   if (themeValue) {
-    return requireSafeCssValue(themeValue, key);
+    return requireSafeExternalModeValue(themeValue, key);
   }
   const sharedValue = normalizeOptionalString(shared?.[key]);
   if (sharedValue) {
-    return requireSafeCssValue(sharedValue, key);
+    return requireSafeExternalModeValue(sharedValue, key);
   }
   if (fallback != null) {
-    return requireSafeCssValue(fallback, key);
+    return key === "font-sans" || key === "font-mono"
+      ? requireSafeFontFamilyValue(fallback, key)
+      : requireSafeCssValue(fallback, key);
   }
   throw new Error(`tweakcn theme is missing required token: ${key}`);
 }
