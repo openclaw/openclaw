@@ -363,12 +363,13 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4` for API-key access or `openai-codex/gpt-5.5` for Codex OAuth). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
-- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`).
+- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, `extra_body`/`extraBody`).
   - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
   - For direct OpenAI Responses models, server-side compaction is enabled automatically. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the threshold. See [OpenAI server-side compaction](/providers/openai#server-side-compaction-responses-api).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
+- `params.extra_body`/`params.extraBody`: advanced pass-through JSON merged into `api: "openai-completions"` request bodies for OpenAI-compatible proxies. If it collides with generated request keys, the extra body wins; non-native completions routes still strip OpenAI-only `store` afterward.
 - `embeddedHarness`: default low-level embedded agent runtime policy. Omitted runtime defaults to OpenClaw Pi. Use `runtime: "pi"` to force the built-in PI harness, `runtime: "auto"` to let registered plugin harnesses claim supported models, or a registered harness id such as `runtime: "codex"`. Set `fallback: "none"` to disable automatic PI fallback. Explicit plugin runtimes such as `codex` fail closed by default unless you set `fallback: "pi"` in the same override scope. Keep model refs canonical as `provider/model`; select Codex, Claude CLI, Gemini CLI, and other execution backends through runtime config instead of legacy runtime provider prefixes. See [Agent runtimes](/concepts/agent-runtimes) for how this differs from provider/model selection.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 4.
@@ -1257,27 +1258,29 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
       maxTextLength: 4000,
       timeoutMs: 30000,
       prefsPath: "~/.openclaw/settings/tts.json",
-      elevenlabs: {
-        apiKey: "elevenlabs_api_key",
-        baseUrl: "https://api.elevenlabs.io",
-        voiceId: "voice_id",
-        modelId: "eleven_multilingual_v2",
-        seed: 42,
-        applyTextNormalization: "auto",
-        languageCode: "en",
-        voiceSettings: {
-          stability: 0.5,
-          similarityBoost: 0.75,
-          style: 0.0,
-          useSpeakerBoost: true,
-          speed: 1.0,
+      providers: {
+        elevenlabs: {
+          apiKey: "elevenlabs_api_key",
+          baseUrl: "https://api.elevenlabs.io",
+          voiceId: "voice_id",
+          modelId: "eleven_multilingual_v2",
+          seed: 42,
+          applyTextNormalization: "auto",
+          languageCode: "en",
+          voiceSettings: {
+            stability: 0.5,
+            similarityBoost: 0.75,
+            style: 0.0,
+            useSpeakerBoost: true,
+            speed: 1.0,
+          },
         },
-      },
-      openai: {
-        apiKey: "openai_api_key",
-        baseUrl: "https://api.openai.com/v1",
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
+        openai: {
+          apiKey: "openai_api_key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
       },
     },
   },
@@ -1288,8 +1291,8 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
 - API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
-- `openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
-- When `openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
+- `providers.openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
+- When `providers.openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
 
 ---
 
