@@ -4,8 +4,10 @@ import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
+import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
+import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
@@ -32,6 +34,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authProfileIdSource?: "auto" | "user";
   provider: string;
   modelId: string;
+  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  agentHarnessId?: string;
+  /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
+  runtimePlan?: AgentRuntimePlan;
   model: Model<Api>;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
@@ -70,6 +76,9 @@ export type EmbeddedRunAttemptResult = {
         handled?: false;
       };
   sessionIdUsed: string;
+  diagnosticTrace?: DiagnosticTraceContext;
+  agentHarnessId?: string;
+  agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;

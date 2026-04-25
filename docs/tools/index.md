@@ -4,10 +4,8 @@ read_when:
   - You want to understand what tools OpenClaw provides
   - You need to configure, allow, or deny tools
   - You are deciding between built-in tools, skills, and plugins
-title: "Tools and Plugins"
+title: "Tools and plugins"
 ---
-
-# Tools and Plugins
 
 Everything the agent does beyond generating text happens through **tools**.
 Tools are how the agent reads files, runs commands, browses the web, sends
@@ -126,6 +124,12 @@ config. Deny always wins over allow.
   },
 }
 ```
+
+OpenClaw fails closed when an explicit allowlist resolves to no callable tools.
+For example, `tools.allow: ["query_db"]` only works if a loaded plugin actually
+registers `query_db`. If no built-in, plugin, or bundled MCP tool matches the
+allowlist, the run stops before the model call instead of continuing as a
+text-only run that could hallucinate tool results.
 
 ### Tool profiles
 

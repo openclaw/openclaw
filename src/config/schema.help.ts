@@ -282,6 +282,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+  "browser.profiles.*.headless":
+    "Per-profile headless override for locally launched browser instances. Use this when one profile should stay headless without forcing browser.headless for every other profile.",
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
@@ -548,6 +550,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
+  "diagnostics.otel.captureContent":
+    "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+  "diagnostics.otel.captureContent.enabled":
+    "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+  "diagnostics.otel.captureContent.inputMessages":
+    "Capture model input message text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.outputMessages":
+    "Capture model output message text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.toolInputs":
+    "Capture tool input text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.toolOutputs":
+    "Capture tool output text on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.systemPrompt":
+    "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":
@@ -958,6 +974,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets the maximum wait time for a full embedding batch operation in minutes (default: 60). Increase for very large corpora or slower providers, and lower it to fail fast in automation-heavy flows.",
   "agents.defaults.memorySearch.local.modelPath":
     "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
+  "agents.defaults.memorySearch.local.contextSize":
+    'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128\u2013512 tokens) while keeping non-weight VRAM bounded. Lower to 1024\u20132048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum \u2014 not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40\u202f960 tokens can push VRAM from ~8.8\u202fGB to ~32\u202fGB).',
   "agents.defaults.memorySearch.fallback":
     'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
   "agents.defaults.memorySearch.store.path":
@@ -1104,6 +1122,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":
     "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+  "plugins.entries.*.hooks.allowConversationAccess":
+    "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
   "plugins.entries.*.subagent":
     "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
   "plugins.entries.*.subagent.allowModelOverride":
@@ -1147,17 +1167,17 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.embeddedHarness":
-    "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+    "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
   "agents.defaults.embeddedHarness.runtime":
-    "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+    "Embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime uses built-in OpenClaw Pi.",
   "agents.defaults.embeddedHarness.fallback":
-    "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+    "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
   "agents.list.*.embeddedHarness":
-    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+    "Per-agent embedded harness policy override. Use runtime=codex to force Codex for one agent while defaults stay in auto mode.",
   "agents.list.*.embeddedHarness.runtime":
-    "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+    "Per-agent embedded harness runtime: pi, auto, or a registered plugin harness id such as codex. Omitted runtime inherits the default OpenClaw Pi behavior.",
   "agents.list.*.embeddedHarness.fallback":
-    "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+    "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
@@ -1256,8 +1276,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Registers native skill commands so users can invoke skills directly from provider command menus where supported. Keep aligned with your skill policy so exposed commands match what operators expect.",
   "commands.text":
     "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
-  "commands.modelsWrite":
-    "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
   "commands.bash":
     "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
   "commands.bashForegroundMs":

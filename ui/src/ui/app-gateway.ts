@@ -43,7 +43,12 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
-import { loadSessions, subscribeSessions, type SessionsState } from "./controllers/sessions.ts";
+import {
+  applySessionsChangedEvent,
+  loadSessions,
+  subscribeSessions,
+  type SessionsState,
+} from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
@@ -93,6 +98,7 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  pendingAbort?: { runId: string; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -296,6 +302,21 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void loadControlUiBootstrapConfig(
         host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
       );
+      // Process any pending abort from before the disconnect.
+      if (host.pendingAbort) {
+        const abort = host.pendingAbort;
+        host.pendingAbort = null;
+        void host.client
+          .request("chat.abort", {
+            sessionKey: abort.sessionKey,
+            runId: abort.runId,
+          })
+          .catch((err) => {
+            // Log to console for diagnostics; user sees no feedback for a stale abort
+            // since the run likely completed during the disconnect window anyway.
+            console.warn("[openclaw] pending abort failed:", err);
+          });
+      }
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;
@@ -466,6 +487,7 @@ function handleSessionMessageGatewayEvent(
   host: GatewayHost,
   payload: { sessionKey?: string } | undefined,
 ) {
+  applySessionsChangedEvent(host as unknown as SessionsState, payload);
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
   if (!sessionKey || sessionKey !== host.sessionKey) {
@@ -552,6 +574,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
+    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
     void loadSessions(host as unknown as SessionsState);
     return;
   }

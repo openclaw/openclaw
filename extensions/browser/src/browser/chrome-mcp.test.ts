@@ -408,6 +408,85 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(2);
   });
 
+  it("reconnects and retries list_pages once when Chrome MCP reports a stale selected page", async () => {
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      session.client.callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name !== "list_pages") {
+          throw new Error(`unexpected tool ${name}`);
+        }
+        if (factoryCalls === 1) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "The selected page has been closed. Call list_pages to see open pages.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+        };
+      }) as typeof session.client.callTool;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+
+    expect(factoryCalls).toBe(2);
+    expect(tabs).toEqual([
+      {
+        targetId: "1",
+        title: "",
+        url: "https://example.com",
+        type: "page",
+      },
+    ]);
+  });
+
+  it("clears cached sessions after repeated stale selected-page failures", async () => {
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      session.client.callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name !== "list_pages") {
+          throw new Error(`unexpected tool ${name}`);
+        }
+        if (factoryCalls <= 2) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "The selected page has been closed. Call list_pages to see open pages.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+        };
+      }) as typeof session.client.callTool;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(
+      /The selected page has been closed/,
+    );
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+
+    expect(factoryCalls).toBe(3);
+    expect(tabs).toHaveLength(1);
+  });
+
   it("always passes a default timeout to navigate_page when none is specified", async () => {
     const session = createFakeSession();
     setChromeMcpSessionFactoryForTest(async () => session);

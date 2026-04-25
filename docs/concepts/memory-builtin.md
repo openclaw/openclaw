@@ -1,12 +1,10 @@
 ---
-title: "Builtin Memory Engine"
 summary: "The default SQLite-based memory backend with keyword, vector, and hybrid search"
+title: "Builtin memory engine"
 read_when:
   - You want to understand the default memory backend
   - You want to configure embedding providers or hybrid search
 ---
-
-# Builtin Memory Engine
 
 The builtin engine is the default memory backend. It stores your memory index in
 a per-agent SQLite database and needs no extra dependencies to get started.
@@ -39,6 +37,25 @@ To set a provider explicitly:
 ```
 
 Without an embedding provider, only keyword search is available.
+
+To force the built-in local embedding provider, point `local.modelPath` at a
+GGUF file:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "local",
+        fallback: "none",
+        local: {
+          modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
+        },
+      },
+    },
+  },
+}
+```
 
 ## Supported embedding providers
 
@@ -91,6 +108,17 @@ automatic user modeling.
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
 detected, set one explicitly or add an API key.
 
+**Local provider not detected?** Confirm the local path exists and run:
+
+```bash
+openclaw memory status --deep --agent main
+openclaw memory index --force --agent main
+```
+
+Both standalone CLI commands and the Gateway use the same `local` provider id.
+If the provider is set to `auto`, local embeddings are considered first only
+when `memorySearch.local.modelPath` points to an existing local file.
+
 **Stale results?** Run `openclaw memory index --force` to rebuild. The watcher
 may miss changes in rare edge cases.
 
@@ -103,3 +131,9 @@ For embedding provider setup, hybrid search tuning (weights, MMR, temporal
 decay), batch indexing, multimodal memory, sqlite-vec, extra paths, and all
 other config knobs, see the
 [Memory configuration reference](/reference/memory-config).
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Active memory](/concepts/active-memory)

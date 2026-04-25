@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw cron` (schedule and run background jobs)"
 read_when:
   - You want scheduled jobs and wakeups
   - You’re debugging cron execution and logs
-title: "cron"
+title: "Cron"
 ---
 
 # `openclaw cron`
@@ -174,3 +174,8 @@ Failure-delivery note:
   delivery mode is `webhook`.
 - If you do not set any failure destination and the job already announces to a
   channel, failure notifications reuse that same announce target.
+
+## Related
+
+- [CLI reference](/cli)
+- [Scheduled tasks](/automation/cron-jobs)

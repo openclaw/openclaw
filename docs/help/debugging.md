@@ -7,8 +7,6 @@ read_when:
 title: "Debugging"
 ---
 
-# Debugging
-
 This page covers debugging helpers for streaming output, especially when a
 provider mixes reasoning into normal text.
 
@@ -323,3 +321,8 @@ Default file:
 - Raw stream logs can include full prompts, tool output, and user data.
 - Keep logs local and delete them after debugging.
 - If you share logs, scrub secrets and PII first.
+
+## Related
+
+- [Troubleshooting](/help/troubleshooting)
+- [FAQ](/help/faq)

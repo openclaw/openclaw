@@ -1,14 +1,12 @@
 ---
-title: "Building Channel Plugins"
-sidebarTitle: "Channel Plugins"
 summary: "Step-by-step guide to building a messaging channel plugin for OpenClaw"
+title: "Building channel plugins"
+sidebarTitle: "Channel Plugins"
 read_when:
   - You are building a new messaging channel plugin
   - You want to connect OpenClaw to a messaging platform
   - You need to understand the ChannelPlugin adapter surface
 ---
-
-# Building Channel Plugins
 
 This guide walks through building a channel plugin that connects OpenClaw to a
 messaging platform. By the end you will have a working channel with DM security,
@@ -324,9 +322,13 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
       "configSchema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-          "acme-chat": {
+        "properties": {}
+      },
+      "channelConfigs": {
+        "acme-chat": {
+          "schema": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "token": { "type": "string" },
               "allowFrom": {
@@ -334,12 +336,23 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
                 "items": { "type": "string" }
               }
             }
+          },
+          "uiHints": {
+            "token": {
+              "label": "Bot token",
+              "sensitive": true
+            }
           }
         }
       }
     }
     ```
     </CodeGroup>
+
+    `configSchema` validates `plugins.entries.acme-chat.config`. Use it for
+    plugin-owned settings that are not the channel account config. `channelConfigs`
+    validates `channels.acme-chat` and is the cold-path source used by config
+    schema, setup, and UI surfaces before the plugin runtime loads.
 
   </Step>
 
@@ -453,6 +466,14 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
 
       You can also pass raw adapter objects instead of the declarative options
       if you need full control.
+
+      Raw outbound adapters may define a `chunker(text, limit, ctx)` function.
+      The optional `ctx.formatting` carries delivery-time formatting decisions
+      such as `maxLinesPerMessage`; apply it before sending so reply threading
+      and chunk boundaries are resolved once by shared outbound delivery.
+      Send contexts also include `replyToIdSource` (`implicit` or `explicit`)
+      when a native reply target was resolved, so payload helpers can preserve
+      explicit reply tags without consuming an implicit single-use reply slot.
     </Accordion>
 
   </Step>
@@ -633,7 +654,7 @@ Write colocated tests in `src/channel.test.ts`:
   <Card title="Message tool integration" icon="puzzle" href="/plugins/architecture#channel-plugins-and-the-shared-message-tool">
     describeMessageTool and action discovery
   </Card>
-  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture#channel-target-resolution">
+  <Card title="Target resolution" icon="crosshair" href="/plugins/architecture-internals#channel-target-resolution">
     inferTargetChatType, looksLikeId, resolveTarget
   </Card>
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
@@ -654,3 +675,9 @@ surface unless you are maintaining that bundled plugin family directly.
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
 - [Plugin Manifest](/plugins/manifest) — full manifest schema
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Agent harness plugins](/plugins/sdk-agent-harness)

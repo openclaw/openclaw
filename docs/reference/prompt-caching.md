@@ -1,13 +1,11 @@
 ---
-title: "Prompt Caching"
 summary: "Prompt caching knobs, merge order, provider behavior, and tuning patterns"
+title: "Prompt caching"
 read_when:
   - You want to reduce prompt token costs with cache retention
   - You need per-agent cache behavior in multi-agent setups
   - You are tuning heartbeat and cache-ttl pruning together
 ---
-
-# Prompt caching
 
 Prompt caching means the model provider can reuse unchanged prompt prefixes (usually system/developer instructions and other stable context) across turns instead of re-processing them every time. OpenClaw normalizes provider usage into `cacheRead` and `cacheWrite` where the upstream API exposes those counters directly.
 
@@ -342,3 +340,8 @@ Related docs:
 - [Token Use and Costs](/reference/token-use)
 - [Session Pruning](/concepts/session-pruning)
 - [Gateway Configuration Reference](/gateway/configuration-reference)
+
+## Related
+
+- [Token use and costs](/reference/token-use)
+- [API usage and costs](/reference/api-usage-costs)

@@ -1,6 +1,6 @@
 ---
-title: "GPT-5.4 / Codex Agentic Parity"
 summary: "How OpenClaw closes agentic execution gaps for GPT-5.4 and Codex-style models"
+title: "GPT-5.4 / Codex agentic parity"
 read_when:
   - Debugging GPT-5.4 or Codex agent behavior
   - Comparing OpenClaw agentic behavior across frontier models
@@ -226,3 +226,7 @@ Keep the default contract when:
 - you want the existing looser behavior
 - you are not using GPT-5-family models
 - you are testing prompts rather than runtime enforcement
+
+## Related
+
+- [GPT-5.4 / Codex parity maintainer notes](/help/gpt54-codex-agentic-parity-maintainers)

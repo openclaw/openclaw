@@ -13,13 +13,14 @@
           "detailLabel": "WeCom",
           "docsPath": "/plugins/community#wecom",
           "docsLabel": "wecom",
-          "blurb": "Enterprise WeChat bot and conversation channel.",
+          "blurb": "Enterprise messaging and documents, scheduling, task tools.",
           "aliases": ["qywx", "wework", "enterprise-wechat"],
           "order": 45
         },
         "install": {
-          "npmSpec": "@wecom/wecom-openclaw-plugin",
-          "defaultChoice": "npm"
+          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.4.23",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ=="
         }
       }
     }

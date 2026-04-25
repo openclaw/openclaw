@@ -11,7 +11,11 @@ import type {
   ConfigWriteNotification,
   OpenClawConfig,
 } from "../config/config.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
@@ -171,6 +175,7 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   afterEach(() => {
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(emptyRegistry);
   });
 
@@ -209,6 +214,23 @@ describe("buildGatewayReloadPlan", () => {
     );
     expect(expected.size).toBeGreaterThan(0);
     expect(plan.restartChannels).toEqual(expected);
+  });
+
+  it("refreshes channel reload rules when only the tracked channel registry changes", () => {
+    const activeOnlyRegistry = createTestRegistry([]);
+    const channelOnlyRegistry = createTestRegistry([
+      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+    ]);
+
+    setActivePluginRegistry(activeOnlyRegistry);
+    const beforePinPlan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
+    expect(beforePinPlan.restartGateway).toBe(true);
+    expect(beforePinPlan.restartChannels).toEqual(new Set());
+
+    pinActivePluginChannelRegistry(channelOnlyRegistry);
+    const afterPinPlan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
+    expect(afterPinPlan.restartGateway).toBe(false);
+    expect(afterPinPlan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
   it("restarts heartbeat when model-related config changes", () => {

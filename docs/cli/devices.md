@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw devices` (device pairing + token rotation/
 read_when:
   - You are approving device pairing requests
   - You need to rotate or revoke device tokens
-title: "devices"
+title: "Devices"
 ---
 
 # `openclaw devices`
@@ -178,3 +178,8 @@ Related:
 
 - [Dashboard auth troubleshooting](/web/dashboard#if-you-see-unauthorized-1008)
 - [Gateway troubleshooting](/gateway/troubleshooting#dashboard-control-ui-connectivity)
+
+## Related
+
+- [CLI reference](/cli)
+- [Nodes](/nodes)

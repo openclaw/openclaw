@@ -3,7 +3,7 @@ summary: "Model providers (LLMs) supported by OpenClaw"
 read_when:
   - You want to choose a model provider
   - You need a quick overview of supported LLM backends
-title: "Provider Directory"
+title: "Provider directory"
 ---
 
 # Model Providers
@@ -40,6 +40,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
 - [GitHub Copilot](/providers/github-copilot)
+- [Gradium](/providers/gradium)
 - [GLM models](/providers/glm)
 - [Google (Gemini)](/providers/google)
 - [Groq (LPU inference)](/providers/groq)

@@ -6,8 +6,6 @@ read_when:
 title: "MiniMax"
 ---
 
-# MiniMax
-
 OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
 MiniMax also provides:
@@ -24,7 +22,7 @@ Provider split:
 | `minimax`        | API key | Text, image generation, image understanding, speech, web search |
 | `minimax-portal` | OAuth   | Text, image generation, image understanding                     |
 
-## Model lineup
+## Built-in catalog
 
 | Model                    | Type             | Description                              |
 | ------------------------ | ---------------- | ---------------------------------------- |
@@ -146,7 +144,7 @@ Choose your preferred auth method and follow the setup steps.
                 id: "MiniMax-M2.7",
                 name: "MiniMax M2.7",
                 reasoning: true,
-                input: ["text", "image"],
+                input: ["text"],
                 cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
                 contextWindow: 204800,
                 maxTokens: 131072,
@@ -155,7 +153,7 @@ Choose your preferred auth method and follow the setup steps.
                 id: "MiniMax-M2.7-highspeed",
                 name: "MiniMax M2.7 Highspeed",
                 reasoning: true,
-                input: ["text", "image"],
+                input: ["text"],
                 cost: { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 },
                 contextWindow: 204800,
                 maxTokens: 131072,
@@ -239,11 +237,8 @@ the bundled `minimax-portal` auth path instead.
 
 When onboarding or API-key setup writes explicit `models.providers.minimax`
 entries, OpenClaw materializes `MiniMax-M2.7` and
-`MiniMax-M2.7-highspeed` with `input: ["text", "image"]`.
-
-The built-in bundled MiniMax text catalog itself stays text-only metadata until
-that explicit provider config exists. Image understanding is exposed separately
-through the plugin-owned `MiniMax-VL-01` media provider.
+`MiniMax-M2.7-highspeed` as text-only chat models. Image understanding is
+exposed separately through the plugin-owned `MiniMax-VL-01` media provider.
 
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
@@ -400,8 +395,8 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   - OAuth setup: `minimax-portal/<model>`
 - Default chat model: `MiniMax-M2.7`
 - Alternate chat model: `MiniMax-M2.7-highspeed`
-- Onboarding and direct API-key setup write explicit model definitions with `input: ["text", "image"]` for both M2.7 variants
-- The bundled provider catalog currently exposes the chat refs as text-only metadata until explicit MiniMax provider config exists
+- Onboarding and direct API-key setup write text-only model definitions for both M2.7 variants
+- Image understanding uses the plugin-owned `MiniMax-VL-01` media provider
 - Update pricing values in `models.json` if you need exact cost tracking
 - Use `openclaw models list` to confirm the current provider id, then switch with `openclaw models set minimax/MiniMax-M2.7` or `openclaw models set minimax-portal/MiniMax-M2.7`
 

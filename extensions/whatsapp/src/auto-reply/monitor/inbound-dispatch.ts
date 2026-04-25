@@ -86,15 +86,19 @@ export function resolveWhatsAppResponsePrefix(params: {
 }
 
 export function buildWhatsAppInboundContext(params: {
+  bodyForAgent?: string;
   combinedBody: string;
+  commandBody?: string;
   commandAuthorized?: boolean;
   conversationId: string;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
   groupSystemPrompt?: string;
   msg: WebInboundMsg;
+  rawBody?: string;
   route: ReturnType<typeof resolveAgentRoute>;
   sender: SenderContext;
+  transcript?: string;
   replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
 }) {
@@ -109,10 +113,11 @@ export function buildWhatsAppInboundContext(params: {
 
   const result = finalizeInboundContext({
     Body: params.combinedBody,
-    BodyForAgent: params.msg.body,
+    BodyForAgent: params.bodyForAgent ?? params.msg.body,
     InboundHistory: inboundHistory,
-    RawBody: params.msg.body,
-    CommandBody: params.msg.body,
+    RawBody: params.rawBody ?? params.msg.body,
+    CommandBody: params.commandBody ?? params.msg.body,
+    Transcript: params.transcript,
     From: params.msg.from,
     To: params.msg.to,
     SessionKey: params.route.sessionKey,
@@ -140,6 +145,7 @@ export function buildWhatsAppInboundContext(params: {
     ReplyThreading: params.replyThreading,
     WasMentioned: params.msg.wasMentioned,
     GroupSystemPrompt: params.groupSystemPrompt,
+    UntrustedStructuredContext: params.msg.untrustedStructuredContext,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",
     Surface: "whatsapp",
