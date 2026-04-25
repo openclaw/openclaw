@@ -516,6 +516,7 @@ describe("detectChangedScope", () => {
       detectNodeFastScope([
         ".github/workflows/ci.yml",
         "scripts/ci-changed-scope.mjs",
+        "src/commands/status.scan-result.test.ts",
         "src/scripts/ci-changed-scope.test.ts",
         "docs/ci.md",
       ]),
