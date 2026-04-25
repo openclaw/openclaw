@@ -745,7 +745,7 @@ describe("buildAgentSystemPrompt", () => {
       "Use lists and headings when they improve scanning or execution, not by default.",
     );
     expect(prompt).toContain(
-      "In conversational replies, prefer acting over asking for reassurance when the next safe step is already clear.",
+      "Continue until done or genuinely blocked; do not finish with a plan/promise when tools can move it forward.",
     );
   });
 
