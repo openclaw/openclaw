@@ -71,7 +71,6 @@ describe("tsdown config", () => {
         "plugin-sdk/compat",
         "plugin-sdk/index",
         bundledEntry("openai"),
-        bundledEntry("msteams"),
         "bundled/boot-md/handler",
       ]),
     );
@@ -88,6 +87,7 @@ describe("tsdown config", () => {
       true,
     );
     expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/discord")).toBe(true);
+    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/msteams")).toBe(true);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
