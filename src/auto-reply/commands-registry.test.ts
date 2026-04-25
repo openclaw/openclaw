@@ -494,6 +494,16 @@ describe("commands registry args", () => {
     expect(seenChoice?.argName).toBe("level");
     expect(seenChoice?.provider).toBeTruthy();
     expect(seenChoice?.model).toBeTruthy();
+
+    seen = null;
+    resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {} as never,
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+    expect(seen).toMatchObject({ provider: "anthropic", model: "claude-opus-4-7" });
   });
 
   it("does not show menus when args were provided as raw text only", () => {
