@@ -714,7 +714,7 @@ describe("image tool implicit imageModel config", () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCODE_API_KEY", "opencode-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
+        agents: { defaults: { model: { primary: "opencode-go/minimax-m2.7" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "opencode-go/kimi-k2.6",
