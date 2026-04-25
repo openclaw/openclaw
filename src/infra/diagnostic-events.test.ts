@@ -147,7 +147,24 @@ describe("diagnostic-events", () => {
     ]);
   });
 
-  it("does not expose mutable diagnostic state on a global symbol", async () => {
+  it("shares diagnostic state across duplicate module instances", async () => {
+    const events: string[] = [];
+    onDiagnosticEvent((event) => {
+      events.push(event.type);
+    });
+
+    vi.resetModules();
+    const specifier = "./diagnostic-events.js";
+    const duplicateModule = (await import(specifier)) as typeof import("./diagnostic-events.js");
+    duplicateModule.emitDiagnosticEvent({
+      type: "message.queued",
+      source: "plugin",
+    });
+
+    expect(events).toEqual(["message.queued"]);
+  });
+
+  it("does not expose mutable diagnostic state on the obsolete global symbol", async () => {
     const globalStore = globalThis as Record<PropertyKey, unknown>;
     const events: boolean[] = [];
     globalStore[Symbol.for("openclaw.diagnosticEventsState")] = {

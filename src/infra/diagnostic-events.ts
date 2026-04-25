@@ -404,14 +404,49 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "log.record",
 ]);
 
-const diagnosticEventsState: DiagnosticEventsGlobalState = {
-  enabled: true,
-  seq: 0,
-  listeners: new Set<DiagnosticEventListener>(),
-  dispatchDepth: 0,
-  asyncQueue: [],
-  asyncDrainScheduled: false,
-};
+const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
+
+function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
+  return {
+    enabled: true,
+    seq: 0,
+    listeners: new Set<DiagnosticEventListener>(),
+    dispatchDepth: 0,
+    asyncQueue: [],
+    asyncDrainScheduled: false,
+  };
+}
+
+function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGlobalState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<DiagnosticEventsGlobalState>;
+  return (
+    typeof candidate.enabled === "boolean" &&
+    typeof candidate.seq === "number" &&
+    candidate.listeners instanceof Set &&
+    typeof candidate.dispatchDepth === "number" &&
+    Array.isArray(candidate.asyncQueue) &&
+    typeof candidate.asyncDrainScheduled === "boolean"
+  );
+}
+
+const diagnosticEventsState: DiagnosticEventsGlobalState = (() => {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[DIAGNOSTIC_EVENTS_STATE_KEY];
+  if (isDiagnosticEventsState(existing)) {
+    return existing;
+  }
+  const created = createDiagnosticEventsState();
+  Object.defineProperty(globalStore, DIAGNOSTIC_EVENTS_STATE_KEY, {
+    configurable: true,
+    enumerable: false,
+    value: created,
+    writable: false,
+  });
+  return created;
+})();
 
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
   return diagnosticEventsState;
