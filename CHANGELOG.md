@@ -96,6 +96,7 @@ Docs: https://docs.openclaw.ai
 - Browser/startup: deduplicate concurrent lazy-start calls per profile so simultaneous browser tool requests no longer race into duplicate Chrome launches and `PortInUseError`. (#61772) Thanks @sukhdeepjohar.
 - Browser/profiles: recover from stale Chromium `Singleton*` profile locks after crashes or host moves by clearing dead/foreign locks and retrying launch once. Thanks @seanc-dev.
 - Browser/existing-session: keep Chrome MCP status probes transport-only and ephemeral, and retry stale cached Playwright attaches once so idle profile checks no longer poison the next real attach. (#57245) Thanks @josephbergvinson.
+- Cron/exec: suppress automatic background exec completion wakes only for silent cron jobs with `delivery.mode="none"` while keeping webhook and announce runs observable. (#71391) Thanks @goldmar.
 - Reply media: allow sandboxed replies to deliver OpenClaw-managed `media/outbound` and `media/tool-*` attachments without treating them as sandbox escapes, while keeping alias-escape checks on the managed media root. Fixes #71138. Thanks @mayor686, @truffle-dev, and @neeravmakwana.
 - CLI/agent: keep `openclaw agent --json` stdout reserved for the JSON response by routing gateway, plugin, and embedded-fallback diagnostics to stderr before execution starts. Fixes #71319.
 - Agents/Gemini: retry reasoning-only, empty, and planning-only Gemini turns instead of letting sessions silently stall. Fixes #71074. (#71362) Thanks @neeravmakwana.
