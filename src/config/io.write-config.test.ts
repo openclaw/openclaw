@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
@@ -98,6 +99,91 @@ describe("config io write", () => {
       homedir: () => home,
       logger: silentLogger,
     });
+
+  it("migrates shipped plugin install config records into the plugin index", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const pluginDir = path.join(home, ".openclaw", "plugins", "demo");
+      const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+      const source = path.join(pluginDir, "index.ts");
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.writeFile(source, "export function register() {}\n", "utf-8");
+      await fs.writeFile(
+        manifestPath,
+        `${JSON.stringify({ id: "demo", configSchema: { type: "object" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            plugins: {
+              entries: { demo: { enabled: true } },
+              installs: {
+                demo: {
+                  source: "npm",
+                  spec: "demo@1.0.0",
+                  installPath: pluginDir,
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      mockLoadPluginManifestRegistry.mockReturnValue({
+        diagnostics: [],
+        plugins: [
+          {
+            id: "demo",
+            origin: "global",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: pluginDir,
+            source,
+            manifestPath,
+            configSchema: {
+              type: "object",
+            },
+          },
+        ],
+      } satisfies PluginManifestRegistry);
+
+      const io = createFastConfigIO(home);
+      try {
+        const cfg = io.loadConfig();
+
+        expect(cfg.plugins?.installs).toBeUndefined();
+        await expect(
+          readPersistedInstalledPluginIndex({
+            stateDir: path.join(home, ".openclaw"),
+          }),
+        ).resolves.toMatchObject({
+          plugins: [
+            expect.objectContaining({
+              pluginId: "demo",
+              installRecord: {
+                source: "npm",
+                spec: "demo@1.0.0",
+                installPath: pluginDir,
+              },
+            }),
+          ],
+        });
+      } finally {
+        mockLoadPluginManifestRegistry.mockReturnValue({
+          diagnostics: [],
+          plugins: [],
+        } satisfies PluginManifestRegistry);
+      }
+    });
+  });
 
   const writeGatewayPortAndReadConfig = async (home: string, configPath: string) => {
     const io = createFastConfigIO(home);

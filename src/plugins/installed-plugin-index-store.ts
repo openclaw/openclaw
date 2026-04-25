@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { saveJsonFile } from "../infra/json-file.js";
 import { readJsonFile, readJsonFileSync, writeJsonAtomic } from "../infra/json-files.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import {
@@ -142,6 +143,15 @@ export async function writePersistedInstalledPluginIndex(
   return filePath;
 }
 
+export function writePersistedInstalledPluginIndexSync(
+  index: InstalledPluginIndex,
+  options: InstalledPluginIndexStoreOptions = {},
+): string {
+  const filePath = resolveInstalledPluginIndexStorePath(options);
+  saveJsonFile(filePath, { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING });
+  return filePath;
+}
+
 export async function inspectPersistedInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndexStoreInspection> {
@@ -174,5 +184,13 @@ export async function refreshPersistedInstalledPluginIndex(
 ): Promise<InstalledPluginIndex> {
   const index = refreshInstalledPluginIndex(params);
   await writePersistedInstalledPluginIndex(index, params);
+  return index;
+}
+
+export function refreshPersistedInstalledPluginIndexSync(
+  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
+): InstalledPluginIndex {
+  const index = refreshInstalledPluginIndex(params);
+  writePersistedInstalledPluginIndexSync(index, params);
   return index;
 }

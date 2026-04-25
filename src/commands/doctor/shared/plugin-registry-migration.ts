@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
+import {
+  extractShippedPluginInstallConfigRecords,
+  stripShippedPluginInstallConfigRecords,
+} from "../../../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import {
@@ -252,8 +256,12 @@ export async function migratePluginRegistryForInstall(
     return { status: "dry-run", migrated: false, preflight };
   }
 
-  const config = await readMigrationConfig(params);
-  const installRecords = await loadInstalledPluginIndexInstallRecords(params);
+  const rawConfig = await readMigrationConfig(params);
+  const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
+  const installRecords = {
+    ...extractShippedPluginInstallConfigRecords(rawConfig),
+    ...(await loadInstalledPluginIndexInstallRecords(params)),
+  };
   const migrationParams = {
     ...params,
     config,

@@ -13,7 +13,7 @@ import {
   writeConfigFile,
   type ConfigWriteOptions,
 } from "./io.js";
-import { applyUnsetPathsForWrite } from "./io.write-prepare.js";
+import { applyUnsetPathsForWrite, resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -114,7 +114,10 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   nextConfig: OpenClawConfig;
   writeOptions?: ConfigWriteOptions;
 }): Promise<boolean> {
-  const nextConfig = applyUnsetPathsForWrite(params.nextConfig, params.writeOptions?.unsetPaths);
+  const nextConfig = applyUnsetPathsForWrite(
+    params.nextConfig,
+    resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
+  );
   const changedKeys = getChangedTopLevelKeys(params.snapshot.sourceConfig, nextConfig);
   if (changedKeys.length !== 1 || changedKeys[0] === "<root>") {
     return false;

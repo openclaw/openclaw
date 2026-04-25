@@ -238,6 +238,63 @@ describe("plugin registry install migration", () => {
     });
   });
 
+  it("seeds first-run install records from shipped plugins.installs config", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        candidates: [createCandidate(pluginDir)],
+        readConfig: async () => ({
+          plugins: {
+            entries: {
+              demo: {
+                enabled: true,
+              },
+            },
+            installs: {
+              demo: {
+                source: "npm",
+                spec: "demo@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          },
+        }),
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "migrated",
+      current: {
+        plugins: [
+          expect.objectContaining({
+            pluginId: "demo",
+            installRecord: {
+              source: "npm",
+              spec: "demo@1.0.0",
+              installPath: pluginDir,
+            },
+          }),
+        ],
+      },
+    });
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      plugins: [
+        expect.objectContaining({
+          pluginId: "demo",
+          installRecord: {
+            source: "npm",
+            spec: "demo@1.0.0",
+            installPath: pluginDir,
+          },
+        }),
+      ],
+    });
+  });
+
   it("marks force migration env as deprecated break-glass", () => {
     expect(
       preflightPluginRegistryInstallMigration({

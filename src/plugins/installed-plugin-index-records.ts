@@ -7,7 +7,10 @@ import {
   readPersistedInstalledPluginIndexInstallRecordsSync,
 } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
-import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import {
+  refreshPersistedInstalledPluginIndex,
+  refreshPersistedInstalledPluginIndexSync,
+} from "./installed-plugin-index-store.js";
 import { type RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
 import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
 
@@ -42,6 +45,18 @@ export async function writePersistedInstalledPluginIndexInstallRecords(
   options: InstalledPluginIndexRecordRefreshOptions = {},
 ): Promise<string> {
   await refreshPersistedInstalledPluginIndex({
+    ...options,
+    reason: "source-changed",
+    installRecords: records,
+  });
+  return resolveInstalledPluginIndexRecordsStorePath(options);
+}
+
+export function writePersistedInstalledPluginIndexInstallRecordsSync(
+  records: Record<string, PluginInstallRecord>,
+  options: InstalledPluginIndexRecordRefreshOptions = {},
+): string {
+  refreshPersistedInstalledPluginIndexSync({
     ...options,
     reason: "source-changed",
     installRecords: records,

@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "./types.js";
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
+const MANAGED_CONFIG_UNSET_PATHS = [["plugins", "installs"]] as const;
+
 function cloneUnknown<T>(value: T): T {
   return structuredClone(value);
 }
@@ -333,6 +335,25 @@ export function applyUnsetPathsForWrite(
     if (unsetResult.changed) {
       next = unsetResult.next;
     }
+  }
+  return next;
+}
+
+export function resolveManagedUnsetPathsForWrite(
+  unsetPaths: readonly string[][] | undefined,
+): string[][] {
+  const next: string[][] = [];
+  for (const managedPath of MANAGED_CONFIG_UNSET_PATHS) {
+    next.push(Array.from(managedPath));
+  }
+  for (const unsetPath of unsetPaths ?? []) {
+    if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
+      continue;
+    }
+    if (next.some((existing) => isDeepStrictEqual(existing, unsetPath))) {
+      continue;
+    }
+    next.push([...unsetPath]);
   }
   return next;
 }
