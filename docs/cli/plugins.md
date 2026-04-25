@@ -355,6 +355,11 @@ current, or stale. Use `--refresh` to rebuild it from the durable install
 ledger, config policy, and manifest/package metadata. This is a repair path, not
 a runtime activation path.
 
+`OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY=1` is a deprecated break-glass
+compatibility switch for registry read failures. Prefer `plugins registry
+--refresh` or `openclaw doctor --fix`; the env fallback is only for emergency
+startup recovery while the migration rolls out.
+
 ### Marketplace
 
 ```bash

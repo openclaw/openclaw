@@ -45,6 +45,10 @@ export type PluginRegistrySnapshotResult = {
 
 export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
 
+function formatDeprecatedPersistedRegistryDisableWarning(): string {
+  return `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is a deprecated break-glass compatibility switch; use \`openclaw plugins registry --refresh\` or \`openclaw doctor --fix\` to repair registry state.`;
+}
+
 export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
     index?: PluginRegistrySnapshot;
@@ -175,7 +179,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
       level: "warn",
       code: "persisted-registry-disabled",
       message: disabledByEnv
-        ? `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is set; using legacy derived plugin index.`
+        ? `${formatDeprecatedPersistedRegistryDisableWarning()} Using legacy derived plugin index.`
         : "Persisted plugin registry reads are disabled by the caller; using derived plugin index.",
     });
   }

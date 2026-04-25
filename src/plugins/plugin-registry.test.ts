@@ -290,7 +290,10 @@ describe("plugin registry facade", () => {
 
     expect(result.source).toBe("derived");
     expect(result.diagnostics).toEqual([
-      expect.objectContaining({ code: "persisted-registry-disabled" }),
+      expect.objectContaining({
+        code: "persisted-registry-disabled",
+        message: expect.stringContaining("deprecated break-glass compatibility switch"),
+      }),
     ]);
     expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
       "demo",

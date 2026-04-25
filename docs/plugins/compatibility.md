@@ -86,6 +86,8 @@ Current compatibility records include:
   toward `agentRuntime`
 - generated bundled channel config metadata fallback while registry-first
   `channelConfigs` metadata lands
+- the persisted plugin registry disable env while repair flows migrate operators
+  to `openclaw plugins registry --refresh` and `openclaw doctor --fix`
 
 New plugin code should prefer the replacement listed in the registry and in the
 specific migration guide. Existing plugins can keep using a compatibility path
