@@ -226,6 +226,14 @@ describe("validateProviderConfig", () => {
   });
 });
 
+describe("resolveVoiceCallConfig", () => {
+  it("enables the pre-answer stale call reaper by default", () => {
+    const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
+
+    expect(config.staleCallReaperSeconds).toBe(120);
+  });
+});
+
 describe("normalizeVoiceCallConfig", () => {
   it("fills nested runtime defaults from a partial config boundary", () => {
     const normalized = normalizeVoiceCallConfig({
