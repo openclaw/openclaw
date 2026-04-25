@@ -13,6 +13,8 @@ Docs: https://docs.openclaw.ai
 
 - Agents/failover: forward embedded run abort signals into provider-owned model streams, cap implicit LLM idle watchdogs below long run timeouts, and mark 429 responses without usable retry timing as non-retryable so GitHub Copilot rate limits fail over or surface promptly instead of hanging until run timeout. Fixes #71120.
 - Plugins/Google Meet: make meeting creation join by default, with an explicit URL-only opt-out, so agents that create a Meet also enter it.
+- Telegram/polling: persist accepted update offsets before long-running handlers complete so poller restarts do not replay already-ingested updates, while keeping same-process retries for handler failures.
+- Telegram/config: include generated Telegram channel config schema metadata in packaged plugin manifests so forum-topic/group config is accepted before runtime loads.
 - Browser/tool: keep explicit AI snapshots from inheriting the efficient role-snapshot default and preserve numeric Playwright AI refs, so `--format ai` remains a real AI snapshot path. Fixes #62550. Thanks @ly85206559.
 - Gateway/config: keep in-process config patch reload comparisons on the resolved source snapshot when `${VAR}` env refs are restored on disk, avoiding false full gateway restarts for unchanged gateway/plugin secrets. Fixes #71208. Thanks @robbiethompson18.
 - Slack/messages: serialize write-client requests and whole outbound sends per target so rapid multi-message Slack replies preserve send order. Fixes #69101. (#69105) Thanks @nightq and @ztexydt-cqh.
@@ -24,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/Codex harness: emit native Codex app-server assistant and lifecycle completion events so live webchat runs stop spinning without needing a transcript reload fallback. (#70815) Thanks @lesaai.
 - Agents/sessions: persist the runtime-resolved context budget from embedded agent runs, so Codex GPT-5.5 sessions keep the catalog/runtime context cap instead of falling back to the generic 200k status value. Fixes #71294. Thanks @tud0r.
 - Agents/tools: fail runs before model submission when explicit tool allowlists resolve to no callable tools, preventing text-only hallucinated tool results for missing tools such as plugin commands that were not registered. Fixes #71292.
+- Agents/embedded: skip provider submission when an embedded run has no prompt, replay history, or prompt-local images, preventing empty OpenAI Responses requests from surfacing provider errors into user channels. Fixes #71130.
 - Providers/MiniMax: keep M2.7 chat model metadata text-only so image tool requests route through `MiniMax-VL-01` instead of the Anthropic-compatible chat endpoint. Fixes #71296. Thanks @ilker-cevikkaya.
 - Discord/replies: run `message_sending` plugin hooks for Discord reply delivery, including DM targets, so plugins can transform or cancel outbound Discord replies consistently with other channels. Fixes #59350. (#71094) Thanks @wei840222.
 - Control UI/commands: carry provider-owned thinking option ids/labels in session rows and defaults so fresh sessions show and accept dynamic modes such as `adaptive`, `xhigh`, and `max`. Fixes #71269. Thanks @Young-Khalil.
