@@ -240,6 +240,10 @@ For CLI registrars specifically:
   want OpenClaw to lazy-load the real CLI module on first invocation
 - make sure those descriptors cover every top-level command root exposed by the
   registrar
+- keep descriptor command names to letters, numbers, hyphen, and underscore,
+  starting with a letter or number; OpenClaw rejects descriptor names outside
+  that shape and strips terminal control sequences from descriptions before
+  rendering help
 - use `commands` alone only for eager compatibility paths
 
 ## Plugin shapes
