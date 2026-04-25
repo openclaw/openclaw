@@ -1,4 +1,3 @@
-import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   AgentToolResultMiddleware,
@@ -43,7 +42,6 @@ export type CapturedPluginRegistration = {
   cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
   textTransforms: PluginTextTransformRegistration[];
-  embeddedExtensionFactories: ExtensionFactory[];
   codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   speechProviders: SpeechProviderPlugin[];
@@ -68,7 +66,6 @@ export function createCapturedPluginRegistration(params?: {
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
   const cliBackends: CliBackendPlugin[] = [];
   const textTransforms: PluginTextTransformRegistration[] = [];
-  const embeddedExtensionFactories: ExtensionFactory[] = [];
   const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
   const agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
@@ -95,7 +92,6 @@ export function createCapturedPluginRegistration(params?: {
     cliRegistrars,
     cliBackends,
     textTransforms,
-    embeddedExtensionFactories,
     codexAppServerExtensionFactories,
     agentToolResultMiddlewares,
     speechProviders,
@@ -147,9 +143,6 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerAgentHarness(harness: AgentHarness) {
           agentHarnesses.push(harness);
-        },
-        registerEmbeddedExtensionFactory(factory: ExtensionFactory) {
-          embeddedExtensionFactories.push(factory);
         },
         registerCodexAppServerExtensionFactory(factory: CodexAppServerExtensionFactory) {
           codexAppServerExtensionFactories.push(factory);
