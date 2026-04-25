@@ -9,50 +9,22 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { selectCrestodianLocalPlannerBackends } from "./assistant-backends.js";
+import {
+  CRESTODIAN_ASSISTANT_MAX_TOKENS,
+  CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
+  CRESTODIAN_ASSISTANT_TIMEOUT_MS,
+  buildCrestodianAssistantUserPrompt,
+  parseCrestodianAssistantPlanText,
+  type CrestodianAssistantPlan,
+} from "./assistant-prompts.js";
 import type { CrestodianOverview } from "./overview.js";
 
-const CRESTODIAN_ASSISTANT_TIMEOUT_MS = 10_000;
-const CRESTODIAN_ASSISTANT_MAX_TOKENS = 512;
-const CRESTODIAN_CLAUDE_CLI_MODEL = "claude-opus-4-7";
-const CRESTODIAN_CODEX_MODEL = "gpt-5.5";
-
-const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
-  "You are Crestodian, OpenClaw's ring-zero setup helper.",
-  "Turn the user's request into exactly one safe OpenClaw Crestodian command.",
-  "Return only compact JSON with keys reply and command.",
-  "Do not invent commands. Do not claim a write was applied.",
-  "Do not use tools, shell commands, file edits, or network lookups; plan only from the supplied overview.",
-  "Use the provided OpenClaw docs/source references when the user's request needs behavior, config, or architecture details.",
-  "If local source is available, prefer inspecting it. Otherwise point to GitHub and strongly recommend reviewing source when docs are not enough.",
-  "Allowed commands:",
-  "- setup",
-  "- status",
-  "- health",
-  "- doctor",
-  "- doctor fix",
-  "- gateway status",
-  "- restart gateway",
-  "- start gateway",
-  "- stop gateway",
-  "- agents",
-  "- models",
-  "- audit",
-  "- validate config",
-  "- set default model <provider/model>",
-  "- config set <path> <value>",
-  "- config set-ref <path> env <ENV_VAR>",
-  "- create agent <id> workspace <path> model <provider/model>",
-  "- talk to <id> agent",
-  "- talk to agent",
-  "If unsure, choose overview.",
-].join("\n");
-
-export type CrestodianAssistantPlan = {
-  command: string;
-  reply?: string;
-  modelLabel?: string;
-};
+export {
+  buildCrestodianAssistantUserPrompt,
+  parseCrestodianAssistantPlanText,
+  type CrestodianAssistantPlan,
+} from "./assistant-prompts.js";
 
 export type CrestodianAssistantPlanner = (params: {
   input: string;
@@ -68,8 +40,6 @@ export type CrestodianLocalRuntimePlannerDeps = {
   createTempDir?: () => Promise<string>;
   removeTempDir?: (dir: string) => Promise<void>;
 };
-
-type LocalPlannerCandidate = "claude-cli" | "codex-app-server" | "codex-cli";
 
 export async function planCrestodianCommand(params: {
   input: string;
@@ -154,8 +124,8 @@ export async function planCrestodianCommandWithLocalRuntime(params: {
   if (!input) {
     return null;
   }
-  const candidates = listLocalRuntimePlannerCandidates(params.overview);
-  if (candidates.length === 0) {
+  const backends = selectCrestodianLocalPlannerBackends(params.overview);
+  if (backends.length === 0) {
     return null;
   }
   const prompt = buildCrestodianAssistantUserPrompt({
@@ -163,9 +133,9 @@ export async function planCrestodianCommandWithLocalRuntime(params: {
     overview: params.overview,
   });
 
-  for (const candidate of candidates) {
+  for (const backend of backends) {
     try {
-      const rawText = await runLocalRuntimePlanner(candidate, {
+      const rawText = await runLocalRuntimePlanner(backend, {
         prompt,
         deps: params.deps,
       });
@@ -173,7 +143,7 @@ export async function planCrestodianCommandWithLocalRuntime(params: {
       if (parsed) {
         return {
           ...parsed,
-          modelLabel: localRuntimePlannerLabel(candidate),
+          modelLabel: backend.label,
         };
       }
     } catch {
@@ -183,109 +153,8 @@ export async function planCrestodianCommandWithLocalRuntime(params: {
   return null;
 }
 
-export function buildCrestodianAssistantUserPrompt(params: {
-  input: string;
-  overview: CrestodianOverview;
-}): string {
-  const agents = params.overview.agents
-    .map((agent) => {
-      const fields = [
-        `id=${agent.id}`,
-        agent.name ? `name=${agent.name}` : undefined,
-        agent.workspace ? `workspace=${agent.workspace}` : undefined,
-        agent.model ? `model=${agent.model}` : undefined,
-        agent.isDefault ? "default=true" : undefined,
-      ].filter(Boolean);
-      return `- ${fields.join(", ")}`;
-    })
-    .join("\n");
-  return [
-    `User request: ${params.input}`,
-    "",
-    `Default agent: ${params.overview.defaultAgentId}`,
-    `Default model: ${params.overview.defaultModel ?? "not configured"}`,
-    `Config valid: ${params.overview.config.valid}`,
-    `Gateway reachable: ${params.overview.gateway.reachable}`,
-    `Codex CLI: ${params.overview.tools.codex.found ? "found" : "not found"}`,
-    `Claude Code CLI: ${params.overview.tools.claude.found ? "found" : "not found"}`,
-    `OpenAI API key: ${params.overview.tools.apiKeys.openai ? "found" : "not found"}`,
-    `Anthropic API key: ${params.overview.tools.apiKeys.anthropic ? "found" : "not found"}`,
-    `OpenClaw docs: ${params.overview.references.docsPath ?? params.overview.references.docsUrl}`,
-    `OpenClaw source: ${
-      params.overview.references.sourcePath ?? params.overview.references.sourceUrl
-    }`,
-    params.overview.references.sourcePath
-      ? "Source mode: local git checkout; inspect source directly when docs are insufficient."
-      : "Source mode: package/install; use GitHub source when docs are insufficient.",
-    "",
-    "Agents:",
-    agents || "- none",
-  ].join("\n");
-}
-
-export function parseCrestodianAssistantPlanText(
-  rawText: string | undefined,
-): CrestodianAssistantPlan | null {
-  const text = rawText?.trim();
-  if (!text) {
-    return null;
-  }
-  const jsonText = extractFirstJsonObject(text);
-  if (!jsonText) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return null;
-  }
-  const record = parsed as Record<string, unknown>;
-  const command = typeof record.command === "string" ? record.command.trim() : "";
-  if (!command) {
-    return null;
-  }
-  const reply = typeof record.reply === "string" ? record.reply.trim() : undefined;
-  return {
-    command,
-    ...(reply ? { reply } : {}),
-  };
-}
-
-function extractFirstJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) {
-    return null;
-  }
-  return text.slice(start, end + 1);
-}
-
-function listLocalRuntimePlannerCandidates(overview: CrestodianOverview): LocalPlannerCandidate[] {
-  const candidates: LocalPlannerCandidate[] = [];
-  if (overview.tools.claude.found) {
-    candidates.push("claude-cli");
-  }
-  if (overview.tools.codex.found) {
-    candidates.push("codex-app-server", "codex-cli");
-  }
-  return candidates;
-}
-
-function localRuntimePlannerLabel(candidate: LocalPlannerCandidate): string {
-  const labels: Record<LocalPlannerCandidate, string> = {
-    "claude-cli": `claude-cli/${CRESTODIAN_CLAUDE_CLI_MODEL}`,
-    "codex-app-server": `openai/${CRESTODIAN_CODEX_MODEL} via codex`,
-    "codex-cli": `codex-cli/${CRESTODIAN_CODEX_MODEL}`,
-  };
-  return labels[candidate];
-}
-
 async function runLocalRuntimePlanner(
-  candidate: LocalPlannerCandidate,
+  backend: ReturnType<typeof selectCrestodianLocalPlannerBackends>[number],
   params: {
     prompt: string;
     deps?: CrestodianLocalRuntimePlannerDeps;
@@ -297,8 +166,8 @@ async function runLocalRuntimePlanner(
     const sessionFile = path.join(tempDir, "session.jsonl");
     const sessionId = `${runId}-session`;
     const sessionKey = `temp:crestodian-planner:${runId}`;
-    switch (candidate) {
-      case "claude-cli": {
+    switch (backend.runner) {
+      case "cli": {
         const runCli = params.deps?.runCliAgent ?? (await loadRunCliAgent());
         const result = await runCli({
           sessionId,
@@ -307,10 +176,10 @@ async function runLocalRuntimePlanner(
           trigger: "manual",
           sessionFile,
           workspaceDir: tempDir,
-          config: buildCliPlannerConfig(tempDir, `claude-cli/${CRESTODIAN_CLAUDE_CLI_MODEL}`),
+          config: backend.buildConfig(tempDir),
           prompt: params.prompt,
-          provider: "claude-cli",
-          model: CRESTODIAN_CLAUDE_CLI_MODEL,
+          provider: backend.provider,
+          model: backend.model,
           timeoutMs: CRESTODIAN_ASSISTANT_TIMEOUT_MS,
           runId,
           extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
@@ -322,7 +191,7 @@ async function runLocalRuntimePlanner(
         });
         return extractPlannerResultText(result);
       }
-      case "codex-app-server": {
+      case "embedded": {
         const runEmbedded = params.deps?.runEmbeddedPiAgent ?? (await loadRunEmbeddedPiAgent());
         const result = await runEmbedded({
           sessionId,
@@ -331,10 +200,10 @@ async function runLocalRuntimePlanner(
           trigger: "manual",
           sessionFile,
           workspaceDir: tempDir,
-          config: buildCodexAppServerPlannerConfig(tempDir),
+          config: backend.buildConfig(tempDir),
           prompt: params.prompt,
-          provider: "openai",
-          model: CRESTODIAN_CODEX_MODEL,
+          provider: backend.provider,
+          model: backend.model,
           agentHarnessId: "codex",
           disableTools: true,
           toolsAllow: [],
@@ -348,63 +217,11 @@ async function runLocalRuntimePlanner(
         });
         return extractPlannerResultText(result);
       }
-      case "codex-cli": {
-        const runCli = params.deps?.runCliAgent ?? (await loadRunCliAgent());
-        const result = await runCli({
-          sessionId,
-          sessionKey,
-          agentId: "crestodian",
-          trigger: "manual",
-          sessionFile,
-          workspaceDir: tempDir,
-          config: buildCliPlannerConfig(tempDir, `codex-cli/${CRESTODIAN_CODEX_MODEL}`),
-          prompt: params.prompt,
-          provider: "codex-cli",
-          model: CRESTODIAN_CODEX_MODEL,
-          timeoutMs: CRESTODIAN_ASSISTANT_TIMEOUT_MS,
-          runId,
-          extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
-          extraSystemPromptStatic: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
-          messageChannel: "crestodian",
-          messageProvider: "crestodian",
-          senderIsOwner: true,
-          cleanupCliLiveSessionOnRunEnd: true,
-        });
-        return extractPlannerResultText(result);
-      }
     }
     return undefined;
   } finally {
     await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
   }
-}
-
-function buildCliPlannerConfig(workspaceDir: string, modelRef: string): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        workspace: workspaceDir,
-        model: { primary: modelRef },
-      },
-    },
-  };
-}
-
-function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        workspace: workspaceDir,
-        embeddedHarness: { runtime: "codex", fallback: "none" },
-        model: { primary: `openai/${CRESTODIAN_CODEX_MODEL}` },
-      },
-    },
-    plugins: {
-      entries: {
-        codex: { enabled: true },
-      },
-    },
-  };
 }
 
 async function createTempPlannerDir(): Promise<string> {

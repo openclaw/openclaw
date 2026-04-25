@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
 import type { EmbeddedPiRunResult } from "../agents/pi-embedded.js";
+import { selectCrestodianLocalPlannerBackends } from "./assistant-backends.js";
 import {
   buildCrestodianAssistantUserPrompt,
   planCrestodianCommandWithLocalRuntime,
@@ -137,6 +138,41 @@ describe("Crestodian assistant", () => {
     expect(firstCliCall.config?.agents?.defaults?.cliBackends).toBeUndefined();
     expect(firstCliCall.extraSystemPrompt).toContain("Do not use tools, shell commands");
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+
+  it("selects local planner backends without execution state", () => {
+    expect(
+      selectCrestodianLocalPlannerBackends(
+        overview({
+          claude: { command: "claude", found: true },
+          codex: { command: "codex", found: true },
+        }),
+      ).map((backend) => backend.kind),
+    ).toEqual(["claude-cli", "codex-app-server", "codex-cli"]);
+
+    const [codexAppServer, codexCli] = selectCrestodianLocalPlannerBackends(
+      overview({
+        codex: { command: "codex", found: true },
+      }),
+    );
+    expect(codexAppServer?.buildConfig("/tmp/workspace")).toMatchObject({
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+          embeddedHarness: { runtime: "codex", fallback: "none" },
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+      plugins: { entries: { codex: { enabled: true } } },
+    });
+    expect(codexCli?.buildConfig("/tmp/workspace")).toMatchObject({
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+          model: { primary: "codex-cli/gpt-5.5" },
+        },
+      },
+    });
   });
 
   it("falls back to Codex app-server when Claude CLI planning fails", async () => {
