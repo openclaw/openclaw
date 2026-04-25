@@ -83,7 +83,7 @@ export function getPluginRecord(params: GetPluginRecordParams): PluginRegistryRe
 }
 
 export function isPluginEnabled(params: GetPluginRecordParams): boolean {
-  return isInstalledPluginEnabled(resolveSnapshot(params), params.pluginId);
+  return isInstalledPluginEnabled(resolveSnapshot(params), params.pluginId, params.config);
 }
 
 export function listPluginContributionIds(
@@ -91,6 +91,7 @@ export function listPluginContributionIds(
 ): readonly string[] {
   return listInstalledPluginContributionIds(resolveSnapshot(params), params.contribution, {
     includeDisabled: params.includeDisabled,
+    config: params.config,
   });
 }
 
@@ -103,6 +104,7 @@ export function resolvePluginContributionOwners(
     params.matches,
     {
       includeDisabled: params.includeDisabled,
+      config: params.config,
     },
   );
 }

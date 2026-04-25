@@ -27,7 +27,8 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    generatedAt: "2026-04-25T12:00:00.000Z",
+    policyHash: "policy-v1",
+    generatedAtMs: 1777118400000,
     plugins: [
       {
         pluginId: "demo",
@@ -35,7 +36,6 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         manifestHash: "manifest-hash",
         rootDir: "/plugins/demo",
         origin: "global",
-        enabled: true,
         contributions: {
           providers: ["demo"],
           channels: ["demo-chat"],
@@ -174,7 +174,7 @@ describe("installed plugin index persistence", () => {
       refreshReasons: ["policy-changed"],
       persisted: current,
       current: {
-        plugins: [expect.objectContaining({ pluginId: "demo", enabled: false })],
+        plugins: [expect.objectContaining({ pluginId: "demo" })],
       },
     });
 

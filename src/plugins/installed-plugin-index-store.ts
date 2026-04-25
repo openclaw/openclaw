@@ -60,7 +60,7 @@ const InstalledPluginIndexRecordSchema = z
     packageJsonHash: z.string().optional(),
     rootDir: z.string(),
     origin: z.string(),
-    enabled: z.boolean(),
+    enabledByDefault: z.boolean().optional(),
     contributions: InstalledPluginIndexContributionsSchema,
     compat: z.array(z.string()),
   })
@@ -80,7 +80,8 @@ const InstalledPluginIndexSchema = z
     version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
     hostContractVersion: z.string(),
     compatRegistryVersion: z.string(),
-    generatedAt: z.string(),
+    policyHash: z.string(),
+    generatedAtMs: z.number(),
     refreshReason: z.string().optional(),
     plugins: z.array(InstalledPluginIndexRecordSchema),
     diagnostics: z.array(PluginDiagnosticSchema),

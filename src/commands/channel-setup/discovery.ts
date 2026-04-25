@@ -56,7 +56,7 @@ export function listManifestInstalledChannelIds(params: {
     env: params.env ?? process.env,
   });
   return new Set(
-    listPluginContributionIds({ index, contribution: "channels" }).map(
+    listPluginContributionIds({ index, contribution: "channels", config: resolvedConfig }).map(
       (channelId) => channelId as ChannelChoice,
     ),
   );
