@@ -247,7 +247,7 @@ describe("model-pricing-cache", () => {
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
-    expect(normalizeProviderModelIdWithPluginMock.mock.calls.length).toBeLessThan(10);
+    expect(normalizeProviderModelIdWithPluginMock.mock.calls.length).toBeLessThanOrEqual(5);
   });
 
   it("does not recurse forever for native openrouter auto refs", async () => {
