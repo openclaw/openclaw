@@ -1491,6 +1491,74 @@ describe("exec approval handlers", () => {
     }
   });
 
+  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async () => {
+    const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+    const requestContext = {
+      ...context,
+      hasExecApprovalClients: () => true,
+      broadcast: (event: string, payload: unknown) => {
+        broadcasts.push({ event, payload });
+      },
+    };
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context: requestContext,
+      params: {
+        id: "approval-control-ui-multichannel",
+        twoPhase: true,
+        timeoutMs: 60_000,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        sessionKey: "agent:main:feishu:chat-123",
+        turnSourceChannel: "feishu",
+        turnSourceTo: "chat-123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "thread-456",
+      },
+    });
+    await drainApprovalRequestTicks();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-control-ui-multichannel",
+      respond: resolveRespond,
+      context: requestContext,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(forwarder.handleResolved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "approval-control-ui-multichannel",
+        decision: "allow-once",
+        request: expect.objectContaining({
+          sessionKey: "agent:main:feishu:chat-123",
+          turnSourceChannel: "feishu",
+          turnSourceTo: "chat-123",
+          turnSourceAccountId: "work",
+          turnSourceThreadId: "thread-456",
+        }),
+      }),
+    );
+    expect(broadcasts).toContainEqual(
+      expect.objectContaining({
+        event: "exec.approval.resolved",
+        payload: expect.objectContaining({
+          id: "approval-control-ui-multichannel",
+          request: expect.objectContaining({
+            turnSourceChannel: "feishu",
+            turnSourceTo: "chat-123",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
