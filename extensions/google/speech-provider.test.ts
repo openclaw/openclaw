@@ -1,3 +1,4 @@
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleSpeechProvider, __testing } from "./speech-provider.js";
 
@@ -313,6 +314,34 @@ describe("Google speech provider", () => {
       }),
     ).rejects.toThrow(
       "Google TTS failed (429): Quota exceeded [code=RESOURCE_EXHAUSTED] [request_id=google_req_123]",
+    );
+  });
+
+  it("honors configured private-network opt-in for Google TTS", async () => {
+    installGoogleTtsFetchMock();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesize({
+      text: "hello",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+      providerConfig: { apiKey: "google-test-key" },
+      target: "audio-file",
+      timeoutMs: 12_345,
+    });
+
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
     );
   });
 });
