@@ -185,6 +185,11 @@ openclaw browser download <ref> report.pdf
 openclaw browser dialog --accept
 ```
 
+Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw
+downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp
+root). Use `waitfordownload` or `download` when the agent needs to wait for a
+specific file and return its path; those explicit waiters own the next download.
+
 ## State and storage
 
 Viewport + emulation:
