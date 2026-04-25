@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Memory-core/hybrid search: expose raw `vectorScore` and `textScore` alongside the combined `score` on hybrid memory search results, so callers can inspect vector-versus-text retrieval contribution before temporal decay or MMR reordering. Fixes #68166. (#68286) Thanks @ajfonthemove.
 - Providers/Xiaomi: add MiMo TTS as a bundled speech provider with MP3/WAV output and voice-note Opus transcoding. Fixes #52376. (#55614) Thanks @zoujiejun.
 - Providers/ElevenLabs: include `eleven_v3` in the bundled TTS model catalog so model selection surfaces can offer ElevenLabs v3. (#68321) Thanks @itsuzef.
+- Providers/Local CLI TTS: add a bundled local command speech provider with file/stdout input, voice-note Opus conversion, and telephony PCM output. (#56239) Thanks @solar2ain.
 
 ### Fixes
 
@@ -58,6 +59,9 @@ Docs: https://docs.openclaw.ai
 - GitHub Copilot: preserve encrypted Responses reasoning item IDs during replay so Copilot can validate encrypted reasoning payloads across requests. (#71448) Thanks @a410979729-sys.
 - Agents/replies: recover final-answer text when streamed assistant chunks contain only whitespace, preventing completed turns from surfacing as empty-payload errors. Fixes #71454. (#71467) Thanks @Sanjays2402.
 - Feishu/TTS: transcode voice-intent MP3 and other audio replies to Ogg/Opus before sending native Feishu audio bubbles, while keeping ordinary MP3 attachments as files. Fixes #61249 and #37868. Thanks @sg1416-zg and @ycjlb2023-peteryi.
+- WhatsApp/TTS: transcode MP3/WebM audio, including Microsoft Edge TTS output, to Ogg/Opus before sending PTT voice notes.
+- QQBot/TTS: honor plain `audioAsVoice` replies by synthesizing TTS to native QQ voice messages, and mark inbound voice-only messages as audio media without exposing raw voice paths to generic media context.
+- Providers/SenseAudio: add bundled SenseAudio batch audio transcription through `tools.media.audio` with `SENSEAUDIO_API_KEY` auth. (#66943) Thanks @Fl0rencess720.
 - Providers/MiniMax: let TTS use MiniMax portal OAuth and Token Plan credentials before falling back to `MINIMAX_API_KEY`, and include current TTS HD model ids. Fixes #55017. Thanks @zx15210404690-hash.
 - Telegram/webhook: acknowledge validated webhook updates before running bot middleware, keeping slow agent turns from tripping Telegram delivery retries while preserving per-chat processing lanes. Fixes #71392. Thanks @joelforsberg46-source.
 - MCP: retire one-shot embedded bundled MCP runtimes at run end, skip bundle-MCP startup when a runtime tool allowlist cannot reach bundle-MCP tools, and add `mcp.sessionIdleTtlMs` idle eviction for leaked session runtimes. Fixes #71106, #71110, #70389, and #70808.
