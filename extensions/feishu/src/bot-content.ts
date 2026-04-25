@@ -1,4 +1,4 @@
-import { recoverLatin1Utf8Mojibake } from "openclaw/plugin-sdk/feishu";
+import { basenameFromUntrustedFilename, recoverLatin1Utf8Mojibake } from "../runtime-api.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -46,7 +46,10 @@ function normalizeFeishuFileName(fileName: unknown): string | undefined {
     return undefined;
   }
   const trimmed = fileName.trim();
-  return trimmed ? recoverLatin1Utf8Mojibake(trimmed) : undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+  return basenameFromUntrustedFilename(recoverLatin1Utf8Mojibake(trimmed));
 }
 
 export type ResolvedFeishuGroupSession = {
@@ -388,7 +391,7 @@ export async function resolveFeishuMediaList(params: {
           contentType,
           "inbound",
           maxBytes,
-          normalizeFeishuFileName(media.fileName),
+          normalizeFeishuFileName(result.fileName),
         );
         out.push({
           path: saved.path,
@@ -417,6 +420,7 @@ export async function resolveFeishuMediaList(params: {
           contentType,
           "inbound",
           maxBytes,
+          normalizeFeishuFileName(result.fileName) || normalizeFeishuFileName(media.fileName),
         );
         out.push({
           path: saved.path,
@@ -455,7 +459,7 @@ export async function resolveFeishuMediaList(params: {
       contentType,
       "inbound",
       maxBytes,
-      normalizeFeishuFileName(result.fileName) || normalizeFeishuFileName(mediaKeys.fileName),
+      normalizeFeishuFileName(result.fileName) || mediaKeys.fileName,
     );
     out.push({
       path: saved.path,
