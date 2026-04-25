@@ -2318,7 +2318,7 @@ describe("openai transport stream", () => {
     expect(functionCall?.arguments).toBe("not valid json");
   });
 
-  it("does not send tool_choice when tools are provided but toolChoice option is not set", () => {
+  it("defaults tool_choice to auto for proxy-like openai-completions endpoints", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "test-model",
@@ -2326,6 +2326,38 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "vllm",
         baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 2048,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [],
+        tools: [
+          {
+            name: "get_weather",
+            description: "Get weather information",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    );
+
+    expect(params).toHaveProperty("tools");
+    expect(params).toHaveProperty("tool_choice", "auto");
+  });
+
+  it("does not send tool_choice by default for native openai-completions endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -1728,6 +1728,7 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const compatDetection = detectOpenAICompletionsCompat(model);
   const completionsContext = context.systemPrompt
     ? {
         ...context,
@@ -1765,6 +1766,12 @@ export function buildOpenAICompletionsParams(
     params.tools = convertTools(context.tools, compat, model);
     if (options?.toolChoice) {
       params.tool_choice = options.toolChoice;
+    } else if (
+      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      Array.isArray(params.tools) &&
+      params.tools.length > 0
+    ) {
+      params.tool_choice = "auto";
     }
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
