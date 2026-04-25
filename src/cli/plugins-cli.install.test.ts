@@ -290,7 +290,7 @@ describe("plugins cli install", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("installs marketplace plugins and persists config", async () => {
+  it("installs marketplace plugins and persists install ledger", async () => {
     const cfg = {
       plugins: {
         entries: {},
@@ -388,6 +388,7 @@ describe("plugins cli install", () => {
       demo: expect.objectContaining({
         source: "clawhub",
         spec: "clawhub:demo@1.2.3",
+        installPath: cliInstallPath("demo"),
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
         clawhubChannel: "official",
@@ -467,6 +468,7 @@ describe("plugins cli install", () => {
       demo: expect.objectContaining({
         source: "clawhub",
         spec: "clawhub:demo@1.2.3",
+        installPath: cliInstallPath("demo"),
         clawhubPackage: "demo",
       }),
     });
