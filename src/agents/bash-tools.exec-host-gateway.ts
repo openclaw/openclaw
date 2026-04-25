@@ -101,6 +101,21 @@ export async function processGatewayAllowlist(
     ask: params.ask,
     host: "gateway",
   });
+  // Warn about bare-name allowlist patterns (no path separator) that the
+  // matcher will silently skip (see #71315).
+  if (hostSecurity === "allowlist") {
+    for (const entry of approvals.allowlist) {
+      const pattern = entry.pattern?.trim();
+      if (!pattern || pattern === "*") {
+        continue;
+      }
+      if (!(pattern.includes("/") || pattern.includes("\\") || pattern.includes("~"))) {
+        params.warnings.push(
+          `Pattern "${pattern}" has no path separator and will not match. Use an absolute path or the "*" wildcard. See https://github.com/openclaw/openclaw/issues/71315`,
+        );
+      }
+    }
+  }
   const allowlistEval = evaluateShellAllowlist({
     command: params.command,
     allowlist: approvals.allowlist,

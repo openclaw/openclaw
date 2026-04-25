@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 
 const INLINE_EVAL_HIT = {
   executable: "python3",
@@ -45,7 +46,7 @@ const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
 );
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
-    approvals: { allowlist: [], file: { version: 1, agents: {} } },
+    approvals: { allowlist: [] as ExecAllowlistEntry[], file: { version: 1, agents: {} } },
     hostSecurity: "allowlist",
     hostAsk: "off",
     askFallback: "deny",
@@ -392,5 +393,85 @@ describe("processGatewayAllowlist", () => {
       );
     });
     expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
+
+  it("warns on bare-name allowlist patterns that will be silently skipped", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [
+          { pattern: "gbrain", id: "gbrain-1" },
+          { pattern: "  ls  ", id: "ls-1" },
+          { pattern: "/usr/bin/du", id: "du-1" },
+          { pattern: "  *  ", id: "wild-1" },
+        ] as ExecAllowlistEntry[],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const warnings: string[] = [];
+    await processGatewayAllowlist({
+      command: "gbrain list -n 3",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings,
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    expect(warnings).toContainEqual(
+      expect.stringContaining('Pattern "gbrain" has no path separator'),
+    );
+    expect(warnings).toContainEqual(expect.stringContaining('Pattern "ls" has no path separator'));
+    // Absolute paths should not trigger a warning.
+    expect(warnings).not.toContainEqual(expect.stringContaining("/usr/bin/du"));
+    // The "*" wildcard should not trigger a warning.
+    expect(warnings).not.toContainEqual(expect.stringContaining('Pattern "*"'));
+    // The warning should include the issue reference.
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("https://github.com/openclaw/openclaw/issues/71315"),
+      ]),
+    );
+  });
+
+  it("does not warn on bare-name patterns when security is not allowlist", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: {
+        allowlist: [{ pattern: "gbrain", id: "gbrain-1" }] as ExecAllowlistEntry[],
+        file: { version: 1, agents: {} },
+      },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+
+    const warnings: string[] = [];
+    await processGatewayAllowlist({
+      command: "gbrain list -n 3",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings,
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    expect(warnings).toEqual([]);
   });
 });
