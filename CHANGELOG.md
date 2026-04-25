@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 - Browser/Linux: fall back to headless mode for local managed profiles on hosts without a display server, while preserving explicit per-profile headed overrides and reporting the headless source. (#60953) Thanks @rrpsantos.
 - Telegram: remove the startup persisted-offset `getUpdates` preflight so polling restarts do not self-conflict before the runner starts. Fixes #69304. (#69779) Thanks @chinar-amrutkar.
 - Telegram: keep the polling stall watchdog active even when grammY reports the runner as not running while its task is still pending, so a rebuilt transport cannot leave `getUpdates` silent until a manual gateway restart. Fixes #69064. Thanks @LDLoeb.
+- Subagents: fall back to direct completion delivery when the parent announce turn finishes without a visible payload, so child results still reach channel-backed requester sessions.
 - Browser/Playwright: ignore benign already-handled route races during guarded navigation so browser-page tasks no longer fail when Playwright tears down a route mid-flight. (#68708) Thanks @Steady-ai.
 - Browser/CLI: lazy-load browser command groups and plugin runtime services so `openclaw browser --help` can render without loading the full browser automation stack. Fixes #65400. (#65460, #66640) Thanks @pandego and @Tianworld.
 - Browser/downloads: seed managed Chrome profiles with OpenClaw download prefs and capture unmanaged click-triggered downloads under the guarded downloads directory, while explicit download waiters still own their target file. (#64558) Thanks @Pearcekieser.
