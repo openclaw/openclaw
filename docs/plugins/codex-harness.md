@@ -37,7 +37,7 @@ result is returned to Codex. This is separate from the public
 tool-result writes.
 
 For the plugin hook semantics themselves, see [Plugin hooks](/plugins/hooks)
-and [Plugin guard behavior](/tools/plugin#hook-guard-behavior-for-typed-lifecycle-hooks).
+and [Plugin guard behavior](/tools/plugin).
 
 The harness is off by default. New configs should keep OpenAI model refs
 canonical as `openai/gpt-*` and explicitly force
