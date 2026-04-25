@@ -15,6 +15,7 @@ import { LITELLM_BASE_URL } from "./onboard.js";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
 const DEFAULT_LITELLM_IMAGE_MODEL = "gpt-image-2";
+const DEFAULT_LITELLM_IMAGE_TIMEOUT_MS = 180_000;
 const LITELLM_SUPPORTED_SIZES = [
   "256x256",
   "512x512",
@@ -195,7 +196,7 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
               url,
               headers: multipartHeaders,
               body: form,
-              timeoutMs: req.timeoutMs,
+              timeoutMs: req.timeoutMs ?? DEFAULT_LITELLM_IMAGE_TIMEOUT_MS,
               fetchFn: fetch,
               allowPrivateNetwork,
               dispatcherPolicy,
@@ -213,7 +214,7 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
                 n: count,
                 size,
               },
-              timeoutMs: req.timeoutMs,
+              timeoutMs: req.timeoutMs ?? DEFAULT_LITELLM_IMAGE_TIMEOUT_MS,
               fetchFn: fetch,
               allowPrivateNetwork,
               dispatcherPolicy,
