@@ -52,6 +52,9 @@ const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "cons
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 const OTEL_SEMCONV_STABILITY_OPT_IN_ENV = "OTEL_SEMCONV_STABILITY_OPT_IN";
 const GEN_AI_LATEST_EXPERIMENTAL_OPT_IN = "gen_ai_latest_experimental";
+const GEN_AI_TOKEN_USAGE_BUCKETS = [
+  1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864,
+];
 
 type OtelContentCapturePolicy = {
   inputMessages: boolean;
@@ -575,6 +578,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Token usage by type",
       });
+      const genAiTokenUsageHistogram = meter.createHistogram("gen_ai.client.token.usage", {
+        unit: "{token}",
+        description: "Number of input and output tokens used by GenAI client operations",
+        advice: {
+          explicitBucketBoundaries: GEN_AI_TOKEN_USAGE_BUCKETS,
+        },
+      });
       const costCounter = meter.createCounter("openclaw.cost.usd", {
         unit: "1",
         description: "Estimated model cost (USD)",
@@ -854,13 +864,26 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.provider": evt.provider ?? "unknown",
           "openclaw.model": evt.model ?? "unknown",
         };
+        const genAiAttrs: Record<string, string> = {
+          "gen_ai.operation.name": "chat",
+          "gen_ai.provider.name": lowCardinalityAttr(evt.provider),
+          ...(evt.model ? { "gen_ai.request.model": lowCardinalityAttr(evt.model) } : {}),
+        };
 
         const usage = evt.usage;
         if (usage.input) {
           tokensCounter.add(usage.input, { ...attrs, "openclaw.token": "input" });
+          genAiTokenUsageHistogram.record(usage.input, {
+            ...genAiAttrs,
+            "gen_ai.token.type": "input",
+          });
         }
         if (usage.output) {
           tokensCounter.add(usage.output, { ...attrs, "openclaw.token": "output" });
+          genAiTokenUsageHistogram.record(usage.output, {
+            ...genAiAttrs,
+            "gen_ai.token.type": "output",
+          });
         }
         if (usage.cacheRead) {
           tokensCounter.add(usage.cacheRead, { ...attrs, "openclaw.token": "cache_read" });

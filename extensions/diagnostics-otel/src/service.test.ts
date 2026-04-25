@@ -691,6 +691,55 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports GenAI client token usage histogram for input and output only", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      sessionKey: "session-key",
+      channel: "webchat",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: {
+        input: 12,
+        output: 7,
+        cacheRead: 3,
+        cacheWrite: 2,
+        promptTokens: 17,
+        total: 24,
+      },
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.meter.createHistogram).toHaveBeenCalledWith(
+      "gen_ai.client.token.usage",
+      expect.objectContaining({
+        unit: "{token}",
+        advice: {
+          explicitBucketBoundaries: expect.arrayContaining([1, 4, 16, 1024, 67108864]),
+        },
+      }),
+    );
+    const genAiTokenUsage = telemetryState.histograms.get("gen_ai.client.token.usage");
+    expect(genAiTokenUsage?.record).toHaveBeenCalledTimes(2);
+    expect(genAiTokenUsage?.record).toHaveBeenCalledWith(12, {
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-5.4",
+      "gen_ai.token.type": "input",
+    });
+    expect(genAiTokenUsage?.record).toHaveBeenCalledWith(7, {
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "openai",
+      "gen_ai.request.model": "gpt-5.4",
+      "gen_ai.token.type": "output",
+    });
+    expect(JSON.stringify(genAiTokenUsage?.record.mock.calls)).not.toContain("session-key");
+    await service.stop?.(ctx);
+  });
+
   test("exports run, model call, and tool execution lifecycle spans", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
