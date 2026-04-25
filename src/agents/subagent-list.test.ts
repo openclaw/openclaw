@@ -49,6 +49,7 @@ describe("buildSubagentList", () => {
   });
 
   it("truncates long task text in list lines", () => {
+    const now = Date.now();
     const run = {
       runId: "run-long-task",
       childSessionKey: "agent:main:subagent:long-task",
@@ -56,8 +57,8 @@ describe("buildSubagentList", () => {
       requesterDisplayKey: "main",
       task: "This is a deliberately long task description used to verify that subagent list output keeps the full task text instead of appending ellipsis after a short hard cutoff.",
       cleanup: "keep",
-      createdAt: 1000,
-      startedAt: 1000,
+      createdAt: now,
+      startedAt: now,
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const cfg = {
@@ -118,6 +119,7 @@ describe("buildSubagentList", () => {
   });
 
   it("formats io and prompt/cache usage from session entries", async () => {
+    const now = Date.now();
     const run = {
       runId: "run-usage",
       childSessionKey: "agent:main:subagent:usage",
@@ -125,8 +127,8 @@ describe("buildSubagentList", () => {
       requesterDisplayKey: "main",
       task: "do thing",
       cleanup: "keep",
-      createdAt: 1000,
-      startedAt: 1000,
+      createdAt: now,
+      startedAt: now,
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
