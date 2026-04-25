@@ -5,6 +5,7 @@ import type {
 } from "../../channels/plugins/types.adapters.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -158,6 +159,13 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
         ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
         : {}),
     });
+    if (shouldMovePluginInstalls || resolvedExplicit.pluginInstalled) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: cfg,
+        reason: "source-changed",
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    }
   }
 
   const selection = explicitChannel

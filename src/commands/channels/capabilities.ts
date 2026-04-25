@@ -10,6 +10,7 @@ import type {
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
   replaceConfigFile,
@@ -269,6 +270,13 @@ export async function channelsCapabilitiesCommand(
                 ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
                 : {}),
             });
+            if (shouldMovePluginInstalls || resolved.pluginInstalled) {
+              await refreshPluginRegistryAfterConfigMutation({
+                config: cfg,
+                reason: "source-changed",
+                logger: { warn: (message) => runtime.log(message) },
+              });
+            }
           }
           return resolved.plugin ? [resolved.plugin] : null;
         })();

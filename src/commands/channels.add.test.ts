@@ -30,6 +30,10 @@ const pluginInstallMocks = vi.hoisted(() => ({
   loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(),
 }));
 
+const registryRefreshMocks = vi.hoisted(() => ({
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
+}));
+
 vi.mock("../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
@@ -49,6 +53,8 @@ vi.mock("../channels/plugins/bundled.js", async () => {
 });
 
 vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
+
+vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
 
 const runtime = createTestRuntime();
 
@@ -268,6 +274,7 @@ describe("channelsAddCommand", () => {
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry(),
     );
+    registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
     setMinimalChannelsAddRegistryForTests();
   });
 
@@ -480,6 +487,16 @@ describe("channelsAddCommand", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({ installRuntimeDeps: false }),
+    );
+    expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          channels: expect.objectContaining({
+            "external-chat": expect.objectContaining({ enabled: true }),
+          }),
+        }),
+        reason: "source-changed",
+      }),
     );
     expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();

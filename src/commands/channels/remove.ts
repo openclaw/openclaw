@@ -4,6 +4,7 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import {
   PLUGIN_INSTALLS_CONFIG_PATH,
@@ -190,6 +191,13 @@ export async function channelsRemoveCommand(
       ? { writeOptions: { unsetPaths: [Array.from(PLUGIN_INSTALLS_CONFIG_PATH)] } }
       : {}),
   });
+  if (shouldMovePluginInstalls || resolvedPluginState?.pluginInstalled) {
+    await refreshPluginRegistryAfterConfigMutation({
+      config: next,
+      reason: "source-changed",
+      logger: { warn: (message) => runtime.log(message) },
+    });
+  }
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig
