@@ -6,6 +6,7 @@ import {
   assertOkOrThrowHttpError,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { LITELLM_BASE_URL } from "./onboard.js";
@@ -28,21 +29,24 @@ const LITELLM_SUPPORTED_SIZES = [
 ] as const;
 const LITELLM_MAX_INPUT_IMAGES = 5;
 
-function resolveConfiguredLitellmBaseUrl(cfg: OpenClawConfig | undefined): string {
-  const provider = cfg?.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
-  return normalizeOptionalString(provider?.baseUrl) ?? LITELLM_BASE_URL;
+type LitellmProviderConfig = NonNullable<
+  NonNullable<OpenClawConfig["models"]>["providers"]
+>[string];
+
+function resolveLitellmProviderConfig(
+  cfg: OpenClawConfig | undefined,
+): LitellmProviderConfig | undefined {
+  return cfg?.models?.providers?.litellm;
 }
 
-// LiteLLM is typically deployed as a self-hosted proxy on loopback or a
-// private LAN address, so allow private network by default when the
-// configured baseUrl resolves to one. Public baseUrls keep the normal SSRF
-// defaults.
-//
-// The classification is anchored on the parsed URL's hostname so that
-// unrelated text elsewhere in the URL (query strings, path segments) cannot
-// trick the heuristic — for example `https://evil.com/?x=host.docker.internal`
-// must NOT be treated as a private endpoint.
-function isPrivateLitellmHostname(hostname: string): boolean {
+function resolveConfiguredLitellmBaseUrl(cfg: OpenClawConfig | undefined): string {
+  return normalizeOptionalString(resolveLitellmProviderConfig(cfg)?.baseUrl) ?? LITELLM_BASE_URL;
+}
+
+// LiteLLM's default proxy is loopback. Auto-enable private-network access only
+// for loopback-style hosts; LAN/custom private endpoints should use the
+// explicit models.providers.litellm.request.allowPrivateNetwork opt-in.
+function isAutoAllowedLitellmHostname(hostname: string): boolean {
   if (!hostname) {
     return false;
   }
@@ -53,9 +57,7 @@ function isPrivateLitellmHostname(hostname: string): boolean {
   if (
     lowered === "localhost" ||
     lowered === "host.docker.internal" ||
-    lowered.endsWith(".localhost") ||
-    lowered.endsWith(".local") ||
-    lowered.endsWith(".internal")
+    lowered.endsWith(".localhost")
   ) {
     return true;
   }
@@ -65,22 +67,16 @@ function isPrivateLitellmHostname(hostname: string): boolean {
   if (lowered === "::1" || lowered === "0:0:0:0:0:0:0:1") {
     return true;
   }
-  if (lowered.startsWith("10.") || lowered.startsWith("192.168.")) {
-    return true;
-  }
-  if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(lowered)) {
-    return true;
-  }
   return false;
 }
 
-function shouldAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
+function shouldAutoAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
   try {
     const parsed = new URL(baseUrl);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
-    return isPrivateLitellmHostname(parsed.hostname);
+    return isAutoAllowedLitellmHostname(parsed.hostname);
   } catch {
     return false;
   }
@@ -139,12 +135,16 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("LiteLLM API key missing");
       }
+      const providerConfig = resolveLitellmProviderConfig(req.cfg);
       const resolvedBaseUrl = resolveConfiguredLitellmBaseUrl(req.cfg);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: resolvedBaseUrl,
           defaultBaseUrl: LITELLM_BASE_URL,
-          allowPrivateNetwork: shouldAllowPrivateLitellmEndpoint(resolvedBaseUrl),
+          allowPrivateNetwork: shouldAutoAllowPrivateLitellmEndpoint(resolvedBaseUrl)
+            ? true
+            : undefined,
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },

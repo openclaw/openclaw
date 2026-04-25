@@ -6,16 +6,18 @@ const {
   postJsonRequestMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "litellm-key" })),
   postJsonRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: Boolean(params.allowPrivateNetwork),
+    allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork),
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined as unknown,
   })),
+  sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -26,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
 
 function mockGeneratedPngResponse() {
@@ -45,6 +48,7 @@ describe("litellm image generation provider", () => {
     postJsonRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
+    sanitizeConfiguredModelProviderRequestMock.mockClear();
   });
 
   it("declares litellm id and OpenAI-compatible size hints", () => {
@@ -107,12 +111,13 @@ describe("litellm image generation provider", () => {
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
       expect.objectContaining({
         baseUrl: "https://proxy.example.com/v1",
-        allowPrivateNetwork: false,
+        allowPrivateNetwork: undefined,
       }),
     );
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://proxy.example.com/v1/images/generations",
+        allowPrivateNetwork: false,
       }),
     );
   });
@@ -210,17 +215,13 @@ describe("litellm image generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledWith(expect.objectContaining({ dispatcherPolicy }));
   });
 
-  it("allows private network for https loopback and RFC1918 baseUrls", async () => {
+  it("auto-allows private network for loopback-style baseUrls", async () => {
     const cases = [
       "http://localhost:4000",
       "http://127.0.0.1:4000",
       "http://[::1]:4000",
-      "http://10.0.0.42:4000",
-      "http://192.168.5.10:4000",
-      "http://172.16.0.5:4000",
       "http://host.docker.internal:4000",
       "https://localhost:4000",
-      "https://192.168.5.10:4000",
     ] as const;
     for (const baseUrl of cases) {
       resolveProviderHttpRequestConfigMock.mockClear();
@@ -237,6 +238,68 @@ describe("litellm image generation provider", () => {
         `expected allowPrivateNetwork=true for ${baseUrl}`,
       ).toHaveBeenCalledWith(expect.objectContaining({ allowPrivateNetwork: true }));
     }
+  });
+
+  it("requires explicit private-network opt-in for LAN and internal baseUrls", async () => {
+    const cases = [
+      "http://10.0.0.42:4000",
+      "http://192.168.5.10:4000",
+      "http://172.16.0.5:4000",
+      "https://192.168.5.10:4000",
+      "http://printer.local:4000",
+      "http://proxy.internal:4000",
+      "https://metadata.google.internal",
+    ] as const;
+    for (const baseUrl of cases) {
+      resolveProviderHttpRequestConfigMock.mockClear();
+      mockGeneratedPngResponse();
+      const provider = buildLitellmImageGenerationProvider();
+      await provider.generateImage({
+        provider: "litellm",
+        model: "gpt-image-2",
+        prompt: "x",
+        cfg: { models: { providers: { litellm: { baseUrl, models: [] } } } },
+      });
+      expect(
+        resolveProviderHttpRequestConfigMock,
+        `expected no automatic allowPrivateNetwork for ${baseUrl}`,
+      ).toHaveBeenCalledWith(expect.objectContaining({ allowPrivateNetwork: undefined }));
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({ allowPrivateNetwork: false }),
+      );
+    }
+  });
+
+  it("honors explicit private-network opt-in for a LAN LiteLLM proxy", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildLitellmImageGenerationProvider();
+    await provider.generateImage({
+      provider: "litellm",
+      model: "gpt-image-2",
+      prompt: "x",
+      cfg: {
+        models: {
+          providers: {
+            litellm: {
+              baseUrl: "http://192.168.5.10:4000",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowPrivateNetwork: undefined,
+        request: { allowPrivateNetwork: true },
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
   });
 
   it("does not allow private network for public hosts that embed private strings in the URL", async () => {
@@ -262,7 +325,7 @@ describe("litellm image generation provider", () => {
       expect(
         resolveProviderHttpRequestConfigMock,
         `expected allowPrivateNetwork=false for ${baseUrl}`,
-      ).toHaveBeenCalledWith(expect.objectContaining({ allowPrivateNetwork: false }));
+      ).toHaveBeenCalledWith(expect.objectContaining({ allowPrivateNetwork: undefined }));
     }
   });
 });

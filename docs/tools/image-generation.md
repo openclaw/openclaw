@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images using configured providers (OpenAI, OpenAI Codex OAuth, Google Gemini, OpenRouter, fal, MiniMax, ComfyUI, Vydra, xAI)"
+summary: "Generate and edit images using configured providers (OpenAI, OpenAI Codex OAuth, Google Gemini, OpenRouter, LiteLLM, fal, MiniMax, ComfyUI, Vydra, xAI)"
 read_when:
   - Generating images via the agent
   - Configuring image generation providers and models
@@ -53,6 +53,7 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 | OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                     |
 | OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI Codex OAuth                   |
 | OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                 |
+| LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                    |
 | Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
 
 The same `image_generate` tool handles text-to-image and reference-image
@@ -67,6 +68,7 @@ ignored when a provider does not support them.
 | ---------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
 | OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI Codex OAuth                |
 | OpenRouter | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
+| LiteLLM    | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | Google     | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | fal        | `fal-ai/flux/dev`                       | Yes                                | `FAL_KEY`                                             |
 | MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
