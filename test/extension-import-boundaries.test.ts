@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { main as extensionPluginSdkMain } from "../scripts/check-extension-plugin-sdk-boundary.mjs";
 import { main as sdkPackageMain } from "../scripts/check-sdk-package-extension-import-boundary.mjs";
 import { main as srcExtensionMain } from "../scripts/check-src-extension-import-boundary.mjs";
+import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
 const srcJsonOutputPromise = getJsonOutput(srcExtensionMain, ["--json"]);
@@ -20,6 +21,26 @@ const relativeOutsidePackageJsonOutputPromise = getJsonOutput(extensionPluginSdk
 ]);
 
 type CapturedIo = ReturnType<typeof createCapturedIo>["io"];
+
+describe("fast module reference scanner", () => {
+  it("collects code references without matching comments or strings", () => {
+    expect(
+      collectModuleReferencesFromSource(`
+// import "./commented";
+const text = 'import("./string")';
+import "./side-effect";
+import type { Example } from "./types";
+export { Example } from "./public";
+await import("./runtime");
+`),
+    ).toEqual([
+      { kind: "import", line: 4, specifier: "./side-effect" },
+      { kind: "import", line: 5, specifier: "./types" },
+      { kind: "export", line: 6, specifier: "./public" },
+      { kind: "dynamic-import", line: 7, specifier: "./runtime" },
+    ]);
+  });
+});
 
 async function getJsonOutput(
   main: (argv: string[], io: CapturedIo) => Promise<number>,

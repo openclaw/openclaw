@@ -3,13 +3,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
 import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
 import {
+  collectModuleReferencesFromSource,
   diffInventoryEntries,
   normalizeRepoPath,
   resolveRepoSpecifier,
@@ -107,7 +107,7 @@ async function collectExtensionModuleReferences() {
           }
           return {
             filePath,
-            references: collectModuleReferences(source),
+            references: collectModuleReferencesFromSource(source),
           };
         }),
       );
@@ -123,49 +123,6 @@ function mayContainModuleSpecifier(source) {
     /\bimport\s*(?:\(|["']|type\b|[\w*{])/.test(source) ||
     /\bexport\s*(?:type\s+)?(?:\*|{)[^;\n]*\bfrom\s*["']/.test(source)
   );
-}
-
-function collectModuleReferences(source) {
-  const lineStarts = computeLineStarts(source);
-  return ts.preProcessFile(source, true, true).importedFiles.map((reference) => ({
-    kind: inferModuleReferenceKind(source, reference.pos),
-    line: lineFromPosition(lineStarts, reference.pos),
-    specifier: reference.fileName,
-  }));
-}
-
-function computeLineStarts(source) {
-  const lineStarts = [0];
-  for (let index = 0; index < source.length; index += 1) {
-    if (source.charCodeAt(index) === 10) {
-      lineStarts.push(index + 1);
-    }
-  }
-  return lineStarts;
-}
-
-function lineFromPosition(lineStarts, position) {
-  let low = 0;
-  let high = lineStarts.length - 1;
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    if (lineStarts[middle] <= position) {
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return high + 1;
-}
-
-function inferModuleReferenceKind(source, specifierStart) {
-  const importIndex = source.lastIndexOf("import", specifierStart);
-  const exportIndex = source.lastIndexOf("export", specifierStart);
-  if (exportIndex > importIndex) {
-    return "export";
-  }
-  const importPrefix = source.slice(importIndex, specifierStart);
-  return /\bimport\s*\(\s*["']?$/.test(importPrefix) ? "dynamic-import" : "import";
 }
 
 function resolveExtensionRoot(filePath) {
