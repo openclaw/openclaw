@@ -122,8 +122,8 @@ await api.runtime.subagent.deleteSession({
 ### `api.runtime.nodes`
 
 List connected nodes and invoke a node-host command from Gateway-loaded plugin
-code. Use this when a plugin owns local work on a paired device, for example a
-browser or audio bridge on another Mac.
+code or from plugin CLI commands. Use this when a plugin owns local work on a
+paired device, for example a browser or audio bridge on another Mac.
 
 ```typescript
 const { nodes } = await api.runtime.nodes.list({ connected: true });
@@ -136,7 +136,9 @@ const result = await api.runtime.nodes.invoke({
 });
 ```
 
-This runtime is only available inside the Gateway. Node commands still go
+Inside the Gateway this runtime is in-process. In plugin CLI commands it calls
+the configured Gateway over RPC, so commands such as `openclaw googlemeet
+recover-tab` can inspect paired nodes from the terminal. Node commands still go
 through normal Gateway node pairing, command allowlists, and node-local command
 handling.
 
