@@ -727,6 +727,62 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
+  it("skips last-known-good recovery for plugin-local invalid reloads", async () => {
+    const activeConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      agents: { defaults: { model: "gpt-5.4" } },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { compactionMode: "adaptive", cacheAwareCompaction: true },
+          },
+        },
+      },
+    };
+    const invalidSnapshot = makeSnapshot({
+      valid: false,
+      raw: `${JSON.stringify(activeConfig, null, 2)}\n`,
+      parsed: activeConfig,
+      sourceConfig: activeConfig,
+      runtimeConfig: activeConfig,
+      config: activeConfig,
+      issues: [
+        {
+          path: "plugins.entries.lossless-claw.config.cacheAwareCompaction",
+          message: "invalid config: must NOT have additional properties",
+        },
+      ],
+      hash: "plugin-skew-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(invalidSnapshot);
+    const recoverSnapshot = vi.fn(async () => true);
+    const promoteSnapshot = vi.fn(async () => true);
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
+      recoverSnapshot,
+      promoteSnapshot,
+    });
+
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(recoverSnapshot).not.toHaveBeenCalled();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(onHotReload).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(promoteSnapshot).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload recovery skipped after invalid-config: invalidity is scoped to plugin entries",
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("config reload skipped (invalid config):"),
+    );
+
+    await reloader.stop();
+  });
+
   it("promotes valid external config edits after they are accepted", async () => {
     const acceptedSnapshot = makeSnapshot({
       config: {
