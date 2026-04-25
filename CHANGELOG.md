@@ -61,6 +61,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/agents: keep `agents bind`, `agents unbind`, and `agents bindings` on
+  setup-safe channel metadata paths so they do not preload bundled plugin
+  runtimes or stage runtime dependencies. Fixes #71743.
 - Plugins/registry: preserve explicit disabled plugin records during registry migration without persisting every unused bundled plugin discovered on disk. Thanks @shakkernerd.
 - Windows/native: keep CLI startup and bundled provider plugin loading off
   Windows ESM raw-path failure paths, fixing native onboarding/install smoke on

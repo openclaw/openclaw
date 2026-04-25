@@ -89,6 +89,24 @@ describe("command-startup-policy", () => {
         jsonOutputMode: true,
       }),
     ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "bind"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "bindings"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "unbind"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
   });
 
   it("matches banner suppression policy", () => {
