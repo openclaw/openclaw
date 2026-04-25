@@ -4722,7 +4722,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "boolean",
                         title: "Compaction Quality Guard Enabled",
                         description:
-                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
                       },
                       maxRetries: {
                         type: "integer",
@@ -4736,7 +4736,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     additionalProperties: false,
                     title: "Compaction Quality Guard",
                     description:
-                      "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+                      "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
                   },
                   postIndexSync: {
                     type: "string",
@@ -26066,12 +26066,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.compaction.qualityGuard": {
       label: "Compaction Quality Guard",
-      help: "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
+      help: "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard.enabled": {
       label: "Compaction Quality Guard Enabled",
-      help: "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
+      help: "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.qualityGuard.maxRetries": {

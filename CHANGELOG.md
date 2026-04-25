@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Compaction: honor explicit `agents.defaults.compaction.keepRecentTokens` for manual `/compact`, re-distill safeguard summaries instead of snowballing previous summaries, and enable safeguard summary quality checks by default. Fixes #71357. Thanks @WhiteGiverMa.
 - Sessions: honor configured `session.maintenance` settings during load-time maintenance instead of falling back to default entry caps. Fixes #71356. Thanks @comolago.
 - Browser/sandbox: pass the resolved `browser.ssrfPolicy` into sandbox browser bridges and refresh cached bridges when the effective policy changes, so sandboxed browser navigation honors private-network opt-ins. Fixes #45153 and #57055. Thanks @jzakirov, @zuoanCo, and @kybrcore.
 - Browser/proxy: keep Gateway/provider proxy environment variables from proxying the OpenClaw-managed browser, so `HTTP_PROXY` and `HTTPS_PROXY` no longer block ordinary browser navigation. Fixes #71358. Thanks @Sanjays2402.
