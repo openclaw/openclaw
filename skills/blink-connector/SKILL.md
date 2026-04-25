@@ -159,14 +159,14 @@ blink connector exec slack conversations.history POST '{"channel":"C123456","lim
 ### Discord
 
 ```bash
+# Get current Discord user
+blink connector exec discord users/@me GET
+
 # List guilds (servers)
 blink connector exec discord users/@me/guilds GET
 
-# List channels in a guild
-blink connector exec discord guilds/GUILD_ID/channels GET
-
-# Send a message
-blink connector exec discord channels/CHANNEL_ID/messages POST '{"content":"Hello from Blink!"}'
+# Get current user's member record in a guild
+blink connector exec discord users/@me/guilds/GUILD_ID/member GET
 ```
 
 ### Google Calendar
