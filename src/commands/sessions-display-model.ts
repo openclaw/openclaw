@@ -1,4 +1,5 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { normalizeStoredProviderModelOverride } from "../agents/model-ref-shared.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -40,25 +41,6 @@ function resolveAgentPrimaryModel(
   return resolveAgentModelPrimaryValue(agentConfig?.model);
 }
 
-function normalizeStoredOverrideModel(params: {
-  providerOverride?: string;
-  modelOverride?: string;
-}): { providerOverride?: string; modelOverride?: string } {
-  const providerOverride = params.providerOverride?.trim();
-  const modelOverride = params.modelOverride?.trim();
-  if (!providerOverride || !modelOverride) {
-    return { providerOverride, modelOverride };
-  }
-
-  const providerPrefix = `${providerOverride.toLowerCase()}/`;
-  return {
-    providerOverride,
-    modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
-      ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
-      : modelOverride,
-  };
-}
-
 function resolveDefaultModelRef(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -85,7 +67,7 @@ export function resolveSessionDisplayModel(
 ): string {
   const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
-  const normalizedOverride = normalizeStoredOverrideModel({
+  const normalizedOverride = normalizeStoredProviderModelOverride({
     providerOverride: row.providerOverride,
     modelOverride: row.modelOverride,
   });
