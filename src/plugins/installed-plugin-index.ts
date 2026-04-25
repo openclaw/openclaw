@@ -91,6 +91,7 @@ export type InstalledPluginIndexRecord = {
   packageJsonHash?: string;
   rootDir: string;
   origin: PluginManifestRecord["origin"];
+  enabled: boolean;
   enabledByDefault?: boolean;
   contributions: InstalledPluginIndexContributions;
   compat: readonly PluginCompatCode[];
@@ -400,6 +401,7 @@ function buildInstalledPluginIndex(
   const env = params.env ?? process.env;
   const { candidates, registry } = resolveRegistry(params);
   const candidateByRootDir = buildCandidateLookup(candidates);
+  const normalizedConfig = normalizePluginsConfigWithResolver(params.config?.plugins);
   const diagnostics: PluginDiagnostic[] = [...registry.diagnostics];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
@@ -422,12 +424,20 @@ function buildInstalledPluginIndex(
           required: false,
         })
       : undefined;
+    const enabled = resolveEffectiveEnableState({
+      id: record.id,
+      origin: record.origin,
+      config: normalizedConfig,
+      rootConfig: params.config,
+      enabledByDefault: record.enabledByDefault,
+    }).enabled;
     const indexRecord: InstalledPluginIndexRecord = {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
       rootDir: record.rootDir,
       origin: record.origin,
+      enabled,
       contributions: buildContributions(record),
       compat: collectCompatCodes(record),
     };
@@ -490,6 +500,9 @@ export function listEnabledInstalledPluginRecords(
   index: InstalledPluginIndex,
   config?: OpenClawConfig,
 ): readonly InstalledPluginIndexRecord[] {
+  if (!config) {
+    return index.plugins.filter((plugin) => plugin.enabled);
+  }
   const normalizedConfig = normalizePluginsConfigWithResolver(config?.plugins);
   return index.plugins.filter(
     (plugin) =>
@@ -518,6 +531,9 @@ export function isInstalledPluginEnabled(
   const record = getInstalledPluginRecord(index, pluginId);
   if (!record) {
     return false;
+  }
+  if (!config) {
+    return record.enabled;
   }
   const normalizedConfig = normalizePluginsConfigWithResolver(config?.plugins);
   return resolveEffectiveEnableState({
@@ -673,6 +689,9 @@ export function diffInstalledPluginIndexInvalidationReasons(
       previousPlugin.installRecordHash !== currentPlugin.installRecordHash
     ) {
       reasons.add("source-changed");
+    }
+    if (previousPlugin.enabled !== currentPlugin.enabled) {
+      reasons.add("policy-changed");
     }
     if (previousPlugin.manifestHash !== currentPlugin.manifestHash) {
       reasons.add("stale-manifest");

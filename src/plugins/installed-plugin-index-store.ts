@@ -60,6 +60,7 @@ const InstalledPluginIndexRecordSchema = z
     packageJsonHash: z.string().optional(),
     rootDir: z.string(),
     origin: z.string(),
+    enabled: z.boolean(),
     enabledByDefault: z.boolean().optional(),
     contributions: InstalledPluginIndexContributionsSchema,
     compat: z.array(z.string()),
