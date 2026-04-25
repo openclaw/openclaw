@@ -339,6 +339,16 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes provider auth choice edits to focused auth-choice tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugins/provider-auth-choice.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/commands/auth-choice.apply.plugin-provider.test.ts",
+        "src/commands/auth-choice.test.ts",
+      ],
+    });
+  });
+
   it("routes changed utils and shared files to their light scoped lanes", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/shared/string-normalization.ts",
