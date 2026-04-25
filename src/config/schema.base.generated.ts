@@ -21075,6 +21075,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
           },
+          speechLocale: {
+            type: "string",
+            title: "Talk Speech Locale",
+            description:
+              'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
+          },
           interruptOnSpeech: {
             type: "boolean",
             title: "Talk Interrupt on Speech",
@@ -27272,6 +27278,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Canvas Host Live Reload",
       help: "Enables automatic live-reload behavior for canvas assets during development workflows. Keep disabled in production-like environments where deterministic output is preferred.",
       tags: ["reliability"],
+    },
+    "talk.speechLocale": {
+      label: "Talk Speech Locale",
+      help: 'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
+      tags: ["media"],
     },
     "talk.interruptOnSpeech": {
       label: "Talk Interrupt on Speech",

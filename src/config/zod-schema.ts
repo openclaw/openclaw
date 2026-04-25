@@ -186,6 +186,7 @@ const TalkSchema = z
   .object({
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
   })

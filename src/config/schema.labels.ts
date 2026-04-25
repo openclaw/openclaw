@@ -786,6 +786,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "canvasHost.port": "Canvas Host Port",
   "canvasHost.liveReload": "Canvas Host Live Reload",
   talk: "Talk",
+  "talk.speechLocale": "Talk Speech Locale",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",

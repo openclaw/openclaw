@@ -59,6 +59,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- iOS/macOS Talk Mode: allow `talk.speechLocale` to set the speech
+  recognition locale for non-English voice conversations. Fixes #44688.
 - Plugins/Voice Call: treat missing provider credentials as setup-incomplete
   during Gateway startup and log the missing keys as a warning instead of a
   runtime startup error, while keeping explicit command/tool errors when used. Thanks

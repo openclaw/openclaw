@@ -1332,6 +1332,7 @@ Defaults for Talk mode (macOS/iOS/Android).
       },
       system: {},
     },
+    speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
   },
@@ -1346,6 +1347,7 @@ Defaults for Talk mode (macOS/iOS/Android).
 - `providers.*.voiceAliases` lets Talk directives use friendly names.
 - `providers.mlx.modelId` selects the Hugging Face repo used by the macOS local MLX helper. If omitted, macOS uses `mlx-community/Soprano-80M-bf16`.
 - macOS MLX playback runs through the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`; `OPENCLAW_MLX_TTS_BIN` overrides the helper path for development.
+- `speechLocale` sets the BCP 47 locale id used by iOS/macOS Talk speech recognition. Leave unset to use the device default.
 - `silenceTimeoutMs` controls how long Talk mode waits after user silence before it sends the transcript. Unset keeps the platform default pause window (`700 ms on macOS and Android, 900 ms on iOS`).
 
 ---

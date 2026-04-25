@@ -148,6 +148,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
   "talk.providers.*": "Provider-owned Talk config fields for the matching provider id.",
   "talk.providers.*.apiKey": "Provider API key for Talk mode.", // pragma: allowlist secret
+  "talk.speechLocale":
+    'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
   "talk.silenceTimeoutMs": `Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (${describeTalkSilenceTimeoutDefaults()}).`,
