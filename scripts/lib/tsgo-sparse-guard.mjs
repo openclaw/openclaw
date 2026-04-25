@@ -9,6 +9,28 @@ const CORE_TEST_CONFIGS = new Set([
   "tsconfig.core.test.non-agents.json",
 ]);
 
+const CORE_PROD_CONFIGS = new Set(["tsconfig.core.json"]);
+const TSGO_SPARSE_SKIP_ENV_KEY = "OPENCLAW_TSGO_SPARSE_SKIP";
+
+const CORE_PROD_REQUIRED_PATHS = [
+  {
+    path: "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+    whenPresent: "ui/src/ui/tool-display.ts",
+  },
+  {
+    path: "scripts/lib/bundled-runtime-sidecar-paths.json",
+    whenPresent: "src/plugins/runtime-sidecar-paths.ts",
+  },
+  {
+    path: "scripts/lib/official-external-channel-catalog.json",
+    whenPresent: "src/channels/plugins/catalog.ts",
+  },
+  {
+    path: "scripts/lib/plugin-sdk-entrypoints.json",
+    whenPresent: "src/plugin-sdk/entrypoints.ts",
+  },
+];
+
 const CORE_TEST_REQUIRED_PATHS = [
   "packages/plugin-package-contract/src/index.ts",
   "ui/src/i18n/lib/registry.ts",
@@ -17,14 +39,27 @@ const CORE_TEST_REQUIRED_PATHS = [
   "ui/src/ui/gateway.ts",
 ];
 
+export function shouldSkipSparseTsgoGuardError(env = process.env) {
+  const value = env[TSGO_SPARSE_SKIP_ENV_KEY]?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+export function createSparseTsgoSkipEnv(baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    [TSGO_SPARSE_SKIP_ENV_KEY]: baseEnv[TSGO_SPARSE_SKIP_ENV_KEY]?.trim() || "1",
+  };
+}
+
 export function getSparseTsgoGuardError(
   args,
   { cwd = process.cwd(), fileExists = fs.existsSync, isSparseCheckoutEnabled } = {},
 ) {
   const projectPath = readProjectFlag(args);
+  const projectName = projectPath ? path.basename(projectPath) : null;
   if (
-    !projectPath ||
-    !CORE_TEST_CONFIGS.has(path.basename(projectPath)) ||
+    !projectName ||
+    (!CORE_PROD_CONFIGS.has(projectName) && !CORE_TEST_CONFIGS.has(projectName)) ||
     isMetadataOnlyCommand(args)
   ) {
     return null;
@@ -36,7 +71,7 @@ export function getSparseTsgoGuardError(
     return null;
   }
 
-  const missingPaths = CORE_TEST_REQUIRED_PATHS.filter(
+  const missingPaths = getRequiredPathsForProject(projectName, cwd, fileExists).filter(
     (relativePath) => !fileExists(path.join(cwd, relativePath)),
   );
   if (missingPaths.length === 0) {
@@ -44,10 +79,27 @@ export function getSparseTsgoGuardError(
   }
 
   return [
-    `${path.basename(projectPath)} requires a full worktree, but this checkout is sparse and missing files that the core test graph imports:`,
+    `${projectName} cannot be typechecked from this sparse checkout because tracked project inputs are missing:`,
     ...missingPaths.map((relativePath) => `- ${relativePath}`),
-    'Run "gwt sparse full" in this worktree, then rerun the tsgo command.',
+    "Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree.",
   ].join("\n");
+}
+
+function getRequiredPathsForProject(projectName, cwd, fileExists) {
+  const requiredPaths = [];
+  if (CORE_PROD_CONFIGS.has(projectName)) {
+    requiredPaths.push(...conditionalRequiredPaths(CORE_PROD_REQUIRED_PATHS, cwd, fileExists));
+  }
+  if (CORE_TEST_CONFIGS.has(projectName)) {
+    requiredPaths.push(...CORE_TEST_REQUIRED_PATHS);
+  }
+  return [...new Set(requiredPaths)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function conditionalRequiredPaths(entries, cwd, fileExists) {
+  return entries
+    .filter((entry) => fileExists(path.join(cwd, entry.whenPresent)))
+    .map((entry) => entry.path);
 }
 
 function getGitBooleanConfig(name, { cwd }) {

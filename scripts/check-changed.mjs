@@ -8,6 +8,7 @@ import {
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 import { isCiLikeEnv } from "./lib/vitest-local-scheduling.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
@@ -44,11 +45,12 @@ export function createChangedCheckVitestEnv(baseEnv = process.env) {
 
 export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
-  const add = (name, args) => {
+  const add = (name, args, env) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
-      commands.push({ name, args });
+      commands.push({ name, args, ...(env ? { env } : {}) });
     }
   };
+  const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(options.env));
 
   add("conflict markers", ["check:no-conflict-markers"]);
 
@@ -89,7 +91,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (runAll) {
-    add("typecheck all", ["tsgo:all"]);
+    addTypecheck("typecheck all", ["tsgo:all"]);
     add("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
     return {
@@ -103,16 +105,16 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core) {
-    add("typecheck core", ["tsgo:core"]);
+    addTypecheck("typecheck core", ["tsgo:core"]);
   }
   if (lanes.coreTests) {
-    add("typecheck core tests", ["tsgo:core:test"]);
+    addTypecheck("typecheck core tests", ["tsgo:core:test"]);
   }
   if (lanes.extensions) {
-    add("typecheck extensions", ["tsgo:extensions"]);
+    addTypecheck("typecheck extensions", ["tsgo:extensions"]);
   }
   if (lanes.extensionTests) {
-    add("typecheck extension tests", ["tsgo:extensions:test"]);
+    addTypecheck("typecheck extension tests", ["tsgo:extensions:test"]);
   }
 
   if (lanes.core || lanes.coreTests) {
