@@ -116,6 +116,8 @@ export type InstalledPluginContributions = {
   contracts: ReadonlyMap<string, readonly string[]>;
 };
 
+export type InstalledPluginContributionKey = keyof InstalledPluginIndexContributions;
+
 export type LoadInstalledPluginIndexParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -446,6 +448,65 @@ export function refreshInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams,
 ): InstalledPluginIndex {
   return buildInstalledPluginIndex({ ...params, cache: false, refreshReason: params.reason });
+}
+
+export function listInstalledPluginRecords(
+  index: InstalledPluginIndex,
+): readonly InstalledPluginIndexRecord[] {
+  return index.plugins;
+}
+
+export function listEnabledInstalledPluginRecords(
+  index: InstalledPluginIndex,
+): readonly InstalledPluginIndexRecord[] {
+  return index.plugins.filter((plugin) => plugin.enabled);
+}
+
+export function getInstalledPluginRecord(
+  index: InstalledPluginIndex,
+  pluginId: string,
+): InstalledPluginIndexRecord | undefined {
+  return index.plugins.find((plugin) => plugin.pluginId === pluginId);
+}
+
+export function isInstalledPluginEnabled(index: InstalledPluginIndex, pluginId: string): boolean {
+  return getInstalledPluginRecord(index, pluginId)?.enabled === true;
+}
+
+function resolveContributionRecordSet(
+  index: InstalledPluginIndex,
+  options: { includeDisabled?: boolean },
+): readonly InstalledPluginIndexRecord[] {
+  return options.includeDisabled ? index.plugins : listEnabledInstalledPluginRecords(index);
+}
+
+export function listInstalledPluginContributionIds(
+  index: InstalledPluginIndex,
+  contribution: InstalledPluginContributionKey,
+  options: { includeDisabled?: boolean } = {},
+): readonly string[] {
+  return sortUnique(
+    resolveContributionRecordSet(index, options).flatMap(
+      (plugin) => plugin.contributions[contribution],
+    ),
+  );
+}
+
+export function resolveInstalledPluginContributionOwners(
+  index: InstalledPluginIndex,
+  contribution: InstalledPluginContributionKey,
+  matches: string | ((contributionId: string) => boolean),
+  options: { includeDisabled?: boolean } = {},
+): readonly string[] {
+  const matcher =
+    typeof matches === "string" ? (contributionId: string) => contributionId === matches : matches;
+  const owners: string[] = [];
+  for (const plugin of resolveContributionRecordSet(index, options)) {
+    if (plugin.contributions[contribution].some(matcher)) {
+      owners.push(plugin.pluginId);
+    }
+  }
+  return sortUnique(owners);
 }
 
 function addContribution(

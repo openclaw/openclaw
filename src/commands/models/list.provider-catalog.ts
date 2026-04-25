@@ -5,8 +5,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  type InstalledPluginIndex,
   loadInstalledPluginIndex,
-  resolveInstalledPluginContributions,
+  resolveInstalledPluginContributionOwners,
 } from "../../plugins/installed-plugin-index.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
@@ -35,17 +36,20 @@ function providerMatchesFilter(params: {
   ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
 }
 
-function collectMatchingContributionPluginIds(
-  contributions: ReadonlyMap<string, readonly string[]>,
+function collectMatchingContributionOwners(
+  index: InstalledPluginIndex,
+  contribution: "providers" | "cliBackends",
   providerFilter: string,
+  options: { includeDisabled?: boolean } = {},
 ): string[] {
-  const pluginIds: string[] = [];
-  for (const [contributionId, ownerPluginIds] of contributions) {
-    if (normalizeProviderId(contributionId) === providerFilter) {
-      pluginIds.push(...ownerPluginIds);
-    }
-  }
-  return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+  return [
+    ...resolveInstalledPluginContributionOwners(
+      index,
+      contribution,
+      (contributionId) => normalizeProviderId(contributionId) === providerFilter,
+      options,
+    ),
+  ];
 }
 
 function resolveInstalledIndexPluginIdsForProviderFilter(params: {
@@ -57,14 +61,22 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
     config: params.cfg,
     env: params.env,
   });
-  const contributions = resolveInstalledPluginContributions(index);
   const pluginIds = [
-    ...collectMatchingContributionPluginIds(contributions.providers, params.providerFilter),
-    ...collectMatchingContributionPluginIds(contributions.cliBackends, params.providerFilter),
+    ...collectMatchingContributionOwners(index, "providers", params.providerFilter),
+    ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter),
   ];
-  return pluginIds.length > 0
-    ? [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
+  if (pluginIds.length > 0) {
+    return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+  }
+  const disabledPluginIds = [
+    ...collectMatchingContributionOwners(index, "providers", params.providerFilter, {
+      includeDisabled: true,
+    }),
+    ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, {
+      includeDisabled: true,
+    }),
+  ];
+  return disabledPluginIds.length > 0 ? [] : undefined;
 }
 
 export async function resolveProviderCatalogPluginIdsForFilter(params: {
