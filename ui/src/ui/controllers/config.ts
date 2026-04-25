@@ -227,7 +227,17 @@ export function updateConfigFormValue(
 }
 
 export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+  const snapshotConfig =
+    state.configSnapshot?.config &&
+    typeof state.configSnapshot.config === "object" &&
+    !Array.isArray(state.configSnapshot.config)
+      ? state.configSnapshot.config
+      : null;
+  const baseSource = state.configForm ?? snapshotConfig;
+  if (!baseSource || (!state.configForm && !state.configSnapshot?.hash)) {
+    return;
+  }
+  const base = cloneConfigObject(baseSource);
   const merged = applyMergePatch(base, patch);
   if (!merged || typeof merged !== "object" || Array.isArray(merged)) {
     return;

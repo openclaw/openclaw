@@ -183,6 +183,24 @@ describe("updateConfigFormValue", () => {
 });
 
 describe("stageConfigPreset", () => {
+  it("ignores preset staging before a config snapshot is ready", () => {
+    const state = createState();
+
+    stageConfigPreset(state, {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 50_000,
+          bootstrapTotalMaxChars: 300_000,
+          contextInjection: "always",
+        },
+      },
+    });
+
+    expect(state.configForm).toBeNull();
+    expect(state.configRaw).toBe("");
+    expect(state.configFormDirty).toBe(false);
+  });
+
   it("stages preset changes without dropping unrelated config", () => {
     const state = createState();
     applyConfigSnapshot(state, {
