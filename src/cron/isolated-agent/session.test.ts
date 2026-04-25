@@ -257,6 +257,14 @@ describe("resolveCronSession", () => {
           cacheRead: 4,
           cacheWrite: 5,
           contextTokens: 200_000,
+          compactionCount: 9,
+          memoryFlushAt: NOW_MS - 500,
+          abortCutoffMessageSid: "old-message",
+          spawnedBy: "agent:main:session:parent",
+          skillsSnapshot: {
+            prompt: "old skills",
+            skills: [{ name: "stale-skill" }],
+          },
           systemPromptReport: {
             source: "run",
             generatedAt: NOW_MS,
@@ -312,6 +320,11 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cacheRead).toBeUndefined();
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.compactionCount).toBeUndefined();
+      expect(result.sessionEntry.memoryFlushAt).toBeUndefined();
+      expect(result.sessionEntry.abortCutoffMessageSid).toBeUndefined();
+      expect(result.sessionEntry.spawnedBy).toBeUndefined();
+      expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
       expect(result.sessionEntry.systemPromptReport).toBeUndefined();
       expect(result.sessionEntry.pluginDebugEntries).toBeUndefined();
       expect(result.sessionEntry.authProfileOverride).toBeUndefined();

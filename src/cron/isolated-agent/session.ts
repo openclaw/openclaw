@@ -9,59 +9,68 @@ import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+const FRESH_CRON_SESSION_PRESERVED_FIELDS = [
+  "heartbeatTaskState",
+  "chatType",
+  "thinkingLevel",
+  "fastMode",
+  "verboseLevel",
+  "traceLevel",
+  "reasoningLevel",
+  "elevatedLevel",
+  "ttsAuto",
+  "responseUsage",
+  "groupActivation",
+  "groupActivationNeedsSystemIntro",
+  "sendPolicy",
+  "queueMode",
+  "queueDebounceMs",
+  "queueCap",
+  "queueDrop",
+  "label",
+  "displayName",
+  "channel",
+  "groupId",
+  "subject",
+  "groupChannel",
+  "space",
+  "origin",
+  "acp",
+] as const satisfies readonly (keyof SessionEntry)[];
+
+function cloneSessionField<T>(value: T): T {
+  return globalThis.structuredClone(value);
+}
+
 function clearFreshCronSessionState(entry: SessionEntry): SessionEntry {
-  const next = { ...entry };
+  const next = {} as SessionEntry;
 
-  delete next.abortedLastRun;
-  delete next.agentHarnessId;
-  delete next.agentRuntimeOverride;
-  delete next.cacheRead;
-  delete next.cacheWrite;
-  delete next.claudeCliSessionId;
-  delete next.cliSessionBindings;
-  delete next.cliSessionIds;
-  delete next.contextTokens;
-  delete next.deliveryContext;
-  delete next.endedAt;
-  delete next.estimatedCostUsd;
-  delete next.execAsk;
-  delete next.execHost;
-  delete next.execNode;
-  delete next.execSecurity;
-  delete next.fallbackNoticeActiveModel;
-  delete next.fallbackNoticeReason;
-  delete next.fallbackNoticeSelectedModel;
-  delete next.heartbeatIsolatedBaseSessionKey;
-  delete next.inputTokens;
-  delete next.lastAccountId;
-  delete next.lastChannel;
-  delete next.lastHeartbeatSentAt;
-  delete next.lastHeartbeatText;
-  delete next.lastThreadId;
-  delete next.lastTo;
-  delete next.liveModelSwitchPending;
-  delete next.model;
-  delete next.modelProvider;
-  delete next.outputTokens;
-  delete next.pluginDebugEntries;
-  delete next.runtimeMs;
-  delete next.sessionFile;
-  delete next.startedAt;
-  delete next.status;
-  delete next.systemPromptReport;
-  delete next.totalTokens;
-  delete next.totalTokensFresh;
-
-  if (next.modelOverrideSource === "auto") {
-    delete next.modelOverride;
-    delete next.providerOverride;
-    delete next.modelOverrideSource;
+  for (const field of FRESH_CRON_SESSION_PRESERVED_FIELDS) {
+    if (entry[field] !== undefined) {
+      next[field] = cloneSessionField(entry[field]) as never;
+    }
   }
 
-  if (next.authProfileOverrideSource !== "user") {
-    delete next.authProfileOverride;
-    delete next.authProfileOverrideSource;
-    delete next.authProfileOverrideCompactionCount;
+  if (entry.modelOverrideSource !== "auto") {
+    if (entry.modelOverride !== undefined) {
+      next.modelOverride = entry.modelOverride;
+    }
+    if (entry.providerOverride !== undefined) {
+      next.providerOverride = entry.providerOverride;
+    }
+    if (entry.modelOverrideSource !== undefined) {
+      next.modelOverrideSource = entry.modelOverrideSource;
+    }
+  }
+
+  if (entry.authProfileOverrideSource === "user") {
+    if (entry.authProfileOverride !== undefined) {
+      next.authProfileOverride = entry.authProfileOverride;
+    }
+    next.authProfileOverrideSource = entry.authProfileOverrideSource;
+    if (entry.authProfileOverrideCompactionCount !== undefined) {
+      next.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+    }
   }
 
   return next;

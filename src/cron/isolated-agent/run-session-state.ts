@@ -20,7 +20,7 @@ type UpdateSessionStore = (
 export type PersistCronSessionEntry = () => Promise<void>;
 
 function cloneSessionEntry(entry: MutableCronSessionEntry): MutableCronSessionEntry {
-  return { ...entry };
+  return globalThis.structuredClone(entry);
 }
 
 export function createPersistCronSessionEntry(params: {

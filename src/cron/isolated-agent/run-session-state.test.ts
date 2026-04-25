@@ -28,6 +28,10 @@ describe("createPersistCronSessionEntry", () => {
       makeSessionEntry({
         status: "running",
         startedAt: 900,
+        skillsSnapshot: {
+          prompt: "old prompt",
+          skills: [{ name: "memory" }],
+        },
       }),
     );
     const updateSessionStore = vi.fn(
@@ -56,7 +60,11 @@ describe("createPersistCronSessionEntry", () => {
     );
 
     cronSession.sessionEntry.status = "done";
+    cronSession.sessionEntry.skillsSnapshot!.skills[0].name = "changed";
     expect(cronSession.store["agent:main:cron:job:run:run-session-id"]?.status).toBe("running");
+    expect(
+      cronSession.store["agent:main:cron:job:run:run-session-id"]?.skillsSnapshot?.skills[0]?.name,
+    ).toBe("memory");
   });
 
   it("uses the shared session entry when the run key is the agent session key", async () => {
