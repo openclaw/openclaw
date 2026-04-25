@@ -704,6 +704,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     The local listener binds to `127.0.0.1:8787`. For public ingress, either put a reverse proxy in front of the local port or set `webhookHost: "0.0.0.0"` intentionally.
 
+    Webhook mode validates request guards, the Telegram secret token, and the JSON body before returning `200` to Telegram.
+    OpenClaw then processes the update asynchronously through the same per-chat/per-topic bot lanes used by long polling, so slow agent turns do not hold Telegram's delivery ACK.
+
   </Accordion>
 
   <Accordion title="Limits, retry, and CLI targets">
