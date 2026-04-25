@@ -286,6 +286,35 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
 
+  it("keeps verbose TTS text when structured local media is not trusted", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+      builtinToolNames: new Set(["tts"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "TTS",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "(spoken) hello" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
   async function handleVerboseGeneratedImage(toolResultFormat: "plain" | "markdown") {
     const ctx = createMockContext({
       shouldEmitToolOutput: true,
