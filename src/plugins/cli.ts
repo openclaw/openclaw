@@ -53,6 +53,7 @@ export async function registerPluginCliCommands(
       env,
       loaderOptions,
       primaryCommand: primary,
+      preferMetadataCommands: mode === "lazy" && primary ? [primary] : undefined,
     }),
     {
       mode,
