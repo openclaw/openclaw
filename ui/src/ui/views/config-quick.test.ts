@@ -161,11 +161,20 @@ describe("renderQuickSettings", () => {
         configurable: true,
         value: "data:image/png;base64,YXZhdGFy",
       });
-      this.onload?.(new Event("load") as ProgressEvent<FileReader>);
+      this.dispatchEvent(new Event("load"));
     });
     class MockFileReader {
       result: string | null = null;
-      onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+      listeners = new Map<string, Array<(event: Event) => void>>();
+      addEventListener(type: string, listener: (event: Event) => void) {
+        this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+      }
+      dispatchEvent(event: Event) {
+        for (const listener of this.listeners.get(event.type) ?? []) {
+          listener(event);
+        }
+        return true;
+      }
       readAsDataURL = readAsDataURL;
     }
     vi.stubGlobal("FileReader", MockFileReader);
