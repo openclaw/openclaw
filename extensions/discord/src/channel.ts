@@ -15,7 +15,6 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   createComputedAccountStatusAdapter,
@@ -49,16 +48,12 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
-import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
 } from "./monitor/thread-bindings.session-updates.js";
-import {
-  looksLikeDiscordTargetId,
-  normalizeDiscordMessagingTarget,
-  normalizeDiscordOutboundTarget,
-} from "./normalize.js";
+import { looksLikeDiscordTargetId, normalizeDiscordMessagingTarget } from "./normalize.js";
+import { discordOutbound } from "./outbound-adapter.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
@@ -68,8 +63,6 @@ import { discordSetupAdapter } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
-
-type DiscordSendFn = typeof import("./send.js").sendMessageDiscord;
 
 let discordProviderRuntimePromise:
   | Promise<typeof import("./monitor/provider.runtime.js")>
@@ -143,22 +136,6 @@ function resolveRuntimeDiscordMessageActions() {
   } catch {
     return null;
   }
-}
-
-function resolveOptionalDiscordRuntime() {
-  try {
-    return getDiscordRuntime();
-  } catch {
-    return null;
-  }
-}
-
-async function resolveDiscordSend(deps?: { [channelId: string]: unknown }): Promise<DiscordSendFn> {
-  return (
-    resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
-    resolveOptionalDiscordRuntime()?.channel?.discord?.sendMessageDiscord ??
-    (await loadDiscordSendModule()).sendMessageDiscord
-  );
 }
 
 const discordMessageActions = {
@@ -811,84 +788,13 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
     },
     outbound: {
-      base: {
-        deliveryMode: "direct",
-        chunker: null,
-        textChunkLimit: 2000,
-        pollMaxOptions: 10,
-        shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
-        shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
-          shouldSuppressLocalDiscordExecApprovalPrompt({
-            cfg,
-            accountId,
-            payload,
-          }),
-        resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
-      },
-      attachedResults: {
-        channel: "discord",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
-          const send = await resolveDiscordSend(deps);
-          return await send(resolveDiscordAttachedOutboundTarget({ to, threadId }), text, {
-            verbose: false,
-            cfg,
-            replyTo: replyToId ?? undefined,
-            accountId: accountId ?? undefined,
-            silent: silent ?? undefined,
-          });
-        },
-        sendMedia: async ({
+      ...discordOutbound,
+      shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalDiscordExecApprovalPrompt({
           cfg,
-          to,
-          text,
-          mediaUrl,
-          mediaLocalRoots,
-          mediaReadFile,
           accountId,
-          deps,
-          replyToId,
-          threadId,
-          silent,
-        }) => {
-          const send = await resolveDiscordSend(deps);
-          const target = resolveDiscordAttachedOutboundTarget({ to, threadId });
-          if (text.trim() && mediaUrl && isLikelyDiscordVideoMedia(mediaUrl)) {
-            await send(target, text, {
-              verbose: false,
-              cfg,
-              replyTo: replyToId ?? undefined,
-              accountId: accountId ?? undefined,
-              silent: silent ?? undefined,
-            });
-            return await send(target, "", {
-              verbose: false,
-              cfg,
-              mediaUrl,
-              mediaLocalRoots,
-              mediaReadFile,
-              accountId: accountId ?? undefined,
-              silent: silent ?? undefined,
-            });
-          }
-          return await send(target, text, {
-            verbose: false,
-            cfg,
-            mediaUrl,
-            mediaLocalRoots,
-            mediaReadFile,
-            replyTo: replyToId ?? undefined,
-            accountId: accountId ?? undefined,
-            silent: silent ?? undefined,
-          });
-        },
-        sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
-          await (
-            await loadDiscordSendModule()
-          ).sendPollDiscord(resolveDiscordAttachedOutboundTarget({ to, threadId }), poll, {
-            cfg,
-            accountId: accountId ?? undefined,
-            silent: silent ?? undefined,
-          }),
-      },
+          payload,
+        }),
     },
   });

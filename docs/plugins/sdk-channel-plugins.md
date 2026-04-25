@@ -466,6 +466,14 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
 
       You can also pass raw adapter objects instead of the declarative options
       if you need full control.
+
+      Raw outbound adapters may define a `chunker(text, limit, ctx)` function.
+      The optional `ctx.formatting` carries delivery-time formatting decisions
+      such as `maxLinesPerMessage`; apply it before sending so reply threading
+      and chunk boundaries are resolved once by shared outbound delivery.
+      Send contexts also include `replyToIdSource` (`implicit` or `explicit`)
+      when a native reply target was resolved, so payload helpers can preserve
+      explicit reply tags without consuming an implicit single-use reply slot.
     </Accordion>
 
   </Step>

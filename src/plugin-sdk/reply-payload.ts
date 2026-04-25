@@ -1,4 +1,5 @@
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
+import { isSingleUseReplyToMode } from "../auto-reply/reply/reply-reference.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
@@ -37,6 +38,26 @@ type SendPayloadAdapter = Pick<
 >;
 
 const REASONING_PREFIX = "reasoning:";
+
+function createSendPayloadReplyToFanout(ctx: SendPayloadContext): () => string | undefined {
+  const replyToId = ctx.replyToId ?? undefined;
+  if (!replyToId) {
+    return () => undefined;
+  }
+  const singleUse =
+    ctx.replyToIdSource !== "explicit" &&
+    ctx.replyToMode !== undefined &&
+    isSingleUseReplyToMode(ctx.replyToMode);
+  if (!singleUse) {
+    return () => replyToId;
+  }
+  let current: string | undefined = replyToId;
+  return () => {
+    const value = current;
+    current = undefined;
+    return value;
+  };
+}
 
 function trimLeadingMarkdownQuoteMarkers(text: string): string {
   let candidate = text.trimStart();
@@ -289,6 +310,7 @@ export async function sendTextMediaPayload(params: {
   if (!text && urls.length === 0) {
     return { channel: params.channel, messageId: "" };
   }
+  const nextReplyToId = createSendPayloadReplyToFanout(params.ctx);
   if (urls.length > 0) {
     const lastResult = await sendPayloadMediaSequence({
       text,
@@ -298,15 +320,23 @@ export async function sendTextMediaPayload(params: {
           ...params.ctx,
           text,
           mediaUrl,
+          replyToId: nextReplyToId(),
         }),
     });
     return lastResult ?? { channel: params.channel, messageId: "" };
   }
   const limit = params.adapter.textChunkLimit;
-  const chunks = limit && params.adapter.chunker ? params.adapter.chunker(text, limit) : [text];
+  const chunks =
+    limit && params.adapter.chunker
+      ? params.adapter.chunker(text, limit, { formatting: params.ctx.formatting })
+      : [text];
   let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
   for (const chunk of chunks) {
-    lastResult = await params.adapter.sendText!({ ...params.ctx, text: chunk });
+    lastResult = await params.adapter.sendText!({
+      ...params.ctx,
+      text: chunk,
+      replyToId: nextReplyToId(),
+    });
   }
   return lastResult!;
 }
