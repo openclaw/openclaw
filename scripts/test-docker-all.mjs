@@ -171,6 +171,7 @@ const lanes = [
     weight: 3,
   }),
   lane("pi-bundle-mcp-tools", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools"),
+  lane("crestodian-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-rescue"),
   serviceLane(
     "cron-mcp-cleanup",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
@@ -184,6 +185,10 @@ const lanes = [
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
   ...bundledScenarioLanes,
   lane("openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth"),
+  lane(
+    "crestodian-first-run",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
+  ),
   lane("qr", "pnpm test:docker:qr"),
 ];
 

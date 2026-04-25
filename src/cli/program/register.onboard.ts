@@ -76,6 +76,7 @@ export function registerOnboardCommand(program: Command) {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
+    .option("--modern", "Use the Crestodian conversational onboarding preview", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -142,6 +143,16 @@ export function registerOnboardCommand(program: Command) {
 
   command.action(async (opts, commandRuntime) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
+      if (opts.modern) {
+        const { runCrestodian } = await import("../../crestodian/crestodian.js");
+        await runCrestodian({
+          message: opts.nonInteractive ? "overview" : undefined,
+          yes: false,
+          json: Boolean(opts.json),
+          interactive: !opts.nonInteractive,
+        });
+        return;
+      }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });

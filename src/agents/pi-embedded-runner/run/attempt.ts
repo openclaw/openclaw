@@ -72,7 +72,7 @@ import {
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import { resolveOpenClawDocsPath } from "../../docs-path.js";
+import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -1053,7 +1053,7 @@ export async function runEmbeddedAttempt(
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
     const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
-    const docsPath = await resolveOpenClawDocsPath({
+    const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveWorkspace,
@@ -1110,7 +1110,8 @@ export async function runEmbeddedAttempt(
         reasoningTagHint,
         heartbeatPrompt,
         skillsPrompt: effectiveSkillsPrompt,
-        docsPath: docsPath ?? undefined,
+        docsPath: openClawReferences.docsPath ?? undefined,
+        sourcePath: openClawReferences.sourcePath ?? undefined,
         ttsHint,
         workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,

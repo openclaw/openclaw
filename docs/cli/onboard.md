@@ -21,11 +21,15 @@ Interactive onboarding for local or remote Gateway setup.
 
 ```bash
 openclaw onboard
+openclaw onboard --modern
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
 openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
+
+`--modern` starts the Crestodian conversational onboarding preview. Without
+`--modern`, `openclaw onboard` keeps the classic onboarding flow.
 
 For plaintext private-network `ws://` targets (trusted networks only), set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
