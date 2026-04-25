@@ -266,6 +266,10 @@ See [Plugins](/tools/plugin).
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
+- Local managed profiles use `browser.localLaunchTimeoutMs` for Chrome CDP HTTP
+  discovery after process start and `browser.localCdpReadyTimeoutMs` for
+  post-launch CDP websocket readiness. Raise them on slower hosts where Chrome
+  starts successfully but readiness checks race startup.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `browser.executablePath` accepts `~` for your OS home directory.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).

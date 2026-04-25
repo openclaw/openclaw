@@ -634,6 +634,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
           },
+          localLaunchTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 120000,
+            title: "Browser Local Launch Timeout (ms)",
+            description:
+              "Timeout in milliseconds for locally launched managed Chrome to expose its CDP HTTP endpoint after process start. Raise this on slow single-board computers or older hosts.",
+          },
+          localCdpReadyTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 120000,
+            title: "Browser Local CDP Ready Timeout (ms)",
+            description:
+              "Timeout in milliseconds for a locally launched managed browser to finish CDP websocket readiness after the process is discovered. Raise this when Chrome starts but browser start still reports CDP not reachable.",
+          },
           actionTimeoutMs: {
             type: "integer",
             exclusiveMinimum: 0,
@@ -23975,6 +23991,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.actionTimeoutMs": {
       label: "Browser Action Timeout (ms)",
       help: "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
+      tags: ["performance"],
+    },
+    "browser.localLaunchTimeoutMs": {
+      label: "Browser Local Launch Timeout (ms)",
+      help: "Timeout in milliseconds for locally launched managed Chrome to expose its CDP HTTP endpoint after process start. Raise this on slow single-board computers or older hosts.",
+      tags: ["performance"],
+    },
+    "browser.localCdpReadyTimeoutMs": {
+      label: "Browser Local CDP Ready Timeout (ms)",
+      help: "Timeout in milliseconds for a locally launched managed browser to finish CDP websocket readiness after the process is discovered. Raise this when Chrome starts but browser start still reports CDP not reachable.",
       tags: ["performance"],
     },
     "browser.color": {

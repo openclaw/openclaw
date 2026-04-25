@@ -63,6 +63,12 @@ When debugging real providers/models (requires real creds):
   - Runs Crestodian in a configless container with a fake Claude CLI on `PATH`
     and verifies the fuzzy planner fallback translates into an audited typed
     config write.
+- Crestodian first-run Docker smoke: `pnpm test:docker:crestodian-first-run`
+  - Starts from an empty OpenClaw state dir, routes bare `openclaw` to
+    Crestodian, applies setup/model/agent/Discord plugin + SecretRef writes,
+    validates config, and verifies audit entries. The same Ring 0 setup path is
+    also covered in QA Lab by
+    `pnpm openclaw qa suite --scenario crestodian-ring-zero-setup`.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
   `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`

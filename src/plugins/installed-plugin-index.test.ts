@@ -154,6 +154,7 @@ describe("installed plugin index", () => {
 
     expect(index).toMatchObject({
       version: 1,
+      migrationVersion: 1,
       generatedAtMs: 1777118400000,
       plugins: [
         {
@@ -278,6 +279,43 @@ describe("installed plugin index", () => {
         includeDisabled: true,
       }),
     ).toEqual(["demo"]);
+  });
+
+  it("uses runtime plugin id normalization for legacy enablement aliases", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "openai",
+      configSchema: { type: "object" },
+      providers: ["openai"],
+    });
+
+    const config = {
+      plugins: {
+        entries: {
+          "openai-codex": {
+            enabled: false,
+          },
+        },
+      },
+    };
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "openai",
+          origin: "bundled",
+        }),
+      ],
+      config,
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "openai",
+      enabled: false,
+    });
+    expect(listEnabledInstalledPluginRecords(index, config)).toEqual([]);
   });
 
   it("records the config install ledger separately from package install intent", () => {
@@ -513,6 +551,43 @@ describe("installed plugin index", () => {
     ]);
   });
 
+  it("does not mark enabled-only migration snapshots stale for omitted disabled plugins", () => {
+    const enabledFixture = createRichPluginFixture();
+    const disabledFixture = createRichPluginFixture();
+    writePluginManifest(disabledFixture.rootDir, {
+      id: "disabled-demo",
+      name: "Disabled Demo",
+      configSchema: { type: "object" },
+      providers: ["disabled-demo"],
+    });
+    const current = loadInstalledPluginIndex({
+      candidates: [
+        enabledFixture.candidate,
+        {
+          ...disabledFixture.candidate,
+          idHint: "disabled-demo",
+        },
+      ],
+      config: {
+        plugins: {
+          entries: {
+            "disabled-demo": {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+    const migratedEnabledOnly = {
+      ...current,
+      refreshReason: "migration" as const,
+      plugins: current.plugins.filter((plugin) => plugin.enabled),
+    };
+
+    expect(diffInstalledPluginIndexInvalidationReasons(migratedEnabledOnly, current)).toEqual([]);
+  });
+
   it("marks disabled plugins without dropping their cold contributions", () => {
     const fixture = createRichPluginFixture();
 
@@ -557,7 +632,7 @@ describe("installed plugin index", () => {
     expect(index.refreshReason).toBe("manual");
   });
 
-  it("diffs invalidation reasons for manifest, package, source, host, and compat changes", () => {
+  it("diffs invalidation reasons for manifest, package, source, host, compat, and migration changes", () => {
     const fixture = createRichPluginFixture();
     const previous = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
@@ -604,11 +679,13 @@ describe("installed plugin index", () => {
         env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
       }),
       compatRegistryVersion: "different-compat-registry",
+      migrationVersion: 2 as 1,
     };
 
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
       "compat-registry-changed",
       "host-contract-changed",
+      "migration",
       "source-changed",
       "stale-manifest",
       "stale-package",

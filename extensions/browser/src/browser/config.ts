@@ -24,6 +24,8 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
+  DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
   DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
   DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION,
   DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES,
@@ -39,6 +41,8 @@ export {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
+  DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -69,6 +73,8 @@ export type ResolvedBrowserConfig = {
   cdpIsLoopback: boolean;
   remoteCdpTimeoutMs: number;
   remoteCdpHandshakeTimeoutMs: number;
+  localLaunchTimeoutMs: number;
+  localCdpReadyTimeoutMs: number;
   actionTimeoutMs: number;
   color: string;
   executablePath?: string;
@@ -106,6 +112,7 @@ export type ResolvedBrowserProfile = {
 };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
+const MAX_BROWSER_STARTUP_TIMEOUT_MS = 120_000;
 export const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
 
 export type ManagedBrowserHeadlessSource =
@@ -142,6 +149,14 @@ function normalizeHexColor(raw: string | undefined): string {
 function normalizeTimeoutMs(raw: number | undefined, fallback: number): number {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value < 0 ? fallback : value;
+}
+
+function normalizeStartupTimeoutMs(raw: number | undefined, fallback: number): number {
+  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
+  if (value <= 0) {
+    return fallback;
+  }
+  return Math.min(value, MAX_BROWSER_STARTUP_TIMEOUT_MS);
 }
 
 function normalizeNonNegativeInteger(raw: number | undefined, fallback: number): number {
@@ -297,6 +312,14 @@ export function resolveBrowserConfig(
     cfg?.remoteCdpHandshakeTimeoutMs,
     Math.max(2000, remoteCdpTimeoutMs * 2),
   );
+  const localLaunchTimeoutMs = normalizeStartupTimeoutMs(
+    cfg?.localLaunchTimeoutMs,
+    DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
+  );
+  const localCdpReadyTimeoutMs = normalizeStartupTimeoutMs(
+    cfg?.localCdpReadyTimeoutMs,
+    DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
+  );
   const actionTimeoutMs = normalizeTimeoutMs(
     cfg?.actionTimeoutMs,
     DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
@@ -382,6 +405,8 @@ export function resolveBrowserConfig(
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
     remoteCdpTimeoutMs,
     remoteCdpHandshakeTimeoutMs,
+    localLaunchTimeoutMs,
+    localCdpReadyTimeoutMs,
     actionTimeoutMs,
     color: defaultColor,
     executablePath,

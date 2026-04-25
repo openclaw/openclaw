@@ -43,7 +43,11 @@ import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
-import { agentLogoUrl, resolveChatAvatarRenderUrl } from "./agents-utils.ts";
+import {
+  agentLogoUrl,
+  assistantAvatarFallbackUrl,
+  resolveChatAvatarRenderUrl,
+} from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -484,6 +488,7 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
   const name = props.assistantName || "Assistant";
   const avatar = resolveAssistantAvatarUrl(props);
   const avatarText = avatar ? null : resolveAssistantTextAvatar(props.assistantAvatar);
+  const fallbackAvatarUrl = assistantAvatarFallbackUrl(props.basePath ?? "");
   const logoUrl = agentLogoUrl(props.basePath ?? "");
 
   return html`
@@ -500,7 +505,7 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
               ${avatarText}
             </div>`
           : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
-              <img src=${logoUrl} alt="OpenClaw" />
+              <img src=${fallbackAvatarUrl} alt=${name} />
             </div>`}
       <h2>${name}</h2>
       <div class="agent-chat__badges">
