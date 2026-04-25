@@ -75,7 +75,7 @@ describe("config io write prepare", () => {
             },
           },
         },
-      }),
+      }) as OpenClawConfig,
       [["plugins", "installs"]],
     ) as {
       plugins?: {
