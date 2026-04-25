@@ -38,6 +38,7 @@ import {
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
+  resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import { type ToolModelConfig } from "./model-config.helpers.js";
@@ -556,7 +557,7 @@ export function createMusicGenerateTool(options?: {
         musicGenerationModelConfig,
         modelOverride: model,
       });
-      const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         inputs: imageInputs,
         workspaceDir: options?.workspaceDir,

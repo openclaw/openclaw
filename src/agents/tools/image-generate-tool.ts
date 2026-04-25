@@ -38,6 +38,7 @@ import {
   isCapabilityProviderConfigured,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
+  resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -552,7 +553,7 @@ export function createImageGenerateTool(options?: {
   }
   const effectiveCfg =
     applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-  const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
+  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
