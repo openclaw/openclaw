@@ -83,6 +83,12 @@ synced to other devices or persisted server-side beyond the normal transcript
 authorship metadata on messages you actually send. Clearing site data or
 switching browsers resets it to empty.
 
+The same browser-local pattern applies to the assistant avatar override.
+Uploaded assistant avatars overlay the gateway-resolved identity on the local
+browser only and never round-trip through `config.patch`. The shared
+`ui.assistant.avatar` config field is still available for non-UI clients
+writing the field directly (such as scripted gateways or custom dashboards).
+
 ## Runtime config endpoint
 
 The Control UI fetches its runtime settings from
