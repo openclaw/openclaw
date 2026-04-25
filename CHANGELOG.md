@@ -231,6 +231,7 @@ Docs: https://docs.openclaw.ai
 - Config/agents: accept `agents.list[].contextTokens` in strict config validation so per-agent overrides survive hot reload, letting `/status` reflect the configured model window instead of the 200k fallback. Fixes #70692. (#71247) Thanks @statxc.
 - Heartbeat: include async exec completion details in heartbeat prompts so command-finished notifications relay the actual output. (#71213) Thanks @GodsBoy.
 - Memory search: apply session visibility and agent-to-agent policy to session transcript hits, and keep `corpus=sessions` ranking scoped to session collections before result limiting. (#70761) Thanks @nefainl.
+- Agents/sessions: stop session write-lock timeouts from entering model failover, so local lock contention surfaces directly instead of cascading across providers. (#68700) Thanks @MonkeyLeeT.
 
 ## 2026.4.23
 
