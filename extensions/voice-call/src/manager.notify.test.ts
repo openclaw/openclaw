@@ -245,6 +245,27 @@ describe("CallManager notify and mapping", () => {
     expectFirstPlayTtsText(provider, "Twilio stream unavailable");
   });
 
+  it("starts listening after the initial greeting for Telnyx conversation calls", async () => {
+    const { manager, provider } = await createManagerHarness({}, new FakeProvider("telnyx"));
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000012",
+      "Telnyx hello",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-telnyx");
+
+    expectFirstPlayTtsText(provider, "Telnyx hello");
+    expect(provider.startListeningCalls).toEqual([
+      expect.objectContaining({
+        callId,
+        providerCallId: "call-uuid",
+      }),
+    ]);
+    expect(requireCall(manager, callId).state).toBe("listening");
+  });
+
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {
     const provider = new FailFirstPlayTtsProvider("plivo");
     const { manager } = await createManagerHarness({}, provider);
