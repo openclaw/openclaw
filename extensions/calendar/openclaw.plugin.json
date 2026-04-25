@@ -1,0 +1,62 @@
+{
+  "id": "calendar",
+  "uiHints": {
+    "google.user": {
+      "label": "Google Account Email",
+      "placeholder": "you@gmail.com",
+      "help": "Owner of the calendar(s) being controlled."
+    },
+    "google.clientId": {
+      "label": "Google OAuth Client ID",
+      "sensitive": true,
+      "placeholder": "${GMAIL_OAUTH_CLIENT_ID}",
+      "help": "Reuses the Gmail Desktop OAuth client; just add the calendar scope."
+    },
+    "google.clientSecret": {
+      "label": "Google OAuth Client Secret",
+      "sensitive": true,
+      "placeholder": "${GMAIL_OAUTH_CLIENT_SECRET}"
+    },
+    "google.refreshToken": {
+      "label": "Google OAuth Refresh Token",
+      "sensitive": true,
+      "placeholder": "${GMAIL_OAUTH_REFRESH_TOKEN}",
+      "help": "Same refresh token as Gmail if you re-ran the auth helper with both scopes."
+    },
+    "defaultCalendarId": {
+      "label": "Default Calendar ID",
+      "placeholder": "primary",
+      "help": "Calendar used when the agent doesn't specify one."
+    },
+    "timezone": {
+      "label": "Timezone",
+      "placeholder": "Europe/London",
+      "help": "Timezone for relative dates and free-time queries."
+    },
+    "writeEnabled": {
+      "label": "Allow Writes",
+      "help": "Disable to make the agent read-only on your calendar."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "google": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": { "type": "string" },
+          "clientId": { "type": "string" },
+          "clientSecret": { "type": "string" },
+          "refreshToken": { "type": "string" }
+        },
+        "required": ["user", "clientId", "clientSecret", "refreshToken"]
+      },
+      "defaultCalendarId": { "type": "string" },
+      "timezone": { "type": "string" },
+      "writeEnabled": { "type": "boolean" }
+    },
+    "required": ["google"]
+  }
+}

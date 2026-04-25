@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/calendar",
+  "version": "0.1.0",
+  "description": "Google Calendar control for OpenClaw: list, create, update, delete events, find free time, and natural-language quick-add.",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "google-auth-library": "^9.14.0",
+    "googleapis": "^144.0.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "defaultChoice": "local",
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.25"
+    }
+  }
+}
