@@ -97,6 +97,30 @@ function resolveEnabledBundledDocumentExtractorPlugins(params: {
   });
 }
 
+function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
+  config?: OpenClawConfig;
+  onlyPluginIds?: readonly string[];
+}): string[] | null {
+  const allow = params.config?.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return null;
+  }
+  const onlyPluginIdSet =
+    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+  const deniedPluginIds = new Set(params.config?.plugins?.deny ?? []);
+  const entries = params.config?.plugins?.entries ?? {};
+  return [
+    ...new Set(
+      allow
+        .map((pluginId) => pluginId.trim())
+        .filter(Boolean)
+        .filter((pluginId) => !onlyPluginIdSet || onlyPluginIdSet.has(pluginId))
+        .filter((pluginId) => !deniedPluginIds.has(pluginId))
+        .filter((pluginId) => entries[pluginId]?.enabled !== false),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resolvePluginDocumentExtractors(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -105,17 +129,24 @@ export function resolvePluginDocumentExtractors(params?: {
 }): PluginDocumentExtractorEntry[] {
   const extractors: PluginDocumentExtractorEntry[] = [];
   const loadErrors: unknown[] = [];
-  for (const plugin of resolveEnabledBundledDocumentExtractorPlugins({
+  const explicitAllowedPluginIds = resolveExplicitAllowedDocumentExtractorPluginIds({
     config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env: params?.env,
     onlyPluginIds: params?.onlyPluginIds,
-  })) {
+  });
+  const pluginIds =
+    explicitAllowedPluginIds ??
+    resolveEnabledBundledDocumentExtractorPlugins({
+      config: params?.config,
+      workspaceDir: params?.workspaceDir,
+      env: params?.env,
+      onlyPluginIds: params?.onlyPluginIds,
+    }).map((plugin) => plugin.id);
+  for (const pluginId of pluginIds) {
     let loaded: PluginDocumentExtractorEntry[] | null;
     try {
       loaded = loadBundledDocumentExtractorEntriesFromDir({
-        dirName: plugin.id,
-        pluginId: plugin.id,
+        dirName: pluginId,
+        pluginId,
       });
     } catch (error) {
       loadErrors.push(error);
