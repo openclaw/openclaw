@@ -146,7 +146,11 @@ function patchGeminiToolCallThoughtSignatures(payloadObj: Record<string, unknown
       id?: unknown;
       extra_content?: unknown;
     }>) {
-      if (!toolCallEntry || typeof toolCallEntry !== "object" || typeof toolCallEntry.id !== "string") {
+      if (
+        !toolCallEntry ||
+        typeof toolCallEntry !== "object" ||
+        typeof toolCallEntry.id !== "string"
+      ) {
         continue;
       }
 
@@ -163,7 +167,10 @@ function patchGeminiToolCallThoughtSignatures(payloadObj: Record<string, unknown
         extraContent.google && typeof extraContent.google === "object"
           ? { ...(extraContent.google as Record<string, unknown>) }
           : {};
-      if (typeof googleContent.thought_signature === "string" && googleContent.thought_signature.trim()) {
+      if (
+        typeof googleContent.thought_signature === "string" &&
+        googleContent.thought_signature.trim()
+      ) {
         continue;
       }
       googleContent.thought_signature = thoughtSignature;

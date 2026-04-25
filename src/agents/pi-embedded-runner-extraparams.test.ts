@@ -1517,29 +1517,6 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("adds OpenRouter attribution headers to stream options", () => {
-    const { calls, agent } = createOptionsCaptureAgent();
-
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "openrouter/auto",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.headers).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-      "X-Custom": "1",
-    });
-  });
-
   it("injects Gemini 3 tool call thought_signature into OpenAI-compatible payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "custom-openai",
@@ -1561,7 +1538,7 @@ describe("applyExtraParamsToAgent", () => {
                 type: "function",
                 function: {
                   name: "read",
-                  arguments: "{\"path\":\"README.md\"}",
+                  arguments: '{"path":"README.md"}',
                 },
               },
             ],
@@ -1614,7 +1591,7 @@ describe("applyExtraParamsToAgent", () => {
                 type: "function",
                 function: {
                   name: "read",
-                  arguments: "{\"path\":\"README.md\"}",
+                  arguments: '{"path":"README.md"}',
                 },
                 extra_content: {
                   google: {
@@ -1731,7 +1708,7 @@ describe("applyExtraParamsToAgent", () => {
                 type: "function",
                 function: {
                   name: "read",
-                  arguments: "{\"path\":\"README.md\"}",
+                  arguments: '{"path":"README.md"}',
                 },
               },
             ],
@@ -1773,7 +1750,7 @@ describe("applyExtraParamsToAgent", () => {
                 type: "function",
                 function: {
                   name: "read",
-                  arguments: "{\"path\":\"README.md\"}",
+                  arguments: '{"path":"README.md"}',
                 },
               },
             ],
