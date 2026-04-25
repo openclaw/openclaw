@@ -607,9 +607,34 @@ function resolveExternalBundledRuntimeDepsInstallRoot(params: {
   env: NodeJS.ProcessEnv;
 }): string {
   const packageRoot = resolveBundledPluginPackageRoot(params.pluginRoot) ?? params.pluginRoot;
+  const existingExternalRoot = resolveExistingExternalBundledRuntimeDepsRoot({
+    packageRoot,
+    env: params.env,
+  });
+  if (existingExternalRoot) {
+    return existingExternalRoot;
+  }
   const version = sanitizePathSegment(readPackageVersion(packageRoot));
   const packageKey = `openclaw-${version}-${createPathHash(packageRoot)}`;
   return path.join(resolveBundledRuntimeDepsExternalBaseDir(params.env), packageKey);
+}
+
+function resolveExistingExternalBundledRuntimeDepsRoot(params: {
+  packageRoot: string;
+  env: NodeJS.ProcessEnv;
+}): string | null {
+  const externalBaseDir = path.resolve(resolveBundledRuntimeDepsExternalBaseDir(params.env));
+  const packageRoot = path.resolve(params.packageRoot);
+  const relative = path.relative(externalBaseDir, packageRoot);
+  if (
+    relative === "" ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative) ||
+    relative.includes(path.sep)
+  ) {
+    return null;
+  }
+  return path.basename(packageRoot).startsWith("openclaw-") ? packageRoot : null;
 }
 
 function resolveSourceCheckoutRuntimeDepsCacheDir(params: {

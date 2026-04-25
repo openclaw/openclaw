@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -724,6 +725,56 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
       },
     ]);
+  });
+
+  it("does not derive a second-generation stage root from external runtime mirrors", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { grammy: "^1.42.0" } }),
+    );
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    const mirroredPluginRoot = path.join(installRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(mirroredPluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(mirroredPluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { grammy: "^1.42.0" } }),
+    );
+    fs.mkdirSync(path.join(installRoot, "node_modules", "grammy"), { recursive: true });
+    fs.writeFileSync(
+      path.join(installRoot, "node_modules", "grammy", "package.json"),
+      JSON.stringify({ name: "grammy", version: "1.42.0" }),
+    );
+
+    const nestedUnknownRoot = path.join(
+      stageDir,
+      `openclaw-unknown-${createHash("sha256").update(path.resolve(installRoot)).digest("hex").slice(0, 12)}`,
+    );
+
+    expect(resolveBundledRuntimeDependencyInstallRoot(mirroredPluginRoot, { env })).toBe(
+      installRoot,
+    );
+    expect(resolveBundledRuntimeDependencyInstallRoot(mirroredPluginRoot, { env })).not.toBe(
+      nestedUnknownRoot,
+    );
+    expect(
+      ensureBundledPluginRuntimeDeps({
+        env,
+        installDeps: () => {
+          throw new Error("mirrored staged deps should not reinstall into a nested stage root");
+        },
+        pluginId: "telegram",
+        pluginRoot: mirroredPluginRoot,
+      }),
+    ).toEqual({ installedSpecs: [], retainSpecs: [] });
   });
 
   it("retains existing staged deps without a retained manifest before shared installs", () => {

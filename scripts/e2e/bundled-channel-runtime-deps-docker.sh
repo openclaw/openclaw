@@ -1107,6 +1107,14 @@ find_external_dep_package() {
   find "$(stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
 }
 
+assert_no_unknown_stage_roots() {
+  if find "$(stage_root)" -maxdepth 1 -type d -name 'openclaw-unknown-*' -print -quit 2>/dev/null | grep -q .; then
+    echo "runtime deps created second-generation unknown stage roots" >&2
+    find "$(stage_root)" -maxdepth 1 -type d -name 'openclaw-*' -print | sort >&2 || true
+    exit 1
+  fi
+}
+
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 update_target="file:$package_tgz"
 candidate_version="$(node - <<'NODE' "$package_tgz"
@@ -1391,6 +1399,7 @@ if should_run_update_target telegram; then
   cat /tmp/openclaw-update-telegram.json
   assert_update_ok /tmp/openclaw-update-telegram.json "$candidate_version"
   assert_dep_available telegram grammy
+  assert_no_unknown_stage_roots
 
   echo "Mutating installed package: remove Telegram deps, then update-mode doctor repairs them..."
   remove_runtime_dep telegram grammy
@@ -1401,6 +1410,7 @@ if should_run_update_target telegram; then
     exit 1
   fi
   assert_dep_available telegram grammy
+  assert_no_unknown_stage_roots
 fi
 
 if should_run_update_target discord; then
