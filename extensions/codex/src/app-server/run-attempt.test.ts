@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as nativeHookRelayTesting } from "../../../../src/agents/harness/native-hook-relay.js";
+import { buildAgentRuntimePlan } from "../../../../src/agents/runtime-plan/build.js";
 import {
   onAgentEvent,
   resetAgentEventsForTest,
@@ -49,6 +50,28 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     timeoutMs: 5_000,
     authStorage: {} as never,
     modelRegistry: {} as never,
+  } as EmbeddedRunAttemptParams;
+}
+
+function createParamsWithRuntimePlan(
+  sessionFile: string,
+  workspaceDir: string,
+): EmbeddedRunAttemptParams {
+  const params = createParams(sessionFile, workspaceDir);
+  return {
+    ...params,
+    runtimePlan: buildAgentRuntimePlan({
+      provider: params.provider,
+      modelId: params.modelId,
+      model: params.model,
+      modelApi: params.model.api,
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      config: params.config,
+      workspaceDir,
+      agentDir: tempDir,
+      thinkingLevel: params.thinkLevel,
+    }),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -364,7 +387,7 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createParamsWithRuntimePlan(sessionFile, workspaceDir);
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -460,6 +483,8 @@ describe("runCodexAppServerAttempt", () => {
         sessionId: "session-1",
         provider: "codex",
         model: "gpt-5.4-codex",
+        resolvedRef: "codex/gpt-5.4-codex",
+        harnessId: "codex",
         assistantTexts: ["hello back"],
         lastAssistant: expect.objectContaining({
           role: "assistant",
@@ -675,9 +700,9 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
-      "turn start exploded",
-    );
+    await expect(
+      runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir)),
+    ).rejects.toThrow("turn start exploded");
 
     await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
     await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
@@ -687,6 +712,8 @@ describe("runCodexAppServerAttempt", () => {
         assistantTexts: [],
         model: "gpt-5.4-codex",
         provider: "codex",
+        resolvedRef: "codex/gpt-5.4-codex",
+        harnessId: "codex",
         runId: "run-1",
         sessionId: "session-1",
       }),
