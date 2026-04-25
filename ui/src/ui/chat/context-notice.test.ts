@@ -8,6 +8,10 @@ vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
 }));
 
+vi.mock("../icons.ts", () => ({
+  icons: {},
+}));
+
 import {
   getContextNoticeViewModel,
   renderContextNotice,
