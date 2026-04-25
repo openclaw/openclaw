@@ -90,6 +90,22 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
   });
 
+  it("uses configured local CDP readiness timeout after launching", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
+      setupEnsureBrowserAvailableHarness();
+    state.resolved.localCdpReadyTimeoutMs = 250;
+    isChromeCdpReady.mockResolvedValue(false);
+    mockLaunchedChrome(launchOpenClawChrome, 322);
+
+    const promise = profile.ensureBrowserAvailable();
+    const rejected = expect(promise).rejects.toThrow("not reachable after start");
+    await vi.advanceTimersByTimeAsync(300);
+    await rejected;
+
+    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
+    expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates concurrent lazy-start calls to prevent PortInUseError", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
       setupEnsureBrowserAvailableHarness();

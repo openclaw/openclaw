@@ -54,6 +54,10 @@ export type BrowserConfig = {
   remoteCdpTimeoutMs?: number;
   /** Remote CDP WebSocket handshake timeout (ms). Default: max(remoteCdpTimeoutMs * 2, 2000). */
   remoteCdpHandshakeTimeoutMs?: number;
+  /** Local managed browser launch discovery timeout (ms). Default: 15000. */
+  localLaunchTimeoutMs?: number;
+  /** Local managed browser post-launch CDP readiness timeout (ms). Default: 8000. */
+  localCdpReadyTimeoutMs?: number;
   /** Default browser act timeout (ms). Default: 60000. */
   actionTimeoutMs?: number;
   /** Accent color for the openclaw browser profile (hex). Default: #FF4500 */
