@@ -34,6 +34,7 @@ import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   ensureBundledPluginRuntimeDeps,
+  installBundledRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRoot,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
@@ -2325,6 +2326,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         candidate.origin === "bundled" &&
         enableState.enabled
       ) {
+        let runtimeDepsInstallStartedAt: number | null = null;
+        let runtimeDepsInstallSpecs: string[] = [];
         try {
           const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
           const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
@@ -2334,7 +2337,26 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             env,
             config: cfg,
             retainSpecs,
-            installDeps: options.bundledRuntimeDepsInstaller,
+            installDeps: (installParams) => {
+              const installSpecs = installParams.installSpecs ?? installParams.missingSpecs;
+              runtimeDepsInstallStartedAt = Date.now();
+              runtimeDepsInstallSpecs = installParams.missingSpecs;
+              if (shouldActivate) {
+                logger.info(
+                  `[plugins] ${record.id} staging bundled runtime deps (${installParams.missingSpecs.length} missing, ${installSpecs.length} install specs): ${installParams.missingSpecs.join(", ")}`,
+                );
+              }
+              const installer =
+                options.bundledRuntimeDepsInstaller ??
+                ((params: BundledRuntimeDepsInstallParams) =>
+                  installBundledRuntimeDeps({
+                    installRoot: params.installRoot,
+                    installExecutionRoot: params.installExecutionRoot,
+                    missingSpecs: params.installSpecs ?? params.missingSpecs,
+                    env,
+                  }));
+              installer(installParams);
+            },
           });
           if (depsInstallResult.installedSpecs.length > 0) {
             bundledRuntimeDepsRetainSpecsByInstallRoot.set(
@@ -2344,8 +2366,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               ),
             );
             if (shouldActivate) {
+              const elapsed =
+                runtimeDepsInstallStartedAt === null
+                  ? ""
+                  : ` in ${Date.now() - runtimeDepsInstallStartedAt}ms`;
               logger.info(
-                `[plugins] ${record.id} installed bundled runtime deps: ${depsInstallResult.installedSpecs.join(", ")}`,
+                `[plugins] ${record.id} installed bundled runtime deps${elapsed}: ${depsInstallResult.installedSpecs.join(", ")}`,
               );
             }
           }
@@ -2371,6 +2397,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(pluginRoot)));
           }
         } catch (error) {
+          if (shouldActivate && runtimeDepsInstallStartedAt !== null) {
+            logger.error(
+              `[plugins] ${record.id} failed to stage bundled runtime deps after ${Date.now() - runtimeDepsInstallStartedAt}ms: ${runtimeDepsInstallSpecs.join(", ")}`,
+            );
+          }
           pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);
           continue;
         }

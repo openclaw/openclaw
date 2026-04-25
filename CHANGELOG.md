@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/runtime deps: log bundled plugin runtime-dependency staging before synchronous npm installs start and include elapsed timing afterward, so first boot after upgrades no longer looks hung while dependencies are being repaired.
 - Agents/failover: forward embedded run abort signals into provider-owned model streams, cap implicit LLM idle watchdogs below long run timeouts, and mark 429 responses without usable retry timing as non-retryable so GitHub Copilot rate limits fail over or surface promptly instead of hanging until run timeout. Fixes #71120.
 - Plugins/Google Meet: make meeting creation join by default, with an explicit URL-only opt-out, so agents that create a Meet also enter it.
 - Telegram/polling: persist accepted update offsets before long-running handlers complete so poller restarts do not replay already-ingested updates, while keeping same-process retries for handler failures.
