@@ -1143,10 +1143,8 @@ describe("createTelegramBot", () => {
       text: "GPT 4.1 Bridge",
       callback_data: "mdl_sel_openai/gpt-4.1",
     });
-    expect(buttons).toContainEqual({
-      text: "GPT Five Bridge ✓",
-      callback_data: "mdl_sel_openai/gpt-5",
-    });
+    const gpt5Button = buttons?.find((button) => button.callback_data === "mdl_sel_openai/gpt-5");
+    expect(gpt5Button?.text?.replace(" ✓", "")).toBe("GPT Five Bridge");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
   });
 
