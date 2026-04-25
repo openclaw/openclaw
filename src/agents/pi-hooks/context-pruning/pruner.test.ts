@@ -223,6 +223,47 @@ describe("pruneContextMessages", () => {
     ).not.toThrow();
   });
 
+  it("counts malformed non-string text blocks when deciding to trim tool results", () => {
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [{ type: "text", text: { payload: "X".repeat(5_000) } }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const result = pruneContextMessages({
+      messages: [
+        makeUser("show data"),
+        malformedToolResult,
+        makeAssistant([{ type: "text", text: "done" }]),
+      ],
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 200,
+          headChars: 80,
+          tailChars: 40,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    const toolResult = result.find((message) => message.role === "toolResult") as Extract<
+      AgentMessage,
+      { role: "toolResult" }
+    >;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("[Tool result trimmed:");
+  });
+
   it("does not crash on toolResult with null content entries", () => {
     const malformedToolResult = {
       role: "toolResult",
