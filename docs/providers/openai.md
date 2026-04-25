@@ -27,6 +27,7 @@ changing config.
 | GPT-5.5 with ChatGPT/Codex subscription auth  | `openai-codex/gpt-5.5`                                   | Default PI route for Codex OAuth. Best first choice for subscription setups. |
 | GPT-5.5 with native Codex app-server behavior | `openai/gpt-5.5` plus `embeddedHarness.runtime: "codex"` | Forces the Codex app-server harness for that model ref.                      |
 | Image generation or editing                   | `openai/gpt-image-2`                                     | Works with either `OPENAI_API_KEY` or OpenAI Codex OAuth.                    |
+| Transparent-background images                 | `openai/gpt-image-1.5`                                   | Use `outputFormat=png` or `webp` and `openai.background=transparent`.        |
 
 <Note>
 GPT-5.5 is available through both direct OpenAI Platform API-key access and
@@ -254,8 +255,17 @@ See [Image Generation](/tools/image-generation) for shared tool parameters, prov
 </Note>
 
 `gpt-image-2` is the default for both OpenAI text-to-image generation and image
-editing. `gpt-image-1` remains usable as an explicit model override, but new
-OpenAI image workflows should use `openai/gpt-image-2`.
+editing. `gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini` remain usable as
+explicit model overrides. Use `openai/gpt-image-1.5` for transparent-background
+PNG/WebP output; the current `gpt-image-2` API rejects
+`background: "transparent"`.
+
+For a transparent-background request, agents should call `image_generate` with
+`model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and
+`openai.background: "transparent"`. OpenClaw also protects the public OpenAI and
+OpenAI Codex OAuth routes by rewriting default `openai/gpt-image-2` transparent
+requests to `gpt-image-1.5`; Azure and custom OpenAI-compatible endpoints keep
+their configured deployment/model names.
 
 For Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
 `openai-codex` OAuth profile is configured, OpenClaw resolves that stored OAuth
@@ -273,6 +283,12 @@ Generate:
 
 ```
 /tool image_generate model=openai/gpt-image-2 prompt="A polished launch poster for OpenClaw on macOS" size=3840x2160 count=1
+```
+
+Generate a transparent PNG:
+
+```
+/tool image_generate model=openai/gpt-image-1.5 prompt="A simple red circle sticker on a transparent background" outputFormat=png openai='{"background":"transparent"}'
 ```
 
 Edit:

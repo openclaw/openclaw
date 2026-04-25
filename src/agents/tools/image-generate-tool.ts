@@ -96,7 +96,10 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
   model: Type.Optional(
-    Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-2." }),
+    Type.String({
+      description:
+        "Optional provider/model override, e.g. openai/gpt-image-2; use openai/gpt-image-1.5 for transparent OpenAI backgrounds.",
+    }),
   ),
   filename: Type.Optional(
     Type.String({
@@ -131,7 +134,8 @@ const ImageGenerateToolSchema = Type.Object({
   openai: Type.Optional(
     Type.Object({
       background: optionalStringEnum(SUPPORTED_OPENAI_BACKGROUNDS, {
-        description: "OpenAI-only background hint: transparent, opaque, or auto.",
+        description:
+          "OpenAI-only background hint: transparent, opaque, or auto. For transparent output use outputFormat png or webp; OpenClaw routes the default OpenAI image model to gpt-image-1.5 for this mode.",
       }),
       moderation: optionalStringEnum(SUPPORTED_OPENAI_MODERATIONS, {
         description: "OpenAI-only moderation hint: low or auto.",
@@ -570,7 +574,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured or inferred image-generation model. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.',
+      'Generate new images or edit reference images with the configured or inferred image-generation model. For transparent OpenAI backgrounds, use outputFormat="png" or "webp" and openai.background="transparent"; OpenClaw routes the default OpenAI image model to gpt-image-1.5 for that mode. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

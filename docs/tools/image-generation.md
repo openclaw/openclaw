@@ -48,13 +48,14 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 ## Common routes
 
-| Goal                                                 | Model ref                                          | Auth                                 |
-| ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------ |
-| OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                     |
-| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI Codex OAuth                   |
-| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                 |
-| LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                    |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| Goal                                                 | Model ref                                          | Auth                                   |
+| ---------------------------------------------------- | -------------------------------------------------- | -------------------------------------- |
+| OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                       |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI Codex OAuth                     |
+| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                             | `OPENAI_API_KEY` or OpenAI Codex OAuth |
+| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
+| LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same `image_generate` tool handles text-to-image and reference-image
 editing. Use `image` for one reference or `images` for multiple references.
@@ -93,7 +94,8 @@ Use `"list"` to inspect available providers and models at runtime.
 </ParamField>
 
 <ParamField path="model" type="string">
-Provider/model override, e.g. `openai/gpt-image-2`.
+Provider/model override, e.g. `openai/gpt-image-2`; use
+`openai/gpt-image-1.5` for transparent OpenAI backgrounds.
 </ParamField>
 
 <ParamField path="image" type="string">
@@ -233,9 +235,10 @@ through the Codex Responses backend. Legacy Codex base URLs such as
 `https://chatgpt.com/backend-api/codex` for image requests. It does not
 silently fall back to `OPENAI_API_KEY` for that request. To force direct OpenAI
 Images API routing, configure `models.providers.openai` explicitly with an API
-key, custom base URL, or Azure endpoint. The older
-`openai/gpt-image-1` model can still be selected explicitly, but new OpenAI
-image-generation and image-editing requests should use `gpt-image-2`.
+key, custom base URL, or Azure endpoint. The `openai/gpt-image-1.5`,
+`openai/gpt-image-1`, and `openai/gpt-image-1-mini` models can still be
+selected explicitly. Use `gpt-image-1.5` for transparent-background PNG/WebP
+output; the current `gpt-image-2` API rejects `background: "transparent"`.
 
 `gpt-image-2` supports both text-to-image generation and reference-image
 editing through the same `image_generate` tool. OpenClaw forwards `prompt`,
@@ -260,13 +263,42 @@ OpenAI-specific options live under the `openai` object:
 ```
 
 `openai.background` accepts `transparent`, `opaque`, or `auto`; transparent
-outputs require `outputFormat` `png` or `webp`. `openai.outputCompression`
-applies to JPEG/WebP outputs.
+outputs require `outputFormat` `png` or `webp` and a transparency-capable OpenAI
+image model. OpenClaw routes default `gpt-image-2` transparent-background
+requests to `gpt-image-1.5`. `openai.outputCompression` applies to JPEG/WebP
+outputs.
+
+When asking an agent for a transparent-background OpenAI image, the expected
+tool call is:
+
+```json
+{
+  "model": "openai/gpt-image-1.5",
+  "prompt": "A simple red circle sticker on a transparent background",
+  "outputFormat": "png",
+  "openai": {
+    "background": "transparent"
+  }
+}
+```
+
+The explicit `openai/gpt-image-1.5` model keeps the request portable across
+tool summaries and harnesses. If the agent instead uses the default
+`openai/gpt-image-2` with `openai.background: "transparent"` on the public
+OpenAI or OpenAI Codex OAuth route, OpenClaw rewrites the provider request to
+`gpt-image-1.5`. Azure and custom OpenAI-compatible endpoints keep their
+configured deployment/model names.
 
 Generate one 4K landscape image:
 
 ```
 /tool image_generate action=generate model=openai/gpt-image-2 prompt="A clean editorial poster for OpenClaw image generation" size=3840x2160 count=1
+```
+
+Generate a transparent PNG:
+
+```
+/tool image_generate action=generate model=openai/gpt-image-1.5 prompt="A simple red circle sticker on a transparent background" outputFormat=png openai='{"background":"transparent"}'
 ```
 
 Generate two square images:

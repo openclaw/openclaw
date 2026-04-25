@@ -218,6 +218,18 @@ describe("createImageGenerateTool", () => {
     expect(createImageGenerateTool({ config: {} })).toBeNull();
   });
 
+  it("tells agents how to request transparent OpenAI backgrounds", () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-key");
+    stubImageGenerationProviders();
+
+    const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
+
+    expect(tool.description).toContain('outputFormat="png" or "webp"');
+    expect(tool.description).toContain('openai.background="transparent"');
+    expect(tool.description).toContain("gpt-image-1.5");
+    expect(JSON.stringify(tool.parameters)).toContain("openai/gpt-image-1.5");
+  });
+
   it("matches image-generation providers across canonical provider aliases", () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
@@ -591,6 +603,62 @@ describe("createImageGenerateTool", () => {
       details: {
         quality: "low",
         outputFormat: "jpeg",
+      },
+    });
+  });
+
+  it("forwards transparent OpenAI background requests with a PNG output format", async () => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "transparent.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/transparent.png",
+      id: "transparent.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1.5");
+    const result = await tool.execute("call-openai-transparent", {
+      prompt: "A transparent badge",
+      outputFormat: "png",
+      openai: {
+        background: "transparent",
+      },
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              imageGenerationModel: { primary: "openai/gpt-image-1.5" },
+            }),
+          }),
+        }),
+        outputFormat: "png",
+        providerOptions: {
+          openai: {
+            background: "transparent",
+          },
+        },
+      }),
+    );
+    expect(result).toMatchObject({
+      details: {
+        provider: "openai",
+        model: "gpt-image-1.5",
+        outputFormat: "png",
       },
     });
   });
