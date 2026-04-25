@@ -14,6 +14,7 @@ describe("browser doctor readiness", () => {
       },
       {
         noteFn,
+        env: { DISPLAY: ":99" },
         resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
       },
     );

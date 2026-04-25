@@ -1,4 +1,4 @@
-import type { BrowserStatus, BrowserTransport } from "./client.js";
+import type { BrowserStatus, BrowserTransport } from "./client.types.js";
 
 export type BrowserDoctorCheckStatus = "pass" | "warn" | "fail" | "info";
 

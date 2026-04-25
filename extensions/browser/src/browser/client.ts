@@ -1,33 +1,20 @@
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
-import type { BrowserTab, BrowserTransport, SnapshotAriaNode } from "./client.types.js";
+import type {
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+  SnapshotAriaNode,
+} from "./client.types.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 
-export type { BrowserTab, BrowserTransport, SnapshotAriaNode } from "./client.types.js";
+export type {
+  BrowserStatus,
+  BrowserTab,
+  BrowserTransport,
+  SnapshotAriaNode,
+} from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
-
-export type BrowserStatus = {
-  enabled: boolean;
-  profile?: string;
-  driver?: "openclaw" | "existing-session";
-  transport?: BrowserTransport;
-  running: boolean;
-  cdpReady?: boolean;
-  cdpHttp?: boolean;
-  pid: number | null;
-  cdpPort: number | null;
-  cdpUrl?: string | null;
-  chosenBrowser: string | null;
-  detectedBrowser?: string | null;
-  detectedExecutablePath?: string | null;
-  detectError?: string | null;
-  userDataDir: string | null;
-  color: string;
-  headless: boolean;
-  noSandbox?: boolean;
-  executablePath?: string | null;
-  attachOnly: boolean;
-};
 
 export type ProfileStatus = {
   name: string;
