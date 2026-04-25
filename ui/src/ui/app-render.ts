@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { applyMergePatch } from "../../../src/config/merge-patch.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -134,7 +133,7 @@ import {
 } from "./views/agents-utils.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
-import { getPresetById, type ConfigPresetId } from "./views/config-presets.ts";
+import { getPresetById } from "./views/config-presets.ts";
 import { renderQuickSettings, type QuickSettingsChannel } from "./views/config-quick.ts";
 import { renderConfig, type ConfigProps } from "./views/config.ts";
 import {
