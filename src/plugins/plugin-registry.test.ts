@@ -206,16 +206,20 @@ describe("plugin registry facade", () => {
   });
 
   it("normalizes plugin config ids through registry contribution aliases", () => {
-    const index = createIndex("openai");
-    const plugin = index.plugins[0];
-    index.plugins[0] = {
-      ...plugin,
-      contributions: {
-        ...plugin.contributions,
-        providers: ["openai", "openai-codex"],
-        channels: ["openai-chat"],
-      },
-    };
+    const baseIndex = createIndex("openai");
+    const plugin = baseIndex.plugins[0]!;
+    const index = createIndex("openai", {
+      plugins: [
+        {
+          ...plugin,
+          contributions: {
+            ...plugin.contributions,
+            providers: ["openai", "openai-codex"],
+            channels: ["openai-chat"],
+          },
+        },
+      ],
+    });
 
     const normalizePluginId = createPluginRegistryIdNormalizer(index);
     expect(normalizePluginId("OpenAI-Codex")).toBe("openai");
