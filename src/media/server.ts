@@ -15,6 +15,15 @@ const DEFAULT_TTL_MS = 2 * 60 * 1000;
 const MAX_MEDIA_ID_CHARS = 200;
 const MEDIA_ID_PATTERN = /^[\p{L}\p{N}._-]+$/u;
 const MAX_MEDIA_BYTES = MEDIA_MAX_BYTES;
+const DEFAULT_MEDIA_CONTENT_TYPE = "application/octet-stream";
+const ACTIVE_CONTENT_MIME_TYPES = new Set([
+  "application/xhtml+xml",
+  "application/xml",
+  "image/svg+xml",
+  "text/html",
+  "text/javascript",
+  "text/xml",
+]);
 
 const isValidMediaId = (id: string) => {
   if (!id) {
@@ -30,12 +39,19 @@ const isValidMediaId = (id: string) => {
 };
 
 function sendText(res: ServerResponse, statusCode: number, body: string): void {
+  const data = Buffer.from(body);
   res.statusCode = statusCode;
-  res.end(body);
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Content-Length", String(data.byteLength));
+  res.end(data);
 }
 
-function resolveMediaId(req: IncomingMessage): { routeMatched: boolean; id?: string } {
-  if (req.method !== "GET") {
+function resolveMediaId(req: IncomingMessage): {
+  routeMatched: boolean;
+  id?: string;
+  method?: string;
+} {
+  if (req.method !== "GET" && req.method !== "HEAD") {
     return { routeMatched: false };
   }
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -48,10 +64,63 @@ function resolveMediaId(req: IncomingMessage): { routeMatched: boolean; id?: str
     return { routeMatched: false };
   }
   try {
-    return { routeMatched: true, id: decodeURIComponent(encodedId) };
+    return { routeMatched: true, id: decodeURIComponent(encodedId), method: req.method };
   } catch {
-    return { routeMatched: true, id: "" };
+    return { routeMatched: true, id: "", method: req.method };
   }
+}
+
+function isActiveContentMime(mime?: string): boolean {
+  const normalized = mime?.split(";")[0]?.trim().toLowerCase();
+  return normalized ? ACTIVE_CONTENT_MIME_TYPES.has(normalized) : false;
+}
+
+function sanitizeAttachmentFilename(id: string): string {
+  const name = id.replace(/["\\\r\n]/g, "_").trim();
+  return name || "media";
+}
+
+function setMediaHeaders(
+  res: ServerResponse,
+  params: { id: string; mime?: string; bytes: number },
+): void {
+  const activeContent = isActiveContentMime(params.mime);
+  res.setHeader(
+    "Content-Type",
+    activeContent ? DEFAULT_MEDIA_CONTENT_TYPE : (params.mime ?? DEFAULT_MEDIA_CONTENT_TYPE),
+  );
+  res.setHeader("Content-Length", String(params.bytes));
+  if (activeContent) {
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${sanitizeAttachmentFilename(params.id)}"`,
+    );
+  }
+}
+
+function scheduleMediaCleanup(realPath: string): void {
+  const cleanup = () => {
+    void fs.rm(realPath).catch(() => {});
+  };
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    queueMicrotask(cleanup);
+    return;
+  }
+  setTimeout(cleanup, 50);
+}
+
+function cleanupAfterGetResponse(res: ServerResponse, realPath: string): void {
+  let scheduled = false;
+  const scheduleOnce = () => {
+    if (scheduled) {
+      return;
+    }
+    scheduled = true;
+    scheduleMediaCleanup(realPath);
+  };
+  res.once("finish", scheduleOnce);
+  res.once("close", scheduleOnce);
+  res.once("error", scheduleOnce);
 }
 
 export function createMediaRequestHandler(ttlMs = DEFAULT_TTL_MS) {
@@ -87,23 +156,18 @@ export function createMediaRequestHandler(ttlMs = DEFAULT_TTL_MS) {
           return;
         }
         const mime = await detectMime({ buffer: data, filePath: realPath });
-        if (mime) {
-          res.setHeader("Content-Type", mime);
-        }
+        setMediaHeaders(res, { id, mime, bytes: data.byteLength });
         res.statusCode = 200;
+        if (route.method === "HEAD") {
+          res.end();
+          return;
+        }
+        cleanupAfterGetResponse(res, realPath);
+        if (req.aborted || res.destroyed || res.writableEnded) {
+          scheduleMediaCleanup(realPath);
+          return;
+        }
         res.end(data);
-        // best-effort single-use cleanup after response ends
-        res.on("finish", () => {
-          const cleanup = () => {
-            void fs.rm(realPath).catch(() => {});
-          };
-          // Tests should not pay for time-based cleanup delays.
-          if (process.env.VITEST || process.env.NODE_ENV === "test") {
-            queueMicrotask(cleanup);
-            return;
-          }
-          setTimeout(cleanup, 50);
-        });
       } catch (err) {
         if (isSafeOpenError(err)) {
           if (err.code === "outside-workspace") {
