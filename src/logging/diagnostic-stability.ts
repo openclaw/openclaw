@@ -25,11 +25,13 @@ export type DiagnosticStabilityEventRecord = {
   mode?: string;
   level?: string;
   detector?: string;
+  deliveryKind?: string;
   toolName?: string;
   pairedToolName?: string;
   provider?: string;
   model?: string;
   durationMs?: number;
+  resultCount?: number;
   commandLength?: number;
   exitCode?: number;
   timedOut?: boolean;
@@ -203,6 +205,24 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       record.outcome = event.outcome;
       assignReasonCode(record, event.reason);
+      break;
+    case "message.delivery.started":
+      record.channel = event.channel;
+      record.deliveryKind = event.deliveryKind;
+      break;
+    case "message.delivery.completed":
+      record.channel = event.channel;
+      record.deliveryKind = event.deliveryKind;
+      record.durationMs = event.durationMs;
+      record.resultCount = event.resultCount;
+      record.outcome = "completed";
+      break;
+    case "message.delivery.error":
+      record.channel = event.channel;
+      record.deliveryKind = event.deliveryKind;
+      record.durationMs = event.durationMs;
+      record.outcome = "error";
+      assignReasonCode(record, event.errorCategory);
       break;
     case "session.state":
       record.outcome = event.state;

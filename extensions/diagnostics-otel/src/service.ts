@@ -59,6 +59,13 @@ type OtelContentCapturePolicy = {
   systemPrompt: boolean;
 };
 
+type MessageDeliveryDiagnosticEvent = Extract<
+  DiagnosticEventPayload,
+  {
+    type: "message.delivery.started" | "message.delivery.completed" | "message.delivery.error";
+  }
+>;
+
 const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   inputMessages: false,
   outputMessages: false,
@@ -514,6 +521,20 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "ms",
         description: "Message processing duration",
       });
+      const messageDeliveryStartedCounter = meter.createCounter(
+        "openclaw.message.delivery.started",
+        {
+          unit: "1",
+          description: "Outbound message delivery attempts started",
+        },
+      );
+      const messageDeliveryDurationHistogram = meter.createHistogram(
+        "openclaw.message.delivery.duration_ms",
+        {
+          unit: "ms",
+          description: "Outbound message delivery duration",
+        },
+      );
       const queueDepthHistogram = meter.createHistogram("openclaw.queue.depth", {
         unit: "1",
         description: "Queue depth on enqueue/dequeue",
@@ -861,6 +882,64 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end();
       };
 
+      const messageDeliveryAttrs = (
+        evt: MessageDeliveryDiagnosticEvent,
+      ): Record<string, string> => ({
+        "openclaw.channel": evt.channel,
+        "openclaw.delivery.kind": evt.deliveryKind,
+      });
+
+      const recordMessageDeliveryStarted = (
+        evt: Extract<DiagnosticEventPayload, { type: "message.delivery.started" }>,
+      ) => {
+        messageDeliveryStartedCounter.add(1, messageDeliveryAttrs(evt));
+      };
+
+      const recordMessageDeliveryCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "message.delivery.completed" }>,
+      ) => {
+        const attrs = {
+          ...messageDeliveryAttrs(evt),
+          "openclaw.outcome": "completed",
+        };
+        messageDeliveryDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = spanWithDuration(
+          "openclaw.message.delivery",
+          {
+            ...attrs,
+            "openclaw.delivery.result_count": evt.resultCount,
+          },
+          evt.durationMs,
+          { endTimeMs: evt.ts },
+        );
+        span.end(evt.ts);
+      };
+
+      const recordMessageDeliveryError = (
+        evt: Extract<DiagnosticEventPayload, { type: "message.delivery.error" }>,
+      ) => {
+        const attrs = {
+          ...messageDeliveryAttrs(evt),
+          "openclaw.outcome": "error",
+          "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other"),
+        };
+        messageDeliveryDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = spanWithDuration("openclaw.message.delivery", attrs, evt.durationMs, {
+          endTimeMs: evt.ts,
+        });
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: redactSensitiveText(evt.errorCategory),
+        });
+        span.end(evt.ts);
+      };
+
       const recordLaneEnqueue = (
         evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>,
       ) => {
@@ -1159,6 +1238,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "message.processed":
               recordMessageProcessed(evt);
+              return;
+            case "message.delivery.started":
+              recordMessageDeliveryStarted(evt);
+              return;
+            case "message.delivery.completed":
+              recordMessageDeliveryCompleted(evt);
+              return;
+            case "message.delivery.error":
+              recordMessageDeliveryError(evt);
               return;
             case "queue.lane.enqueue":
               recordLaneEnqueue(evt);
