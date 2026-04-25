@@ -185,6 +185,51 @@ describe("config io write", () => {
     });
   });
 
+  it("keeps shipped plugin install config records when index migration fails", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const unwritableStatePath = path.join(home, ".openclaw");
+      const pluginDir = path.join(unwritableStatePath, "plugins", "demo");
+      const original = {
+        plugins: {
+          entries: { demo: { enabled: true } },
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "demo@1.0.0",
+              installPath: pluginDir,
+            },
+          },
+        },
+      };
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(original, null, 2)}\n`, "utf-8");
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+      await fs.writeFile(path.join(unwritableStatePath, "plugins"), "not a directory", "utf-8");
+
+      expect(() => io.loadConfig()).toThrow('Unrecognized key: "installs"');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("could not migrate shipped plugins.installs records"),
+      );
+
+      await expect(io.writeConfigFile({ gateway: { mode: "local" } })).rejects.toThrow(
+        "Config write blocked: shipped plugins.installs records",
+      );
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as typeof original;
+      expect(persisted.plugins.installs.demo).toMatchObject({
+        source: "npm",
+        spec: "demo@1.0.0",
+        installPath: pluginDir,
+      });
+    });
+  });
+
   const writeGatewayPortAndReadConfig = async (home: string, configPath: string) => {
     const io = createFastConfigIO(home);
 
