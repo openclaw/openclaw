@@ -151,7 +151,7 @@ describe("createDiscordRestClient proxy support", () => {
         }
         const rest = createDiscordRequestClient("test-token", {
           baseUrl: `http://127.0.0.1:${address.port}`,
-          fetch: undiciFetch as typeof fetch,
+          fetch: undiciFetch as unknown as typeof fetch,
           queueRequests: false,
         });
         void rest

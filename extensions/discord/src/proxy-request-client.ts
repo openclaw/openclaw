@@ -301,7 +301,7 @@ class ProxyRequestClientCompat {
         files: undefined,
       };
       formData.append("payload_json", JSON.stringify(cleanedBody));
-      body = formData;
+      body = formData as unknown as BodyInit;
     } else if (data?.body != null) {
       headers.set("Content-Type", "application/json");
       body = data.rawBody ? (data.body as BodyInit) : JSON.stringify(data.body);
