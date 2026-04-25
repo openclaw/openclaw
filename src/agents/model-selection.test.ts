@@ -966,7 +966,7 @@ describe("model-selection", () => {
       }
     });
 
-    it("sanitizes control characters in providerless-model warnings", () => {
+    it("sanitizes control characters in providerless-model warnings", async () => {
       const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
@@ -987,7 +987,7 @@ describe("model-selection", () => {
           provider: "google",
           model: "\u001B[31mclaude-3-5-sonnet\nspoof",
         });
-        const warning = warnLogs.findText('Falling back to "google/claude-3-5-sonnet"');
+        const warning = await warnLogs.findText('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).toContain('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).not.toContain("\u001B");
         expect(warning).not.toContain("\n");

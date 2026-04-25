@@ -1014,7 +1014,7 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      const warning = warnLogs.findText('Model "openai/gpt-6spoof" not found');
+      const warning = await warnLogs.findText('Model "openai/gpt-6spoof" not found');
       expect(warning).toContain('Model "openai/gpt-6spoof" not found');
       expect(warning).not.toContain("\u001B");
       expect(warning).not.toContain("\n");
