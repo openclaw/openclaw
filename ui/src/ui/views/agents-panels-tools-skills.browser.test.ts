@@ -180,6 +180,87 @@ describe("agents tools panel (browser)", () => {
     expect(tool.open).toBe(false);
   });
 
+  it("keeps the access toggle inside the collapsed tool summary", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "full", label: "Full" }],
+            groups: [
+              {
+                id: "files",
+                label: "Files",
+                source: "core",
+                tools: [
+                  {
+                    id: "read",
+                    label: "read",
+                    description: "Read file contents",
+                    source: "core",
+                    defaultProfiles: ["full"],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
+    const summary = container.querySelector<HTMLElement>(".agent-tool-summary");
+    const toggle = container.querySelector<HTMLInputElement>(".agent-tool-toggle input");
+
+    expect(tool?.open).toBe(false);
+    expect(toggle?.closest(".agent-tool-summary")).toBe(summary);
+  });
+
+  it("uses section-level plugin provenance for tool details", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "full", label: "Full" }],
+            groups: [
+              {
+                id: "plugin:voice-call",
+                label: "voice-call",
+                source: "plugin",
+                pluginId: "voice-call",
+                tools: [
+                  {
+                    id: "voice_call",
+                    label: "voice_call",
+                    description: "Voice call tool",
+                    source: undefined as never,
+                    defaultProfiles: ["full"],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
+    tool!.open = true;
+
+    const sourceDetail = Array.from(
+      container.querySelectorAll<HTMLElement>(".agent-tool-detail"),
+    ).find((detail) => detail.textContent?.includes("Source"));
+
+    expect(sourceDetail?.textContent).toContain("Plugin: voice-call");
+  });
+
   it("opens the collapsed group and tool row from a live tool chip", async () => {
     const container = document.createElement("div");
     document.body.append(container);

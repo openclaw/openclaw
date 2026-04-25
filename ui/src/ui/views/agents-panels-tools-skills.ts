@@ -82,9 +82,11 @@ function formatToolPolicyState(params: {
   return "Not included in the current profile.";
 }
 
-function formatToolSourceLabel(tool: { source?: "core" | "plugin"; pluginId?: string }) {
-  if (tool.source === "plugin" && tool.pluginId) {
-    return `Plugin: ${tool.pluginId}`;
+function formatToolSourceLabel(section: AgentToolSection, tool: AgentToolEntry) {
+  const source = tool.source ?? section.source;
+  const pluginId = tool.pluginId ?? section.pluginId;
+  if (source === "plugin" && pluginId) {
+    return `Plugin: ${pluginId}`;
   }
   return "Built-In";
 }
@@ -596,21 +598,22 @@ export function renderAgentTools(params: {
                         <div class="agent-tool-summary__badges">
                           ${renderToolMetaBadges(rowBadges)}
                         </div>
+                        <label
+                          class="cfg-toggle agent-tool-toggle"
+                          @click=${(event: Event) => event.stopPropagation()}
+                          @keydown=${(event: KeyboardEvent) => event.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            .checked=${resolved.allowed}
+                            ?disabled=${!editable}
+                            aria-label=${`${resolved.allowed ? "Disable" : "Enable"} ${tool.label}`}
+                            @change=${(e: Event) =>
+                              updateTool(tool.id, (e.target as HTMLInputElement).checked)}
+                          />
+                          <span class="cfg-toggle__track"></span>
+                        </label>
                       </summary>
-                      <label
-                        class="cfg-toggle agent-tool-toggle"
-                        @click=${(event: Event) => event.stopPropagation()}
-                      >
-                        <input
-                          type="checkbox"
-                          .checked=${resolved.allowed}
-                          ?disabled=${!editable}
-                          aria-label=${`${resolved.allowed ? "Disable" : "Enable"} ${tool.label}`}
-                          @change=${(e: Event) =>
-                            updateTool(tool.id, (e.target as HTMLInputElement).checked)}
-                        />
-                        <span class="cfg-toggle__track"></span>
-                      </label>
                       <div class="agent-tool-details">
                         <div class="agent-tool-details-strip">
                           <div class="agent-tool-detail agent-tool-detail--inline">
@@ -619,7 +622,7 @@ export function renderAgentTools(params: {
                           </div>
                           <div class="agent-tool-detail agent-tool-detail--inline">
                             <div class="label">Source</div>
-                            <div>${formatToolSourceLabel(tool)}</div>
+                            <div>${formatToolSourceLabel(section, tool)}</div>
                           </div>
                           ${defaultProfiles.length > 0
                             ? html`
