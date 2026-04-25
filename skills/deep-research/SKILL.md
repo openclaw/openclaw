@@ -1,7 +1,6 @@
 ---
 name: deep-research
 description: Multi-source deep research using OpenClaw web search and Firecrawl tools. Searches the web, reads key sources, synthesizes findings, and delivers cited reports with source attribution. Use when the user wants thorough research on any topic with evidence and citations.
-origin: ECC
 metadata: { "openclaw": { "emoji": "DR" } }
 ---
 
