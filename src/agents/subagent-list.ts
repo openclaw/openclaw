@@ -20,6 +20,7 @@ import {
 } from "./subagent-registry-read.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 export type SubagentListItem = {
   index: number;
@@ -133,7 +134,7 @@ export function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
 ) {
-  return !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
+  return isLiveUnendedSubagentRun(entry) || pendingDescendantCount(entry.childSessionKey) > 0;
 }
 
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
@@ -142,7 +143,7 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendan
     const childLabel = pendingDescendants === 1 ? "child" : "children";
     return `active (waiting on ${pendingDescendants} ${childLabel})`;
   }
-  if (!entry.endedAt) {
+  if (!hasSubagentRunEnded(entry)) {
     return "running";
   }
   const status = entry.outcome?.status ?? "done";
