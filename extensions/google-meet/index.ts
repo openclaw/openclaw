@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
+  listGoogleMeetCalendarEvents,
   type GoogleMeetCalendarLookupResult,
 } from "./src/calendar.js";
 import {
@@ -150,6 +151,7 @@ const GoogleMeetToolSchema = Type.Object({
       "resolve_space",
       "preflight",
       "latest",
+      "calendar_events",
       "artifacts",
       "attendance",
       "recover_current_tab",
@@ -199,6 +201,12 @@ const GoogleMeetToolSchema = Type.Object({
   pageSize: Type.Optional(Type.Number({ description: "Meet API page size for list actions" })),
   includeTranscriptEntries: Type.Optional(
     Type.Boolean({ description: "For artifacts, include structured transcript entries" }),
+  ),
+  includeDocumentBodies: Type.Optional(
+    Type.Boolean({
+      description:
+        "For artifacts, export linked transcript and smart-note Google Docs text through Drive.",
+    }),
   ),
   includeAllConferenceRecords: Type.Optional(
     Type.Boolean({
@@ -358,6 +366,7 @@ async function resolveArtifactQueryFromParams(
     conferenceRecord,
     pageSize: resolveOptionalPositiveInteger(raw.pageSize),
     includeTranscriptEntries: raw.includeTranscriptEntries !== false,
+    includeDocumentBodies: raw.includeDocumentBodies === true,
     allConferenceRecords: raw.includeAllConferenceRecords === true,
     mergeDuplicateParticipants: raw.mergeDuplicateParticipants !== false,
     lateAfterMinutes: resolveOptionalPositiveInteger(raw.lateAfterMinutes),
@@ -500,6 +509,28 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.calendarEvents",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          const token = await resolveGoogleMeetTokenFromParams(config, raw);
+          const window = raw.today === true ? buildGoogleMeetCalendarDayWindow() : {};
+          respond(
+            true,
+            await listGoogleMeetCalendarEvents({
+              accessToken: token.accessToken,
+              calendarId: normalizeOptionalString(raw.calendarId),
+              eventQuery: normalizeOptionalString(raw.event),
+              ...window,
+            }),
+          );
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.artifacts",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -513,6 +544,7 @@ export default definePluginEntry({
               conferenceRecord: resolved.conferenceRecord,
               pageSize: resolved.pageSize,
               includeTranscriptEntries: resolved.includeTranscriptEntries,
+              includeDocumentBodies: resolved.includeDocumentBodies,
               allConferenceRecords: resolved.allConferenceRecords,
             }),
           );
@@ -694,6 +726,18 @@ export default definePluginEntry({
                 ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
               });
             }
+            case "calendar_events": {
+              const token = await resolveGoogleMeetTokenFromParams(config, raw);
+              const window = raw.today === true ? buildGoogleMeetCalendarDayWindow() : {};
+              return json(
+                await listGoogleMeetCalendarEvents({
+                  accessToken: token.accessToken,
+                  calendarId: normalizeOptionalString(raw.calendarId),
+                  eventQuery: normalizeOptionalString(raw.event),
+                  ...window,
+                }),
+              );
+            }
             case "artifacts": {
               const resolved = await resolveArtifactQueryFromParams(config, raw);
               return json(
@@ -703,6 +747,7 @@ export default definePluginEntry({
                   conferenceRecord: resolved.conferenceRecord,
                   pageSize: resolved.pageSize,
                   includeTranscriptEntries: resolved.includeTranscriptEntries,
+                  includeDocumentBodies: resolved.includeDocumentBodies,
                   allConferenceRecords: resolved.allConferenceRecords,
                 }),
               );
