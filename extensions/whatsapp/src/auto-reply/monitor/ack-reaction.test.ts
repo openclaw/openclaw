@@ -1,11 +1,26 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebInboundMessage } from "../../inbound/types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 
 const hoisted = vi.hoisted(() => ({
   sendReactionWhatsApp: vi.fn(async () => undefined),
 }));
+
+async function makeSessionStore(): Promise<{ storePath: string; cleanup: () => Promise<void> }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
+  const storePath = path.join(dir, "sessions.json");
+  await fs.writeFile(storePath, JSON.stringify({}));
+  return {
+    storePath,
+    cleanup: async () => {
+      await fs.rm(dir, { recursive: true, force: true });
+    },
+  };
+}
 
 vi.mock("../../send.js", () => ({
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
@@ -77,8 +92,16 @@ const expectAckReactionSent = (accountId: string) => {
 };
 
 describe("maybeSendAckReaction", () => {
+  const cleanups: Array<() => Promise<void>> = [];
+
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    while (cleanups.length > 0) {
+      await cleanups.pop()?.();
+    }
   });
 
   it.each(["ack", "minimal", "extensive"] as const)(
@@ -135,6 +158,45 @@ describe("maybeSendAckReaction", () => {
       expect.objectContaining({
         verbose: false,
         fromMe: false,
+        accountId: "default",
+      }),
+    );
+  });
+
+  it("treats configured group admins as active for mention-scoped ack reactions", async () => {
+    const { storePath, cleanup } = await makeSessionStore();
+    cleanups.push(cleanup);
+
+    const ackReaction = await runAckReaction({
+      msg: createMessage({
+        from: "123@g.us",
+        conversationId: "123@g.us",
+        chatType: "group",
+        chatId: "123@g.us",
+        senderE164: "+15550001111",
+        wasMentioned: false,
+      }),
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      conversationId: "123@g.us",
+      cfg: {
+        ...createConfig("ack", {
+          groups: {
+            "*": {
+              requireMention: true,
+              admin: "+15550001111",
+            },
+          },
+        }),
+        session: { store: storePath },
+      } as OpenClawConfig,
+    });
+
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "123@g.us",
+      "msg-1",
+      "👀",
+      expect.objectContaining({
         accountId: "default",
       }),
     );
