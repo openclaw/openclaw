@@ -1233,6 +1233,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     };
 
     const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
+    const processEvent = vi.fn();
     const manager = {
       getActiveCalls: () => [call],
       getCallByProviderCallId: (providerCallId: string) =>
@@ -1240,7 +1241,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       getCall: (callId: string) => (callId === call.callId ? call : undefined),
       endCall: vi.fn(async () => ({ success: true })),
       speakInitialMessage: vi.fn(async () => {}),
-      processEvent: vi.fn(),
+      processEvent,
     } as unknown as CallManager;
 
     const config = createConfig({
@@ -1257,12 +1258,28 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     });
     const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(clearTtsQueue));
     await server.start();
+    const handleInboundResponse = vi.fn(async () => {});
+    (
+      server as unknown as {
+        handleInboundResponse: (callId: string, transcript: string) => Promise<void>;
+      }
+    ).handleInboundResponse = handleInboundResponse;
 
     try {
       const media = getMediaCallbacks(server);
       media.config.onSpeechStart?.("CA-inbound");
       media.config.onTranscript?.("CA-inbound", "hello");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
+      expect(processEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "call.speech",
+          callId: "call-inbound",
+          providerCallId: "CA-inbound",
+          transcript: "hello",
+          isFinal: true,
+        }),
+      );
+      expect(handleInboundResponse).toHaveBeenCalledWith("call-inbound", "hello");
     } finally {
       await server.stop();
     }
