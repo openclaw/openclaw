@@ -4,6 +4,9 @@ import { normalizeOptionalString } from "./string-coerce.ts";
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
 const THEME_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const CUSTOM_THEME_STYLE_ID = "openclaw-custom-theme";
+const MAX_TWEAKCN_THEME_BYTES = 200_000;
+const MAX_CSS_TOKEN_LENGTH = 240;
+const TWEAKCN_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_FONT_BODY =
   '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const DEFAULT_MONO =
@@ -67,6 +70,29 @@ const MODE_TOKEN_ORDER = [
 type ModeTokenName = (typeof MODE_TOKEN_ORDER)[number];
 type ThemeTokenMap = Record<ModeTokenName, string>;
 
+const REQUIRED_TWEAKCN_MODE_VARS = [
+  "background",
+  "foreground",
+  "card",
+  "card-foreground",
+  "popover",
+  "popover-foreground",
+  "primary",
+  "primary-foreground",
+  "secondary",
+  "secondary-foreground",
+  "muted",
+  "muted-foreground",
+  "accent",
+  "accent-foreground",
+  "destructive",
+  "destructive-foreground",
+  "border",
+  "input",
+  "ring",
+] as const;
+type RequiredTweakcnModeVar = (typeof REQUIRED_TWEAKCN_MODE_VARS)[number];
+
 export type ImportedCustomTheme = {
   sourceUrl: string;
   themeId: string;
@@ -76,14 +102,26 @@ export type ImportedCustomTheme = {
   dark: ThemeTokenMap;
 };
 
-const tweakcnCssVarMapSchema = z.record(z.string(), z.string());
+const cssTokenSchema = z.string().max(MAX_CSS_TOKEN_LENGTH);
+
+function createStringShape<const T extends readonly string[]>(keys: T) {
+  return Object.fromEntries(keys.map((key) => [key, cssTokenSchema])) as Record<
+    T[number],
+    typeof cssTokenSchema
+  >;
+}
 
 const tweakcnThemeSchema = z.object({
-  name: z.string().optional(),
+  name: z.string().max(80).optional(),
   cssVars: z.object({
-    theme: tweakcnCssVarMapSchema.optional(),
-    light: tweakcnCssVarMapSchema,
-    dark: tweakcnCssVarMapSchema,
+    theme: z
+      .object({
+        "font-sans": cssTokenSchema.optional(),
+        "font-mono": cssTokenSchema.optional(),
+      })
+      .optional(),
+    light: z.object(createStringShape(REQUIRED_TWEAKCN_MODE_VARS)),
+    dark: z.object(createStringShape(REQUIRED_TWEAKCN_MODE_VARS)),
   }),
 });
 
@@ -92,8 +130,8 @@ const importedCustomThemeSchema = z.object({
   themeId: z.string(),
   label: z.string(),
   importedAt: z.string(),
-  light: z.record(z.string(), z.string()),
-  dark: z.record(z.string(), z.string()),
+  light: z.object(createStringShape(MODE_TOKEN_ORDER)),
+  dark: z.object(createStringShape(MODE_TOKEN_ORDER)),
 });
 
 type TweakcnThemePayload = z.infer<typeof tweakcnThemeSchema>;
@@ -126,6 +164,20 @@ function normalizeThemeIdFromPath(pathname: string): string {
 function requireSafeCssValue(value: unknown, label: string) {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
+    throw new Error(`Unsupported tweakcn token: ${label}`);
+  }
+  if (normalized.length > MAX_CSS_TOKEN_LENGTH) {
+    throw new Error(`Unsupported tweakcn token: ${label}`);
+  }
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered.includes("url(") ||
+    lowered.includes("@import") ||
+    lowered.includes("expression(") ||
+    normalized.includes("/*") ||
+    normalized.includes("*/") ||
+    normalized.includes("\\")
+  ) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
   for (const char of normalized) {
@@ -163,8 +215,8 @@ function normalizeStoredTokenMap(value: Record<string, string> | undefined): The
 }
 
 function resolveModeVar(
-  theme: Record<string, string>,
-  shared: Record<string, string> | undefined,
+  theme: Record<string, string | undefined>,
+  shared: Record<string, string | undefined> | undefined,
   key: string,
   fallback?: string,
 ) {
@@ -184,8 +236,8 @@ function resolveModeVar(
 
 function normalizeModeTokenMap(
   mode: "light" | "dark",
-  theme: Record<string, string>,
-  shared: Record<string, string> | undefined,
+  theme: Record<RequiredTweakcnModeVar, string>,
+  shared: Record<string, string | undefined> | undefined,
 ): ThemeTokenMap {
   const isLight = mode === "light";
   const contrastTarget = isLight ? "black" : "white";
@@ -348,19 +400,104 @@ export function normalizeImportedCustomTheme(
   };
 }
 
+function assertTweakcnResponseUrl(value: string | undefined) {
+  if (!value) {
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("Unexpected tweakcn import response URL.");
+  }
+  if (parsed.protocol !== "https:" || !TWEAKCN_HOSTS.has(parsed.hostname)) {
+    throw new Error("Unexpected redirect during tweakcn import.");
+  }
+}
+
+function parseContentLength(headers: Headers): number | null {
+  const raw = headers.get("content-length");
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+async function readResponseTextWithLimit(response: Response): Promise<string> {
+  const contentLength = parseContentLength(response.headers);
+  if (contentLength != null && contentLength > MAX_TWEAKCN_THEME_BYTES) {
+    throw new Error("tweakcn theme payload is too large.");
+  }
+
+  if (response.body) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let text = "";
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          break;
+        }
+        bytes += chunk.value.byteLength;
+        if (bytes > MAX_TWEAKCN_THEME_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          throw new Error("tweakcn theme payload is too large.");
+        }
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      text += decoder.decode();
+      return text;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  const text = await response.text();
+  if (new TextEncoder().encode(text).byteLength > MAX_TWEAKCN_THEME_BYTES) {
+    throw new Error("tweakcn theme payload is too large.");
+  }
+  return text;
+}
+
+async function readJsonResponseWithLimit(response: Response): Promise<unknown> {
+  const text = await readResponseTextWithLimit(response);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error("tweakcn returned invalid JSON.");
+  }
+}
+
 export async function importCustomThemeFromUrl(
   input: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ImportedCustomTheme> {
   const resolution = normalizeTweakcnThemeUrl(input);
-  const response = await fetchImpl(resolution.fetchUrl, {
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) {
-    throw new Error(`tweakcn import failed (${response.status}).`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TWEAKCN_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(resolution.fetchUrl, {
+      headers: { accept: "application/json" },
+      redirect: "error",
+      signal: controller.signal,
+    });
+    assertTweakcnResponseUrl(response.url);
+    if (!response.ok) {
+      throw new Error(`tweakcn import failed (${response.status}).`);
+    }
+    const payload = await readJsonResponseWithLimit(response);
+    return normalizeImportedCustomTheme(payload, resolution);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("tweakcn import timed out.", { cause: error });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  const payload = await response.json();
-  return normalizeImportedCustomTheme(payload, resolution);
 }
 
 export function buildCustomThemeStyles(theme: ImportedCustomTheme) {
