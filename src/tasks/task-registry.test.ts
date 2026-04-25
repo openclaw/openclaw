@@ -1590,6 +1590,108 @@ describe("task-registry", () => {
     });
   });
 
+  it("backdates createdAt when a task is created with an earlier startedAt", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-backdated-create",
+        task: "Backdated create",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 1_699_999_999_000,
+      });
+
+      nowSpy.mockRestore();
+
+      expect(task).toMatchObject({
+        createdAt: 1_699_999_999_000,
+        startedAt: 1_699_999_999_000,
+        lastEventAt: 1_699_999_999_000,
+      });
+      expect(getInspectableTaskAuditSummary().byCode.inconsistent_timestamps).toBe(0);
+    });
+  });
+
+  it("keeps timestamps monotonic when an update supplies an earlier startedAt", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-backdated-update",
+        task: "Backdated update",
+        status: "queued",
+        deliveryStatus: "pending",
+      });
+
+      nowSpy.mockReturnValue(1_700_000_001_000);
+      setTaskTimingById({
+        taskId: task.taskId,
+        startedAt: 1_699_999_998_000,
+        lastEventAt: 1_699_999_998_500,
+      });
+      nowSpy.mockRestore();
+
+      expect(getTaskById(task.taskId)).toMatchObject({
+        createdAt: 1_699_999_998_000,
+        startedAt: 1_699_999_998_000,
+        lastEventAt: 1_699_999_998_500,
+      });
+      expect(getInspectableTaskAuditSummary().byCode.inconsistent_timestamps).toBe(0);
+    });
+  });
+
+  it("normalizes restored task timestamps before exposing them", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: new Map([
+              [
+                "task-restored-bad-timestamps",
+                {
+                  taskId: "task-restored-bad-timestamps",
+                  runtime: "acp",
+                  requesterSessionKey: "agent:main:main",
+                  ownerKey: "agent:main:main",
+                  scopeKind: "session",
+                  runId: "run-restored-bad-timestamps",
+                  task: "Restored task with old start time",
+                  status: "running",
+                  deliveryStatus: "pending",
+                  notifyPolicy: "done_only",
+                  createdAt: 200,
+                  startedAt: 100,
+                  lastEventAt: 150,
+                },
+              ],
+            ]),
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(findTaskByRunId("run-restored-bad-timestamps")).toMatchObject({
+        createdAt: 100,
+        startedAt: 100,
+        lastEventAt: 150,
+      });
+    });
+  });
+
   it("summarizes inspectable task audit findings", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
