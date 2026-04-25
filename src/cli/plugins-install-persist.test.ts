@@ -56,6 +56,13 @@ describe("persistPluginInstall", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: enabledConfig,
+      installRecords: {
+        alpha: expect.objectContaining({
+          source: "npm",
+          spec: "alpha@1.0.0",
+          installPath: "/tmp/alpha",
+        }),
+      },
       reason: "source-changed",
     });
   });
