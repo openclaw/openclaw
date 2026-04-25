@@ -546,6 +546,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - default: audio file behavior
     - tag `[[audio_as_voice]]` in agent reply to force voice-note send
+    - inbound voice-note transcripts are framed as machine-generated,
+      untrusted text in the agent context; mention detection still uses the raw
+      transcript so mention-gated voice messages continue to work.
 
     Message action example:
 
