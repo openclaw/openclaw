@@ -8,6 +8,7 @@ import {
   isDirectPostinstallInvocation,
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
+  discoverBundledPluginRuntimeDepsWithConflicts,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
@@ -856,5 +857,181 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(removePath).not.toHaveBeenCalled();
+  });
+
+  it("reports an empty conflicts list when every bundled plugin agrees on a runtime dep version", async () => {
+    const extensionsDir = await createExtensionsDir();
+    await writePluginPackage(extensionsDir, "slack", {
+      dependencies: { "https-proxy-agent": "^8.0.0" },
+    });
+    await writePluginPackage(extensionsDir, "feishu", {
+      dependencies: { "https-proxy-agent": "^8.0.0" },
+    });
+
+    const { deps, conflicts } = discoverBundledPluginRuntimeDepsWithConflicts({ extensionsDir });
+
+    expect(conflicts).toEqual([]);
+    expect(deps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "https-proxy-agent",
+          version: "^8.0.0",
+          pluginIds: ["feishu", "slack"],
+        }),
+      ]),
+    );
+  });
+
+  it("detects conflicts when two bundled plugins pin the same dep at different exact versions", async () => {
+    const extensionsDir = await createExtensionsDir();
+    await writePluginPackage(extensionsDir, "amazon-bedrock", {
+      dependencies: { "@aws-sdk/client-bedrock-runtime": "3.1033.0" },
+    });
+    await writePluginPackage(extensionsDir, "other-aws", {
+      dependencies: { "@aws-sdk/client-bedrock-runtime": "3.1037.0" },
+    });
+
+    const { deps, conflicts } = discoverBundledPluginRuntimeDepsWithConflicts({ extensionsDir });
+
+    // Top-level keeps the first-seen version (alphabetical readdir order —
+    // amazon-bedrock comes before other-aws), preserving historical behavior.
+    const winner = deps.find((dep) => dep.name === "@aws-sdk/client-bedrock-runtime");
+    expect(winner?.version).toBe("3.1033.0");
+    expect(winner?.pluginIds).toEqual(["amazon-bedrock"]);
+
+    expect(conflicts).toEqual([
+      {
+        name: "@aws-sdk/client-bedrock-runtime",
+        winnerVersion: "3.1033.0",
+        winnerPluginIds: ["amazon-bedrock"],
+        losers: [{ pluginId: "other-aws", version: "3.1037.0" }],
+      },
+    ]);
+  });
+
+  it("reports every loser plugin when more than two plugins disagree on a runtime dep version", async () => {
+    const extensionsDir = await createExtensionsDir();
+    await writePluginPackage(extensionsDir, "amazon-bedrock", {
+      dependencies: { "@aws-sdk/client-s3": "3.1033.0" },
+    });
+    await writePluginPackage(extensionsDir, "plugin-b", {
+      dependencies: { "@aws-sdk/client-s3": "3.1040.0" },
+    });
+    await writePluginPackage(extensionsDir, "plugin-c", {
+      dependencies: { "@aws-sdk/client-s3": "^3.1037.0" },
+    });
+
+    const { conflicts } = discoverBundledPluginRuntimeDepsWithConflicts({ extensionsDir });
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].name).toBe("@aws-sdk/client-s3");
+    expect(conflicts[0].winnerVersion).toBe("3.1033.0");
+    expect(conflicts[0].losers).toEqual([
+      { pluginId: "plugin-b", version: "3.1040.0" },
+      { pluginId: "plugin-c", version: "^3.1037.0" },
+    ]);
+  });
+
+  it("installs each loser's exact pin into its own plugin node_modules after the top-level install", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "amazon-bedrock", {
+      dependencies: { "@aws-sdk/client-bedrock-runtime": "3.1033.0" },
+    });
+    await writePluginPackage(extensionsDir, "other-aws", {
+      dependencies: { "@aws-sdk/client-bedrock-runtime": "3.1037.0" },
+    });
+
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+    const calls: Array<{ cwd: string; spec: string }> = [];
+    const npmRunnerForTopLevel = createBareNpmRunner(["@aws-sdk/client-bedrock-runtime@3.1033.0"]);
+    const npmRunnerForLoser = createBareNpmRunner(["@aws-sdk/client-bedrock-runtime@3.1037.0"]);
+    const wrappedSpawn = vi.fn(
+      (command: string, args: string[], options: Record<string, unknown>) => {
+        const spec = args[args.length - 1];
+        calls.push({ cwd: options.cwd as string, spec });
+        return { status: 0, stderr: "", stdout: "" };
+      },
+    );
+
+    runBundledPluginPostinstall({
+      env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
+        HOME: "/tmp/home",
+      },
+      extensionsDir,
+      packageRoot,
+      npmRunner: npmRunnerForTopLevel,
+      localPluginNpmRunner: () => npmRunnerForLoser,
+      spawnSync: wrappedSpawn,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(calls).toEqual([
+      { cwd: packageRoot, spec: "@aws-sdk/client-bedrock-runtime@3.1033.0" },
+      {
+        cwd: path.join(extensionsDir, "other-aws"),
+        spec: "@aws-sdk/client-bedrock-runtime@3.1037.0",
+      },
+    ]);
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("skips per-plugin loser install when the loser's exact pin is already populated locally", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "amazon-bedrock", {
+      dependencies: { "@aws-sdk/client-bedrock-runtime": "3.1033.0" },
+    });
+    await writePluginPackage(extensionsDir, "other-aws", {
+      dependencies: { "@aws-sdk/client-bedrock-runtime": "3.1037.0" },
+    });
+    // Pre-populate the loser's local node_modules with the exact pin it wanted.
+    const loserSentinelDir = path.join(
+      extensionsDir,
+      "other-aws",
+      "node_modules",
+      "@aws-sdk",
+      "client-bedrock-runtime",
+    );
+    await fs.mkdir(loserSentinelDir, { recursive: true });
+    await fs.writeFile(
+      path.join(loserSentinelDir, "package.json"),
+      JSON.stringify({
+        name: "@aws-sdk/client-bedrock-runtime",
+        version: "3.1037.0",
+      }),
+    );
+
+    const calls: Array<{ cwd: string; spec: string }> = [];
+    const wrappedSpawn = vi.fn(
+      (command: string, args: string[], options: Record<string, unknown>) => {
+        const spec = args[args.length - 1];
+        calls.push({ cwd: options.cwd as string, spec });
+        return { status: 0, stderr: "", stdout: "" };
+      },
+    );
+
+    const localPluginNpmRunner = vi.fn(() =>
+      createBareNpmRunner(["@aws-sdk/client-bedrock-runtime@3.1037.0"]),
+    );
+
+    runBundledPluginPostinstall({
+      env: {
+        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
+        HOME: "/tmp/home",
+      },
+      extensionsDir,
+      packageRoot,
+      npmRunner: createBareNpmRunner(["@aws-sdk/client-bedrock-runtime@3.1033.0"]),
+      localPluginNpmRunner,
+      spawnSync: wrappedSpawn,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(calls).toEqual([{ cwd: packageRoot, spec: "@aws-sdk/client-bedrock-runtime@3.1033.0" }]);
+    // The local-plugin runner should never have been resolved because the
+    // sentinel was already populated with the loser's exact pin.
+    expect(localPluginNpmRunner).not.toHaveBeenCalled();
   });
 });

@@ -407,6 +407,21 @@ function collectRuntimeDeps(packageJson) {
 }
 
 export function discoverBundledPluginRuntimeDeps(params = {}) {
+  return discoverBundledPluginRuntimeDepsWithConflicts(params).deps;
+}
+
+/**
+ * Walk the bundled plugin extensions directory and collect every runtime
+ * dependency declared by every plugin's package.json (dependencies +
+ * optionalDependencies). Two plugins requesting the same dep at different
+ * versions create a CONFLICT: the postinstall step keeps the first-seen
+ * version for the top-level (hoisted) install (preserving historical
+ * behavior) and reports the losers so the caller can install the conflicting
+ * version locally inside each loser plugin's own node_modules. Without that
+ * extra step, the runtime loader would re-install the loser's exact pin on
+ * the first cold start of the gateway, costing tens of seconds per fresh VM.
+ */
+export function discoverBundledPluginRuntimeDepsWithConflicts(params = {}) {
   const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
   const pathExists = params.existsSync ?? existsSync;
   const readDir = params.readdirSync ?? readdirSync;
@@ -422,9 +437,33 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
       },
     ]),
   );
+  // Per-dep tracker of every distinct (version, pluginId) pair we've seen,
+  // used to detect conflicts (same dep declared at multiple versions across
+  // bundled plugins).
+  const sightings = new Map();
+  function recordSighting(name, version, pluginId) {
+    if (!sightings.has(name)) {
+      sightings.set(name, new Map());
+    }
+    const versionMap = sightings.get(name);
+    if (!versionMap.has(version)) {
+      versionMap.set(version, []);
+    }
+    const pluginsForVersion = versionMap.get(version);
+    if (pluginId && !pluginsForVersion.includes(pluginId)) {
+      pluginsForVersion.push(pluginId);
+    }
+  }
+
+  for (const dep of deps.values()) {
+    for (const pluginId of dep.pluginIds) {
+      recordSighting(dep.name, dep.version, pluginId);
+    }
+  }
 
   if (!pathExists(extensionsDir)) {
-    return [...deps.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+    const sortedDeps = [...deps.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+    return { deps: sortedDeps, conflicts: [] };
   }
 
   for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
@@ -439,9 +478,15 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
     try {
       const packageJson = readJsonFile(packageJsonPath);
       for (const [name, version] of Object.entries(collectRuntimeDeps(packageJson))) {
+        recordSighting(name, version, pluginId);
         const existing = deps.get(name);
         if (existing) {
           if (existing.version !== version) {
+            // Conflict: keep the first-seen version as the top-level winner;
+            // the loser is recorded via `sightings` and surfaced in the
+            // returned `conflicts` array so the caller can install the
+            // exact pinned version locally inside the loser plugin's
+            // node_modules.
             continue;
           }
           if (!existing.pluginIds.includes(pluginId)) {
@@ -461,13 +506,48 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
     }
   }
 
-  return [...deps.values()]
+  const sortedDeps = [...deps.values()]
     .map((dep) =>
       Object.assign({}, dep, {
         pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
       }),
     )
     .toSorted((a, b) => a.name.localeCompare(b.name));
+
+  const conflicts = [];
+  for (const [name, versionMap] of sightings) {
+    if (versionMap.size <= 1) {
+      continue;
+    }
+    const winnerEntry = deps.get(name);
+    if (!winnerEntry) {
+      continue;
+    }
+    const winnerVersion = winnerEntry.version;
+    const losers = [];
+    for (const [version, pluginIds] of versionMap) {
+      if (version === winnerVersion) {
+        continue;
+      }
+      for (const pluginId of [...pluginIds].toSorted((a, b) => a.localeCompare(b))) {
+        losers.push({ pluginId, version });
+      }
+    }
+    if (losers.length === 0) {
+      continue;
+    }
+    conflicts.push({
+      name,
+      winnerVersion,
+      winnerPluginIds: [...winnerEntry.pluginIds].toSorted((a, b) => a.localeCompare(b)),
+      losers: losers.toSorted(
+        (a, b) => a.pluginId.localeCompare(b.pluginId) || a.version.localeCompare(b.version),
+      ),
+    });
+  }
+  conflicts.sort((a, b) => a.name.localeCompare(b.name));
+
+  return { deps: sortedDeps, conflicts };
 }
 
 export function createNestedNpmInstallEnv(env = process.env) {
@@ -811,9 +891,21 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
-  const runtimeDeps =
-    params.runtimeDeps ??
-    discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
+  let runtimeDeps;
+  let runtimeDepConflicts;
+  if (params.runtimeDeps) {
+    runtimeDeps = params.runtimeDeps;
+    runtimeDepConflicts = params.runtimeDepConflicts ?? [];
+  } else {
+    const discovered = discoverBundledPluginRuntimeDepsWithConflicts({
+      extensionsDir,
+      existsSync: pathExists,
+      readdirSync: params.readdirSync,
+      readJson: params.readJson,
+    });
+    runtimeDeps = discovered.deps;
+    runtimeDepConflicts = discovered.conflicts;
+  }
   const missingSpecs = runtimeDeps
     .filter((dep) =>
       runtimeDepNeedsInstall({
@@ -827,7 +919,7 @@ export function runBundledPluginPostinstall(params = {}) {
     )
     .map((dep) => `${dep.name}@${dep.version}`);
 
-  if (missingSpecs.length === 0) {
+  if (missingSpecs.length === 0 && runtimeDepConflicts.length === 0) {
     applyBundledPluginRuntimeHotfixes({
       packageRoot,
       existsSync: pathExists,
@@ -838,34 +930,95 @@ export function runBundledPluginPostinstall(params = {}) {
     return;
   }
 
-  try {
-    const installEnv = createBundledRuntimeDependencyInstallEnv(env);
-    const npmRunner =
-      params.npmRunner ??
-      resolveNpmRunner({
-        env: installEnv,
-        execPath: params.execPath,
-        existsSync: pathExists,
-        platform: params.platform,
-        comSpec: params.comSpec,
-        npmArgs: createBundledRuntimeDependencyInstallArgs(missingSpecs),
+  if (missingSpecs.length > 0) {
+    try {
+      const installEnv = createBundledRuntimeDependencyInstallEnv(env);
+      const npmRunner =
+        params.npmRunner ??
+        resolveNpmRunner({
+          env: installEnv,
+          execPath: params.execPath,
+          existsSync: pathExists,
+          platform: params.platform,
+          comSpec: params.comSpec,
+          npmArgs: createBundledRuntimeDependencyInstallArgs(missingSpecs),
+        });
+      const result = spawn(npmRunner.command, npmRunner.args, {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: npmRunner.env ?? installEnv,
+        stdio: "pipe",
+        shell: npmRunner.shell,
+        windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
       });
-    const result = spawn(npmRunner.command, npmRunner.args, {
-      cwd: packageRoot,
-      encoding: "utf8",
-      env: npmRunner.env ?? installEnv,
-      stdio: "pipe",
-      shell: npmRunner.shell,
-      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
-    });
-    if (result.status !== 0) {
-      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-      throw new Error(output || "npm install failed");
+      if (result.status !== 0) {
+        const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+        throw new Error(output || "npm install failed");
+      }
+      log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
+    } catch (e) {
+      // Non-fatal: gateway will surface the missing dep via doctor.
+      log.warn(`[postinstall] could not install bundled plugin deps: ${String(e)}`);
     }
-    log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
-  } catch (e) {
-    // Non-fatal: gateway will surface the missing dep via doctor.
-    log.warn(`[postinstall] could not install bundled plugin deps: ${String(e)}`);
+  }
+
+  // Resolve discovered version conflicts by populating each loser plugin's
+  // local node_modules with the exact pin it requested. The runtime loader's
+  // sentinel check walks plugin-local node_modules first, so this avoids the
+  // ~30s per-cold-start re-install penalty when a plugin's exact pin differs
+  // from the version that won the top-level (hoisted) install.
+  for (const conflict of runtimeDepConflicts) {
+    for (const loser of conflict.losers) {
+      const loserPluginRoot = join(extensionsDir, loser.pluginId);
+      if (!pathExists(loserPluginRoot)) {
+        continue;
+      }
+      const sentinelPath = join(loserPluginRoot, dependencySentinelPath(conflict.name));
+      if (pathExists(sentinelPath)) {
+        try {
+          const installedPkg = (params.readJson ?? readJson)(sentinelPath);
+          if (installedPkg && installedPkg.version === loser.version) {
+            // Already populated locally — nothing to do.
+            continue;
+          }
+        } catch {
+          // Re-install on parse failure.
+        }
+      }
+      try {
+        const installEnv = createBundledRuntimeDependencyInstallEnv(env);
+        const installSpec = `${conflict.name}@${loser.version}`;
+        const localNpmRunner =
+          params.localPluginNpmRunner?.({ pluginId: loser.pluginId, spec: installSpec }) ??
+          resolveNpmRunner({
+            env: installEnv,
+            execPath: params.execPath,
+            existsSync: pathExists,
+            platform: params.platform,
+            comSpec: params.comSpec,
+            npmArgs: createBundledRuntimeDependencyInstallArgs([installSpec]),
+          });
+        const result = spawn(localNpmRunner.command, localNpmRunner.args, {
+          cwd: loserPluginRoot,
+          encoding: "utf8",
+          env: localNpmRunner.env ?? installEnv,
+          stdio: "pipe",
+          shell: localNpmRunner.shell,
+          windowsVerbatimArguments: localNpmRunner.windowsVerbatimArguments,
+        });
+        if (result.status !== 0) {
+          const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+          throw new Error(output || "npm install failed");
+        }
+        log.log(
+          `[postinstall] resolved version conflict for ${conflict.name}: top-level ${conflict.winnerVersion}, also installed ${loser.version} locally for ${loser.pluginId}`,
+        );
+      } catch (e) {
+        log.warn(
+          `[postinstall] could not install conflicting bundled plugin dep ${conflict.name}@${loser.version} for ${loser.pluginId}: ${String(e)}`,
+        );
+      }
+    }
   }
 
   applyBundledPluginRuntimeHotfixes({
