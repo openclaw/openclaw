@@ -260,6 +260,10 @@ const SOURCE_TEST_TARGETS = new Map([
     ["src/commands/auth-choice.apply.plugin-provider.test.ts", "src/commands/auth-choice.test.ts"],
   ],
   [
+    "src/secrets/provider-env-vars.ts",
+    ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
+  ],
+  [
     "src/memory-host-sdk/host/embedding-defaults.ts",
     ["src/memory-host-sdk/host/embeddings.test.ts"],
   ],

@@ -349,6 +349,16 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes provider env var edits to focused secret tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/secrets/provider-env-vars.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/secrets/provider-env-vars.dynamic.test.ts",
+        "src/secrets/provider-env-vars.test.ts",
+      ],
+    });
+  });
+
   it("routes changed utils and shared files to their light scoped lanes", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/shared/string-normalization.ts",
