@@ -59,6 +59,17 @@ describe("shared/frontmatter", () => {
     ).toEqual({ requires: { bins: ["op"] }, install: [] });
   });
 
+  test("resolveOpenClawManifestBlock prefers current manifest keys over legacy keys", () => {
+    expect(
+      resolveOpenClawManifestBlock({
+        frontmatter: {
+          metadata:
+            "{ openclaw: { requires: { bins: ['current'] } }, clawdbot: { requires: { bins: ['legacy'] } } }",
+        },
+      }),
+    ).toEqual({ requires: { bins: ["current"] } });
+  });
+
   test("resolveOpenClawManifestBlock returns undefined for invalid input", () => {
     expect(resolveOpenClawManifestBlock({ frontmatter: {} })).toBeUndefined();
     expect(
