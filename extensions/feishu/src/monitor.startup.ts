@@ -42,6 +42,16 @@ function isAbortErrorMessage(message: string | undefined): boolean {
   return normalizeLowercaseStringOrEmpty(message).includes("aborted");
 }
 
+function isStartupTransientNetworkErrorMessage(message: string | undefined): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  return (
+    lower.includes("econnreset") ||
+    lower.includes("socket disconnected") ||
+    lower.includes("tls connection") ||
+    lower.includes("network socket disconnected")
+  );
+}
+
 export async function fetchBotIdentityForMonitor(
   account: ResolvedFeishuAccount,
   options: FetchBotOpenIdOptions = {},
@@ -69,6 +79,12 @@ export async function fetchBotIdentityForMonitor(
     error(
       `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,
     );
+    return {};
+  }
+
+  if (isStartupTransientNetworkErrorMessage(probeError)) {
+    const error = options.runtime?.error ?? console.error;
+    error(`feishu[${account.accountId}]: bot info probe failed (${probeError}); continuing startup`);
   }
   return {};
 }

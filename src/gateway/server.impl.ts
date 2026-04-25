@@ -837,6 +837,7 @@ export async function startGatewayServer(
         defaultWorkspaceDir,
         deps,
         startChannels,
+        getChannelRuntimeSnapshot: () => channelManager.getRuntimeSnapshot(),
         logHooks,
         logChannels,
         unavailableGatewayMethods,

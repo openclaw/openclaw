@@ -9,6 +9,7 @@ import {
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
+  FEISHU_PROBE_REQUEST_TIMEOUT_MS: 10_000,
 }));
 
 vi.mock("./app-registration.js", () => ({

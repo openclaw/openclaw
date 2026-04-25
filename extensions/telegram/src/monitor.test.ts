@@ -457,11 +457,14 @@ describe("monitorTelegramProvider (grammY)", () => {
   it("deletes webhook before starting polling", async () => {
     const { order } = await runMonitorAndCaptureStartupOrder();
 
-    expect(api.deleteWebhook).toHaveBeenCalledWith({ drop_pending_updates: false });
+    expect(api.deleteWebhook).toHaveBeenCalledWith(
+      { drop_pending_updates: false },
+      expect.anything(),
+    );
     expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
-  it("retries recoverable deleteWebhook failures before polling", async () => {
+  it("continues startup after recoverable deleteWebhook failure", async () => {
     const abort = new AbortController();
     const cleanupError = makeRecoverableFetchError();
     api.deleteWebhook.mockReset();
@@ -470,7 +473,11 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    // The initial deleteWebhook fails; the session schedules a background
+    // retry (setTimeout 1s) and proceeds with polling immediately.  Because
+    // the test aborts right away the background retry sees aborted=true and
+    // skips the second call, so only 1 deleteWebhook invocation is observed.
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(1);
     expectRecoverableRetryState(1);
   });
 
