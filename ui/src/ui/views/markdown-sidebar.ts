@@ -29,9 +29,20 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
     <div class="sidebar-panel">
       <div class="sidebar-header">
         <div class="sidebar-title">
-          ${content?.kind === "canvas" ? content.title?.trim() || "Render Preview" : "Tool Details"}
+          ${content?.kind === "canvas"
+            ? content.title?.trim() || "Render Preview"
+            : content?.kind === "markdown"
+              ? "Markdown Preview"
+              : "Tool Details"}
         </div>
-        <button @click=${props.onClose} class="btn" title="Close sidebar">${icons.x}</button>
+        <button
+          @click=${props.onClose}
+          class="btn"
+          title="Close sidebar"
+          aria-label="Close sidebar"
+        >
+          ${icons.x}
+        </button>
       </div>
       <div class="sidebar-content">
         ${props.error
@@ -72,9 +83,27 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       : nothing}
                   </div>
                 `
-              : html`<div class="sidebar-markdown">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(content.content))}
-                </div>`
+              : html`
+                  <section class="sidebar-markdown-shell">
+                    <div class="sidebar-markdown-shell__toolbar">
+                      <div class="sidebar-markdown-shell__intro">
+                        <div class="sidebar-markdown-shell__eyebrow">
+                          ${icons.scrollText}
+                          <span>Rendered Markdown</span>
+                        </div>
+                        <div class="sidebar-markdown-shell__hint">
+                          Sanitized rich-text preview for quick reading.
+                        </div>
+                      </div>
+                      <button @click=${props.onViewRawText} class="btn btn--sm">
+                        View Raw Text
+                      </button>
+                    </div>
+                    <article class="sidebar-markdown-reader sidebar-markdown">
+                      ${unsafeHTML(toSanitizedMarkdownHtml(content.content))}
+                    </article>
+                  </section>
+                `
             : html` <div class="muted">No content available</div> `}
       </div>
     </div>
