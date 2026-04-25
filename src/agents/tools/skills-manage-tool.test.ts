@@ -27,6 +27,14 @@ afterEach(() => {
   __resetSkillsManageProposalsForTests();
 });
 
+type SkillsManageProposeDetails = {
+  status: string;
+  persisted?: boolean;
+  proposalId?: string;
+  quality?: { score: number };
+  errorCode?: string;
+};
+
 describe("createSkillsManageTool", () => {
   it("includes recovery-oriented description keys", () => {
     const tool = createSkillsManageTool({
@@ -47,11 +55,12 @@ describe("createSkillsManageTool", () => {
       content: goodSkillMd,
       targetRoot: "workspace",
     });
-    const payload = res.details as Record<string, unknown>;
+    const payload = res.details as SkillsManageProposeDetails;
     expect(payload.status).toBe("ok");
     expect(payload.persisted).toBe(false);
     expect(typeof payload.proposalId).toBe("string");
-    expect(payload.quality?.score).toBeGreaterThanOrEqual(8);
+    expect(typeof payload.quality?.score).toBe("number");
+    expect((payload.quality?.score ?? 0) >= 8).toBe(true);
   });
 
   it("rejects propose with proposalId", async () => {
@@ -63,7 +72,24 @@ describe("createSkillsManageTool", () => {
       content: goodSkillMd,
       proposalId: "sp_bad",
     });
-    const payload = res.details as Record<string, unknown>;
+    const payload = res.details as SkillsManageProposeDetails;
+    expect(payload.status).toBe("error");
+    expect(payload.errorCode).toBe("invalid_action_arguments");
+  });
+
+  it("rejects invalid targetRoot in update", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "smt-"));
+    const skillDir = path.join(root, "skills", "demo-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), goodSkillMd, "utf8");
+    const tool = createSkillsManageTool({ workspaceDir: root, config: {} });
+    const res = await tool.execute("t3", {
+      action: "update",
+      name: "demo-skill",
+      content: goodSkillMd,
+      targetRoot: "workspace-typo",
+    });
+    const payload = res.details as SkillsManageProposeDetails;
     expect(payload.status).toBe("error");
     expect(payload.errorCode).toBe("invalid_action_arguments");
   });

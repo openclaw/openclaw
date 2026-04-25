@@ -6,7 +6,9 @@ import {
   __resetSkillsManageProposalsForTests,
   approveProposal,
   createProposal,
+  getProposal,
   hashSkillFileContent,
+  listProposals,
   tryApplyPatch,
   validateSkillQuality,
 } from "./skills-manage-proposals.js";
@@ -130,5 +132,59 @@ describe("skills manage approve", () => {
     if (!result.ok) {
       expect(result.errorCode).toBe("patch_base_stale");
     }
+  });
+
+  it("rejects approve for new proposal when SKILL.md appeared after propose", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "smg-"));
+    const created = createProposal({
+      workspaceDir: root,
+      name: "race-skill",
+      contents: goodSkillMd,
+      kind: "new",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      return;
+    }
+    const skillDir = path.join(root, "skills", "race-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), goodSkillMd, "utf8");
+    const approved = await approveProposal({
+      proposalId: created.proposal.id,
+      workspaceDir: root,
+    });
+    expect(approved.ok).toBe(false);
+    if (!approved.ok) {
+      expect(approved.errorCode).toBe("name_conflict");
+    }
+  });
+});
+
+describe("proposal TTL config use", () => {
+  it("respects configured TTL in list/get sweeps", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "smg-"));
+    const created = createProposal({
+      workspaceDir: root,
+      name: "ttl-skill",
+      contents: goodSkillMd,
+      kind: "new",
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) {
+      return;
+    }
+    const listedDefault = listProposals(undefined, {});
+    expect(listedDefault.some((p) => p.id === created.proposal.id)).toBe(true);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const listedExpired = listProposals(undefined, {
+      skills: { manage: { proposalTtlMs: 1 } },
+    });
+    expect(listedExpired.some((p) => p.id === created.proposal.id)).toBe(false);
+
+    const fetched = getProposal(created.proposal.id, {
+      skills: { manage: { proposalTtlMs: 1 } },
+    });
+    expect(fetched).toBeUndefined();
   });
 });

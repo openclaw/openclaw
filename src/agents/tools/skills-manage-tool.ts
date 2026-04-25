@@ -113,7 +113,7 @@ export function createSkillsManageTool(opts: {
             "Remove extra fields and call list again.",
           );
         }
-        const rows = listProposals(opts.agentSessionKey).map((p) => ({
+        const rows = listProposals(opts.agentSessionKey, opts.config).map((p) => ({
           proposalId: p.id,
           name: p.name,
           kind: p.kind,
@@ -238,7 +238,15 @@ export function createSkillsManageTool(opts: {
         const content = readContentParam(params);
         const targetRaw =
           readStringParam(params, "targetRoot") ?? readStringParam(params, "target");
-        const targetRoot = parseTargetRoot(targetRaw) ?? "workspace";
+        const parsedTargetRoot = parseTargetRoot(targetRaw);
+        if (targetRaw && !parsedTargetRoot) {
+          return err(
+            action,
+            "invalid_action_arguments",
+            "targetRoot must be workspace or project-agents",
+          );
+        }
+        const targetRoot = parsedTargetRoot ?? "workspace";
         if (!name || !content) {
           return err(action, "missing_argument", "name and content are required for update");
         }
@@ -280,7 +288,15 @@ export function createSkillsManageTool(opts: {
         const newString = readStringParam(params, "newString", { required: true, trim: false });
         const targetRaw =
           readStringParam(params, "targetRoot") ?? readStringParam(params, "target");
-        const targetRoot = parseTargetRoot(targetRaw) ?? "workspace";
+        const parsedTargetRoot = parseTargetRoot(targetRaw);
+        if (targetRaw && !parsedTargetRoot) {
+          return err(
+            action,
+            "invalid_action_arguments",
+            "targetRoot must be workspace or project-agents",
+          );
+        }
+        const targetRoot = parsedTargetRoot ?? "workspace";
         const replaceAll = params.replaceAll === true;
         if (!name || oldString === undefined || newString === undefined) {
           return err(

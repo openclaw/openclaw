@@ -314,6 +314,7 @@ function syntheticSkillEntryForBudget(
     filePath,
     baseDir: skillDir,
     source: "workspace",
+    disableModelInvocation: false,
     sourceInfo: createSyntheticSourceInfo(filePath, {
       source: "workspace",
       baseDir: skillDir,
@@ -533,14 +534,14 @@ export function createProposal(params: {
   };
 }
 
-export function getProposal(id: string): SkillManageProposal | undefined {
-  const runtime = resolveSkillsManageRuntime(undefined);
+export function getProposal(id: string, config?: OpenClawConfig): SkillManageProposal | undefined {
+  const runtime = resolveSkillsManageRuntime(config);
   sweepExpired(runtime.proposalTtlMs);
   return proposals.get(id);
 }
 
-export function listProposals(sessionKey?: string): SkillManageProposal[] {
-  const runtime = resolveSkillsManageRuntime(undefined);
+export function listProposals(sessionKey?: string, config?: OpenClawConfig): SkillManageProposal[] {
+  const runtime = resolveSkillsManageRuntime(config);
   sweepExpired(runtime.proposalTtlMs);
   const items = Array.from(proposals.values()).sort((a, b) => b.createdAt - a.createdAt);
   if (!sessionKey) {
@@ -587,13 +588,14 @@ export async function approveProposal(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;
-}):
+}): Promise<
   | {
       ok: true;
       path: string;
       appliedChecks: string[];
     }
-  | { ok: false; errorCode: string; error: string; hint?: string } {
+  | { ok: false; errorCode: string; error: string; hint?: string }
+> {
   const runtime = resolveSkillsManageRuntime(params.config);
   sweepExpired(runtime.proposalTtlMs);
   const proposal = proposals.get(params.proposalId);
@@ -754,6 +756,14 @@ export async function approveProposal(params: {
     };
   }
   const mdStat = await fs.lstat(resolvedSkillMdPath).catch(() => null);
+  if (proposal.kind === "new" && mdStat) {
+    return {
+      ok: false,
+      errorCode: "name_conflict",
+      error: "A skill with this name already exists on disk",
+      hint: "Use update/patch to revise the existing skill, or choose a new skill name.",
+    };
+  }
   if (mdStat?.isSymbolicLink()) {
     let realMd: string;
     try {
