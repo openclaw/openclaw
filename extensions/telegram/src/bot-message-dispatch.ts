@@ -208,7 +208,6 @@ function resolveTelegramReasoningLevel(params: {
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
-const MAX_PROGRESS_MARKDOWN_FENCE_CHARS = 10;
 
 function clipProgressMarkdownText(text: string): string {
   if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
@@ -219,12 +218,8 @@ function clipProgressMarkdownText(text: string): string {
 
 function formatProgressAsMarkdownCode(text: string): string {
   const clipped = clipProgressMarkdownText(text);
-  const maxBacktickRun = Math.max(
-    0,
-    ...Array.from(clipped.matchAll(/`+/g), (match) => match[0].length),
-  );
-  const fence = "`".repeat(Math.min(maxBacktickRun + 1, MAX_PROGRESS_MARKDOWN_FENCE_CHARS));
-  return `${fence}${clipped}${fence}`;
+  const safe = clipped.replaceAll("`", "'");
+  return `\`${safe}\``;
 }
 
 export const dispatchTelegramMessage = async ({
@@ -408,7 +403,7 @@ export const dispatchTelegramMessage = async ({
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
   const previewToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg, false);
+    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
   const pushPreviewToolProgress = (line?: string) => {

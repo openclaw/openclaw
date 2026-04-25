@@ -47,6 +47,7 @@ import {
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
+import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   createSlackReplyDeliveryPlan,
   deliverReplies,
@@ -891,11 +892,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (!normalized) {
       return;
     }
+    const escaped = escapeSlackMrkdwn(normalized);
     const previous = previewToolProgressLines.at(-1);
-    if (previous === normalized) {
+    if (previous === escaped) {
       return;
     }
-    previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
+    previewToolProgressLines = [...previewToolProgressLines, escaped].slice(-8);
     draftStream.update(
       ["Working…", ...previewToolProgressLines.map((entry) => `• ${entry}`)].join("\n"),
     );
