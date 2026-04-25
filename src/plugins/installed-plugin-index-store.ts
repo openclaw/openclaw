@@ -6,6 +6,7 @@ import { safeParseWithSchema } from "../utils/zod-parse.js";
 import {
   diffInstalledPluginIndexInvalidationReasons,
   INSTALLED_PLUGIN_INDEX_VERSION,
+  INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   loadInstalledPluginIndex,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
@@ -85,6 +86,7 @@ const InstalledPluginIndexSchema = z
     version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
     hostContractVersion: z.string(),
     compatRegistryVersion: z.string(),
+    migrationVersion: z.literal(INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION),
     policyHash: z.string(),
     generatedAtMs: z.number(),
     refreshReason: z.string().optional(),

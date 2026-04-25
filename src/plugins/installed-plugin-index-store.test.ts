@@ -27,6 +27,7 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
     version: 1,
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
+    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
     plugins: [
@@ -109,6 +110,17 @@ describe("installed plugin index persistence", () => {
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify({ version: 999 }), "utf8");
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
+  });
+
+  it("rejects pre-migration persisted indexes so update can rebuild them", async () => {
+    const stateDir = makeTempDir();
+    const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const legacyIndex = createIndex();
+    delete (legacyIndex as unknown as Record<string, unknown>).migrationVersion;
+    fs.writeFileSync(filePath, JSON.stringify(legacyIndex), "utf8");
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });

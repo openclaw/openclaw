@@ -20,6 +20,9 @@ import {
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
 export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
+export type PluginRegistryMigrationInspection = PluginRegistryInspection & {
+  migrated: boolean;
+};
 
 export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams & {
   index?: PluginRegistrySnapshot;
@@ -173,4 +176,32 @@ export function refreshPluginRegistry(
   return import("./installed-plugin-index-store.js").then((store) =>
     store.refreshPersistedInstalledPluginIndex(params),
   );
+}
+
+function resolveMigrationRefreshReason(
+  reasons: readonly RefreshInstalledPluginIndexParams["reason"][],
+): RefreshInstalledPluginIndexParams["reason"] {
+  return reasons.includes("missing") || reasons.includes("migration") ? "migration" : "manual";
+}
+
+export async function ensurePluginRegistryMigrated(
+  params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
+): Promise<PluginRegistryMigrationInspection> {
+  const store = await import("./installed-plugin-index-store.js");
+  const inspection = await store.inspectPersistedInstalledPluginIndex(params);
+  if (inspection.state === "fresh") {
+    return {
+      ...inspection,
+      migrated: false,
+    };
+  }
+  const current = await store.refreshPersistedInstalledPluginIndex({
+    ...params,
+    reason: resolveMigrationRefreshReason(inspection.refreshReasons),
+  });
+  return {
+    ...inspection,
+    current,
+    migrated: true,
+  };
 }
