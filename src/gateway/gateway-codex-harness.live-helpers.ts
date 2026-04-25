@@ -48,6 +48,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Current session model: `codex/",
   "Current session model is `openai/",
   "Current session model is `codex/",
+  "Visible session model:",
   "The current session is using `openai/",
   "The current session is using `codex/",
   "current session is using `openai/",
@@ -109,6 +110,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
   const mentionsSessionModel =
     normalized.includes("current session is using") ||
     normalized.includes("current session model") ||
+    normalized.includes("visible session model") ||
     normalized.includes("the current session is using");
   const mentionsConfigSummary =
     normalized.includes("default model") ||
