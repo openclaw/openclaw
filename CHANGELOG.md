@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Google video generation: fall back to the REST `predictLongRunning` Veo endpoint for text-only SDK 404s while keeping reference image/video generation on the SDK path. Fixes #62309 and #63008. (#62343) Thanks @leoleedev.
 - MiniMax music generation: switch the bundled default model from the unsupported `music-2.5+` id to the current `music-2.6` API model. Fixes #64870 and addresses the music default from #62315. Thanks @noahclanman and @edwardzheng1.
 - Cron: hydrate flat legacy job rows with top-level `cron`, `tz`, `session`, and `message` fields into canonical schedule, target, and payload objects before startup recomputes run times. Fixes #43351.
+- Agents/replies: let pending group chat history trigger bare mentioned turns without treating metadata-only inbound context as user input. Fixes #71489. (#71520) Thanks @SymbolStar.
 - Google media generation: strip a configured trailing `/v1beta` from Google music/video provider base URLs before calling the Google GenAI SDK, preventing doubled `/v1beta/v1beta` paths. Fixes #63240. (#63258) Thanks @Hybirdss.
 - Discord: restore direct-message voice-note preflight transcription and classify URL-only Ogg/Opus voice attachments as audio while skipping partial attachments without usable URLs. Fixes #61314 and #64803.
 - Google Chat: preserve reply text when a typing indicator message is deleted or can no longer be updated, so media captions and first text chunks are resent instead of silently disappearing. (#71498) Thanks @colin-lgtm.
