@@ -643,11 +643,12 @@ openclaw googlemeet attendance --conference-record conferenceRecords/abc123 --js
 ```
 
 `artifacts` returns conference record metadata plus participant, recording,
-transcript, and smart-note resource metadata when Google exposes it for the
-meeting. `attendance` expands participants into participant-session rows with
-join/leave timestamps. These commands use the Meet REST API only; transcript or
-smart-note document body download is intentionally out of scope because that
-requires separate Google Docs/Drive access.
+transcript, structured transcript-entry, and smart-note resource metadata when
+Google exposes it for the meeting. Use `--no-transcript-entries` to skip
+entry lookup for large meetings. `attendance` expands participants into
+participant-session rows with join/leave timestamps. These commands use the Meet
+REST API only; Google Docs/Drive document body download is intentionally out of
+scope because that requires separate Google Docs/Drive access.
 
 Create a fresh Meet space:
 

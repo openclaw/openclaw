@@ -156,6 +156,20 @@ function stubMeetArtifactsApi() {
         ],
       });
     }
+    if (url.pathname === "/v2/conferenceRecords/rec-1/transcripts/t1/entries") {
+      return jsonResponse({
+        transcriptEntries: [
+          {
+            name: "conferenceRecords/rec-1/transcripts/t1/entries/e1",
+            participant: "conferenceRecords/rec-1/participants/p1",
+            text: "Hello from the transcript.",
+            languageCode: "en-US",
+            startTime: "2026-04-25T10:01:00Z",
+            endTime: "2026-04-25T10:01:05Z",
+          },
+        ],
+      });
+    }
     if (url.pathname === "/v2/conferenceRecords/rec-1/smartNotes") {
       return jsonResponse({
         smartNotes: [
@@ -439,6 +453,17 @@ describe("google-meet plugin", () => {
           participants: [{ name: "conferenceRecords/rec-1/participants/p1" }],
           recordings: [{ name: "conferenceRecords/rec-1/recordings/r1" }],
           transcripts: [{ name: "conferenceRecords/rec-1/transcripts/t1" }],
+          transcriptEntries: [
+            {
+              transcript: "conferenceRecords/rec-1/transcripts/t1",
+              entries: [
+                {
+                  name: "conferenceRecords/rec-1/transcripts/t1/entries/e1",
+                  text: "Hello from the transcript.",
+                },
+              ],
+            },
+          ],
           smartNotes: [{ name: "conferenceRecords/rec-1/smartNotes/sn1" }],
         },
       ],
@@ -458,6 +483,12 @@ describe("google-meet plugin", () => {
       expect.objectContaining({
         url: "https://meet.googleapis.com/v2/conferenceRecords/rec-1/smartNotes?pageSize=2",
         auditContext: "google-meet.conferenceRecords.smartNotes.list",
+      }),
+    );
+    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://meet.googleapis.com/v2/conferenceRecords/rec-1/transcripts/t1/entries?pageSize=2",
+        auditContext: "google-meet.conferenceRecords.transcripts.entries.list",
       }),
     );
   });
@@ -868,6 +899,12 @@ describe("google-meet plugin", () => {
           {
             recordings: [{ name: "conferenceRecords/rec-1/recordings/r1" }],
             transcripts: [{ name: "conferenceRecords/rec-1/transcripts/t1" }],
+            transcriptEntries: [
+              {
+                transcript: "conferenceRecords/rec-1/transcripts/t1",
+                entries: [{ text: "Hello from the transcript." }],
+              },
+            ],
             smartNotes: [{ name: "conferenceRecords/rec-1/smartNotes/sn1" }],
           },
         ],
