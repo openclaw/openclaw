@@ -721,7 +721,9 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const requestResult = isEdit
         ? await (() => {
             const form = new FormData();
-            form.set("model", model);
+            if (!isAzure) {
+              form.set("model", model);
+            }
             form.set("prompt", req.prompt);
             form.set("n", String(count));
             form.set("size", size);
@@ -755,11 +757,13 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             const body: Record<string, unknown> = {
-              model,
               prompt: req.prompt,
               n: count,
               size,
             };
+            if (!isAzure) {
+              body.model = model;
+            }
             appendOpenAIImageOptions(body, req);
             return postJsonRequest({
               url,
