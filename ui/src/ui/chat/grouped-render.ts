@@ -1404,7 +1404,7 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
+  const bubbleClasses = ["chat-bubble", canCopyMarkdown || canExpand ? "has-copy" : "", opts.isStreaming ? "streaming" : "", "fade-in"]
     .filter(Boolean)
     .join(" ");
 
