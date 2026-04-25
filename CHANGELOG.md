@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- OpenAI/image generation: canonicalize `models.providers.openai-codex.baseUrl` for the Codex Responses image route so existing configs that still use the legacy `https://chatgpt.com/backend-api` form (no `/codex` segment) work the same as they already do for chat. OpenAI retired the `/backend-api/responses` alias on 2026-04, so without this the image path POSTed to a missing endpoint and 403'd while the chat path silently corrected itself in `normalizeCodexTransportFields`. Thanks @GodsBoy.
 - Telegram/webhook: acknowledge validated webhook updates before running bot middleware, keeping slow agent turns from tripping Telegram delivery retries while preserving per-chat processing lanes. Fixes #71392.
 - MCP: retire one-shot embedded bundled MCP runtimes at run end, skip bundle-MCP startup when a runtime tool allowlist cannot reach bundle-MCP tools, and add `mcp.sessionIdleTtlMs` idle eviction for leaked session runtimes. Fixes #71106, #71110, #70389, and #70808.
 - Gateway/restart continuation: durably hand restart continuations to a session-delivery queue before deleting the restart sentinel, recover queued continuation work after crashy restarts, and fall back to a session-only wake when no channel route survives reboot. (#70780) Thanks @fuller-stack-dev.

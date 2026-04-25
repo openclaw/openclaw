@@ -921,6 +921,48 @@ describe("openai image generation provider", () => {
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
   });
 
+  it("canonicalizes a legacy openai-codex.baseUrl that omits the /codex segment", async () => {
+    // OpenAI removed the /backend-api/responses alias on 2026-04. A user
+    // configuration that still sets baseUrl to https://chatgpt.com/backend-api
+    // (without /codex) made the chat path work via normalizeCodexTransportFields
+    // but caused the image path to POST /backend-api/responses and 403. The
+    // image path must apply the same canonicalization.
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const authStore = createCodexOAuthAuthStore();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Codex image with legacy backend-api baseUrl",
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api",
+              api: "openai-codex-responses",
+              models: [],
+            },
+          },
+        },
+      },
+      authStore,
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://chatgpt.com/backend-api/codex/responses",
+      }),
+    );
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
+  });
+
   it("uses direct OpenAI auth when custom OpenAI image config is explicit", async () => {
     mockGeneratedPngResponse();
     resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
