@@ -66,6 +66,9 @@ Docs: https://docs.openclaw.ai
   internal calls no longer hit `scope-upgrade` pairing prompts while remote,
   browser, node, device-token, and explicit-device paths still require normal
   pairing approval. Fixes #63548.
+- Providers/Azure OpenAI: give deployment-scoped image generation requests a
+  longer 600s default timeout so slow `gpt-image-2` generations can complete
+  without a per-call `timeoutMs`. Fixes #71705. Thanks @voytas75.
 - CLI/gateway: keep diagnostic probes from creating first-time read-only device
   pairings, while still reusing cached device tokens for detailed read probes.
   Fixes #71766. Thanks @SunboZ.
