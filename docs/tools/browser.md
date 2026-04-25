@@ -199,7 +199,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
 OpenClaw uses it automatically. Set `browser.executablePath` to override
-auto-detection:
+auto-detection. `~` expands to your OS home directory:
 
 ```bash
 openclaw config set browser.executablePath "/usr/bin/google-chrome"

@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -137,6 +139,30 @@ describe("browser config", () => {
       maxTabsPerSession: 0,
       sweepMinutes: 15,
     });
+  });
+
+  it("expands tilde-prefixed executablePath with the OS home directory", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: " ~/.local/bin/chromium ",
+    });
+
+    expect(resolved.executablePath).toBe(path.resolve(os.homedir(), ".local/bin/chromium"));
+  });
+
+  it("keeps non-tilde executablePath values unchanged after trimming", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: " ./local-chromium ",
+    });
+
+    expect(resolved.executablePath).toBe("./local-chromium");
+  });
+
+  it("normalizes blank executablePath to undefined", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "   ",
+    });
+
+    expect(resolved.executablePath).toBeUndefined();
   });
 
   it("normalizes invalid browser tab cleanup numbers to defaults", () => {

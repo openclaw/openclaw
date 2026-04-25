@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
@@ -123,6 +125,17 @@ function normalizeNonNegativeInteger(raw: number | undefined, fallback: number):
 function normalizePositiveInteger(raw: number | undefined, fallback: number): number {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value <= 0 ? fallback : value;
+}
+
+function normalizeExecutablePath(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  if (!/^~(?=$|[\\/])/.test(value)) {
+    return value;
+  }
+  return path.resolve(value.replace(/^~(?=$|[\\/])/, os.homedir()));
 }
 
 function resolveBrowserTabCleanupConfig(
@@ -287,7 +300,7 @@ export function resolveBrowserConfig(
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
-  const executablePath = normalizeOptionalString(cfg?.executablePath);
+  const executablePath = normalizeExecutablePath(cfg?.executablePath);
   const defaultProfileFromConfig = normalizeOptionalString(cfg?.defaultProfile);
 
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
