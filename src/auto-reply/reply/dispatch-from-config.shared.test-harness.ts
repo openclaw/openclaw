@@ -194,6 +194,7 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
+  initializeGlobalHookRunner: vi.fn(),
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
