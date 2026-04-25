@@ -244,6 +244,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("Google API key missing");
       }
+      const apiKey = auth.apiKey;
 
       const configuredBaseUrl = resolveConfiguredGoogleVideoBaseUrl(req);
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
@@ -252,7 +253,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         label: "Google video generation",
       });
       const client = createGoogleGenAI({
-        apiKey: auth.apiKey,
+        apiKey,
         httpOptions: {
           ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
           timeout: resolveProviderOperationTimeoutMs({
@@ -305,7 +306,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           }
           const directDownload = await downloadGeneratedVideoFromUri({
             uri: inline?.uri,
-            apiKey: auth.apiKey,
+            apiKey,
             configuredBaseUrl,
             mimeType: inline?.mimeType,
             index,
