@@ -71,8 +71,18 @@ export type InstalledPluginIndexRecord = {
   pluginId: string;
   packageName?: string;
   packageVersion?: string;
+  /**
+   * Actual install ledger entry recorded by OpenClaw under
+   * cfg.plugins.installs[pluginId]. This is the durable source of truth for
+   * what onboarding/update installed.
+   */
   installRecord?: InstalledPluginInstallRecordInfo;
+  /** Hash of installRecord; used to detect source-changed invalidation. */
   installRecordHash?: string;
+  /**
+   * Package-authored openclaw.install metadata. This describes catalog/package
+   * install intent and must not be treated as the durable install ledger.
+   */
   packageInstall?: PluginInstallSourceInfo;
   manifestPath: string;
   manifestHash: string;
