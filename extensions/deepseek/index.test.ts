@@ -116,6 +116,107 @@ describe("deepseek provider plugin", () => {
     });
   });
 
+  it("preserves replayed reasoning_content when DeepSeek V4 thinking is enabled", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const model = {
+      provider: "deepseek",
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
+    } as Model<"openai-completions">;
+    const context = {
+      messages: [
+        { role: "user", content: "hi", timestamp: 1 },
+        {
+          role: "assistant",
+          api: "openai-completions",
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          content: [
+            {
+              type: "thinking",
+              thinking: "call reasoning",
+              thinkingSignature: "reasoning_content",
+            },
+            { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          ],
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+      tools: [
+        {
+          name: "read",
+          description: "Read data",
+          parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+        },
+      ],
+    } as Context;
+    const baseStreamFn = (
+      streamModel: Model<"openai-completions">,
+      streamContext: Context,
+      options?: { onPayload?: (payload: unknown, model: unknown) => unknown },
+    ) => {
+      capturedPayload = buildOpenAICompletionsParams(streamModel, streamContext, {
+        reasoning: "high",
+      } as never);
+      options?.onPayload?.(capturedPayload, streamModel);
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => stream.end());
+      return stream;
+    };
+
+    const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
+    expect(wrapThinkingHigh).toBeDefined();
+    wrapThinkingHigh?.(model, context, {});
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+    expect((capturedPayload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
+      role: "assistant",
+      reasoning_content: "call reasoning",
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: {
+            name: "read",
+            arguments: "{}",
+          },
+        },
+      ],
+    });
+  });
+
   it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const model = {
