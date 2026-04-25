@@ -251,39 +251,29 @@ describe("bundled plugin postinstall", () => {
   it("migrates the plugin registry during postinstall from built dist contracts", async () => {
     const packageRoot = await createTempDirAsync("openclaw-postinstall-registry-");
     const log = { log: vi.fn(), warn: vi.fn() };
-    const readBestEffortConfig = vi.fn(async () => ({
-      plugins: {
-        installs: {
-          demo: {
-            source: "npm",
-            resolvedName: "@vendor/demo",
-            resolvedVersion: "1.0.0",
-          },
-        },
-      },
-    }));
-    const ensurePluginRegistryMigrated = vi.fn(async () => ({
+    const migratePluginRegistryForInstall = vi.fn(async () => ({
+      status: "migrated",
       migrated: true,
+      preflight: {
+        deprecationWarnings: [],
+      },
       current: {
         plugins: [{ pluginId: "demo" }],
       },
     }));
     const importModule = vi.fn(async (specifier: string) => {
-      if (specifier.endsWith("/dist/config/config.js")) {
-        return { readBestEffortConfig };
-      }
-      if (specifier.endsWith("/dist/plugins/plugin-registry.js")) {
-        return { ensurePluginRegistryMigrated };
+      if (specifier.endsWith("/dist/commands/doctor/shared/plugin-registry-migration.js")) {
+        return { migratePluginRegistryForInstall };
       }
       throw new Error(`unexpected import: ${specifier}`);
     });
 
     const result = await runPluginRegistryPostinstallMigration({
       packageRoot,
-      existsSync: vi.fn(
-        (filePath: string) =>
-          filePath.endsWith(path.join("dist", "config", "config.js")) ||
-          filePath.endsWith(path.join("dist", "plugins", "plugin-registry.js")),
+      existsSync: vi.fn((filePath: string) =>
+        filePath.endsWith(
+          path.join("dist", "commands", "doctor", "shared", "plugin-registry-migration.js"),
+        ),
       ),
       importModule,
       env: { OPENCLAW_HOME: "/tmp/home" },
@@ -291,24 +281,35 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(result).toMatchObject({ status: "migrated" });
-    expect(readBestEffortConfig).toHaveBeenCalled();
-    expect(ensurePluginRegistryMigrated).toHaveBeenCalledWith({
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              resolvedName: "@vendor/demo",
-              resolvedVersion: "1.0.0",
-            },
-          },
-        },
-      },
+    expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
       env: { OPENCLAW_HOME: "/tmp/home" },
       packageRoot,
     });
     expect(log.log).toHaveBeenCalledWith(
       "[postinstall] migrated plugin registry: 1 plugin(s) indexed",
+    );
+  });
+
+  it("surfaces deprecated plugin registry migration break-glass warnings", async () => {
+    const warn = vi.fn();
+    const migratePluginRegistryForInstall = vi.fn(async () => ({
+      status: "skip-existing",
+      migrated: false,
+      preflight: {
+        deprecationWarnings: ["OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated"],
+      },
+    }));
+    const importModule = vi.fn(async () => ({ migratePluginRegistryForInstall }));
+
+    await runPluginRegistryPostinstallMigration({
+      packageRoot: "/pkg",
+      existsSync: vi.fn(() => true),
+      importModule,
+      log: { log: vi.fn(), warn },
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[postinstall] OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION is deprecated",
     );
   });
 
@@ -329,12 +330,22 @@ describe("bundled plugin postinstall", () => {
   });
 
   it("honors plugin registry postinstall migration disable env", async () => {
+    const migratePluginRegistryForInstall = vi.fn(async () => ({
+      status: "disabled",
+      migrated: false,
+      preflight: {
+        deprecationWarnings: [],
+      },
+    }));
     await expect(
       runPluginRegistryPostinstallMigration({
+        packageRoot: "/pkg",
         env: { OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION: "1" },
+        existsSync: vi.fn(() => true),
+        importModule: vi.fn(async () => ({ migratePluginRegistryForInstall })),
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).resolves.toEqual({ status: "disabled" });
+    ).resolves.toMatchObject({ status: "disabled" });
   });
 
   it("prunes stale dist files from packaged installs", async () => {

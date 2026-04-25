@@ -1,0 +1,172 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginCandidate } from "../../../plugins/discovery.js";
+import { readPersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+} from "../../../plugins/test-helpers/fs-fixtures.js";
+import {
+  FORCE_PLUGIN_REGISTRY_MIGRATION_ENV,
+  migratePluginRegistryForInstall,
+  preflightPluginRegistryInstallMigration,
+} from "./plugin-registry-migration.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  cleanupTrackedTempDirs(tempDirs);
+});
+
+function makeTempDir() {
+  return makeTrackedTempDir("openclaw-plugin-registry-migration", tempDirs);
+}
+
+function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+    OPENCLAW_VERSION: "2026.4.25",
+    VITEST: "true",
+    ...overrides,
+  };
+}
+
+function createCandidate(rootDir: string): PluginCandidate {
+  fs.writeFileSync(
+    path.join(rootDir, "index.ts"),
+    "throw new Error('runtime entry should not load while migrating plugin registry');\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "demo",
+      name: "Demo",
+      configSchema: { type: "object" },
+      providers: ["demo"],
+    }),
+    "utf8",
+  );
+  return {
+    idHint: "demo",
+    source: path.join(rootDir, "index.ts"),
+    rootDir,
+    origin: "global",
+  };
+}
+
+describe("plugin registry install migration", () => {
+  it("short-circuits when a registry file already exists", async () => {
+    const stateDir = makeTempDir();
+    const filePath = path.join(stateDir, "plugins", "installed-index.json");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "{}\n", "utf8");
+    const readConfig = vi.fn(async () => ({}));
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        readConfig,
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "skip-existing",
+      migrated: false,
+      preflight: {
+        action: "skip-existing",
+        filePath,
+      },
+    });
+    expect(readConfig).not.toHaveBeenCalled();
+  });
+
+  it("supports dry-run preflight without reading config or writing the registry", async () => {
+    const stateDir = makeTempDir();
+    const readConfig = vi.fn(async () => ({}));
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        dryRun: true,
+        readConfig,
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "dry-run",
+      migrated: false,
+      preflight: {
+        action: "migrate",
+      },
+    });
+    expect(readConfig).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(stateDir, "plugins", "installed-index.json"))).toBe(false);
+  });
+
+  it("migrates missing registry state from legacy discovery and config inputs", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        candidates: [candidate],
+        readConfig: async () => ({
+          plugins: {
+            installs: {
+              demo: {
+                source: "npm",
+                resolvedName: "@vendor/demo",
+                resolvedVersion: "1.0.0",
+              },
+            },
+          },
+        }),
+        env: hermeticEnv(),
+      }),
+    ).resolves.toMatchObject({
+      status: "migrated",
+      migrated: true,
+      current: {
+        refreshReason: "migration",
+        migrationVersion: 1,
+        plugins: [
+          expect.objectContaining({
+            pluginId: "demo",
+            installRecord: expect.objectContaining({
+              source: "npm",
+              resolvedName: "@vendor/demo",
+              resolvedVersion: "1.0.0",
+            }),
+          }),
+        ],
+      },
+    });
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      refreshReason: "migration",
+      plugins: [expect.objectContaining({ pluginId: "demo" })],
+    });
+  });
+
+  it("marks force migration env as deprecated break-glass", () => {
+    expect(
+      preflightPluginRegistryInstallMigration({
+        stateDir: makeTempDir(),
+        env: hermeticEnv({
+          [FORCE_PLUGIN_REGISTRY_MIGRATION_ENV]: "1",
+        }),
+      }),
+    ).toMatchObject({
+      action: "migrate",
+      force: true,
+      deprecationWarnings: [
+        expect.stringContaining(`${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated`),
+      ],
+    });
+  });
+});
