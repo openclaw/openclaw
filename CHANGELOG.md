@@ -79,6 +79,10 @@ Docs: https://docs.openclaw.ai
   metadata when callers request the model without the provider prefix, so custom
   image models keep their `input: ["text", "image"]` capability. Fixes #33185.
   Thanks @Kobe9312 and @vincentkoc.
+- Sessions: keep embedded runtime context out of the visible user prompt by
+  sending it as a hidden next-turn custom message, and teach doctor to repair
+  affected 2026.4.24 transcripts with duplicated prompt-rewrite branches.
+  Fixes #71761.
 - Gateway/subagents: keep direct-loopback backend RPCs authenticated with the
   shared gateway token/password off stale CLI paired-device scope baselines, so
   internal calls no longer hit `scope-upgrade` pairing prompts while remote,

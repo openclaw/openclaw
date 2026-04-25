@@ -253,6 +253,11 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
   await noteSessionLockHealth({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
+async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
+  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+}
+
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore } = await import("../commands/doctor-cron.js");
   await maybeRepairLegacyCronStore({
@@ -571,6 +576,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-locks",
       label: "Session locks",
       run: runSessionLocksHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcripts",
+      label: "Session transcripts",
+      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",

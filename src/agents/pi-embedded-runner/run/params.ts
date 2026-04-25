@@ -79,7 +79,7 @@ export type RunEmbeddedPiAgentParams = {
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
-  /** User-visible prompt body to persist instead of runtime-enriched prompt text. */
+  /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];

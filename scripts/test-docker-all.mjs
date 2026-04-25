@@ -254,6 +254,10 @@ const lanes = [
     "crestodian-first-run",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
   ),
+  lane(
+    "session-runtime-context",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
+  ),
   lane("qr", "pnpm test:docker:qr"),
 ];
 

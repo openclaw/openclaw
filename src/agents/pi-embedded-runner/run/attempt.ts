@@ -305,7 +305,10 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
-import { rewriteSubmittedPromptTranscript } from "./transcript-prompt-rewrite.js";
+import {
+  queueRuntimeContextForNextTurn,
+  resolveRuntimeContextPromptParts,
+} from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -2373,10 +2376,15 @@ export async function runEmbeddedAttempt(
           }
           prePromptMessageCount = activeSession.messages.length;
 
-          // Detect and load images referenced in the prompt for vision-capable models.
+          const promptSubmission = resolveRuntimeContextPromptParts({
+            effectivePrompt,
+            transcriptPrompt: params.transcriptPrompt,
+          });
+
+          // Detect and load images referenced in the visible prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
           const imageResult = await detectAndLoadPromptImages({
-            prompt: effectivePrompt,
+            prompt: promptSubmission.prompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
             existingImages: params.images,
@@ -2392,13 +2400,13 @@ export async function runEmbeddedAttempt(
           });
 
           cacheTrace?.recordStage("prompt:images", {
-            prompt: effectivePrompt,
+            prompt: promptSubmission.prompt,
             messages: activeSession.messages,
             note: `images: prompt=${imageResult.images.length}`,
           });
           trajectoryRecorder?.recordEvent("context.compiled", {
             systemPrompt: systemPromptText,
-            prompt: effectivePrompt,
+            prompt: promptSubmission.prompt,
             messages: activeSession.messages,
             tools: toTrajectoryToolDefinitions(effectiveTools),
             imagesCount: imageResult.images.length,
@@ -2410,7 +2418,7 @@ export async function runEmbeddedAttempt(
           if (
             !skipPromptSubmission &&
             !hasPromptSubmissionContent({
-              prompt: effectivePrompt,
+              prompt: promptSubmission.prompt,
               messages: activeSession.messages,
               imageCount: imageResult.images.length,
             })
@@ -2423,7 +2431,7 @@ export async function runEmbeddedAttempt(
             );
             trajectoryRecorder?.recordEvent("prompt.skipped", {
               reason: "empty_prompt_history_images",
-              prompt: effectivePrompt,
+              prompt: promptSubmission.prompt,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
             });
@@ -2589,9 +2597,9 @@ export async function runEmbeddedAttempt(
             if (normalizedReplayMessages !== activeSession.messages) {
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
-            finalPromptText = effectivePrompt;
+            finalPromptText = promptSubmission.prompt;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
-              prompt: effectivePrompt,
+              prompt: promptSubmission.prompt,
               systemPrompt: systemPromptText,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
@@ -2600,25 +2608,22 @@ export async function runEmbeddedAttempt(
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
               messages: btwSnapshotMessages,
-              inFlightPrompt: effectivePrompt,
+              inFlightPrompt: promptSubmission.prompt,
+            });
+            await queueRuntimeContextForNextTurn({
+              session: activeSession,
+              runtimeContext: promptSubmission.runtimeContext,
             });
 
             // Only pass images option if there are actually images to pass
             // This avoids potential issues with models that don't expect the images parameter
             if (imageResult.images.length > 0) {
               await abortable(
-                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
               );
             } else {
-              await abortable(activeSession.prompt(effectivePrompt));
+              await abortable(activeSession.prompt(promptSubmission.prompt));
             }
-            rewriteSubmittedPromptTranscript({
-              sessionManager,
-              sessionFile: params.sessionFile,
-              previousLeafId: transcriptLeafId,
-              submittedPrompt: effectivePrompt,
-              transcriptPrompt: params.transcriptPrompt,
-            });
           }
         } catch (err) {
           yieldAborted =
