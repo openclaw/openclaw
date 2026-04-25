@@ -1241,6 +1241,22 @@ function shouldValidatePluginConfigForLoad(params: {
   return params.shouldActivate || params.value !== undefined;
 }
 
+function resolveDeferredPluginConfigValue(params: {
+  schema: Record<string, unknown>;
+  cacheKey?: string;
+  value?: unknown;
+}): Record<string, unknown> {
+  if (params.value !== undefined) {
+    return params.value as Record<string, unknown>;
+  }
+  const defaultedConfig = validatePluginConfig({
+    schema: params.schema,
+    cacheKey: params.cacheKey,
+    value: {},
+  });
+  return defaultedConfig.ok ? (defaultedConfig.value ?? {}) : {};
+}
+
 function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
@@ -2535,7 +2551,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
       let validatedConfig: { ok: boolean; value?: Record<string, unknown>; errors?: string[] } = {
         ok: true,
-        value: (entry?.config as Record<string, unknown> | undefined) ?? {},
+        value: resolveDeferredPluginConfigValue({
+          schema: manifestRecord.configSchema,
+          cacheKey: manifestRecord.schemaCacheKey,
+          value: entry?.config,
+        }),
       };
       if (
         shouldValidatePluginConfigForLoad({
@@ -3196,7 +3216,11 @@ export async function loadOpenClawPluginCliRegistry(
 
     let validatedConfig: { ok: boolean; value?: Record<string, unknown>; errors?: string[] } = {
       ok: true,
-      value: (entry?.config as Record<string, unknown> | undefined) ?? {},
+      value: resolveDeferredPluginConfigValue({
+        schema: manifestRecord.configSchema,
+        cacheKey: manifestRecord.schemaCacheKey,
+        value: entry?.config,
+      }),
     };
     if (
       shouldValidatePluginConfigForLoad({

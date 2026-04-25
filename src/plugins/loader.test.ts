@@ -7007,6 +7007,55 @@ module.exports = {
     );
   });
 
+  it("applies schema defaults during non-activating snapshot loads with omitted config", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "config-default-snapshot",
+      filename: "config-default-snapshot.cjs",
+      body: `module.exports = {
+  id: "config-default-snapshot",
+  register(api) {
+    if (api.pluginConfig.mode !== "safe") {
+      throw new Error("plugin config defaults should be applied");
+    }
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "config-default-snapshot",
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              mode: { type: "string", default: "safe" },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["config-default-snapshot"],
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "config-default-snapshot")?.status).toBe(
+      "loaded",
+    );
+  });
+
   it("loads source TypeScript plugins that route through local runtime shims", () => {
     const plugin = writePlugin({
       id: "source-runtime-shim",
