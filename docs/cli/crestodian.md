@@ -306,7 +306,12 @@ pnpm test:docker:crestodian-first-run
 
 That lane starts with an empty state dir, routes bare `openclaw` to Crestodian,
 sets the default model, creates an additional agent, configures Discord through
-a token SecretRef, validates config, and checks the audit log.
+a plugin enablement plus token SecretRef, validates config, and checks the audit
+log. QA Lab also has a repo-backed scenario for the same Ring 0 flow:
+
+```bash
+pnpm openclaw qa suite --scenario crestodian-ring-zero-setup
+```
 
 ## Related
 

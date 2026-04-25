@@ -109,6 +109,36 @@ async function main() {
   );
 
   clearConfigCache();
+  const discordPluginAllowRuntime = createRuntime();
+  await runCrestodian(
+    {
+      message: 'config set plugins.allow ["discord"]',
+      yes: true,
+      interactive: false,
+    },
+    discordPluginAllowRuntime.runtime,
+  );
+  assert(
+    discordPluginAllowRuntime.lines.join("\n").includes("[crestodian] done: config.set"),
+    "Crestodian Discord plugin allowlist did not apply",
+  );
+
+  clearConfigCache();
+  const discordPluginEntryRuntime = createRuntime();
+  await runCrestodian(
+    {
+      message: "config set plugins.entries.discord.enabled true",
+      yes: true,
+      interactive: false,
+    },
+    discordPluginEntryRuntime.runtime,
+  );
+  assert(
+    discordPluginEntryRuntime.lines.join("\n").includes("[crestodian] done: config.set"),
+    "Crestodian Discord plugin entry did not apply",
+  );
+
+  clearConfigCache();
   const discordTokenRuntime = createRuntime();
   await runCrestodian(
     {
@@ -162,6 +192,11 @@ async function main() {
   assert(reef, "Crestodian did not create reef agent");
   assert(reef.workspace === "/tmp/openclaw-reef", "Crestodian did not write reef workspace");
   assert(reef.model === "openai/gpt-5.2", "Crestodian did not write reef model");
+  assert(config.plugins?.allow?.includes("discord"), "Crestodian did not allow Discord plugin");
+  assert(
+    config.plugins?.entries?.discord?.enabled === true,
+    "Crestodian did not enable Discord plugin entry",
+  );
   assert(config.channels?.discord?.enabled === true, "Crestodian did not enable Discord");
   const discordToken = config.channels?.discord?.token;
   assert(
