@@ -7,6 +7,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { createCronExecutionId } from "../run-id.js";
+import { SESSIONS_SLEEP_DESCRIPTION_PREFIX } from "../session-sleep.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
@@ -43,6 +44,8 @@ import {
 } from "./timer.js";
 
 const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
+const STARTUP_SESSION_SLEEP_REQUEUED =
+  "cron: sessions_sleep wake interrupted by gateway restart; requeued once";
 
 type InterruptedStartupRun = {
   jobId: string;
@@ -89,6 +92,43 @@ function markInterruptedStartupRun(params: {
     runAtMs: runningAtMs,
     durationMs: job.state.lastDurationMs,
   };
+}
+
+function requeueInterruptedSessionSleepStartupRun(params: {
+  state: CronServiceState;
+  job: CronJob;
+  runningAtMs: number;
+  nowMs: number;
+}): boolean {
+  const { job, runningAtMs, nowMs } = params;
+  if (
+    job.schedule.kind !== "at" ||
+    typeof job.description !== "string" ||
+    !job.description.startsWith(SESSIONS_SLEEP_DESCRIPTION_PREFIX)
+  ) {
+    return false;
+  }
+  const retryCount =
+    typeof job.state.startupInterruptedRetryCount === "number" &&
+    Number.isFinite(job.state.startupInterruptedRetryCount)
+      ? Math.max(0, Math.floor(job.state.startupInterruptedRetryCount))
+      : 0;
+  if (retryCount >= 1) {
+    return false;
+  }
+
+  params.state.deps.log.warn(
+    { jobId: job.id, runningAtMs },
+    "cron: requeuing interrupted sessions_sleep wake on startup",
+  );
+
+  job.enabled = true;
+  job.state.runningAtMs = undefined;
+  job.state.nextRunAtMs = nowMs;
+  job.state.lastError = STARTUP_SESSION_SLEEP_REQUEUED;
+  job.state.startupInterruptedRetryCount = retryCount + 1;
+  job.updatedAtMs = nowMs;
+  return true;
 }
 
 function mergeManualRunSnapshotAfterReload(params: {
@@ -149,6 +189,17 @@ export async function start(state: CronServiceState) {
       job.state ??= {};
       if (typeof job.state.runningAtMs === "number") {
         const nowMs = state.deps.nowMs();
+        if (
+          requeueInterruptedSessionSleepStartupRun({
+            state,
+            job,
+            runningAtMs: job.state.runningAtMs,
+            nowMs,
+          })
+        ) {
+          markedAnyInterruptedRun = true;
+          continue;
+        }
         const interrupted = markInterruptedStartupRun({
           state,
           job,

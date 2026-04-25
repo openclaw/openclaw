@@ -8,6 +8,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/sessions: add `sessions_sleep` so agents can persist lightweight
+  self-wake timers for long-running polling loops without shell sleeps or
+  background daemons.
 - CLI/image generation: expose generic `--background` on
   `openclaw infer image generate` and `openclaw infer image edit`, keep
   `--openai-background` as an OpenAI alias, and let fal image generation honor

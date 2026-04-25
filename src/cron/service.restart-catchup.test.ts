@@ -23,6 +23,7 @@ describe("CronService restart catch-up", () => {
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeatNow: ReturnType<typeof vi.fn>;
     onEvent?: ReturnType<typeof vi.fn>;
+    runIsolatedAgentJob?: ReturnType<typeof vi.fn>;
   }) {
     return new CronService({
       storePath: params.storePath,
@@ -30,7 +31,9 @@ describe("CronService restart catch-up", () => {
       log: noopLogger,
       enqueueSystemEvent: params.enqueueSystemEvent as never,
       requestHeartbeatNow: params.requestHeartbeatNow as never,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+      runIsolatedAgentJob:
+        (params.runIsolatedAgentJob as never) ??
+        (vi.fn(async () => ({ status: "ok" as const })) as never),
       onEvent: params.onEvent as ((evt: CronEvent) => void) | undefined,
     });
   }
@@ -57,12 +60,14 @@ describe("CronService restart catch-up", () => {
       enqueueSystemEvent: ReturnType<typeof vi.fn>;
       requestHeartbeatNow: ReturnType<typeof vi.fn>;
       onEvent: ReturnType<typeof vi.fn>;
+      runIsolatedAgentJob: ReturnType<typeof vi.fn>;
     }) => Promise<void>,
   ) {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const onEvent = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
 
     await writeStoreJobs(store.storePath, jobs);
 
@@ -71,11 +76,12 @@ describe("CronService restart catch-up", () => {
       enqueueSystemEvent,
       requestHeartbeatNow,
       onEvent,
+      runIsolatedAgentJob,
     });
 
     try {
       await cron.start();
-      await run({ cron, enqueueSystemEvent, requestHeartbeatNow, onEvent });
+      await run({ cron, enqueueSystemEvent, requestHeartbeatNow, onEvent, runIsolatedAgentJob });
     } finally {
       cron.stop();
       await store.cleanup();
@@ -251,6 +257,98 @@ describe("CronService restart catch-up", () => {
             status: "error",
             error: "cron: job interrupted by gateway restart",
             runAtMs: staleRunningAt,
+          }),
+        );
+      },
+    );
+  });
+
+  it("requeues an interrupted sessions_sleep one-shot once on startup", async () => {
+    const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
+    const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");
+
+    await withRestartedCron(
+      [
+        {
+          id: "restart-stale-session-sleep",
+          name: "session sleep stale marker",
+          description: "openclaw:sessions_sleep:askpro:run-1",
+          enabled: true,
+          deleteAfterRun: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
+          schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
+          sessionTarget: "session:agent:main:bluebubbles:default:direct:+15551234567",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Check Ask Pro run run-1." },
+          delivery: { mode: "none" },
+          state: {
+            nextRunAtMs: dueAt,
+            runningAtMs: staleRunningAt,
+          },
+        },
+      ],
+      async ({ cron, runIsolatedAgentJob, onEvent }) => {
+        expect(noopLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ jobId: "restart-stale-session-sleep" }),
+          "cron: requeuing interrupted sessions_sleep wake on startup",
+        );
+        expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+        expect(onEvent).not.toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "finished",
+            jobId: "restart-stale-session-sleep",
+            status: "error",
+          }),
+        );
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        expect(listedJobs.find((job) => job.id === "restart-stale-session-sleep")).toBeUndefined();
+      },
+    );
+  });
+
+  it("disables an interrupted sessions_sleep one-shot after its startup retry was already used", async () => {
+    const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
+    const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");
+
+    await withRestartedCron(
+      [
+        {
+          id: "restart-stale-session-sleep-retried",
+          name: "session sleep retried stale marker",
+          description: "openclaw:sessions_sleep:askpro:run-1",
+          enabled: true,
+          deleteAfterRun: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T16:30:00.000Z"),
+          schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
+          sessionTarget: "session:agent:main:bluebubbles:default:direct:+15551234567",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Check Ask Pro run run-1." },
+          delivery: { mode: "none" },
+          state: {
+            nextRunAtMs: dueAt,
+            runningAtMs: staleRunningAt,
+            startupInterruptedRetryCount: 1,
+          },
+        },
+      ],
+      async ({ cron, runIsolatedAgentJob, onEvent }) => {
+        expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-stale-session-sleep-retried");
+        expect(updated?.enabled).toBe(false);
+        expect(updated?.state.runningAtMs).toBeUndefined();
+        expect(updated?.state.lastStatus).toBe("error");
+        expect(updated?.state.nextRunAtMs).toBeUndefined();
+        expect(updated?.state.lastError).toBe("cron: job interrupted by gateway restart");
+        expect(onEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "finished",
+            jobId: "restart-stale-session-sleep-retried",
+            status: "error",
           }),
         );
       },

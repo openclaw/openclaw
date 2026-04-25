@@ -160,6 +160,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "sessions_history",
   "sessions_list",
   "sessions_send",
+  "sessions_sleep",
   "sessions_spawn",
   "subagents",
   "tts",

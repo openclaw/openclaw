@@ -101,6 +101,25 @@ assistant text once instead of replaying both streamed/intermediate text payload
 and the final answer. Media and structured Discord payloads are still delivered
 as separate payloads so attachments and components are not dropped.
 
+### Agent-owned sleeps
+
+Session agents can use the `sessions_sleep` tool to schedule their own
+continuation turns without starting shell sleeps or external polling daemons.
+The tool stores a one-shot cron job bound to the current session, wakes the
+session at the requested time, runs with lightweight context by default, and
+uses `delivery: none` so the agent remains responsible for sending the final
+user-facing reply.
+
+Use a stable `dedupeKey` for polling loops. Calling `sessions_sleep` again with
+the same key refreshes the existing timer instead of creating duplicate wakeups.
+Keep the wake prompt self-contained and small, with only the run id, next check
+action, and the result-delivery instruction needed for that continuation.
+
+Recommended long-running research cadence:
+
+- Ask Pro: sleep 10 minutes after submission, then check every 5 minutes.
+- Deep Research: sleep 30 minutes after submission, then check every 10 minutes.
+
 ### Payload options for isolated jobs
 
 - `--message`: prompt text (required for isolated)

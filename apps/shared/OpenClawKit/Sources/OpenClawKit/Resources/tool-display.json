@@ -886,6 +886,15 @@
         "message"
       ]
     },
+    "sessions_sleep": {
+      "emoji": "⏱️",
+      "title": "Sleep",
+      "detailKeys": [
+        "wakeAfterSeconds",
+        "dedupeKey",
+        "message"
+      ]
+    },
     "tts": {
       "emoji": "🔊",
       "title": "TTS",

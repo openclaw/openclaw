@@ -46,6 +46,7 @@ const DEFAULT_STALE_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
+const DEFAULT_INCOMPLETE_LOCK_RECLAIM_MS = 2_000;
 const MAX_LOCK_HOLD_MS = 2_147_000_000;
 
 type CleanupState = {
@@ -394,7 +395,9 @@ async function shouldReclaimContendedLockFile(
   try {
     const stat = await fs.stat(lockPath);
     const ageMs = Math.max(0, nowMs - stat.mtimeMs);
-    return ageMs > staleMs;
+    const mtimeStaleMs =
+      details.pid === null ? Math.min(staleMs, DEFAULT_INCOMPLETE_LOCK_RECLAIM_MS) : staleMs;
+    return ageMs > mtimeStaleMs;
   } catch (error) {
     const code = (error as { code?: string } | null)?.code;
     return code !== "ENOENT";

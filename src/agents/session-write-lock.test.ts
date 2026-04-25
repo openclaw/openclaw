@@ -271,6 +271,22 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("reclaims incomplete lock files after the short startup-recovery grace", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      await fs.writeFile(lockPath, "", "utf8");
+      const incompleteDate = new Date(Date.now() - 5_000);
+      await fs.utimes(lockPath, incompleteDate, incompleteDate);
+
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        staleMs: 60_000,
+      });
+      await lock.release();
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    });
+  });
+
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

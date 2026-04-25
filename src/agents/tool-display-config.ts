@@ -562,6 +562,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Yield",
       detailKeys: ["message"],
     },
+    sessions_sleep: {
+      emoji: "⏱️",
+      title: "Sleep",
+      detailKeys: ["wakeAfterSeconds", "dedupeKey", "message"],
+    },
     tts: {
       emoji: "🔊",
       title: "TTS",

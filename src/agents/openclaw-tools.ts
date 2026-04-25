@@ -30,6 +30,7 @@ import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
+import { createSessionsSleepTool } from "./tools/sessions-sleep-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
@@ -291,6 +292,10 @@ export function createOpenClawTools(
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
             callGateway: openClawToolsDeps.callGateway,
+          }),
+          createSessionsSleepTool({
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
           }),
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,

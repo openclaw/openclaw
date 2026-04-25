@@ -157,6 +157,8 @@ export type CronJobState = {
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Internal restart-recovery guard for idempotent one-shot session sleeps. */
+  startupInterruptedRetryCount?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */

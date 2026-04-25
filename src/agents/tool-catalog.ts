@@ -166,6 +166,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "sessions_sleep",
+    label: "sessions_sleep",
+    description: "Sleep current session and resume later",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions_spawn",
     label: "sessions_spawn",
     description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
