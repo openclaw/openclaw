@@ -320,11 +320,11 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
     OPENCLAW_STATE_DIR: stateDir,
   };
   return {
+    artifactDir,
     configPath,
     dispose: async () => {
       await rm(rootDir, { force: true, recursive: true });
     },
-    rootDir: artifactDir,
     run: async (
       args: string[],
       opts: { allowNonZero?: boolean; timeoutMs: number },

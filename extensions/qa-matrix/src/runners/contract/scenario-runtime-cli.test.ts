@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it } from "vitest";
 import {
   formatMatrixQaCliCommand,
@@ -36,7 +36,7 @@ describe("Matrix QA CLI runtime", () => {
   });
 
   it("prefers the ESM OpenClaw CLI entrypoint when present", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "matrix-qa-cli-entry-"));
+    const root = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-entry-"));
     try {
       await mkdir(path.join(root, "dist"));
       await writeFile(path.join(root, "dist", "index.mjs"), "");
@@ -47,7 +47,9 @@ describe("Matrix QA CLI runtime", () => {
   });
 
   it("can preserve expected non-zero CLI output for negative scenarios", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "matrix-qa-cli-nonzero-"));
+    const root = await mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "matrix-qa-cli-nonzero-"),
+    );
     try {
       await mkdir(path.join(root, "dist"));
       await writeFile(

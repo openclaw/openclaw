@@ -286,10 +286,10 @@ async function writeMatrixQaCliArtifacts(params: {
   result: MatrixQaCliRunResult;
   runtime: MatrixQaCliRuntime;
 }) {
-  await mkdir(params.runtime.rootDir, { mode: 0o700, recursive: true });
+  await mkdir(params.runtime.artifactDir, { mode: 0o700, recursive: true });
   const safe = params.label.replace(/[^A-Za-z0-9_-]/g, "-");
-  const stdoutPath = path.join(params.runtime.rootDir, `${safe}.stdout.txt`);
-  const stderrPath = path.join(params.runtime.rootDir, `${safe}.stderr.txt`);
+  const stdoutPath = path.join(params.runtime.artifactDir, `${safe}.stdout.txt`);
+  const stderrPath = path.join(params.runtime.artifactDir, `${safe}.stderr.txt`);
   await Promise.all([
     writeFile(stdoutPath, redactMatrixQaCliOutput(params.result.stdout), { mode: 0o600 }),
     writeFile(stderrPath, redactMatrixQaCliOutput(params.result.stderr), { mode: 0o600 }),
