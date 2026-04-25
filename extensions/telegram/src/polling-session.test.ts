@@ -280,10 +280,8 @@ describe("TelegramPollingSession", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds the persisted offset confirmation getUpdates call", async () => {
+  it("does not call getUpdates for offset confirmation (avoiding 409 conflicts)", async () => {
     const abort = new AbortController();
-    const timeoutSignal = new AbortController().signal;
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
     const bot = makeBot();
     createTelegramBotMock.mockReturnValueOnce(bot);
     runMock.mockReturnValueOnce({
@@ -308,17 +306,11 @@ describe("TelegramPollingSession", () => {
       telegramTransport: undefined,
     });
 
-    try {
-      await session.runUntilAbort();
+    await session.runUntilAbort();
 
-      expect(timeoutSpy).toHaveBeenCalledWith(10_000);
-      expect(bot.api.getUpdates).toHaveBeenCalledWith(
-        { offset: 42, limit: 1, timeout: 0 },
-        timeoutSignal,
-      );
-    } finally {
-      timeoutSpy.mockRestore();
-    }
+    // Offset confirmation was removed because it could self-conflict with the runner.
+    // OpenClaw middleware still skips duplicates using the persisted update offset.
+    expect(bot.api.getUpdates).not.toHaveBeenCalled();
   });
 
   it("forces a restart when polling stalls without getUpdates activity", async () => {

@@ -829,16 +829,14 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("confirms persisted offset with Telegram before starting runner", async () => {
+  it("does not call getUpdates for offset confirmation (avoids 409 conflicts)", async () => {
     const { order } = await runMonitorAndCaptureStartupOrder({
       persistedOffset: 549076203,
     });
 
-    expect(api.getUpdates).toHaveBeenCalledWith(
-      { offset: 549076204, limit: 1, timeout: 0 },
-      expect.any(AbortSignal),
-    );
-    expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
+    // OpenClaw middleware skips duplicates using the persisted update offset.
+    expect(api.getUpdates).not.toHaveBeenCalled();
+    expect(order).toEqual(["deleteWebhook", "run"]);
   });
 
   it("skips offset confirmation when no persisted offset exists", async () => {
