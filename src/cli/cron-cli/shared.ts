@@ -34,21 +34,24 @@ function addCronRunCauseFields(value: unknown): unknown {
   if (!Array.isArray(entries)) {
     return value;
   }
-  const nextEntries = entries.map((entry) => {
+  const nextEntries: unknown[] = [];
+  for (const entry of entries) {
     if (!entry || typeof entry !== "object") {
-      return entry;
+      nextEntries.push(entry);
+      continue;
     }
     const item = entry as Record<string, unknown>;
     if (typeof item.errorReason !== "string" || item.errorReason.trim().length === 0) {
-      return item;
+      nextEntries.push(item);
+      continue;
     }
     const error = typeof item.error === "string" ? item.error : undefined;
-    return {
-      cause: item.errorReason,
-      ...item,
-      ...(error ? { error: `Cause: ${item.errorReason}\n${error}` } : {}),
-    };
-  });
+    const result = Object.assign({ cause: item.errorReason }, item);
+    if (error) {
+      result.error = `Cause: ${item.errorReason}\n${error}`;
+    }
+    nextEntries.push(result);
+  }
   return { ...record, entries: nextEntries };
 }
 
