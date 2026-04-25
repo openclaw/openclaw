@@ -41,6 +41,7 @@ export {
   normalizeBatchBaseUrl,
   type BatchHttpClientConfig,
 } from "./host/batch-utils.js";
+export { joinRemoteEndpoint, normalizeRemoteBaseUrl } from "./host/remote-url.js";
 export { enforceEmbeddingMaxInputTokens } from "./host/embedding-chunk-limits.js";
 export {
   isMissingEmbeddingApiKeyError,

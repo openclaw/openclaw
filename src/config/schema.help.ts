@@ -986,6 +986,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Supplies a dedicated API key for remote embedding calls used by memory indexing and query-time embeddings. Use this when memory embeddings should use different credentials than global defaults or environment variables.",
   "agents.defaults.memorySearch.remote.headers":
     "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
+  "agents.defaults.memorySearch.remote.concurrency":
+    "Limits how many normal non-batch remote embedding requests run at the same time during indexing (default: 4). Lower this for proxies or providers that reject parallel embedding requests; batch jobs use remote.batch.concurrency instead.",
   "agents.defaults.memorySearch.remote.batch.enabled":
     "Enables provider batch APIs for embedding jobs when supported (OpenAI/Gemini), improving throughput on larger index runs. Keep this enabled unless debugging provider batch failures or running very small workloads.",
   "agents.defaults.memorySearch.remote.batch.wait":

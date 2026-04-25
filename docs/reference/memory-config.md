@@ -80,11 +80,12 @@ requests.
 
 For custom OpenAI-compatible endpoints or overriding provider defaults:
 
-| Key              | Type     | Description                                        |
-| ---------------- | -------- | -------------------------------------------------- |
-| `remote.baseUrl` | `string` | Custom API base URL                                |
-| `remote.apiKey`  | `string` | Override API key                                   |
-| `remote.headers` | `object` | Extra HTTP headers (merged with provider defaults) |
+| Key                  | Type     | Default | Description                                        |
+| -------------------- | -------- | ------- | -------------------------------------------------- |
+| `remote.baseUrl`     | `string` | --      | Custom API base URL                                |
+| `remote.apiKey`      | `string` | --      | Override API key                                   |
+| `remote.headers`     | `object` | --      | Extra HTTP headers (merged with provider defaults) |
+| `remote.concurrency` | `number` | `4`     | Parallel non-batch `/embeddings` requests          |
 
 ```json5
 {
@@ -346,6 +347,11 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 Available for `openai`, `gemini`, and `voyage`. OpenAI batch is typically
 fastest and cheapest for large backfills.
+
+`remote.concurrency` controls normal non-batch `/embeddings` calls during
+indexing. `remote.batch.concurrency` controls provider batch jobs only, and has
+no effect unless `remote.batch.enabled` is true and the provider exposes a batch
+embedding API.
 
 ---
 

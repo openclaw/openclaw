@@ -1,4 +1,5 @@
 import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
+import { normalizeRemoteBaseUrl } from "./remote-url.js";
 
 export type BatchHttpClientConfig = {
   baseUrl?: string;
@@ -7,7 +8,8 @@ export type BatchHttpClientConfig = {
 };
 
 export function normalizeBatchBaseUrl(client: BatchHttpClientConfig): string {
-  return client.baseUrl?.replace(/\/$/, "") ?? "";
+  const baseUrl = client.baseUrl?.trim();
+  return baseUrl ? normalizeRemoteBaseUrl(baseUrl) : "";
 }
 
 export function buildBatchHeaders(

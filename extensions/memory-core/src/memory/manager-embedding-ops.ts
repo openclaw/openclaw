@@ -464,7 +464,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
+    if (this.batch.enabled) {
+      return this.batch.concurrency;
+    }
+    if (this.provider && this.provider.id !== "local") {
+      return this.settings.remote?.concurrency ?? EMBEDDING_INDEX_CONCURRENCY;
+    }
+    return EMBEDDING_INDEX_CONCURRENCY;
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {

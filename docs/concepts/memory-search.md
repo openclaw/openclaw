@@ -135,6 +135,10 @@ earlier conversations. This is opt-in via
 **Only keyword matches?** Your embedding provider may not be configured. Check
 `openclaw memory status --deep`.
 
+**Remote embeddings fail before an HTTP status?** The error includes the
+guarded-fetch context and the sanitized endpoint origin/path; check that
+message for DNS, TLS, proxy, or socket failures without exposing credentials.
+
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.
 

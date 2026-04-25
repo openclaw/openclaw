@@ -22,6 +22,7 @@ export type ResolvedMemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    concurrency: number;
     batch?: {
       enabled: boolean;
       wait: boolean;
@@ -187,6 +188,7 @@ function mergeConfig(
         baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
         apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
         headers: overrideRemote?.headers ?? defaultRemote?.headers,
+        concurrency: Math.max(1, overrideRemote?.concurrency ?? defaultRemote?.concurrency ?? 4),
         batch,
       }
     : undefined;

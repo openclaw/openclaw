@@ -5,6 +5,7 @@ import {
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import { joinRemoteEndpoint } from "./remote-url.js";
 
 export type RemoteEmbeddingClient = {
   baseUrl: string;
@@ -20,7 +21,7 @@ export function createRemoteEmbeddingProvider(params: {
   maxInputTokens?: number;
 }): EmbeddingProvider {
   const { client } = params;
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  const url = joinRemoteEndpoint(client.baseUrl, "/embeddings");
 
   const embed = async (input: string[]): Promise<number[][]> => {
     if (input.length === 0) {

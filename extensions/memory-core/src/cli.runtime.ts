@@ -332,6 +332,34 @@ function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] 
   return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
 }
 
+function formatBatchDisabledReason(reason: string | undefined): string | null {
+  switch (reason) {
+    case "configured_off":
+      return "configured off";
+    case "provider_unavailable":
+      return "provider unavailable";
+    case "provider_unsupported":
+      return "provider unsupported";
+    case "failure_limit":
+      return "failure limit";
+    default:
+      return null;
+  }
+}
+
+function formatBatchStatusSuffix(batch: {
+  enabled: boolean;
+  disabledReason?: string;
+  failures: number;
+  limit: number;
+}): string {
+  if (batch.enabled || batch.disabledReason === "failure_limit") {
+    return ` (failures ${batch.failures}/${batch.limit})`;
+  }
+  const reason = formatBatchDisabledReason(batch.disabledReason);
+  return reason ? ` (${reason})` : "";
+}
+
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);
   return match?.[1] ?? null;
@@ -931,7 +959,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     if (status.batch) {
       const batchState = status.batch.enabled ? "enabled" : "disabled";
       const batchColor = status.batch.enabled ? theme.success : theme.warn;
-      const batchSuffix = ` (failures ${status.batch.failures}/${status.batch.limit})`;
+      const batchSuffix = formatBatchStatusSuffix(status.batch);
       lines.push(
         `${label("Batch")} ${colorize(rich, batchColor, batchState)}${muted(batchSuffix)}`,
       );
