@@ -220,7 +220,7 @@ describe("renderAgentFiles", () => {
 
     expect(container.querySelector(".md-preview-dialog__reader.sidebar-markdown")).not.toBeNull();
     expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
-      "/tmp/workspace/USER.md",
+      "USER.md",
     );
     expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(
       "Saved Preview",

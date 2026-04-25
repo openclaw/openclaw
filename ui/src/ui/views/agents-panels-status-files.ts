@@ -47,6 +47,28 @@ function getExtensionLabel(fileName: string) {
   return ext ? `${ext.toUpperCase()} Preview` : "Preview";
 }
 
+function formatWorkspaceRelativePath(filePath: string, workspace: string | null | undefined) {
+  const normalizedPath = filePath.trim();
+  const normalizedWorkspace = workspace?.trim();
+  if (!normalizedPath) {
+    return "";
+  }
+  if (normalizedWorkspace && normalizedPath === normalizedWorkspace) {
+    return ".";
+  }
+  if (normalizedWorkspace && normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
+    return normalizedPath.slice(normalizedWorkspace.length + 1) || ".";
+  }
+  const pathParts = normalizedPath.split(/[\\/]+/);
+  for (let index = pathParts.length - 1; index >= 0; index -= 1) {
+    const pathPart = pathParts[index];
+    if (pathPart) {
+      return pathPart;
+    }
+  }
+  return normalizedPath;
+}
+
 function toDomId(value: string) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return normalized.replace(/^-+|-+$/g, "") || "preview";
@@ -413,6 +435,9 @@ export function renderAgentFiles(params: {
   const draftByteSize = formatBytes(new TextEncoder().encode(draft).length);
   const draftWordCount = countWords(draft);
   const draftLineCount = countLines(draft);
+  const activePathLabel = activeEntry
+    ? formatWorkspaceRelativePath(activeEntry.path, list?.workspace)
+    : "";
   const previewTitleId = activeEntry ? `agent-file-preview-title-${toDomId(activeEntry.name)}` : "";
   const previewStatusLabel = activeEntry?.missing
     ? "Will Create on Save"
@@ -574,7 +599,7 @@ export function renderAgentFiles(params: {
                                 ${activeEntry.name}
                               </div>
                               <div class="md-preview-dialog__path mono" translate="no">
-                                ${activeEntry.path}
+                                ${activePathLabel}
                               </div>
                             </div>
                           </div>

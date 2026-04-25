@@ -141,6 +141,11 @@ function getPinnedMessages(sessionKey: string): PinnedMessages {
   );
 }
 
+function toPlainTextCodeFence(value: string, language = ""): string {
+  const fenceHeader = language ? `\`\`\`${language}` : "```";
+  return `${fenceHeader}\n${value}\n\`\`\``;
+}
+
 function getDeletedMessages(sessionKey: string): DeletedMessages {
   return getOrCreateSessionCacheValue(
     deletedMessagesMap,
@@ -1129,14 +1134,17 @@ export function renderChat(props: ChatProps) {
                       return;
                     }
                     if (props.sidebarContent.kind === "markdown") {
+                      const rawText = props.sidebarContent.rawText ?? props.sidebarContent.content;
                       props.onOpenSidebar(
-                        buildSidebarContent(`\`\`\`\n${props.sidebarContent.content}\n\`\`\``),
+                        buildSidebarContent(toPlainTextCodeFence(rawText), { rawText }),
                       );
                       return;
                     }
                     if (props.sidebarContent.rawText?.trim()) {
                       props.onOpenSidebar(
-                        buildSidebarContent(`\`\`\`json\n${props.sidebarContent.rawText}\n\`\`\``),
+                        buildSidebarContent(
+                          toPlainTextCodeFence(props.sidebarContent.rawText, "json"),
+                        ),
                       );
                     }
                   },
