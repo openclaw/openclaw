@@ -186,9 +186,14 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
-- `plugins.installs`: CLI-managed install metadata used by `openclaw plugins update`.
-  - Includes `source`, `spec`, `sourcePath`, `installPath`, `version`, `resolvedName`, `resolvedVersion`, `resolvedSpec`, `integrity`, `shasum`, `resolvedAt`, `installedAt`.
-  - Treat `plugins.installs.*` as managed state; prefer CLI commands over manual edits.
+- `plugins.installs`: deprecated compatibility fallback for legacy
+  CLI-managed install metadata. New plugin installs write the managed
+  `plugins/installs.json` state ledger instead.
+  - Legacy records include `source`, `spec`, `sourcePath`, `installPath`,
+    `version`, `resolvedName`, `resolvedVersion`, `resolvedSpec`, `integrity`,
+    `shasum`, `resolvedAt`, `installedAt`.
+  - Treat `plugins.installs.*` as managed state; prefer CLI commands over
+    manual edits.
 
 See [Plugins](/tools/plugin).
 
@@ -275,9 +280,12 @@ See [Plugins](/tools/plugin).
 - Local managed profiles use `browser.localLaunchTimeoutMs` for Chrome CDP HTTP
   discovery after process start and `browser.localCdpReadyTimeoutMs` for
   post-launch CDP websocket readiness. Raise them on slower hosts where Chrome
-  starts successfully but readiness checks race startup.
+  starts successfully but readiness checks race startup. Both values must be
+  positive integers up to `120000` ms; invalid config values are rejected.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
-- `browser.executablePath` accepts `~` for your OS home directory.
+- `browser.executablePath` and `browser.profiles.<name>.executablePath` both
+  accept `~` and `~/...` for your OS home directory before Chromium launch.
+  Per-profile `userDataDir` on `existing-session` profiles is also tilde-expanded.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
   `--disable-gpu`, window sizing, or debug flags).
@@ -909,6 +917,7 @@ Notes:
 - `otel.sampleRate`: trace sampling rate `0`–`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, and `systemPrompt` explicitly.
+- `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI span provider attributes. By default spans keep the legacy `gen_ai.system` attribute for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
 - `cacheTrace.filePath`: output path for cache trace JSONL (default: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`).

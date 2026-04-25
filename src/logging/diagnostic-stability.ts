@@ -246,6 +246,16 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "run.attempt":
       record.count = event.attempt;
       break;
+    case "context.assembled":
+      record.channel = event.channel;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.count = event.messageCount;
+      record.bytes = event.promptChars;
+      record.context =
+        event.contextTokenBudget !== undefined ? { limit: event.contextTokenBudget } : undefined;
+      record.bytes = event.promptChars;
+      break;
     case "diagnostic.heartbeat":
       record.webhooks = { ...event.webhooks };
       record.active = event.active;

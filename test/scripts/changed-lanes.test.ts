@@ -98,6 +98,10 @@ describe("scripts/changed-lanes", () => {
       PATH: "/usr/bin",
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
     });
+    expect(plan.commands.find((command) => command.args[0] === "lint:core")?.env).toMatchObject({
+      PATH: "/usr/bin",
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+    });
   });
 
   it("reenables local-check policy for changed typecheck commands", () => {
@@ -115,6 +119,19 @@ describe("scripts/changed-lanes", () => {
 
   it("marks changed-check children as covered by the parent heavy-check lock", () => {
     expect(createChangedCheckChildEnv({ PATH: "/usr/bin" })).toMatchObject({
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("runs changed-check lint lanes under the parent heavy-check lock", () => {
+    const result = detectChangedLanes(["extensions/discord/src/index.ts"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+    const lintCommand = plan.commands.find((command) => command.args[0] === "lint:extensions");
+
+    expect(lintCommand?.env).toMatchObject({
       OPENCLAW_OXLINT_SKIP_LOCK: "1",
       OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
       OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",

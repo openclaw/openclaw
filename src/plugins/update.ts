@@ -523,7 +523,9 @@ export async function updateNpmInstalledPlugins(params: {
 
     let installPath: string;
     try {
-      installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
+      installPath = resolveUserPath(
+        record.installPath?.trim() || resolvePluginInstallDir(pluginId),
+      );
     } catch (err) {
       outcomes.push({
         pluginId,

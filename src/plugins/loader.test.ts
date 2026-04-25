@@ -1558,6 +1558,158 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
   });
 
+  it("loads copied external runtime mirrors with package-root runtime deps", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(bundledDir, "alpha");
+    const packageDepRoot = path.join(packageRoot, "node_modules", "root-support");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(packageDepRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.24",
+        type: "module",
+        dependencies: { "root-support": "1.0.0" },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageDepRoot, "package.json"),
+      JSON.stringify({
+        name: "root-support",
+        version: "1.0.0",
+        type: "module",
+        exports: {
+          ".": {
+            import: "./index.js",
+          },
+          "./oauth": {
+            import: "./oauth.js",
+          },
+          "./*": {
+            import: "./dist/*",
+          },
+        },
+      }),
+      "utf-8",
+    );
+    fs.mkdirSync(path.join(packageDepRoot, "dist", "client"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDepRoot, "index.js"),
+      "export default { marker: 'root-ok' };\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageDepRoot, "oauth.js"),
+      "export const oauthMarker = 'oauth-ok';\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageDepRoot, "dist", "client", "index.js"),
+      "export const clientMarker = 'client-ok';\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "manifest-support.js"),
+      [
+        `import support from "root-support";`,
+        `import { oauthMarker } from "root-support/oauth";`,
+        `import { clientMarker } from "root-support/client/index.js";`,
+        `export const marker = [support.marker, oauthMarker, clientMarker].join(":");`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      [
+        `import { marker } from "../../manifest-support.js";`,
+        `import externalRuntime from "external-runtime";`,
+        `export default {`,
+        `  id: "alpha",`,
+        `  register(api) {`,
+        `    api.registerCommand({ name: "root-support", handler: () => [marker, externalRuntime.marker].join(":") });`,
+        `  },`,
+        `};`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/alpha",
+          version: "1.0.0",
+          type: "module",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "alpha",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageDir;
+
+    const symlinkSync = vi.spyOn(fs, "symlinkSync").mockImplementation(() => {
+      throw Object.assign(new Error("symlinks unavailable"), { code: "EPERM" });
+    });
+    let registry: PluginRegistry | null = null;
+    try {
+      registry = loadOpenClawPlugins({
+        cache: false,
+        config: { plugins: { enabled: true } },
+        bundledRuntimeDepsInstaller: ({ installRoot }) => {
+          const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+          fs.mkdirSync(depRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(depRoot, "package.json"),
+            JSON.stringify({
+              name: "external-runtime",
+              version: "1.0.0",
+              type: "module",
+              exports: {
+                ".": {
+                  import: "./index.js",
+                },
+              },
+            }),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(depRoot, "index.js"),
+            "export default { marker: 'external-ok' };\n",
+            "utf-8",
+          );
+        },
+      });
+    } finally {
+      symlinkSync.mockRestore();
+    }
+
+    expect(registry?.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
+  });
+
   it("loads bundled plugins with plugin-sdk imports from an external stage dir", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();

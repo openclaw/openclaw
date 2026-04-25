@@ -91,6 +91,13 @@ Defaults:
   - Click cloud: stop speaking
   - Click X: exit Talk mode
 
+## Android UI
+
+- Voice tab toggle: **Talk**
+- Manual **Mic** and **Talk** are mutually exclusive runtime capture modes.
+- Manual Mic stops when the app leaves the foreground or the user leaves the Voice tab.
+- Talk Mode keeps running until toggled off or the Android node disconnects, and uses Android's microphone foreground-service type while active.
+
 ## Notes
 
 - Requires Speech + Microphone permissions.

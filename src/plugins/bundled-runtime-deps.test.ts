@@ -16,7 +16,8 @@ import {
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
-vi.mock("node:child_process", () => ({
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: vi.fn(),
 }));
 
@@ -766,6 +767,72 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(false);
   });
 
+  it("does not expire fresh ownerless runtime-deps install locks", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { lockDirMtimeMs: 1_000 },
+        31_000,
+        () => true,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not expire ownerless runtime-deps install locks when the owner file changed recently", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { lockDirMtimeMs: 1_000, ownerFileMtimeMs: 31_000 },
+        61_000,
+        () => true,
+      ),
+    ).toBe(false);
+  });
+
+  it("expires ownerless runtime-deps install locks after the owner write grace window", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { lockDirMtimeMs: 1_000 },
+        31_001,
+        () => true,
+      ),
+    ).toBe(true);
+  });
+
+  it("expires ownerless runtime-deps install locks when lock and owner file are stale", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { lockDirMtimeMs: 1_000, ownerFileMtimeMs: 2_000 },
+        32_001,
+        () => true,
+      ),
+    ).toBe(true);
+  });
+
+  it("includes runtime-deps lock owner details in timeout messages", () => {
+    const message = bundledRuntimeDepsTesting.formatRuntimeDepsLockTimeoutMessage({
+      lockDir: "/tmp/openclaw-plugin/.openclaw-runtime-deps.lock",
+      owner: {
+        pid: 0,
+        createdAtMs: 1_000,
+        ownerFileState: "invalid",
+        ownerFilePath: "/tmp/openclaw-plugin/.openclaw-runtime-deps.lock/owner.json",
+        ownerFileMtimeMs: 2_500,
+        ownerFileIsSymlink: true,
+        lockDirMtimeMs: 2_000,
+      },
+      waitedMs: 300_123,
+      nowMs: 303_000,
+    });
+
+    expect(message).toContain("waited=300123ms");
+    expect(message).toContain("ownerFile=invalid");
+    expect(message).toContain("ownerFileSymlink=true");
+    expect(message).toContain("pid=0 alive=false");
+    expect(message).toContain("ownerAge=302000ms");
+    expect(message).toContain("ownerFileAge=300500ms");
+    expect(message).toContain("lockAge=301000ms");
+    expect(message).toContain(".openclaw-runtime-deps.lock/owner.json");
+  });
+
   it("removes stale runtime-deps install locks before repairing deps", () => {
     const packageRoot = makeTempDir();
     const pluginRoot = path.join(packageRoot, "dist", "extensions", "openai");
@@ -807,6 +874,100 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toHaveLength(1);
     expect(fs.existsSync(lockDir)).toBe(false);
   });
+
+  it("removes stale malformed runtime-deps install locks before repairing deps", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "browser");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "browser-runtime": "1.0.0",
+        },
+      }),
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
+    const lockDir = path.join(installRoot, ".openclaw-runtime-deps.lock");
+    fs.mkdirSync(lockDir, { recursive: true });
+    const ownerPath = path.join(lockDir, "owner.json");
+    fs.writeFileSync(ownerPath, "{", "utf8");
+    fs.utimesSync(ownerPath, new Date(0), new Date(0));
+    fs.utimesSync(lockDir, new Date(0), new Date(0));
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+        fs.mkdirSync(path.join(params.installRoot, "node_modules", "browser-runtime"), {
+          recursive: true,
+        });
+        fs.writeFileSync(
+          path.join(params.installRoot, "node_modules", "browser-runtime", "package.json"),
+          JSON.stringify({ name: "browser-runtime", version: "1.0.0" }),
+        );
+      },
+      pluginId: "browser",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["browser-runtime@1.0.0"],
+      retainSpecs: ["browser-runtime@1.0.0"],
+    });
+    expect(calls).toHaveLength(1);
+    expect(fs.existsSync(lockDir)).toBe(false);
+  });
+
+  const itSupportsSymlinks = process.platform === "win32" ? it.skip : it;
+  itSupportsSymlinks(
+    "removes stale runtime-deps install locks with broken owner symlinks before repairing deps",
+    () => {
+      const packageRoot = makeTempDir();
+      const pluginRoot = path.join(packageRoot, "dist-runtime", "extensions", "browser");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginRoot, "package.json"),
+        JSON.stringify({
+          dependencies: {
+            "browser-runtime": "1.0.0",
+          },
+        }),
+      );
+      const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
+      const lockDir = path.join(installRoot, ".openclaw-runtime-deps.lock");
+      fs.mkdirSync(lockDir, { recursive: true });
+      const ownerPath = path.join(lockDir, "owner.json");
+      fs.symlinkSync("../missing-owner.json", ownerPath);
+      fs.lutimesSync(ownerPath, new Date(0), new Date(0));
+      fs.utimesSync(lockDir, new Date(0), new Date(0));
+
+      const calls: BundledRuntimeDepsInstallParams[] = [];
+      const result = ensureBundledPluginRuntimeDeps({
+        env: {},
+        installDeps: (params) => {
+          calls.push(params);
+          fs.mkdirSync(path.join(params.installRoot, "node_modules", "browser-runtime"), {
+            recursive: true,
+          });
+          fs.writeFileSync(
+            path.join(params.installRoot, "node_modules", "browser-runtime", "package.json"),
+            JSON.stringify({ name: "browser-runtime", version: "1.0.0" }),
+          );
+        },
+        pluginId: "browser",
+        pluginRoot,
+      });
+
+      expect(result).toEqual({
+        installedSpecs: ["browser-runtime@1.0.0"],
+        retainSpecs: ["browser-runtime@1.0.0"],
+      });
+      expect(calls).toHaveLength(1);
+      expect(fs.existsSync(lockDir)).toBe(false);
+    },
+  );
 
   it("does not install when runtime deps are only workspace links", () => {
     const packageRoot = makeTempDir();

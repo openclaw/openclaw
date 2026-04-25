@@ -259,6 +259,7 @@ export function createSessionsSpawnTool(
             agentId: requestedAgentId,
             resumeSessionId,
             model: modelOverride,
+            thinking: thinkingOverrideRaw,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,

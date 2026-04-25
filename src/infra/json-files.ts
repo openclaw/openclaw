@@ -18,6 +18,13 @@ async function replaceFileWithWindowsFallback(tempPath: string, filePath: string
     }
   }
 
+  const existing = await fs.lstat(filePath).catch(() => null);
+  if (existing?.isSymbolicLink()) {
+    await fs.rm(filePath, { force: true });
+    await fs.rename(tempPath, filePath);
+    return;
+  }
+
   await fs.copyFile(tempPath, filePath);
   try {
     await fs.chmod(filePath, mode);

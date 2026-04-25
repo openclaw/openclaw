@@ -718,7 +718,17 @@ function Invoke-OpenClawUpdateWithTimeout {
 
   $updateJob = Start-Job -ScriptBlock {
     param([string]$Path, [string]$Target)
-    $output = & $Path update --tag $Target --yes --json *>&1
+    $previousDisableBundledPlugins = $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS
+    $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
+    try {
+      $output = & $Path update --tag $Target --yes --json *>&1
+    } finally {
+      if ($null -eq $previousDisableBundledPlugins) {
+        Remove-Item Env:OPENCLAW_DISABLE_BUNDLED_PLUGINS -ErrorAction SilentlyContinue
+      } else {
+        $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = $previousDisableBundledPlugins
+      }
+    }
     [pscustomobject]@{
       ExitCode = $LASTEXITCODE
       Output = ($output | Out-String).Trim()
@@ -1649,7 +1659,11 @@ stop_openclaw_gateway_processes() {
 # host can observe new plugin metadata mid-update and abort config validation.
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-/opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
+# The baseline updater process may run its post-install doctor through the old
+# host while new bundled plugin metadata is already on disk. Keep this
+# same-guest update hop focused on core/package migration; post-update smoke
+# below starts the fresh gateway with bundled plugins enabled.
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 # Same-guest npm upgrades can leave the old gateway process holding the old
 # bundled plugin host version. Stop it before post-update config commands.
 stop_openclaw_gateway_processes
@@ -1782,7 +1796,7 @@ stop_openclaw_gateway_processes() {
 # the old host can observe new plugin metadata mid-update and abort validation.
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-openclaw update --tag "$update_target" --yes --json
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag "$update_target" --yes --json
 # The fresh Linux lane starts a manual gateway; stop the old process before
 # post-update config validation sees mixed old-host/new-plugin metadata.
 stop_openclaw_gateway_processes

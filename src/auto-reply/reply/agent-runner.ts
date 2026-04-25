@@ -585,6 +585,13 @@ function resolveRequestPromptTokens(params: {
     total?: number;
   };
 }): number | undefined {
+  if (
+    typeof params.promptTokens === "number" &&
+    Number.isFinite(params.promptTokens) &&
+    params.promptTokens > 0
+  ) {
+    return params.promptTokens;
+  }
   const lastCall = params.lastCallUsage;
   if (lastCall) {
     const input = lastCall.input ?? 0;
@@ -594,13 +601,6 @@ function resolveRequestPromptTokens(params: {
     if (sum > 0) {
       return sum;
     }
-  }
-  if (
-    typeof params.promptTokens === "number" &&
-    Number.isFinite(params.promptTokens) &&
-    params.promptTokens > 0
-  ) {
-    return params.promptTokens;
   }
   const usage = params.usage;
   if (usage) {
@@ -1428,8 +1428,13 @@ export async function runReplyAgent(params: {
       const output = usage.output ?? 0;
       const cacheRead = usage.cacheRead ?? 0;
       const cacheWrite = usage.cacheWrite ?? 0;
-      const promptTokens = input + cacheRead + cacheWrite;
-      const totalTokens = usage.total ?? promptTokens + output;
+      const usagePromptTokens = input + cacheRead + cacheWrite;
+      const totalTokens = usage.total ?? usagePromptTokens + output;
+      const contextUsedTokens = resolveRequestPromptTokens({
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        promptTokens,
+        usage,
+      });
       const costConfig = resolveModelCostConfig({
         provider: providerUsed,
         model: modelUsed,
@@ -1455,13 +1460,13 @@ export async function runReplyAgent(params: {
           output,
           cacheRead,
           cacheWrite,
-          promptTokens,
+          promptTokens: usagePromptTokens,
           total: totalTokens,
         },
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         context: {
           limit: contextTokensUsed,
-          used: totalTokens,
+          ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
         },
         costUsd,
         durationMs: Date.now() - runStartedAt,

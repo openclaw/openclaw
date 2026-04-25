@@ -268,6 +268,7 @@ describe("image-generation runtime", () => {
       | {
           quality?: string;
           outputFormat?: string;
+          background?: string;
           providerOptions?: unknown;
         }
       | undefined;
@@ -285,12 +286,14 @@ describe("image-generation runtime", () => {
         output: {
           qualities: ["low", "medium", "high", "auto"],
           formats: ["png", "jpeg", "webp"],
+          backgrounds: ["transparent", "opaque", "auto"],
         },
       },
       async generateImage(req) {
         seenRequest = {
           quality: req.quality,
           outputFormat: req.outputFormat,
+          background: req.background,
           providerOptions: req.providerOptions,
         };
         return {
@@ -310,6 +313,7 @@ describe("image-generation runtime", () => {
       prompt: "draw a cheap preview",
       quality: "low",
       outputFormat: "jpeg",
+      background: "opaque",
       providerOptions: {
         openai: {
           background: "opaque",
@@ -323,6 +327,7 @@ describe("image-generation runtime", () => {
     expect(seenRequest).toEqual({
       quality: "low",
       outputFormat: "jpeg",
+      background: "opaque",
       providerOptions: {
         openai: {
           background: "opaque",
@@ -340,6 +345,7 @@ describe("image-generation runtime", () => {
       | {
           quality?: string;
           outputFormat?: string;
+          background?: string;
         }
       | undefined;
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("vydra/grok-imagine");
@@ -355,6 +361,7 @@ describe("image-generation runtime", () => {
         seenRequest = {
           quality: req.quality,
           outputFormat: req.outputFormat,
+          background: req.background,
         };
         return {
           images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
@@ -373,15 +380,18 @@ describe("image-generation runtime", () => {
       prompt: "draw a cat",
       quality: "low",
       outputFormat: "jpeg",
+      background: "transparent",
     });
 
     expect(seenRequest).toEqual({
       quality: undefined,
       outputFormat: undefined,
+      background: undefined,
     });
     expect(result.ignoredOverrides).toEqual([
       { key: "quality", value: "low" },
       { key: "outputFormat", value: "jpeg" },
+      { key: "background", value: "transparent" },
     ]);
   });
 

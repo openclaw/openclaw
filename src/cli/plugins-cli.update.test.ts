@@ -12,6 +12,7 @@ import {
   updateNpmInstalledHookPacks,
   updateNpmInstalledPlugins,
   writeConfigFile,
+  writePersistedPluginInstallLedger,
 } from "./plugins-cli-test-helpers.js";
 
 function createTrackedPluginConfig(params: {
@@ -210,9 +211,10 @@ describe("plugins cli update", () => {
         dryRun: false,
       }),
     );
-    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(writePersistedPluginInstallLedger).toHaveBeenCalledWith(nextConfig.plugins?.installs);
+    expect(writeConfigFile).toHaveBeenCalledWith({});
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: nextConfig,
+      config: {},
       reason: "source-changed",
     });
     expect(

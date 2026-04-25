@@ -77,6 +77,7 @@ export async function generateImage(
         resolution: params.resolution,
         quality: params.quality,
         outputFormat: params.outputFormat,
+        background: params.background,
         inputImages: params.inputImages,
       });
       const result: ImageGenerationResult = await provider.generateImage({
@@ -92,6 +93,7 @@ export async function generateImage(
         resolution: sanitized.resolution,
         quality: sanitized.quality,
         outputFormat: sanitized.outputFormat,
+        background: sanitized.background,
         inputImages: params.inputImages,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         providerOptions: params.providerOptions,

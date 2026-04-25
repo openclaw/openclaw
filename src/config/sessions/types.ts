@@ -58,6 +58,8 @@ export type AcpSessionRuntimeOptions = {
   runtimeMode?: string;
   /** ACP runtime config option: model id. */
   model?: string;
+  /** ACP runtime config option: thinking/reasoning effort. */
+  thinking?: string;
   /** Working directory override for ACP session turns. */
   cwd?: string;
   /** ACP runtime config option: permission profile id. */

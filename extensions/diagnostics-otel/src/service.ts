@@ -52,6 +52,12 @@ const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "cons
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 const OTEL_SEMCONV_STABILITY_OPT_IN_ENV = "OTEL_SEMCONV_STABILITY_OPT_IN";
 const GEN_AI_LATEST_EXPERIMENTAL_OPT_IN = "gen_ai_latest_experimental";
+const GEN_AI_TOKEN_USAGE_BUCKETS = [
+  1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864,
+];
+const GEN_AI_OPERATION_DURATION_BUCKETS = [
+  0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
+];
 
 type OtelContentCapturePolicy = {
   inputMessages: boolean;
@@ -171,17 +177,41 @@ function genAiOperationName(
   return "chat";
 }
 
+function positiveFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function assignPositiveNumberAttr(
+  attrs: Record<string, string | number>,
+  key: string,
+  value: number | undefined,
+): void {
+  const normalized = positiveFiniteNumber(value);
+  if (normalized !== undefined) {
+    attrs[key] = normalized;
+  }
+}
+
+function assignGenAiSpanIdentityAttrs(
+  attrs: Record<string, string | number | boolean>,
+  input: { api?: string; model?: string; provider?: string },
+): void {
+  if (emitLatestGenAiSemconv()) {
+    attrs["gen_ai.provider.name"] = lowCardinalityAttr(input.provider);
+  } else {
+    attrs["gen_ai.system"] = lowCardinalityAttr(input.provider);
+  }
+  if (input.model) {
+    attrs["gen_ai.request.model"] = lowCardinalityAttr(input.model);
+  }
+  attrs["gen_ai.operation.name"] = genAiOperationName(input.api);
+}
+
 function assignGenAiModelCallAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: ModelCallLifecycleDiagnosticEvent,
 ): void {
-  if (emitLatestGenAiSemconv()) {
-    attrs["gen_ai.provider.name"] = evt.provider;
-  } else {
-    attrs["gen_ai.system"] = evt.provider;
-  }
-  attrs["gen_ai.request.model"] = evt.model;
-  attrs["gen_ai.operation.name"] = genAiOperationName(evt.api);
+  assignGenAiSpanIdentityAttrs(attrs, evt);
 }
 
 function addUpstreamRequestIdSpanEvent(
@@ -575,6 +605,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Token usage by type",
       });
+      const genAiTokenUsageHistogram = meter.createHistogram("gen_ai.client.token.usage", {
+        unit: "{token}",
+        description: "Number of input and output tokens used by GenAI client operations",
+        advice: {
+          explicitBucketBoundaries: GEN_AI_TOKEN_USAGE_BUCKETS,
+        },
+      });
+      const genAiOperationDurationHistogram = meter.createHistogram(
+        "gen_ai.client.operation.duration",
+        {
+          unit: "s",
+          description: "GenAI client operation duration",
+          advice: {
+            explicitBucketBoundaries: GEN_AI_OPERATION_DURATION_BUCKETS,
+          },
+        },
+      );
       const costCounter = meter.createCounter("openclaw.cost.usd", {
         unit: "1",
         description: "Estimated model cost (USD)",
@@ -657,6 +704,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Run attempts",
       });
+      const toolLoopCounter = meter.createCounter("openclaw.tool.loop", {
+        unit: "1",
+        description: "Detected repetitive tool-call loop events",
+      });
       const modelCallDurationHistogram = meter.createHistogram("openclaw.model_call.duration_ms", {
         unit: "ms",
         description: "Model call duration",
@@ -671,6 +722,33 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
         unit: "ms",
         description: "Exec process duration",
+      });
+      const memoryRssHistogram = meter.createHistogram("openclaw.memory.rss_bytes", {
+        unit: "By",
+        description: "Resident set size reported by diagnostic memory samples",
+      });
+      const memoryHeapUsedHistogram = meter.createHistogram("openclaw.memory.heap_used_bytes", {
+        unit: "By",
+        description: "Heap used bytes reported by diagnostic memory samples",
+      });
+      const memoryHeapTotalHistogram = meter.createHistogram("openclaw.memory.heap_total_bytes", {
+        unit: "By",
+        description: "Heap total bytes reported by diagnostic memory samples",
+      });
+      const memoryExternalHistogram = meter.createHistogram("openclaw.memory.external_bytes", {
+        unit: "By",
+        description: "External memory bytes reported by diagnostic memory samples",
+      });
+      const memoryArrayBuffersHistogram = meter.createHistogram(
+        "openclaw.memory.array_buffers_bytes",
+        {
+          unit: "By",
+          description: "ArrayBuffer bytes reported by diagnostic memory samples",
+        },
+      );
+      const memoryPressureCounter = meter.createCounter("openclaw.memory.pressure", {
+        unit: "1",
+        description: "Diagnostic memory pressure events",
       });
 
       let recordLogRecord:
@@ -823,13 +901,26 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.provider": evt.provider ?? "unknown",
           "openclaw.model": evt.model ?? "unknown",
         };
+        const genAiAttrs: Record<string, string> = {
+          "gen_ai.operation.name": "chat",
+          "gen_ai.provider.name": lowCardinalityAttr(evt.provider),
+          "gen_ai.request.model": lowCardinalityAttr(evt.model),
+        };
 
         const usage = evt.usage;
         if (usage.input) {
           tokensCounter.add(usage.input, { ...attrs, "openclaw.token": "input" });
+          genAiTokenUsageHistogram.record(usage.input, {
+            ...genAiAttrs,
+            "gen_ai.token.type": "input",
+          });
         }
         if (usage.output) {
           tokensCounter.add(usage.output, { ...attrs, "openclaw.token": "output" });
+          genAiTokenUsageHistogram.record(usage.output, {
+            ...genAiAttrs,
+            "gen_ai.token.type": "output",
+          });
         }
         if (usage.cacheRead) {
           tokensCounter.add(usage.cacheRead, { ...attrs, "openclaw.token": "cache_read" });
@@ -866,6 +957,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (!tracesEnabled) {
           return;
         }
+        const genAiInputTokens =
+          usage.promptTokens ??
+          (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
         const spanAttrs: Record<string, string | number> = {
           ...attrs,
           "openclaw.tokens.input": usage.input ?? 0,
@@ -874,6 +968,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
         };
+        assignGenAiSpanIdentityAttrs(spanAttrs, evt);
+        assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
+        assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
+        assignPositiveNumberAttr(
+          spanAttrs,
+          "gen_ai.usage.cache_read.input_tokens",
+          usage.cacheRead,
+        );
+        assignPositiveNumberAttr(
+          spanAttrs,
+          "gen_ai.usage.cache_creation.input_tokens",
+          usage.cacheWrite,
+        );
 
         const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs, {
           parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
@@ -1093,6 +1200,94 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         runAttemptCounter.add(1, { "openclaw.attempt": evt.attempt });
       };
 
+      const toolLoopAttrs = (
+        evt: Extract<DiagnosticEventPayload, { type: "tool.loop" }>,
+      ): Record<string, string | number> => ({
+        "openclaw.toolName": lowCardinalityAttr(evt.toolName, "tool"),
+        "openclaw.loop.level": evt.level,
+        "openclaw.loop.action": evt.action,
+        "openclaw.loop.detector": evt.detector,
+        "openclaw.loop.count": evt.count,
+        ...(evt.pairedToolName
+          ? { "openclaw.loop.paired_tool": lowCardinalityAttr(evt.pairedToolName, "tool") }
+          : {}),
+      });
+
+      const recordToolLoop = (evt: Extract<DiagnosticEventPayload, { type: "tool.loop" }>) => {
+        const attrs = toolLoopAttrs(evt);
+        toolLoopCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = spanWithDuration("openclaw.tool.loop", attrs, 0, { endTimeMs: evt.ts });
+        if (evt.level === "critical" || evt.action === "block") {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: `${evt.detector}:${evt.action}`,
+          });
+        }
+        span.end(evt.ts);
+      };
+
+      const recordMemoryUsageMetrics = (
+        evt: Extract<
+          DiagnosticEventPayload,
+          { type: "diagnostic.memory.sample" | "diagnostic.memory.pressure" }
+        >,
+        attrs: Record<string, string> = {},
+      ) => {
+        memoryRssHistogram.record(evt.memory.rssBytes, attrs);
+        memoryHeapUsedHistogram.record(evt.memory.heapUsedBytes, attrs);
+        memoryHeapTotalHistogram.record(evt.memory.heapTotalBytes, attrs);
+        memoryExternalHistogram.record(evt.memory.externalBytes, attrs);
+        memoryArrayBuffersHistogram.record(evt.memory.arrayBuffersBytes, attrs);
+      };
+
+      const recordMemorySample = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>,
+      ) => {
+        recordMemoryUsageMetrics(evt);
+      };
+
+      const recordMemoryPressure = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.pressure" }>,
+      ) => {
+        const attrs = {
+          "openclaw.memory.level": evt.level,
+          "openclaw.memory.reason": evt.reason,
+        };
+        memoryPressureCounter.add(1, attrs);
+        recordMemoryUsageMetrics(evt, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          ...attrs,
+          "openclaw.memory.rss_bytes": evt.memory.rssBytes,
+          "openclaw.memory.heap_used_bytes": evt.memory.heapUsedBytes,
+          "openclaw.memory.heap_total_bytes": evt.memory.heapTotalBytes,
+          "openclaw.memory.external_bytes": evt.memory.externalBytes,
+          "openclaw.memory.array_buffers_bytes": evt.memory.arrayBuffersBytes,
+          ...(evt.thresholdBytes !== undefined
+            ? { "openclaw.memory.threshold_bytes": evt.thresholdBytes }
+            : {}),
+          ...(evt.rssGrowthBytes !== undefined
+            ? { "openclaw.memory.rss_growth_bytes": evt.rssGrowthBytes }
+            : {}),
+          ...(evt.windowMs !== undefined ? { "openclaw.memory.window_ms": evt.windowMs } : {}),
+        };
+        const span = spanWithDuration("openclaw.memory.pressure", spanAttrs, 0, {
+          endTimeMs: evt.ts,
+        });
+        if (evt.level === "critical") {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: evt.reason,
+          });
+        }
+        span.end(evt.ts);
+      };
+
       const recordRunCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
         metadata: DiagnosticEventMetadata,
@@ -1165,12 +1360,25 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         "openclaw.api": lowCardinalityAttr(evt.api),
         "openclaw.transport": lowCardinalityAttr(evt.transport),
       });
+      const genAiModelCallMetricAttrs = (
+        evt: ModelCallLifecycleDiagnosticEvent,
+        errorType?: string,
+      ) => ({
+        "gen_ai.operation.name": genAiOperationName(evt.api),
+        "gen_ai.provider.name": lowCardinalityAttr(evt.provider),
+        "gen_ai.request.model": lowCardinalityAttr(evt.model),
+        ...(errorType ? { "error.type": errorType } : {}),
+      });
 
       const recordModelCallCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" }>,
         metadata: DiagnosticEventMetadata,
       ) => {
         modelCallDurationHistogram.record(evt.durationMs, modelCallMetricAttrs(evt));
+        genAiOperationDurationHistogram.record(
+          evt.durationMs / 1000,
+          genAiModelCallMetricAttrs(evt),
+        );
         if (!tracesEnabled) {
           return;
         }
@@ -1202,18 +1410,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "model.call.error" }>,
         metadata: DiagnosticEventMetadata,
       ) => {
+        const errorType = lowCardinalityAttr(evt.errorCategory, "other");
         modelCallDurationHistogram.record(evt.durationMs, {
           ...modelCallMetricAttrs(evt),
-          "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other"),
+          "openclaw.errorCategory": errorType,
         });
+        genAiOperationDurationHistogram.record(
+          evt.durationMs / 1000,
+          genAiModelCallMetricAttrs(evt, errorType),
+        );
         if (!tracesEnabled) {
           return;
         }
         const spanAttrs: Record<string, string | number | boolean> = {
           "openclaw.provider": evt.provider,
           "openclaw.model": evt.model,
-          "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other"),
-          "error.type": lowCardinalityAttr(evt.errorCategory, "other"),
+          "openclaw.errorCategory": errorType,
+          "error.type": errorType,
         };
         assignGenAiModelCallAttrs(spanAttrs, evt);
         if (evt.api) {
@@ -1435,11 +1648,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordLogRecord?.(evt, metadata);
               return;
             case "tool.loop":
+              recordToolLoop(evt);
+              return;
+            case "diagnostic.memory.sample":
+              recordMemorySample(evt);
+              return;
+            case "diagnostic.memory.pressure":
+              recordMemoryPressure(evt);
+              return;
             case "tool.execution.started":
             case "run.started":
             case "model.call.started":
-            case "diagnostic.memory.sample":
-            case "diagnostic.memory.pressure":
             case "payload.large":
               return;
           }

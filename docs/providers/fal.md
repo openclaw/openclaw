@@ -50,10 +50,15 @@ The bundled `fal` image-generation provider defaults to
 | Size overrides | Supported                  |
 | Aspect ratio   | Supported                  |
 | Resolution     | Supported                  |
+| Output format  | `png` or `jpeg`            |
 
 <Warning>
 The fal image edit endpoint does **not** support `aspectRatio` overrides.
 </Warning>
+
+Use `outputFormat: "png"` when you want PNG output. fal does not declare an
+explicit transparent-background control in OpenClaw, so `background:
+"transparent"` is reported as an ignored override for fal models.
 
 To use fal as the default image provider:
 

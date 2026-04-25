@@ -53,6 +53,12 @@ Restart the Gateway afterwards.
 
 Set config under `plugins.entries.voice-call.config`:
 
+If `enabled` is true but the selected provider is missing credentials, Gateway
+startup logs a setup-incomplete warning with the missing keys and skips starting
+the runtime. Run `openclaw voicecall setup` to see the same readiness details.
+Commands, RPC calls, and agent tools still return the exact missing provider
+configuration when used.
+
 ```json5
 {
   plugins: {
