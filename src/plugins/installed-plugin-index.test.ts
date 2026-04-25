@@ -192,6 +192,7 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]?.packageJsonHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(index.plugins[0]?.packageJsonPath).toBe(path.join(fixture.rootDir, "package.json"));
     expect(index.plugins[0]?.installRecord).toBeUndefined();
+    expect(index.plugins[0]?.installRecordHash).toBeUndefined();
 
     const contributions = resolveInstalledPluginContributions(index);
     expect(contributions.providers.get("demo")).toEqual(["demo"]);
@@ -247,6 +248,39 @@ describe("installed plugin index", () => {
       },
     });
     expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("does not treat package install intent as source invalidation", () => {
+    const fixture = createRichPluginFixture();
+    const previous = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              resolvedName: "@vendor/demo-plugin",
+              resolvedVersion: "1.2.3",
+              resolvedSpec: "@vendor/demo-plugin@1.2.3",
+              integrity: "sha512-installed",
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+    const current = {
+      ...previous,
+      plugins: previous.plugins.map((plugin) => ({
+        ...plugin,
+        packageInstall: {
+          ...plugin.packageInstall,
+          warnings: ["npm-spec-missing-integrity" as const],
+        },
+      })),
+    };
+
+    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([]);
   });
 
   it("treats install ledger changes as source invalidation", () => {
