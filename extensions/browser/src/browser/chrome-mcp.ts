@@ -5,10 +5,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asRecord } from "../record-shared.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.types.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
+
+const log = createSubsystemLogger("browser").child("chrome-mcp");
 
 type ChromeMcpStructuredPage = {
   id: number;
@@ -44,6 +47,10 @@ const DEFAULT_CHROME_MCP_ARGS = [
 ];
 const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
 const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
+const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
+const CHROME_MCP_STDERR_MAX_BYTES = 8 * 1024;
+const STALE_SELECTED_PAGE_ERROR =
+  "The selected page has been closed. Call list_pages to see open pages.";
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
@@ -151,6 +158,10 @@ function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): str
   return message || `Chrome MCP tool "${name}" failed.`;
 }
 
+function shouldReconnectForToolError(name: string, message: string): boolean {
+  return name === "list_pages" && message.includes(STALE_SELECTED_PAGE_ERROR);
+}
+
 function extractJsonMessage(result: ChromeMcpToolResult): unknown {
   const candidates = [extractMessageText(result), ...extractTextContent(result)].filter((text) =>
     text.trim(),
@@ -218,6 +229,52 @@ export function buildChromeMcpArgs(userDataDir?: string): string[] {
     : [...DEFAULT_CHROME_MCP_ARGS];
 }
 
+function drainStderr(transport: StdioClientTransport): () => string {
+  const stream = transport.stderr;
+  if (!stream) {
+    return () => "";
+  }
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  stream.on("data", (chunk: Buffer | string) => {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const capped =
+      buffer.length > CHROME_MCP_STDERR_MAX_BYTES
+        ? buffer.subarray(buffer.length - CHROME_MCP_STDERR_MAX_BYTES)
+        : buffer;
+    chunks.push(capped);
+    totalBytes += capped.length;
+    while (totalBytes > CHROME_MCP_STDERR_MAX_BYTES && chunks.length > 1) {
+      const dropped = chunks.shift();
+      if (dropped) {
+        totalBytes -= dropped.length;
+      }
+    }
+  });
+  stream.on("error", () => {});
+  return () => Buffer.concat(chunks).toString("utf8").trim().slice(-CHROME_MCP_STDERR_MAX_BYTES);
+}
+
+async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Chrome MCP handshake timed out")),
+          CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function createRealSession(
   profileName: string,
   userDataDir?: string,
@@ -235,25 +292,38 @@ async function createRealSession(
     {},
   );
 
+  let getStderr = () => "";
   const ready = (async () => {
     try {
-      await client.connect(transport);
-      const tools = await client.listTools();
-      if (!tools.tools.some((tool) => tool.name === "list_pages")) {
-        throw new Error("Chrome MCP server did not expose the expected navigation tools.");
-      }
+      await withChromeMcpHandshakeTimeout(
+        (async () => {
+          await client.connect(transport);
+          getStderr = drainStderr(transport);
+          const tools = await client.listTools();
+          if (!tools.tools.some((tool) => tool.name === "list_pages")) {
+            throw new Error("Chrome MCP server did not expose the expected navigation tools.");
+          }
+        })(),
+      );
     } catch (err) {
       await client.close().catch(() => {});
+      const stderr = getStderr();
+      if (stderr) {
+        log.warn(
+          `Chrome MCP attach failed for profile "${profileName}". Subprocess stderr:\n${stderr}`,
+        );
+      }
       const targetLabel = userDataDir
         ? `the configured Chromium user data dir (${userDataDir})`
         : "Google Chrome's default profile";
       throw new BrowserProfileUnavailableError(
         `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
           `Make sure ${targetLabel} is running locally with remote debugging enabled. ` +
-          `Details: ${String(err)}`,
+          `Details: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   })();
+  ready.catch(() => {});
 
   return {
     client,
@@ -313,72 +383,87 @@ async function callTool(
   opts?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<ChromeMcpToolResult> {
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
-  const session = await getSession(profileName, userDataDir);
   const timeoutMs = opts?.timeoutMs;
   const signal = opts?.signal;
   if (signal?.aborted) {
     throw signal.reason ?? new Error("aborted");
   }
 
-  const rawCall = session.client.callTool({
-    name,
-    arguments: args,
-  }) as Promise<ChromeMcpToolResult>;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const session = await getSession(profileName, userDataDir);
+    const rawCall = session.client.callTool({
+      name,
+      arguments: args,
+    }) as Promise<ChromeMcpToolResult>;
 
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-  const racers: Array<Promise<ChromeMcpToolResult> | Promise<never>> = [rawCall];
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let abortListener: (() => void) | undefined;
+    const racers: Array<Promise<ChromeMcpToolResult> | Promise<never>> = [rawCall];
 
-  if (timeoutMs !== undefined && timeoutMs > 0) {
-    racers.push(
-      new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(
-            new Error(
-              `Chrome MCP "${name}" timed out after ${timeoutMs}ms. Session reset for reconnect.`,
-            ),
-          );
-        }, timeoutMs);
-      }),
-    );
-  }
-
-  if (signal) {
-    racers.push(
-      new Promise<never>((_, reject) => {
-        abortListener = () => reject(signal.reason ?? new Error("aborted"));
-        signal.addEventListener("abort", abortListener, { once: true });
-      }),
-    );
-  }
-
-  let result: ChromeMcpToolResult;
-  try {
-    result = racers.length === 1 ? await rawCall : await Promise.race(racers);
-  } catch (err) {
-    void rawCall.catch(() => {});
-    // Transport/connection error, timeout, or abort: tear down session so it reconnects.
-    // Transport-identity check prevents clobbering a replacement session created concurrently.
-    const cur = sessions.get(cacheKey);
-    if (cur?.transport === session.transport) {
-      sessions.delete(cacheKey);
-      await session.client.close().catch(() => {});
+    if (timeoutMs !== undefined && timeoutMs > 0) {
+      racers.push(
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(
+              new Error(
+                `Chrome MCP "${name}" timed out after ${timeoutMs}ms. Session reset for reconnect.`,
+              ),
+            );
+          }, timeoutMs);
+        }),
+      );
     }
-    throw err;
-  } finally {
-    if (timeoutHandle !== undefined) {
-      clearTimeout(timeoutHandle);
+
+    if (signal) {
+      racers.push(
+        new Promise<never>((_, reject) => {
+          abortListener = () => reject(signal.reason ?? new Error("aborted"));
+          signal.addEventListener("abort", abortListener, { once: true });
+        }),
+      );
     }
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
+
+    let result: ChromeMcpToolResult;
+    try {
+      result = racers.length === 1 ? await rawCall : await Promise.race(racers);
+    } catch (err) {
+      void rawCall.catch(() => {});
+      // Transport/connection error, timeout, or abort: tear down session so it reconnects.
+      // Transport-identity check prevents clobbering a replacement session created concurrently.
+      const cur = sessions.get(cacheKey);
+      if (cur?.transport === session.transport) {
+        sessions.delete(cacheKey);
+        await session.client.close().catch(() => {});
+      }
+      throw err;
+    } finally {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle);
+      }
+      if (signal && abortListener) {
+        signal.removeEventListener("abort", abortListener);
+      }
     }
+    // Tool-level errors (element not found, script error, etc.) don't indicate a
+    // broken connection. A stale selected-page error does poison the Chrome MCP
+    // session, so reconnect and retry that one once.
+    if (result.isError) {
+      const message = extractToolErrorMessage(result, name);
+      if (shouldReconnectForToolError(name, message)) {
+        const cur = sessions.get(cacheKey);
+        if (cur?.transport === session.transport) {
+          sessions.delete(cacheKey);
+          await session.client.close().catch(() => {});
+        }
+        if (attempt === 0) {
+          continue;
+        }
+      }
+      throw new Error(message);
+    }
+    return result;
   }
-  // Tool-level errors (element not found, script error, etc.) don't indicate a
-  // broken connection — don't tear down the session for these.
-  if (result.isError) {
-    throw new Error(extractToolErrorMessage(result, name));
-  }
-  return result;
+  throw new Error(`Chrome MCP tool "${name}" failed after reconnect.`);
 }
 
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
