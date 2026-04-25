@@ -117,6 +117,9 @@ Docs: https://docs.openclaw.ai
 - Plugins/startup: remove ownerless bundled runtime-dependency install locks
   after a short grace window and include lock owner details when startup times
   out waiting for a plugin runtime-deps lock.
+- Plugins/install: anchor bundled runtime-dependency npm installs with an
+  OpenClaw-owned package manifest so Linux updates cannot accidentally write to
+  a parent `$HOME/node_modules` tree. Fixes #71730.
 - Live tests/voice: accept common STT variants for OpenClaw and ElevenLabs
   brand names so provider smoke tests fail on real regressions rather than
   equivalent transcripts.

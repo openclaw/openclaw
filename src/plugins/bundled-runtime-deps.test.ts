@@ -222,6 +222,44 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("anchors non-isolated external install roots with a package manifest", () => {
+    const parentRoot = makeTempDir();
+    const installRoot = path.join(parentRoot, ".openclaw", "plugin-runtime-deps", "openclaw-test");
+    fs.mkdirSync(path.join(parentRoot, "node_modules", "@grammyjs"), { recursive: true });
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      expect(cwd).toBe(installRoot);
+      expect(JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"))).toEqual({
+        name: "openclaw-runtime-deps-install",
+        private: true,
+      });
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["@grammyjs/runner@^2.0.3"],
+      env: {
+        HOME: parentRoot,
+      },
+    });
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        cwd: installRoot,
+      }),
+    );
+  });
+
   it("uses an isolated execution root and copies node_modules back when requested", () => {
     const installRoot = makeTempDir();
     const installExecutionRoot = makeTempDir();
