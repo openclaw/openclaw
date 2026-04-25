@@ -16,8 +16,8 @@ import {
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
 import {
-  normalizeWhatsAppLoadedMedia,
   normalizeWhatsAppPayloadText,
+  prepareWhatsAppOutboundMedia,
   resolveWhatsAppOutboundMediaUrls,
 } from "./outbound-media-contract.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
@@ -67,6 +67,7 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
+    audioAsVoice?: boolean;
     accountId?: string;
     quotedMessageKey?: {
       id: string;
@@ -115,7 +116,7 @@ export async function sendMessageWhatsApp(
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
     if (primaryMediaUrl) {
-      const media = normalizeWhatsAppLoadedMedia(
+      const media = await prepareWhatsAppOutboundMedia(
         await loadOutboundMediaFromUrl(primaryMediaUrl, {
           maxBytes: resolveWhatsAppMediaMaxBytes(account),
           mediaAccess: options.mediaAccess,

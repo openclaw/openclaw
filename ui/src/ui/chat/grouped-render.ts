@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { DEFAULT_ASSISTANT_AVATAR, type AssistantIdentity } from "../assistant-identity.ts";
+import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -20,7 +20,12 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../user-identity.ts";
-import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
+import {
+  assistantAvatarFallbackUrl,
+  isRenderableControlUiAvatarUrl,
+  resolveAssistantTextAvatar,
+} from "../views/agents-utils.ts";
+export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -48,6 +53,53 @@ type AssistantAttachmentAvailability =
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+
+export type ChatTimestampDisplay = {
+  label: string;
+  title: string;
+  dateTime: string;
+};
+
+export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return {
+      label: "Unknown date",
+      title: "Unknown date",
+      dateTime: "",
+    };
+  }
+
+  return {
+    label: date.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+    title: date.toLocaleString([], {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }),
+    dateTime: date.toISOString(),
+  };
+}
+
+function renderChatTimestamp(timestamp: number) {
+  const display = formatChatTimestampForDisplay(timestamp);
+  return html`
+    <time class="chat-group-timestamp" datetime=${display.dateTime} title=${display.title}>
+      ${display.label}
+    </time>
+  `;
+}
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
   assistantAttachmentAvailabilityCache.clear();
@@ -238,10 +290,6 @@ export function renderStreamingGroup(
   basePath?: string,
   authToken?: string | null,
 ) {
-  const timestamp = new Date(startedAt).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
   const name = assistant?.name ?? "Assistant";
 
   return html`
@@ -260,7 +308,7 @@ export function renderStreamingGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
-          <span class="chat-group-timestamp">${timestamp}</span>
+          ${renderChatTimestamp(startedAt)}
         </div>
       </div>
     </div>
@@ -316,10 +364,6 @@ export function renderMessageGroup(
         : normalizedRole === "tool"
           ? "tool"
           : "other";
-  const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
@@ -365,8 +409,7 @@ export function renderMessageGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
-          <span class="chat-group-timestamp">${timestamp}</span>
-          ${renderMessageMeta(meta)}
+          ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
           ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
@@ -495,7 +538,15 @@ function renderMessageMeta(meta: GroupMeta | null) {
     return nothing;
   }
 
-  return html`<span class="msg-meta">${parts}</span>`;
+  return html`
+    <details class="msg-meta">
+      <summary class="msg-meta__summary" title="Show message context details">
+        <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
+        <span>Context</span>
+      </summary>
+      <span class="msg-meta__details">${parts}</span>
+    </details>
+  `;
 }
 
 function extractGroupText(group: MessageGroup): string {
@@ -639,6 +690,7 @@ function renderAvatar(
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
+  const assistantFallbackAvatar = assistantAvatarFallbackUrl(basePath ?? "");
   const userName = resolveLocalUserName(user);
   const userAvatarUrl = resolveLocalUserAvatarUrl(user);
   const userAvatarText = resolveLocalUserAvatarText(user);
@@ -703,7 +755,7 @@ function renderAvatar(
       if (authToken?.trim() && assistantAvatar.startsWith("/")) {
         return html`<img
           class="chat-avatar ${className} chat-avatar--logo"
-          src="${agentLogoUrl(basePath ?? "")}"
+          src="${assistantFallbackAvatar}"
           alt="${assistantName}"
         />`;
       }
@@ -720,17 +772,15 @@ function renderAvatar(
     }
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
-      src="${agentLogoUrl(basePath ?? "")}"
+      src="${assistantFallbackAvatar}"
       alt="${assistantName}"
     />`;
   }
 
-  /* Assistant with no custom avatar: use logo when basePath available */
-  if (normalized === "assistant" && basePath) {
-    const logoUrl = agentLogoUrl(basePath);
+  if (normalized === "assistant") {
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
-      src="${logoUrl}"
+      src="${assistantFallbackAvatar}"
       alt="${assistantName}"
     />`;
   }
@@ -741,27 +791,6 @@ function renderAvatar(
 function isAvatarUrl(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
-}
-
-const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
-
-export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
-    return null;
-  }
-  if (isAvatarUrl(trimmed)) {
-    return null;
-  }
-  if (
-    trimmed.length > 8 ||
-    /\s/.test(trimmed) ||
-    /[\\/.:]/.test(trimmed) ||
-    UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
-  ) {
-    return null;
-  }
-  return trimmed;
 }
 
 function resolveRenderableMessageImages(
@@ -1404,7 +1433,13 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
+  const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const bubbleClasses = [
+    "chat-bubble",
+    isToolMessage ? "chat-bubble--tool-shell" : "",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -1421,7 +1456,6 @@ function renderGroupedMessage(
     return nothing;
   }
 
-  const isToolMessage = normalizedRole === "tool" || isToolResult;
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];

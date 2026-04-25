@@ -12,6 +12,21 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import { renderChatSessionSelect } from "./session-controls.ts";
 
+const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
+  vi.fn(async (state: AppViewState) => {
+    const agentId = state.agentsSelectedId ?? "main";
+    const sessionKey = state.sessionKey;
+    await state.client?.request("tools.effective", { agentId, sessionKey });
+    const override = state.chatModelOverrides[sessionKey];
+    state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override?.value ?? "(default)"}`;
+    state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
+  }),
+);
+
+vi.mock("../controllers/agents.ts", () => ({
+  refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
+}));
+
 function createChatHeaderState(
   overrides: {
     model?: string | null;
@@ -193,12 +208,16 @@ describe("chat session controls", () => {
 
     modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
+    await vi.waitFor(
+      () => {
+        expect(request).toHaveBeenCalledWith("tools.effective", {
+          agentId: "main",
+          sessionKey: "main",
+        });
+      },
+      { interval: 1, timeout: 100 },
+    );
 
-    expect(request).toHaveBeenCalledWith("tools.effective", {
-      agentId: "main",
-      sessionKey: "main",
-    });
     expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
@@ -272,5 +291,36 @@ describe("chat session controls", () => {
     );
     expect(rerendered?.value).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
+  });
+
+  it("uses default thinking options when the active session is absent", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai-codex",
+      defaultsThinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "adaptive", label: "adaptive" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "maximum" },
+      ],
+      omitSessionFromList: true,
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    const options = [...(thinkingSelect?.options ?? [])].map((option) => option.value);
+
+    expect(options).toContain("adaptive");
+    expect(options).toContain("xhigh");
+    expect(options).toContain("max");
+    expect(
+      [...(thinkingSelect?.options ?? [])]
+        .find((option) => option.value === "max")
+        ?.textContent?.trim(),
+    ).toBe("maximum");
   });
 });

@@ -31,7 +31,7 @@ describe("tokenjuice bundled plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers tokenjuice tool result middleware for Pi and Codex app-server", () => {
+  it("registers tokenjuice tool result middleware for Pi and Codex runtimes", () => {
     const registerAgentToolResultMiddleware = vi.fn();
 
     plugin.register(
@@ -49,7 +49,7 @@ describe("tokenjuice bundled plugin", () => {
     expect(createTokenjuiceOpenClawEmbeddedExtension).toHaveBeenCalledTimes(1);
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
     expect(registerAgentToolResultMiddleware).toHaveBeenCalledWith(expect.any(Function), {
-      harnesses: ["pi", "codex-app-server"],
+      runtimes: ["pi", "codex"],
     });
   });
 });

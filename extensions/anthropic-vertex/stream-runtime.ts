@@ -1,6 +1,10 @@
-import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
+import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamAnthropic, type AnthropicOptions, type Model } from "@mariozechner/pi-ai";
+import {
+  streamAnthropic as streamAnthropicDefault,
+  type AnthropicOptions,
+  type Model,
+} from "@mariozechner/pi-ai";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -9,6 +13,17 @@ import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } f
 
 type AnthropicVertexEffort = NonNullable<AnthropicOptions["effort"]>;
 type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
+type AnthropicVertexClientOptions = ConstructorParameters<typeof AnthropicVertexSdk>[0];
+
+export type AnthropicVertexStreamDeps = {
+  AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;
+  streamAnthropic: typeof streamAnthropicDefault;
+};
+
+const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
+  AnthropicVertex: AnthropicVertexSdk as AnthropicVertexStreamDeps["AnthropicVertex"],
+  streamAnthropic: streamAnthropicDefault,
+};
 
 function isClaudeOpus47Model(modelId: string): boolean {
   return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
@@ -104,8 +119,9 @@ export function createAnthropicVertexStreamFn(
   projectId: string | undefined,
   region: string,
   baseURL?: string,
+  deps: AnthropicVertexStreamDeps = defaultAnthropicVertexStreamDeps,
 ): StreamFn {
-  const client = new AnthropicVertex({
+  const client = new deps.AnthropicVertex({
     region,
     ...(baseURL ? { baseURL } : {}),
     ...(projectId ? { projectId } : {}),
@@ -122,7 +138,7 @@ export function createAnthropicVertexStreamFn(
       requestedMaxTokens: options?.maxTokens,
     });
     const opts: AnthropicOptions = {
-      client: client as unknown as AnthropicOptions["client"],
+      client: client as AnthropicOptions["client"],
       temperature: options?.temperature,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,
@@ -157,7 +173,7 @@ export function createAnthropicVertexStreamFn(
       opts.thinkingEnabled = false;
     }
 
-    return streamAnthropic(transportModel, context, opts);
+    return deps.streamAnthropic(transportModel, context, opts);
   };
 }
 
@@ -187,6 +203,7 @@ function resolveAnthropicVertexSdkBaseUrl(baseUrl?: string): string | undefined 
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,
+  deps?: AnthropicVertexStreamDeps,
 ): StreamFn {
   return createAnthropicVertexStreamFn(
     resolveAnthropicVertexProjectId(env),
@@ -195,5 +212,6 @@ export function createAnthropicVertexStreamFnForModel(
       env,
     }),
     resolveAnthropicVertexSdkBaseUrl(model.baseUrl),
+    deps,
   );
 }

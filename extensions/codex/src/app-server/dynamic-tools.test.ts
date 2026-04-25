@@ -225,7 +225,7 @@ describe("createCodexDynamicToolBridge", () => {
       pluginName: "Tokenjuice",
       rawHandler: handler,
       handler,
-      harnesses: ["codex-app-server"],
+      runtimes: ["codex"],
       source: "test",
     });
     setActivePluginRegistry(registry);
@@ -253,7 +253,7 @@ describe("createCodexDynamicToolBridge", () => {
         toolName: "exec",
         args: { command: "git status" },
       }),
-      expect.objectContaining({ harness: "codex-app-server" }),
+      expect.objectContaining({ runtime: "codex" }),
     );
   });
 
@@ -265,7 +265,7 @@ describe("createCodexDynamicToolBridge", () => {
       pluginName: "Tokenjuice",
       rawHandler: handler,
       handler,
-      harnesses: ["codex-app-server"],
+      runtimes: ["codex"],
       source: "test",
     });
     setActivePluginRegistry(registry);
@@ -286,7 +286,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ isError: true }),
-      expect.objectContaining({ harness: "codex-app-server" }),
+      expect.objectContaining({ runtime: "codex" }),
     );
   });
 
@@ -308,7 +308,7 @@ describe("createCodexDynamicToolBridge", () => {
       pluginName: "Tokenjuice",
       rawHandler: handler,
       handler,
-      harnesses: ["codex-app-server"],
+      runtimes: ["codex"],
       source: "test",
     });
     setActivePluginRegistry(registry);
@@ -583,7 +583,7 @@ describe("createCodexDynamicToolBridge", () => {
       pluginName: "Tokenjuice",
       rawHandler: handler,
       handler,
-      harnesses: ["codex-app-server"],
+      runtimes: ["codex"],
       source: "test",
     });
     setActivePluginRegistry(registry);

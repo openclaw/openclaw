@@ -77,6 +77,8 @@ describe("realtime voice agent consult runtime", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "voice:15550001234",
+        sandboxSessionKey: "agent:main:voice:15550001234",
+        agentId: "main",
         messageProvider: "voice",
         lane: "voice",
         toolsAllow: ["read"],
@@ -85,6 +87,33 @@ describe("realtime voice agent consult runtime", () => {
         thinkLevel: "high",
         timeoutMs: 10_000,
         prompt: expect.stringContaining("Caller: Can you check this?"),
+      }),
+    );
+  });
+
+  it("scopes sandbox resolution to the configured consult agent", async () => {
+    const { runtime, runEmbeddedPiAgent } = createAgentRuntime();
+
+    await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      agentId: "voice",
+      sessionKey: "voice:15550001234",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-realtime-consult:call-1",
+      args: { question: "What should I say?" },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "voice:15550001234",
+        sandboxSessionKey: "agent:voice:voice:15550001234",
+        agentId: "voice",
       }),
     );
   });

@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import {
   getRegisteredAgentHarness,
   registerAgentHarness as registerGlobalAgentHarness,
@@ -7,6 +6,10 @@ import {
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import {
+  normalizeCommandDescriptorName,
+  sanitizeCommandDescriptorDescription,
+} from "../cli/program/command-descriptor-utils.js";
 import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
@@ -29,7 +32,10 @@ import {
 } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
-import { normalizeAgentToolResultMiddlewareHarnesses } from "./agent-tool-result-middleware.js";
+import {
+  normalizeAgentToolResultMiddlewareRuntimeIds,
+  normalizeAgentToolResultMiddlewareRuntimes,
+} from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
@@ -40,7 +46,6 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
-import { PI_EMBEDDED_EXTENSION_RUNTIME_ID } from "./embedded-extension-factory.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
@@ -226,69 +231,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registry.diagnostics.push(diag);
   };
 
-  const registerPiEmbeddedExtensionFactory = (
-    record: PluginRecord,
-    factory: Parameters<OpenClawPluginApi["registerEmbeddedExtensionFactory"]>[0],
-  ) => {
-    if (record.origin !== "bundled") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "only bundled plugins can register Pi embedded extension factories",
-      });
-      return;
-    }
-    if (
-      !(record.contracts?.embeddedExtensionFactories ?? []).includes(
-        PI_EMBEDDED_EXTENSION_RUNTIME_ID,
-      )
-    ) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message:
-          'plugin must declare contracts.embeddedExtensionFactories: ["pi"] to register Pi embedded extension factories',
-      });
-      return;
-    }
-    if (typeof (factory as unknown) !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "embedded extension factory must be a function",
-      });
-      return;
-    }
-    if (
-      registry.embeddedExtensionFactories.some(
-        (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
-      )
-    ) {
-      return;
-    }
-    const safeFactory: ExtensionFactory = async (pi) => {
-      try {
-        await factory(pi);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        registryParams.logger.warn(
-          `[plugins] embedded extension factory failed for ${record.id}: ${detail}`,
-        );
-      }
-    };
-    registry.embeddedExtensionFactories.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      rawFactory: factory,
-      factory: safeFactory,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
-  };
-
   const registerCodexAppServerExtensionFactory = (
     record: PluginRecord,
     factory: Parameters<OpenClawPluginApi["registerCodexAppServerExtensionFactory"]>[0],
@@ -375,18 +317,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const harnesses = normalizeAgentToolResultMiddlewareHarnesses(options);
-    if (harnesses.length === 0) {
+    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
+    if (runtimes.length === 0) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "agent tool result middleware must target at least one supported harness",
+        message: "agent tool result middleware must target at least one supported runtime",
       });
       return;
     }
-    const declared = record.contracts?.agentToolResultMiddleware ?? [];
-    const missing = harnesses.filter((harness) => !declared.includes(harness));
+    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
+      record.contracts?.agentToolResultMiddleware,
+    );
+    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
     if (missing.length > 0) {
       pushDiagnostic({
         level: "error",
@@ -400,7 +344,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      existing.harnesses = [...new Set([...existing.harnesses, ...harnesses])];
+      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
       return;
     }
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
@@ -418,7 +362,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       rawHandler: handler,
       handler: safeHandler,
-      harnesses,
+      runtimes,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1063,19 +1007,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registrar: OpenClawPluginCliRegistrar,
     opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
   ) => {
+    const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
+      const normalized = normalizeCommandDescriptorName(raw);
+      if (!normalized) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `invalid cli ${source} name: ${JSON.stringify(raw.trim())}`,
+        });
+      }
+      return normalized;
+    };
     const descriptors = (opts?.descriptors ?? [])
-      .map((descriptor) => ({
-        name: descriptor.name.trim(),
-        description: descriptor.description.trim(),
-        hasSubcommands: descriptor.hasSubcommands,
-      }))
-      .filter((descriptor) => descriptor.name && descriptor.description);
+      .map((descriptor) => {
+        const name = normalizeCommandRoot(descriptor.name, "descriptor");
+        const description = sanitizeCommandDescriptorDescription(descriptor.description);
+        return name && description
+          ? {
+              name,
+              description,
+              hasSubcommands: descriptor.hasSubcommands,
+            }
+          : null;
+      })
+      .filter(
+        (descriptor): descriptor is OpenClawPluginCliCommandDescriptor => descriptor !== null,
+      );
     const commands = [
       ...(opts?.commands ?? []),
       ...descriptors.map((descriptor) => descriptor.name),
     ]
-      .map((cmd) => cmd.trim())
-      .filter(Boolean);
+      .map((cmd) => normalizeCommandRoot(cmd, "command"))
+      .filter((command): command is string => command !== null);
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",
@@ -1579,9 +1543,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return;
                 }
                 registerCompactionProvider(provider, { ownerPluginId: record.id });
-              },
-              registerEmbeddedExtensionFactory: (factory) => {
-                registerPiEmbeddedExtensionFactory(record, factory);
               },
               registerCodexAppServerExtensionFactory: (factory) => {
                 registerCodexAppServerExtensionFactory(record, factory);

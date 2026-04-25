@@ -55,8 +55,10 @@ if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
 fi
 
 PROFILE_MOUNT=()
+PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  PROFILE_STATUS="$PROFILE_FILE"
 fi
 
 AUTH_DIRS=()
@@ -182,6 +184,7 @@ EOF
 echo "==> Run live model tests (profile keys)"
 echo "==> Target: src/agents/models.profiles.live.test.ts"
 echo "==> Profile env only: ${OPENCLAW_DOCKER_PROFILE_ENV_ONLY:-0}"
+echo "==> Profile file: $PROFILE_STATUS"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 DOCKER_RUN_ARGS=(docker run --rm -t \
