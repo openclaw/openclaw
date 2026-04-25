@@ -11,6 +11,7 @@ const CORE_TEST_CONFIGS = new Set([
 
 const CORE_PROD_CONFIGS = new Set(["tsconfig.core.json"]);
 const TSGO_SPARSE_SKIP_ENV_KEY = "OPENCLAW_TSGO_SPARSE_SKIP";
+const CORE_SPARSE_ROOTS = ["packages", "ui/src"];
 
 const CORE_PROD_REQUIRED_PATHS = [
   {
@@ -53,7 +54,12 @@ export function createSparseTsgoSkipEnv(baseEnv = process.env) {
 
 export function getSparseTsgoGuardError(
   args,
-  { cwd = process.cwd(), fileExists = fs.existsSync, isSparseCheckoutEnabled } = {},
+  {
+    cwd = process.cwd(),
+    fileExists = fs.existsSync,
+    isSparseCheckoutEnabled,
+    sparseCheckoutPatterns,
+  } = {},
 ) {
   const projectPath = readProjectFlag(args);
   const projectName = projectPath ? path.basename(projectPath) : null;
@@ -71,18 +77,31 @@ export function getSparseTsgoGuardError(
     return null;
   }
 
-  const missingPaths = getRequiredPathsForProject(projectName, cwd, fileExists).filter(
-    (relativePath) => !fileExists(path.join(cwd, relativePath)),
-  );
+  const sparsePatterns = sparseCheckoutPatterns ?? getSparseCheckoutPatterns({ cwd });
+  const missingPaths = [
+    ...getRequiredSparseRootsForProject(projectName).filter((relativePath) =>
+      sparsePatterns ? !isSparseRootCovered(relativePath, sparsePatterns) : false,
+    ),
+    ...getRequiredPathsForProject(projectName, cwd, fileExists).filter(
+      (relativePath) => !fileExists(path.join(cwd, relativePath)),
+    ),
+  ];
   if (missingPaths.length === 0) {
     return null;
   }
 
   return [
-    `${projectName} cannot be typechecked from this sparse checkout because tracked project inputs are missing:`,
+    `${projectName} cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:`,
     ...missingPaths.map((relativePath) => `- ${relativePath}`),
     "Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree.",
   ].join("\n");
+}
+
+function getRequiredSparseRootsForProject(projectName) {
+  if (CORE_PROD_CONFIGS.has(projectName) || CORE_TEST_CONFIGS.has(projectName)) {
+    return CORE_SPARSE_ROOTS;
+  }
+  return [];
 }
 
 function getRequiredPathsForProject(projectName, cwd, fileExists) {
@@ -115,6 +134,46 @@ function getGitBooleanConfig(name, { cwd }) {
   }
 
   return (result.stdout ?? "").trim() === "true";
+}
+
+function getSparseCheckoutPatterns({ cwd }) {
+  const result = spawnSync("git", ["sparse-checkout", "list"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: process.platform === "win32",
+  });
+
+  if (result.error || (result.status ?? 1) !== 0) {
+    return null;
+  }
+
+  return (result.stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isSparseRootCovered(relativeRoot, patterns) {
+  const root = normalizeSparsePattern(relativeRoot);
+  return patterns.some((pattern) => {
+    if (pattern.startsWith("!")) {
+      return false;
+    }
+
+    const normalized = normalizeSparsePattern(pattern);
+    return normalized === root || (normalized.length > 0 && root.startsWith(`${normalized}/`));
+  });
+}
+
+function normalizeSparsePattern(pattern) {
+  return pattern
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^!/, "")
+    .replace(/^\/+/, "")
+    .replace(/\/\*\*$/, "")
+    .replace(/\/+$/, "");
 }
 
 function readProjectFlag(args) {
