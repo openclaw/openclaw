@@ -517,6 +517,49 @@ describe("resolveMediaList", () => {
     expectAttachmentImageFallback({ result, attachment });
   });
 
+  it("skips attachments without a usable URL", async () => {
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [
+          {
+            id: "att-missing-url",
+            filename: "voice.ogg",
+            content_type: "audio/ogg",
+          },
+        ],
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([]);
+  });
+
+  it("classifies audio attachments by filename when content type is missing", async () => {
+    const attachment = {
+      id: "att-audio-fallback",
+      url: "https://cdn.discordapp.com/attachments/1/voice.ogg",
+      filename: "voice.ogg",
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: undefined,
+        placeholder: "<media:audio>",
+      },
+    ]);
+  });
+
   it("falls back to URL when saveMediaBuffer fails", async () => {
     const attachment = {
       id: "att-save-fail",
