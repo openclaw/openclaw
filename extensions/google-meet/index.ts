@@ -313,7 +313,7 @@ export default definePluginEntry({
       async ({ respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, rt.setupStatus());
+          respond(true, await rt.setupStatus());
         } catch (err) {
           sendError(respond, err);
         }
@@ -430,7 +430,7 @@ export default definePluginEntry({
             }
             case "setup_status": {
               const rt = await ensureRuntime();
-              return json(rt.setupStatus());
+              return json(await rt.setupStatus());
             }
             case "resolve_space": {
               const { token: _token, ...result } = await resolveSpaceFromParams(config, raw);

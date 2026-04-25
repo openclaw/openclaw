@@ -4,7 +4,8 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
-import { getGoogleMeetSetupStatus } from "./setup.js";
+import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
+import { resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
 import { launchChromeMeet, launchChromeMeetOnNode } from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
@@ -81,8 +82,34 @@ export class GoogleMeetRuntime {
     return session ? { found: true, session } : { found: false };
   }
 
-  setupStatus() {
-    return getGoogleMeetSetupStatus(this.params.config, { fullConfig: this.params.fullConfig });
+  async setupStatus() {
+    let status = getGoogleMeetSetupStatus(this.params.config, {
+      fullConfig: this.params.fullConfig,
+    });
+    if (
+      this.params.config.defaultTransport === "chrome-node" ||
+      Boolean(this.params.config.chromeNode.node)
+    ) {
+      try {
+        const node = await resolveChromeNodeInfo({
+          runtime: this.params.runtime,
+          requestedNode: this.params.config.chromeNode.node,
+        });
+        const label = node.displayName ?? node.remoteIp ?? node.nodeId ?? "connected node";
+        status = addGoogleMeetSetupCheck(status, {
+          id: "chrome-node-connected",
+          ok: true,
+          message: `Connected Google Meet node ready: ${label}`,
+        });
+      } catch (error) {
+        status = addGoogleMeetSetupCheck(status, {
+          id: "chrome-node-connected",
+          ok: false,
+          message: formatErrorMessage(error),
+        });
+      }
+    }
+    return status;
   }
 
   async createViaBrowser() {

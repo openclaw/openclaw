@@ -451,6 +451,35 @@ describe("google-meet plugin", () => {
     expect(result.details.ok).toBe(true);
   });
 
+  it("fails setup status when the configured Chrome node is not connected", async () => {
+    const { tools } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      { nodesListResult: { nodes: [] } },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status" });
+
+    expect(result.details.ok).toBe(false);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "chrome-node-connected",
+          ok: false,
+          message: expect.stringContaining("No connected Google Meet-capable node"),
+        }),
+      ]),
+    );
+  });
+
   it("reports Twilio delegation readiness when voice-call is enabled", async () => {
     vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
     vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
@@ -547,7 +576,7 @@ describe("google-meet plugin", () => {
       config: resolveGoogleMeetConfig({}),
       ensureRuntime: async () =>
         ({
-          setupStatus: () => ({
+          setupStatus: async () => ({
             ok: true,
             checks: [
               {
@@ -557,7 +586,7 @@ describe("google-meet plugin", () => {
               },
             ],
           }),
-        }) as GoogleMeetRuntime,
+        }) as unknown as GoogleMeetRuntime,
     });
 
     try {
@@ -580,11 +609,11 @@ describe("google-meet plugin", () => {
       config: resolveGoogleMeetConfig({}),
       ensureRuntime: async () =>
         ({
-          setupStatus: () => ({
+          setupStatus: async () => ({
             ok: false,
             checks: [{ id: "twilio-voice-call-plugin", ok: false, message: "missing" }],
           }),
-        }) as GoogleMeetRuntime,
+        }) as unknown as GoogleMeetRuntime,
     });
 
     try {
