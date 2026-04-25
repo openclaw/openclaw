@@ -66,6 +66,35 @@ Notes:
   stale removed-provider default.
 - `models status` may show `marker(<value>)` in auth output for non-secret placeholders (for example `OPENAI_API_KEY`, `secretref-managed`, `minimax-oauth`, `oauth:chutes`, `ollama-local`) instead of masking them as secrets.
 
+### `models scan`
+
+`models scan` reads OpenRouter's public `:free` catalog and ranks candidates for
+fallback use. The catalog itself is public, so metadata-only scans do not need
+an OpenRouter key.
+
+By default OpenClaw tries to probe tool and image support with live model calls.
+If no OpenRouter key is configured, the command falls back to metadata-only
+output and explains that `:free` models still require `OPENROUTER_API_KEY` for
+probes and inference.
+
+Options:
+
+- `--no-probe` (metadata only; no config/secrets lookup)
+- `--min-params <b>`
+- `--max-age-days <days>`
+- `--provider <name>`
+- `--max-candidates <n>`
+- `--timeout <ms>` (catalog request and per-probe timeout)
+- `--concurrency <n>`
+- `--yes`
+- `--no-input`
+- `--set-default`
+- `--set-image`
+- `--json`
+
+`--set-default` and `--set-image` require live probes; metadata-only scan
+results are informational and are not applied to config.
+
 ### `models status`
 
 Options:
