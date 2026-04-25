@@ -59,6 +59,12 @@ Target direction:
 
 Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
 
+Docker note: OpenClaw's bundled Compose setup disables Bonjour advertising by
+default because Docker bridge networking usually does not pass the mDNS
+multicast traffic required for reliable probing/announcement. Use the published
+gateway URL, Tailnet/Wide-Area DNS-SD, host networking, or macvlan networking for
+containerized gateways.
+
 #### Service beacon details
 
 - Service types:

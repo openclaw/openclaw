@@ -62,6 +62,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Docker/Bonjour: disable mDNS advertising by default for the bundled Compose
+  setup because Docker bridge networking usually drops Bonjour multicast; docs
+  now call out the host-network/macvlan opt-in path.
 - Agents/subagents: keep queued subagent announces session-only when the
   requester has no external channel target, avoiding ambiguous multi-channel
   delivery failures. Fixes #59201. Thanks @larrylhollan.

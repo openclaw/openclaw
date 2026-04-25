@@ -130,6 +130,7 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`) |
 | `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                   |
 | `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
+| `OPENCLAW_DISABLE_BONJOUR`     | Disable mDNS/Bonjour advertising (`1` by default for Docker)    |
 | `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                     |
 
 ### Health checks
@@ -164,6 +165,23 @@ docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLA
 Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` /
 `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`.
 </Note>
+
+### Bonjour / mDNS in Docker
+
+The bundled Compose setup disables Bonjour advertising by default with
+`OPENCLAW_DISABLE_BONJOUR=1` because Docker's default bridge network generally
+does not forward the IPv4 mDNS multicast traffic (`224.0.0.251:5353`) that
+Bonjour/DNS-SD needs for probing, announcing, and discovery.
+
+For Docker installs, prefer one of these discovery paths instead:
+
+- use the published gateway URL directly, such as `http://127.0.0.1:18789/`
+- configure a public/tailnet URL for node pairing
+- use Tailscale/Wide-Area DNS-SD where appropriate
+
+Only set `OPENCLAW_DISABLE_BONJOUR=0` when the container is attached to a
+network that is known to pass mDNS, such as Linux host networking or a macvlan
+setup. Plain bridge networking is not enough for reliable Bonjour discovery.
 
 ### Storage and persistence
 
