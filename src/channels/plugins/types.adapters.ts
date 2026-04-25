@@ -18,6 +18,7 @@ import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 export type {
   ChannelOutboundAdapter,
+  ChannelOutboundChunkContext,
   ChannelOutboundContext,
   ChannelOutboundFormattedContext,
   ChannelOutboundPayloadContext,
@@ -69,9 +70,7 @@ export type ChannelCapabilitiesDiagnostics = {
   details?: Record<string, unknown>;
 };
 
-type BivariantCallback<T extends (...args: never[]) => unknown> = {
-  bivarianceHack: T;
-}["bivarianceHack"];
+type ChannelAdapterCallback<T extends (...args: never[]) => unknown> = T;
 
 export type ChannelSetupAdapter = {
   resolveAccountId?: (params: {
@@ -124,13 +123,17 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     enabled: boolean;
   }) => OpenClawConfig;
   deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
-  isEnabled?: BivariantCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => boolean>;
-  disabledReason?: BivariantCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => string>;
-  isConfigured?: BivariantCallback<
+  isEnabled?: ChannelAdapterCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => boolean>;
+  disabledReason?: ChannelAdapterCallback<
+    (account: ResolvedAccount, cfg: OpenClawConfig) => string
+  >;
+  isConfigured?: ChannelAdapterCallback<
     (account: ResolvedAccount, cfg: OpenClawConfig) => boolean | Promise<boolean>
   >;
-  unconfiguredReason?: BivariantCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => string>;
-  describeAccount?: BivariantCallback<
+  unconfiguredReason?: ChannelAdapterCallback<
+    (account: ResolvedAccount, cfg: OpenClawConfig) => string
+  >;
+  describeAccount?: ChannelAdapterCallback<
     (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountSnapshot
   >;
   resolveAllowFrom?: (params: {
@@ -172,7 +175,7 @@ export type ChannelGroupAdapter = {
 
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
-  buildChannelSummary?: BivariantCallback<
+  buildChannelSummary?: ChannelAdapterCallback<
     (params: {
       account: ResolvedAccount;
       cfg: OpenClawConfig;
@@ -180,13 +183,13 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
       snapshot: ChannelAccountSnapshot;
     }) => Record<string, unknown> | Promise<Record<string, unknown>>
   >;
-  probeAccount?: BivariantCallback<
+  probeAccount?: ChannelAdapterCallback<
     (params: { account: ResolvedAccount; timeoutMs: number; cfg: OpenClawConfig }) => Promise<Probe>
   >;
-  formatCapabilitiesProbe?: BivariantCallback<
+  formatCapabilitiesProbe?: ChannelAdapterCallback<
     (params: { probe: Probe }) => ChannelCapabilitiesDisplayLine[]
   >;
-  auditAccount?: BivariantCallback<
+  auditAccount?: ChannelAdapterCallback<
     (params: {
       account: ResolvedAccount;
       timeoutMs: number;
@@ -194,7 +197,7 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
       probe?: Probe;
     }) => Promise<Audit>
   >;
-  buildCapabilitiesDiagnostics?: BivariantCallback<
+  buildCapabilitiesDiagnostics?: ChannelAdapterCallback<
     (params: {
       account: ResolvedAccount;
       timeoutMs: number;
@@ -204,7 +207,7 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
       target?: string;
     }) => Promise<ChannelCapabilitiesDiagnostics | undefined>
   >;
-  buildAccountSnapshot?: BivariantCallback<
+  buildAccountSnapshot?: ChannelAdapterCallback<
     (params: {
       account: ResolvedAccount;
       cfg: OpenClawConfig;
@@ -213,7 +216,7 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
       audit?: Audit;
     }) => ChannelAccountSnapshot | Promise<ChannelAccountSnapshot>
   >;
-  logSelfId?: BivariantCallback<
+  logSelfId?: ChannelAdapterCallback<
     (params: {
       account: ResolvedAccount;
       cfg: OpenClawConfig;
@@ -221,7 +224,7 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
       includeChannelPrefix?: boolean;
     }) => void
   >;
-  resolveAccountState?: BivariantCallback<
+  resolveAccountState?: ChannelAdapterCallback<
     (params: {
       account: ResolvedAccount;
       cfg: OpenClawConfig;
@@ -322,6 +325,7 @@ export type ChannelLoginWithQrStartResult = {
 export type ChannelLoginWithQrWaitResult = {
   connected: boolean;
   message: string;
+  qrDataUrl?: string;
 };
 
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
@@ -346,6 +350,7 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   loginWithQrWait?: (params: {
     accountId?: string;
     timeoutMs?: number;
+    currentQrDataUrl?: string;
   }) => Promise<ChannelLoginWithQrWaitResult>;
   logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
 };
@@ -464,8 +469,14 @@ export type ChannelCommandAdapter = {
     totalPages: number;
     agentId?: string;
   }) => ReplyPayload["channelData"] | null;
+  buildModelsMenuChannelData?: (params: {
+    providers: Array<{ id: string; count: number }>;
+  }) => ReplyPayload["channelData"] | null;
   buildModelsProviderChannelData?: (params: {
     providers: Array<{ id: string; count: number }>;
+  }) => ReplyPayload["channelData"] | null;
+  buildModelsAddProviderChannelData?: (params: {
+    providers: Array<{ id: string }>;
   }) => ReplyPayload["channelData"] | null;
   buildModelsListChannelData?: (params: {
     provider: string;
@@ -837,13 +848,13 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
   }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
-  resolveDmPolicy?: BivariantCallback<
+  resolveDmPolicy?: ChannelAdapterCallback<
     (ctx: ChannelSecurityContext<ResolvedAccount>) => ChannelSecurityDmPolicy | null
   >;
-  collectWarnings?: BivariantCallback<
+  collectWarnings?: ChannelAdapterCallback<
     (ctx: ChannelSecurityContext<ResolvedAccount>) => Promise<string[]> | string[]
   >;
-  collectAuditFindings?: BivariantCallback<
+  collectAuditFindings?: ChannelAdapterCallback<
     (
       ctx: ChannelSecurityContext<ResolvedAccount> & {
         sourceConfig: OpenClawConfig;

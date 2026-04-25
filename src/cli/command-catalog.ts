@@ -32,6 +32,10 @@ export type CliCommandCatalogEntry = {
 };
 
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
+  {
+    commandPath: ["crestodian"],
+    policy: { bypassConfigGuard: true, loadPlugins: "never", ensureCliPath: false },
+  },
   { commandPath: ["agent"], policy: { loadPlugins: "always" } },
   { commandPath: ["message"], policy: { loadPlugins: "always" } },
   { commandPath: ["channels"], policy: { loadPlugins: "always" } },
@@ -55,7 +59,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["gateway", "status"],
     exact: true,
-    policy: { routeConfigGuard: "always" },
+    policy: {
+      routeConfigGuard: "always",
+      loadPlugins: "never",
+    },
     route: { id: "gateway-status" },
   },
   {
@@ -83,13 +90,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["models", "list"],
     exact: true,
-    policy: { ensureCliPath: false },
+    policy: { ensureCliPath: false, routeConfigGuard: "always" },
     route: { id: "models-list" },
   },
   {
     commandPath: ["models", "status"],
     exact: true,
-    policy: { ensureCliPath: false },
+    policy: { ensureCliPath: false, routeConfigGuard: "always" },
     route: { id: "models-status" },
   },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true } },

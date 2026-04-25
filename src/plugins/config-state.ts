@@ -21,6 +21,7 @@ import {
 } from "./config-normalization-shared.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 export type { PluginActivationSource };
 export type PluginActivationState = PluginActivationStateLike;
@@ -40,6 +41,10 @@ const BUILT_IN_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<readonly [alias: string, pl
   ["minimax-portal", "minimax"],
   ["minimax-portal-auth", "minimax"],
 ] as const;
+const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
+  ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS,
+  ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
+]);
 
 function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
   if (bundledPluginAliasLookupCache) {
@@ -78,6 +83,10 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
 export function normalizePluginId(id: string): string {
   const trimmed = normalizeOptionalString(id) ?? "";
   const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
+  const builtInAlias = BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized);
+  if (builtInAlias) {
+    return builtInAlias;
+  }
   return getBundledPluginAliasLookup().get(normalized) ?? trimmed;
 }
 
@@ -101,7 +110,10 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.slots && Object.prototype.hasOwnProperty.call(plugins.slots, "memory"));
 
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
+  Boolean(
+    plugins?.entries &&
+    Object.prototype.hasOwnProperty.call(plugins.entries, defaultSlotIdForKey("memory")),
+  );
 
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
   hasExplicitPluginConfigShared(plugins);

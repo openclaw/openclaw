@@ -75,9 +75,19 @@ const PROVIDER_CASES: LiveProviderCase[] = [
     providerId: "openai",
   },
   {
+    pluginId: "openrouter",
+    pluginName: "OpenRouter Provider",
+    providerId: "openrouter",
+  },
+  {
     pluginId: "vydra",
     pluginName: "Vydra Provider",
     providerId: "vydra",
+  },
+  {
+    pluginId: "xai",
+    pluginName: "xAI Provider",
+    providerId: "xai",
   },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))

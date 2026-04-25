@@ -100,6 +100,8 @@ export type TtsResult = {
   attempts?: TtsProviderAttempt[];
   outputFormat?: string;
   voiceCompatible?: boolean;
+  audioAsVoice?: boolean;
+  target?: "audio-file" | "voice-note";
 };
 
 export type TtsSynthesisResult = {
@@ -114,6 +116,7 @@ export type TtsSynthesisResult = {
   outputFormat?: string;
   voiceCompatible?: boolean;
   fileExtension?: string;
+  target?: "audio-file" | "voice-note";
 };
 
 export type TtsTelephonyResult = {
@@ -586,6 +589,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
+const TRANSCODED_VOICE_NOTE_CHANNELS = new Set(["feishu"]);
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
@@ -594,6 +598,22 @@ function resolveChannelId(channel: string | undefined): ChannelId | null {
 function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
   const channelId = resolveChannelId(channel);
   return channelId !== null && OPUS_CHANNELS.has(channelId);
+}
+
+function supportsTranscodedVoiceNoteTts(channel: string | undefined): boolean {
+  const channelId = resolveChannelId(channel);
+  return channelId !== null && TRANSCODED_VOICE_NOTE_CHANNELS.has(channelId);
+}
+
+function shouldDeliverTtsAsVoice(params: {
+  channel: string | undefined;
+  target: "audio-file" | "voice-note" | undefined;
+  voiceCompatible: boolean | undefined;
+}): boolean {
+  if (!supportsNativeVoiceNoteTts(params.channel) || params.target !== "voice-note") {
+    return false;
+  }
+  return params.voiceCompatible === true || supportsTranscodedVoiceNoteTts(params.channel);
 }
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
@@ -753,6 +773,7 @@ export async function textToSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  timeoutMs?: number;
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
@@ -781,6 +802,12 @@ export async function textToSpeech(params: {
     attempts: synthesis.attempts,
     outputFormat: synthesis.outputFormat,
     voiceCompatible: synthesis.voiceCompatible,
+    audioAsVoice: shouldDeliverTtsAsVoice({
+      channel: params.channel,
+      target: synthesis.target,
+      voiceCompatible: synthesis.voiceCompatible,
+    }),
+    target: synthesis.target,
   };
 }
 
@@ -791,6 +818,7 @@ export async function synthesizeSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  timeoutMs?: number;
 }): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -804,6 +832,7 @@ export async function synthesizeSpeech(params: {
   }
 
   const { config, providers } = setup;
+  const timeoutMs = params.timeoutMs ?? config.timeoutMs;
   const target = supportsNativeVoiceNoteTts(params.channel) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
@@ -840,7 +869,7 @@ export async function synthesizeSpeech(params: {
         providerConfig: resolvedProvider.providerConfig,
         target,
         providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
-        timeoutMs: config.timeoutMs,
+        timeoutMs,
       });
       const latencyMs = Date.now() - providerStart;
       attempts.push({
@@ -860,6 +889,7 @@ export async function synthesizeSpeech(params: {
         outputFormat: synthesis.outputFormat,
         voiceCompatible: synthesis.voiceCompatible,
         fileExtension: synthesis.fileExtension,
+        target,
       };
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
@@ -1168,12 +1198,10 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
-    const shouldVoice =
-      supportsNativeVoiceNoteTts(params.channel) && result.voiceCompatible === true;
     return {
       ...nextPayload,
       mediaUrl: result.audioPath,
-      audioAsVoice: shouldVoice || params.payload.audioAsVoice,
+      audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
     };
   }
 
@@ -1196,6 +1224,8 @@ export const _test = {
   parseTtsDirectives,
   resolveModelOverridePolicy,
   supportsNativeVoiceNoteTts,
+  supportsTranscodedVoiceNoteTts,
+  shouldDeliverTtsAsVoice,
   summarizeText,
   getResolvedSpeechProviderConfig,
   formatTtsProviderError,

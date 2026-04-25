@@ -5,8 +5,6 @@ read_when:
 title: "WhatsApp"
 ---
 
-# WhatsApp (Web channel)
-
 Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session(s).
 
 ## Install (on demand)
@@ -65,6 +63,13 @@ openclaw channels login --channel whatsapp
     For a specific account:
 
 ```bash
+openclaw channels login --channel whatsapp --account work
+```
+
+    To attach an existing/custom WhatsApp Web auth directory before login:
+
+```bash
+openclaw channels add --channel whatsapp --account work --auth-dir /path/to/wa-auth
 openclaw channels login --channel whatsapp --account work
 ```
 
@@ -147,6 +152,46 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
 
+## Plugin hooks and privacy
+
+WhatsApp inbound messages can contain personal message content, phone numbers,
+group identifiers, sender names, and session correlation fields. For that reason,
+WhatsApp does not broadcast inbound `message_received` hook payloads to plugins
+unless you explicitly opt in:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      pluginHooks: {
+        messageReceived: true,
+      },
+    },
+  },
+}
+```
+
+You can scope the opt-in to one account:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      accounts: {
+        work: {
+          pluginHooks: {
+            messageReceived: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Only enable this for plugins you trust to receive inbound WhatsApp message
+content and identifiers.
+
 ## Access control and activation
 
 <Tabs>
@@ -166,7 +211,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
     - if no allowlist is configured, the linked self number is allowed by default
-    - outbound `fromMe` DMs are never auto-paired
+    - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
 
   </Tab>
 
@@ -250,7 +295,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - `<media:document>`
     - `<media:sticker>`
 
-    Location and contact payloads are normalized into textual context before routing.
+    Location bodies use terse coordinate text. Location labels/comments and contact/vCard details are rendered as fenced untrusted metadata, not inline prompt text.
 
   </Accordion>
 
@@ -316,6 +361,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
+    - reply payloads preserve `audioAsVoice`; WhatsApp sends audio media as Baileys PTT voice notes
     - `audio/ogg` is rewritten to `audio/ogg; codecs=opus` for voice-note compatibility
     - animated GIF playback is supported via `gifPlayback: true` on video sends
     - captions are applied to the first media item when sending multi-media reply payloads
@@ -330,6 +376,29 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
   </Accordion>
 </AccordionGroup>
+
+## Reply quoting
+
+WhatsApp supports native reply quoting, where outbound replies visibly quote the inbound message. Control it with `channels.whatsapp.replyToMode`.
+
+| Value       | Behavior                                                              |
+| ----------- | --------------------------------------------------------------------- |
+| `"off"`     | Never quote; send as a plain message                                  |
+| `"first"`   | Quote only the first outbound reply chunk                             |
+| `"all"`     | Quote every outbound reply chunk                                      |
+| `"batched"` | Quote queued batched replies while leaving immediate replies unquoted |
+
+Default is `"off"`. Per-account overrides use `channels.whatsapp.accounts.<id>.replyToMode`.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      replyToMode: "first",
+    },
+  },
+}
+```
 
 ## Reaction level
 
@@ -473,15 +542,15 @@ Resolution hierarchy for group messages:
 
 The effective `groups` map is determined first: if the account defines its own `groups`, it fully replaces the root `groups` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used if the specific group entry defines a `systemPrompt`.
-2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent or defines no `systemPrompt`.
+1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used when the specific group entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Resolution hierarchy for direct messages:
 
 The effective `direct` map is determined first: if the account defines its own `direct`, it fully replaces the root `direct` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used if the specific peer entry defines a `systemPrompt`.
-2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent or defines no `systemPrompt`.
+1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used when the specific peer entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Note: `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`); prompt overrides live under `direct`.
 
@@ -538,7 +607,7 @@ Example:
 
 Primary reference:
 
-- [Configuration reference - WhatsApp](/gateway/configuration-reference#whatsapp)
+- [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)
 
 High-signal WhatsApp fields:
 

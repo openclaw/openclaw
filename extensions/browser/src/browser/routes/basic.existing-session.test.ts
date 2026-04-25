@@ -8,7 +8,11 @@ vi.mock("../chrome-mcp.js", () => ({
 const { BrowserProfileUnavailableError } = await import("../errors.js");
 const { registerBrowserBasicRoutes } = await import("./basic.js");
 
-function createExistingSessionProfileState(params?: { isHttpReachable?: () => Promise<boolean> }) {
+function createExistingSessionProfileState(params?: {
+  isHttpReachable?: () => Promise<boolean>;
+  isTransportAvailable?: () => Promise<boolean>;
+  isReachable?: () => Promise<boolean>;
+}) {
   return {
     resolved: {
       enabled: true,
@@ -26,10 +30,45 @@ function createExistingSessionProfileState(params?: { isHttpReachable?: () => Pr
           cdpUrl: "",
           userDataDir: "/tmp/brave-profile",
           color: "#00AA00",
+          executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+          headless: false,
           attachOnly: true,
         },
         isHttpReachable: params?.isHttpReachable ?? (async () => true),
-        isReachable: async () => true,
+        isTransportAvailable: params?.isTransportAvailable ?? (async () => true),
+        isReachable: params?.isReachable ?? (async () => true),
+      }) as never,
+  };
+}
+
+function createManagedProfileState() {
+  return {
+    resolved: {
+      enabled: true,
+      headless: false,
+      headlessSource: "default",
+      noSandbox: false,
+      executablePath: undefined,
+    },
+    profiles: new Map(),
+    forProfile: () =>
+      ({
+        profile: {
+          name: "openclaw",
+          driver: "openclaw",
+          cdpPort: 18800,
+          cdpUrl: "http://127.0.0.1:18800",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          userDataDir: "/tmp/openclaw-profile",
+          color: "#FF4500",
+          headless: false,
+          headlessSource: "default",
+          attachOnly: false,
+        },
+        isHttpReachable: async () => false,
+        isTransportAvailable: async () => false,
+        isReachable: async () => false,
       }) as never,
   };
 }
@@ -53,10 +92,44 @@ async function callBasicRouteWithState(params: {
 }
 
 describe("basic browser routes", () => {
+  it("reports Linux no-display headless fallback for local managed profiles", async () => {
+    const originalPlatform = process.platform;
+    const originalDisplay = process.env.DISPLAY;
+    const originalWayland = process.env.WAYLAND_DISPLAY;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    delete process.env.DISPLAY;
+    delete process.env.WAYLAND_DISPLAY;
+    try {
+      const response = await callBasicRouteWithState({
+        query: { profile: "openclaw" },
+        state: createManagedProfileState(),
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({
+        profile: "openclaw",
+        headless: true,
+        headlessSource: "linux-display-fallback",
+      });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+      if (originalDisplay === undefined) {
+        delete process.env.DISPLAY;
+      } else {
+        process.env.DISPLAY = originalDisplay;
+      }
+      if (originalWayland === undefined) {
+        delete process.env.WAYLAND_DISPLAY;
+      } else {
+        process.env.WAYLAND_DISPLAY = originalWayland;
+      }
+    }
+  });
+
   it("maps existing-session status failures to JSON browser errors", async () => {
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
-        isHttpReachable: async () => {
+        isTransportAvailable: async () => {
           throw new BrowserProfileUnavailableError("attach failed");
         },
       }),
@@ -80,7 +153,47 @@ describe("basic browser routes", () => {
       cdpPort: null,
       cdpUrl: null,
       userDataDir: "/tmp/brave-profile",
+      executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
       pid: 4321,
+    });
+  });
+
+  it("treats attach-only profiles as running when transport is available even if page reachability is false", async () => {
+    const response = await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isTransportAvailable: async () => true,
+        isReachable: async () => false,
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      profile: "chrome-live",
+      driver: "existing-session",
+      transport: "chrome-mcp",
+      running: true,
+      cdpReady: true,
+    });
+  });
+
+  it("probes Chrome MCP transport only once for status", async () => {
+    const isHttpReachable = vi.fn(async () => true);
+    const isTransportAvailable = vi.fn(async () => true);
+
+    const response = await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isHttpReachable,
+        isTransportAvailable,
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(isTransportAvailable).toHaveBeenCalledTimes(1);
+    expect(isHttpReachable).not.toHaveBeenCalled();
+    expect(response.body).toMatchObject({
+      cdpHttp: true,
+      cdpReady: true,
+      running: true,
     });
   });
 });

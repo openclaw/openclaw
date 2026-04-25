@@ -72,6 +72,15 @@ export function resetClaudeLiveSessionsForTest(): void {
   liveSessionCreates.clear();
 }
 
+export function closeClaudeLiveSessionForContext(context: PreparedCliRunContext): void {
+  const key = buildClaudeLiveKey(context);
+  const session = liveSessions.get(key);
+  if (session) {
+    closeLiveSession(session, "restart");
+  }
+  liveSessionCreates.delete(key);
+}
+
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
   return (
     context.backendResolved.id === "claude-cli" &&
@@ -882,11 +891,12 @@ export async function runClaudeLiveSessionTurn(params: {
     });
   });
   const abort = () => abortTurn(liveSession, createAbortError());
+  let replyBackendCompleted = false;
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
     ? {
         kind: "cli",
         cancel: abort,
-        isStreaming: () => false,
+        isStreaming: () => !replyBackendCompleted,
       }
     : undefined;
   params.context.params.abortSignal?.addEventListener("abort", abort, { once: true });
@@ -905,6 +915,7 @@ export async function runClaudeLiveSessionTurn(params: {
     }
     return { output: await outputPromise };
   } finally {
+    replyBackendCompleted = true;
     params.context.params.abortSignal?.removeEventListener("abort", abort);
     if (replyBackendHandle) {
       params.context.params.replyOperation?.detachBackend(replyBackendHandle);

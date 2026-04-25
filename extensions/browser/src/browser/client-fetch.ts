@@ -127,6 +127,27 @@ function appendBrowserToolModelHint(message: string): string {
   return `${message} ${BROWSER_TOOL_MODEL_HINT}`;
 }
 
+type BrowserFetchFailureKind = "timeout" | "aborted" | "persistent";
+
+function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {
+  const msg = normalizeErrorMessage(err);
+  const msgLower = normalizeLowercaseStringOrEmpty(msg);
+  const nameLower = err instanceof Error ? normalizeLowercaseStringOrEmpty(err.name) : "";
+  const looksLikeTimeout =
+    nameLower.includes("timeout") || msgLower.includes("timed out") || msgLower.includes("timeout");
+  if (looksLikeTimeout) {
+    return "timeout";
+  }
+  const looksLikeAbort =
+    nameLower === "aborterror" ||
+    msgLower.includes("aborterror") ||
+    msgLower.includes("aborted") ||
+    msgLower.includes("abort") ||
+    msgLower.includes("cancelled") ||
+    msgLower.includes("canceled");
+  return looksLikeAbort ? "aborted" : "persistent";
+}
+
 async function discardResponseBody(res: Response): Promise<void> {
   try {
     await res.body?.cancel();
@@ -137,32 +158,36 @@ async function discardResponseBody(res: Response): Promise<void> {
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
-  const suffix = `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`;
+  const kind = classifyBrowserFetchFailure(err);
+  const suffix =
+    kind === "persistent"
+      ? `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`
+      : resolveBrowserFetchOperatorHint(url);
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
 }
 
 function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
   const operatorHint = resolveBrowserFetchOperatorHint(url);
-  const msg = String(err);
-  const msgLower = normalizeLowercaseStringOrEmpty(msg);
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
-  if (looksLikeTimeout) {
+  const msg = normalizeErrorMessage(err);
+  const kind = classifyBrowserFetchFailure(err);
+  if (kind === "timeout") {
     return new Error(
-      appendBrowserToolModelHint(
-        `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
-      ),
+      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
+  if (kind === "aborted") {
+    return new Error(
+      `Browser control request was cancelled. ${operatorHint}`,
+      err instanceof Error ? { cause: err } : undefined,
     );
   }
   return new Error(
     appendBrowserToolModelHint(
       `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
     ),
+    err instanceof Error ? { cause: err } : undefined,
   );
 }
 

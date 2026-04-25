@@ -139,13 +139,41 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredLiveProvider).toBe("openai");
     expect(config?.requiredLiveModel).toBe("gpt-5.4");
     expect(config?.offDirective).toBe("/think off");
-    expect(config?.maxDirective).toBe("/think max");
+    expect(config?.maxDirective).toBe("/think medium");
     expect(config?.reasoningDirective).toBe("/reasoning on");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "enables reasoning display and disables thinking",
-      "switches to max thinking",
-      "verifies max thinking emits visible reasoning",
-      "verifies max thinking completes the answer",
+      "switches to medium thinking",
+      "verifies medium thinking emits visible reasoning",
+      "verifies medium thinking completes the answer",
+    ]);
+  });
+
+  it("includes the OpenAI native web search live scenario", () => {
+    const scenario = readQaScenarioById("openai-native-web-search-live");
+    const config = readQaScenarioExecutionConfig("openai-native-web-search-live") as
+      | {
+          requiredProvider?: string;
+          requiredModel?: string;
+          expectedMarker?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.md");
+    expect(scenario.gatewayConfigPatch?.tools).toEqual({
+      web: {
+        search: {
+          enabled: true,
+          provider: null,
+        },
+      },
+    });
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.requiredModel).toBe("gpt-5.4");
+    expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "confirms live OpenAI GPT-5.4 web search auto mode",
+      "searches official OpenAI News through the live model",
     ]);
   });
 
