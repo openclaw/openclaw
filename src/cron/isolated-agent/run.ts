@@ -977,6 +977,7 @@ export async function runCronIsolatedAgentTurn(params: {
       isAborted,
       thinkLevel: prepared.context.thinkLevel,
       timeoutMs: prepared.context.timeoutMs,
+      deliveryRequested: prepared.context.deliveryRequested,
     });
     if (isAborted()) {
       return prepared.context.withRunSession({ status: "error", error: abortReason() });
