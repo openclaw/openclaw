@@ -4,11 +4,11 @@ import SwiftUI
 
 extension OnboardingView {
     func wizardPage() -> some View {
-        self.onboardingPage {
+        self.onboardingFixedPage {
             VStack(spacing: 16) {
-                Text("Setup Wizard")
+                Text("Configure OpenClaw")
                     .font(.largeTitle.weight(.semibold))
-                Text("Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.")
+                Text("Follow the steps below to configure your AI provider and gateway.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

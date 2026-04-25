@@ -59,6 +59,7 @@ extension OnboardingView {
         _ = view.connectionPage()
 
         view.currentPage = 0
+        view.setSecurityNoticeAcknowledged(true)
         view.handleNext()
         view.handleBack()
 

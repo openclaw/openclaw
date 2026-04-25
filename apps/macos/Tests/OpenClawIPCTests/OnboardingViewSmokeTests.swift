@@ -27,6 +27,50 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(8))
     }
 
+    @Test func `fresh installs require security acknowledgement before advancing`() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: onboardingSecurityAcknowledgedKey)
+        defaults.removeObject(forKey: onboardingSecurityAcknowledgedKey)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: onboardingSecurityAcknowledgedKey)
+            } else {
+                defaults.removeObject(forKey: onboardingSecurityAcknowledgedKey)
+            }
+        }
+
+        let freshState = AppState(preview: true)
+        freshState.onboardingSeen = false
+        let freshView = OnboardingView(
+            state: freshState,
+            permissionMonitor: PermissionMonitor.shared,
+            discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+
+        #expect(freshView.isSecurityNoticeBlocking)
+        #expect(!freshView.canAdvance)
+
+        defaults.set(true, forKey: onboardingSecurityAcknowledgedKey)
+
+        let acknowledgedState = AppState(preview: true)
+        acknowledgedState.onboardingSeen = false
+        let acknowledgedView = OnboardingView(
+            state: acknowledgedState,
+            permissionMonitor: PermissionMonitor.shared,
+            discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+
+        #expect(!acknowledgedView.isSecurityNoticeBlocking)
+        #expect(acknowledgedView.canAdvance)
+    }
+
+    @Test func `existing onboarded users keep their acknowledgement`() {
+        #expect(OnboardingView.resolveSecurityNoticeAcknowledged(
+            onboardingSeen: true,
+            storedAcknowledgement: false))
+        #expect(!OnboardingView.resolveSecurityNoticeAcknowledged(
+            onboardingSeen: false,
+            storedAcknowledgement: false))
+    }
+
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")

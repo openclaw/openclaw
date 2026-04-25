@@ -25,6 +25,7 @@ final class OnboardingController {
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
             UserDefaults.standard.set(true, forKey: "openclaw.onboardingSeen")
+            UserDefaults.standard.set(true, forKey: onboardingSecurityAcknowledgedKey)
             UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
             AppStateStore.shared.onboardingSeen = true
             return
@@ -67,6 +68,8 @@ struct OnboardingView: View {
     @State var isRequesting = false
     @State var installingCLI = false
     @State var cliStatus: String?
+    @State var cliPreflightStatus: String?
+    @State var cliNeedsCommandLineTools = false
     @State var copied = false
     @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
@@ -88,6 +91,7 @@ struct OnboardingView: View {
     @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
+    @State var securityNoticeAcknowledged: Bool
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
 
@@ -97,6 +101,7 @@ struct OnboardingView: View {
     let pageWidth: CGFloat = Self.windowWidth
     let contentHeight: CGFloat = 460
     let connectionPageIndex = 1
+    let cliPageIndex = 6
     let wizardPageIndex = 3
     let onboardingChatPageIndex = 8
 
@@ -113,7 +118,7 @@ struct OnboardingView: View {
         case .unconfigured:
             showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            showOnboardingChat ? [0, 1, 6, 3, 5, 8, 9] : [0, 1, 6, 3, 5, 9]
         }
     }
 
@@ -145,8 +150,25 @@ struct OnboardingView: View {
         self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
     }
 
+    var isSecurityNoticeBlocking: Bool {
+        self.activePageIndex == 0 && !self.securityNoticeAcknowledged
+    }
+
     var canAdvance: Bool {
-        !self.isWizardBlocking
+        if self.isSecurityNoticeBlocking {
+            return false
+        }
+        if self.activePageIndex == self.cliPageIndex {
+            return self.cliInstalled && !self.installingCLI
+        }
+        return !self.isWizardBlocking
+    }
+
+    static func resolveSecurityNoticeAcknowledged(
+        onboardingSeen: Bool,
+        storedAcknowledgement: Bool) -> Bool
+    {
+        storedAcknowledgement || onboardingSeen
     }
 
     var devLinkCommand: String {
@@ -171,6 +193,10 @@ struct OnboardingView: View {
         self.state = state
         self.permissionMonitor = permissionMonitor
         self._gatewayDiscovery = State(initialValue: discoveryModel)
+        self._securityNoticeAcknowledged = State(
+            initialValue: Self.resolveSecurityNoticeAcknowledged(
+                onboardingSeen: state.onboardingSeen,
+                storedAcknowledgement: UserDefaults.standard.bool(forKey: onboardingSecurityAcknowledgedKey)))
         self._onboardingChatModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: "onboarding",

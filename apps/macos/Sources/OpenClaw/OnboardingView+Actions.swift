@@ -45,7 +45,7 @@ extension OnboardingView {
     }
 
     func handleNext() {
-        if self.isWizardBlocking { return }
+        if !self.canAdvance { return }
         if self.currentPage < self.pageCount - 1 {
             withAnimation { self.currentPage += 1 }
         } else {
@@ -53,7 +53,13 @@ extension OnboardingView {
         }
     }
 
+    func setSecurityNoticeAcknowledged(_ acknowledged: Bool) {
+        self.securityNoticeAcknowledged = acknowledged
+        UserDefaults.standard.set(acknowledged, forKey: onboardingSecurityAcknowledgedKey)
+    }
+
     func finish() {
+        UserDefaults.standard.set(true, forKey: onboardingSecurityAcknowledgedKey)
         UserDefaults.standard.set(true, forKey: "openclaw.onboardingSeen")
         UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
         OnboardingController.shared.close()

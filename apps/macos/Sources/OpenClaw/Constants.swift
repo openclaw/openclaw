@@ -6,6 +6,7 @@ let launchdLabel = "ai.openclaw.mac"
 let gatewayLaunchdLabel = "ai.openclaw.gateway"
 let onboardingVersionKey = "openclaw.onboardingVersion"
 let onboardingSeenKey = "openclaw.onboardingSeen"
+let onboardingSecurityAcknowledgedKey = "openclaw.onboardingSecurityAcknowledged"
 let currentOnboardingVersion = 7
 let pauseDefaultsKey = "openclaw.pauseEnabled"
 let iconAnimationsEnabledKey = "openclaw.iconAnimationsEnabled"
