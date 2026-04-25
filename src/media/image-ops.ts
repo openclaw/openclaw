@@ -28,7 +28,7 @@ type MediaAttachmentImageOps = {
 };
 
 type MediaAttachmentImageOpsModule = {
-  createMediaAttachmentImageOps?: () => MediaAttachmentImageOps;
+  createMediaAttachmentImageOps?: (options: { maxInputPixels: number }) => MediaAttachmentImageOps;
 };
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
@@ -81,7 +81,9 @@ async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
           dirName: MEDIA_ATTACHMENTS_PLUGIN_ID,
           artifactBasename: MEDIA_ATTACHMENTS_IMAGE_OPS_ARTIFACT,
         });
-        const ops = mod.createMediaAttachmentImageOps?.();
+        const ops = mod.createMediaAttachmentImageOps?.({
+          maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+        });
         if (!isMediaAttachmentImageOps(ops)) {
           throw new Error("Media attachments image operations plugin did not expose image ops");
         }

@@ -17,8 +17,11 @@ type ResizeToPngParams = {
   withoutEnlargement?: boolean;
 };
 
+type MediaAttachmentImageOpsOptions = {
+  maxInputPixels: number;
+};
+
 const SHARP_MODULE = "sharp";
-const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
 
 let sharpFactoryPromise: Promise<SharpFactory> | null = null;
 
@@ -37,7 +40,7 @@ function normalizeSharpFactory(mod: unknown): SharpFactory {
   return sharp;
 }
 
-async function loadSharp(): Promise<SharpFactory> {
+async function loadSharp(maxInputPixels: number): Promise<SharpFactory> {
   if (!sharpFactoryPromise) {
     sharpFactoryPromise = import(SHARP_MODULE)
       .then((mod) => {
@@ -46,7 +49,7 @@ async function loadSharp(): Promise<SharpFactory> {
           sharp(buffer, {
             ...options,
             failOnError: false,
-            limitInputPixels: MAX_IMAGE_INPUT_PIXELS,
+            limitInputPixels: maxInputPixels,
           })) as SharpFactory;
       })
       .catch((err) => {
@@ -57,6 +60,13 @@ async function loadSharp(): Promise<SharpFactory> {
       });
   }
   return await sharpFactoryPromise;
+}
+
+function normalizeMaxInputPixels(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("Media attachment image ops require a positive maxInputPixels budget");
+  }
+  return value;
 }
 
 function normalizeMetadata(meta: { width?: number; height?: number }): ImageMetadata | null {
@@ -71,20 +81,21 @@ function normalizeMetadata(meta: { width?: number; height?: number }): ImageMeta
   return { width, height };
 }
 
-export function createMediaAttachmentImageOps() {
+export function createMediaAttachmentImageOps(options: MediaAttachmentImageOpsOptions) {
+  const maxInputPixels = normalizeMaxInputPixels(options.maxInputPixels);
   return {
     async getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
-      const sharp = await loadSharp();
+      const sharp = await loadSharp(maxInputPixels);
       return normalizeMetadata(await sharp(buffer).metadata());
     },
 
     async normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
-      const sharp = await loadSharp();
+      const sharp = await loadSharp(maxInputPixels);
       return await sharp(buffer).rotate().toBuffer();
     },
 
     async resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
-      const sharp = await loadSharp();
+      const sharp = await loadSharp(maxInputPixels);
       return await sharp(params.buffer)
         .rotate()
         .resize({
@@ -98,18 +109,18 @@ export function createMediaAttachmentImageOps() {
     },
 
     async convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
-      const sharp = await loadSharp();
+      const sharp = await loadSharp(maxInputPixels);
       return await sharp(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
     },
 
     async hasAlphaChannel(buffer: Buffer): Promise<boolean> {
-      const sharp = await loadSharp();
+      const sharp = await loadSharp(maxInputPixels);
       const meta = await sharp(buffer).metadata();
       return meta.hasAlpha || meta.channels === 4;
     },
 
     async resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
-      const sharp = await loadSharp();
+      const sharp = await loadSharp(maxInputPixels);
       const compressionLevel = params.compressionLevel ?? 6;
       return await sharp(params.buffer)
         .rotate()
