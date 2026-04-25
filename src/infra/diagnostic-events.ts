@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
+import {
+  formatDiagnosticTraceparent,
+  type DiagnosticTraceContext,
+} from "./diagnostic-trace-context.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
@@ -413,6 +416,7 @@ type DiagnosticEventsGlobalState = {
 
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
+const dispatchedTrustedDiagnosticMetadata = new WeakSet<object>();
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.started",
   "tool.execution.completed",
@@ -500,7 +504,10 @@ function dispatchDiagnosticEvent(
   try {
     for (const listener of state.listeners) {
       try {
-        listener(cloneDiagnosticEventForListener(enriched), Object.freeze({ ...metadata }));
+        listener(
+          cloneDiagnosticEventForListener(enriched),
+          createDiagnosticMetadataForListener(metadata),
+        );
       } catch (err) {
         const errorMessage =
           err instanceof Error
@@ -517,6 +524,16 @@ function dispatchDiagnosticEvent(
   } finally {
     state.dispatchDepth -= 1;
   }
+}
+
+function createDiagnosticMetadataForListener(
+  metadata: DiagnosticEventMetadata,
+): DiagnosticEventMetadata {
+  const listenerMetadata = Object.freeze({ ...metadata });
+  if (listenerMetadata.trusted) {
+    dispatchedTrustedDiagnosticMetadata.add(listenerMetadata);
+  }
+  return listenerMetadata;
 }
 
 function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): DiagnosticEventPayload {
@@ -621,6 +638,16 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
     }
     listener(event);
   });
+}
+
+export function formatDiagnosticTraceparentForPropagation(
+  event: { trace?: DiagnosticTraceContext },
+  metadata: DiagnosticEventMetadata,
+): string | undefined {
+  if (!metadata.trusted || !dispatchedTrustedDiagnosticMetadata.has(metadata)) {
+    return undefined;
+  }
+  return formatDiagnosticTraceparent(event.trace);
 }
 
 export function resetDiagnosticEventsForTest(): void {

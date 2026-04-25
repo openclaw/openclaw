@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/OTEL: keep model-usage span GenAI provider attributes aligned with the existing semantic-convention opt-in policy, using legacy `gen_ai.system` unless latest experimental GenAI conventions are enabled. Thanks @vincentkoc.
 - Diagnostics/OTEL: keep `gen_ai.request.model` present on GenAI token usage metrics with a bounded `unknown` fallback when model usage events do not include a model. Thanks @vincentkoc.
 - Docs/OTEL: document the GenAI token and model-call duration metrics, model-usage span attributes, and `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` provider-attribute behavior. Thanks @vincentkoc.
+- Diagnostics/trace: add an internal traceparent propagation helper that only formats trusted dispatcher metadata, keeping plugin-emitted diagnostic traces out of outbound propagation by default. Thanks @vincentkoc.
 - Diagnostics/OTEL: add bounded outbound message delivery lifecycle diagnostics and export them as low-cardinality delivery spans/metrics without message body, recipient, room, or media-path data. (#71471) Thanks @vincentkoc and @jlapenna.
 - Diagnostics/OTEL: emit bounded exec-process diagnostics and export them as `openclaw.exec` spans without exposing command text, working directories, or container identifiers. (#71451) Thanks @vincentkoc and @jlapenna.
 - Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#71450) Thanks @vincentkoc and @jlapenna.
