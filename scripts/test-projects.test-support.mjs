@@ -256,6 +256,10 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
   [
+    "src/plugins/provider-auth-choice.ts",
+    ["src/commands/auth-choice.apply.plugin-provider.test.ts", "src/commands/auth-choice.test.ts"],
+  ],
+  [
     "src/memory-host-sdk/host/embedding-defaults.ts",
     ["src/memory-host-sdk/host/embeddings.test.ts"],
   ],
