@@ -283,7 +283,9 @@ See [Plugins](/tools/plugin).
   starts successfully but readiness checks race startup. Both values must be
   positive integers up to `120000` ms; invalid config values are rejected.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
-- `browser.executablePath` accepts `~` for your OS home directory.
+- `browser.executablePath` and `browser.profiles.<name>.executablePath` both
+  accept `~` and `~/...` for your OS home directory before Chromium launch.
+  Per-profile `userDataDir` on `existing-session` profiles is also tilde-expanded.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
   `--disable-gpu`, window sizing, or debug flags).
