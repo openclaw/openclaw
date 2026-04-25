@@ -453,6 +453,14 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+function hasPromptSubmissionContent(params: {
+  prompt: string;
+  messages: readonly AgentMessage[];
+  imageCount: number;
+}): boolean {
+  return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
+}
+
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -2372,6 +2380,28 @@ export async function runEmbeddedAttempt(
             transport: effectiveAgentTransport,
             transcriptLeafId,
           });
+
+          if (
+            !skipPromptSubmission &&
+            !hasPromptSubmissionContent({
+              prompt: effectivePrompt,
+              messages: activeSession.messages,
+              imageCount: imageResult.images.length,
+            })
+          ) {
+            skipPromptSubmission = true;
+            log.info(
+              `embedded run prompt skipped: empty prompt/history/images ` +
+                `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
+                `provider=${params.provider}/${params.modelId}`,
+            );
+            trajectoryRecorder?.recordEvent("prompt.skipped", {
+              reason: "empty_prompt_history_images",
+              prompt: effectivePrompt,
+              messages: activeSession.messages,
+              imagesCount: imageResult.images.length,
+            });
+          }
 
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
           if (log.isEnabled("debug")) {
