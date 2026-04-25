@@ -11,6 +11,7 @@ installPinnedHostnameTestHooks();
 describe("minimax image-generation provider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("MINIMAX_API_HOST", "");
   });
 
   afterEach(() => {
