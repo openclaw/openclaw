@@ -207,7 +207,7 @@ describe("browser navigation guard", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("blocks strict policy navigation when env proxy is configured", async () => {
+  it("allows navigation to public IPs when env proxy is configured", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const lookupFn = createLookupFn("93.184.216.34");
     await expect(
@@ -215,7 +215,18 @@ describe("browser navigation guard", () => {
         url: "https://example.com",
         lookupFn,
       }),
-    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+    ).resolves.toBeUndefined();
+  });
+
+  it("blocks navigation to private IPs when env proxy is configured", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = createLookupFn("127.0.0.1");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://internal.test",
+        lookupFn,
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
   });
 
   it("allows env proxy navigation when private-network mode is explicitly enabled", async () => {

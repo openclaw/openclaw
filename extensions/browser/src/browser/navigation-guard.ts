@@ -111,13 +111,11 @@ export async function assertBrowserNavigationAllowed(
 
   // Browser network stacks may apply env proxy routing at connect-time, which
   // can bypass strict destination-binding intent from pre-navigation DNS checks.
-  // In strict mode, fail closed unless private-network navigation is explicitly
-  // enabled by policy.
-  if (hasProxyEnvConfigured() && !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)) {
-    throw new InvalidBrowserNavigationUrlError(
-      "Navigation blocked: strict browser SSRF policy cannot be enforced while env proxy variables are set",
-    );
-  }
+  // When env proxy is configured, skip the blanket block and defer to the
+  // per-hostname DNS resolution check below. Public URLs resolving to public
+  // IPs are allowed; only private/internal destinations remain blocked.
+  // Previously this blocked ALL navigation when proxy env vars were set,
+  // which prevented legitimate public-internet browsing (see #71358).
 
   // Browser navigations happen in Chromium's network stack, not Node's. In
   // strict mode, a hostname-based URL would be resolved twice by different
