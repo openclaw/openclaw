@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   enrichBlueBubblesParticipantsWithContactNames,
@@ -111,25 +112,26 @@ describe("enrichBlueBubblesParticipantsWithContactNames", () => {
   });
 
   it("lists contacts databases from the current home directory", async () => {
+    const homeDir = "/Users/tester";
+    const sourcesDir = join(homeDir, "Library", "Application Support", "AddressBook", "Sources");
+    const expectedDbPath = join(sourcesDir, "source-a", "AddressBook-v22.abcddb");
+
     const readdir = vi.fn(async () => ["source-a", "source-b"]);
-    const access = vi.fn(async (path: string) => {
-      if (!path.endsWith("source-a/AddressBook-v22.abcddb")) {
+    const access = vi.fn(async (p: string) => {
+      const normalized = p.replaceAll("\\", "/");
+      if (!normalized.endsWith("source-a/AddressBook-v22.abcddb")) {
         throw new Error("missing");
       }
     });
 
     const databases = await listBlueBubblesContactsDatabasesForTest({
-      homeDir: "/Users/tester",
+      homeDir,
       readdir,
       access,
     });
 
-    expect(readdir).toHaveBeenCalledWith(
-      "/Users/tester/Library/Application Support/AddressBook/Sources",
-    );
-    expect(databases).toEqual([
-      "/Users/tester/Library/Application Support/AddressBook/Sources/source-a/AddressBook-v22.abcddb",
-    ]);
+    expect(readdir).toHaveBeenCalledWith(sourcesDir);
+    expect(databases).toEqual([expectedDbPath]);
   });
 
   it("queries only the requested phone keys in sqlite", async () => {
@@ -141,7 +143,7 @@ describe("enrichBlueBubblesParticipantsWithContactNames", () => {
     const rows = await queryBlueBubblesContactsDatabaseForTest(
       "/tmp/AddressBook-v22.abcddb",
       ["5551234567", "5557654321"],
-      { execFileAsync },
+      { execFileAsync, sqliteDotParameterSupported: true },
     );
 
     expect(rows).toEqual([
@@ -149,8 +151,109 @@ describe("enrichBlueBubblesParticipantsWithContactNames", () => {
       { phoneKey: "5557654321", name: "Bob Example" },
     ]);
     expect(execFileAsync).toHaveBeenCalledTimes(1);
-    const sql = execFileAsync.mock.calls[0]?.[1]?.[3];
+
+    const args = execFileAsync.mock.calls[0]?.[1] ?? [];
+    const sql = args[args.length - 1];
+    expect(sql).toContain("WHERE digits IN (?1, ?2)");
+    expect(args).toContain("-cmd");
+    expect(args).toContain(".parameter set ?1 '5551234567'");
+    expect(args).toContain(".parameter set ?2 '5557654321'");
+  });
+
+  it("uses digit-only SQL literals when sqlite dot-parameter commands are unavailable", async () => {
+    const execFileAsync = vi.fn(async (_file: string, _args: string[], _options: unknown) => ({
+      stdout: "5551234567\tAlice Example\n5557654321\tBob Example\n",
+      stderr: "",
+    }));
+
+    const rows = await queryBlueBubblesContactsDatabaseForTest(
+      "/tmp/AddressBook-v22.abcddb",
+      ["5551234567", "5557654321"],
+      { execFileAsync, sqliteDotParameterSupported: false },
+    );
+
+    expect(rows).toEqual([
+      { phoneKey: "5551234567", name: "Alice Example" },
+      { phoneKey: "5557654321", name: "Bob Example" },
+    ]);
+    expect(execFileAsync).toHaveBeenCalledTimes(1);
+
+    const args = execFileAsync.mock.calls[0]?.[1] ?? [];
+    const sql = args[args.length - 1];
     expect(sql).toContain("WHERE digits IN ('5551234567', '5557654321')");
+    expect(args.filter((a) => a === "-cmd")).toHaveLength(0);
+  });
+
+  it("normalizes fallback SQL literals before interpolation", async () => {
+    const execFileAsync = vi.fn(async (_file: string, _args: string[], _options: unknown) => ({
+      stdout: "5551234567\tAlice Example\n",
+      stderr: "",
+    }));
+
+    const rows = await queryBlueBubblesContactsDatabaseForTest(
+      "/tmp/AddressBook-v22.abcddb",
+      ["+1 (555) 123-4567'); DROP TABLE ZABCDRECORD; --"],
+      { execFileAsync, sqliteDotParameterSupported: false },
+    );
+
+    expect(rows).toEqual([{ phoneKey: "5551234567", name: "Alice Example" }]);
+
+    const args = execFileAsync.mock.calls[0]?.[1] ?? [];
+    const sql = args[args.length - 1];
+    expect(sql).toContain("WHERE digits IN ('5551234567')");
+    expect(sql).not.toContain("DROP TABLE");
+  });
+
+  it("probes sqlite --version once when dot-parameter support is unknown", async () => {
+    const execFileAsync = vi.fn(async (_file: string, args: string[]) => {
+      if (args[0] === "--version") {
+        return { stdout: "3.28.0 2019-04-15 14:59:49 UTC\n", stderr: "" };
+      }
+      return {
+        stdout: "5551234567\tAlice Example\n",
+        stderr: "",
+      };
+    });
+
+    const deps = { execFileAsync };
+
+    await queryBlueBubblesContactsDatabaseForTest("/tmp/a.abcddb", ["5551234567"], deps);
+    await queryBlueBubblesContactsDatabaseForTest("/tmp/b.abcddb", ["5551234567"], deps);
+
+    expect(execFileAsync).toHaveBeenCalledTimes(3);
+    expect(execFileAsync.mock.calls[0]?.[1]?.[0]).toBe("--version");
+
+    const firstQueryArgs = execFileAsync.mock.calls[1]?.[1] ?? [];
+    expect(firstQueryArgs[firstQueryArgs.length - 1]).toContain("WHERE digits IN ('5551234567')");
+
+    const secondQueryArgs = execFileAsync.mock.calls[2]?.[1] ?? [];
+    expect(secondQueryArgs[secondQueryArgs.length - 1]).toContain("WHERE digits IN ('5551234567')");
+  });
+
+  it("uses sqlite dot parameters after a supported version probe", async () => {
+    const execFileAsync = vi.fn(async (_file: string, args: string[]) => {
+      if (args[0] === "--version") {
+        return { stdout: "3.31.0 2020-01-22 18:38:59 UTC\n", stderr: "" };
+      }
+      return {
+        stdout: "5551234567\tAlice Example\n",
+        stderr: "",
+      };
+    });
+
+    const rows = await queryBlueBubblesContactsDatabaseForTest(
+      "/tmp/AddressBook-v22.abcddb",
+      ["5551234567"],
+      { execFileAsync },
+    );
+
+    expect(rows).toEqual([{ phoneKey: "5551234567", name: "Alice Example" }]);
+    expect(execFileAsync).toHaveBeenCalledTimes(2);
+
+    const queryArgs = execFileAsync.mock.calls[1]?.[1] ?? [];
+    const sql = queryArgs[queryArgs.length - 1];
+    expect(sql).toContain("WHERE digits IN (?1)");
+    expect(queryArgs).toContain(".parameter set ?1 '5551234567'");
   });
 
   it("resolves names through the macOS contacts path across multiple databases", async () => {
@@ -171,6 +274,7 @@ describe("enrichBlueBubblesParticipantsWithContactNames", () => {
         readdir,
         access,
         execFileAsync,
+        sqliteDotParameterSupported: true,
       },
     );
 

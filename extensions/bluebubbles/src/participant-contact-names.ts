@@ -10,6 +10,8 @@ const CONTACT_NAME_CACHE_TTL_MS = 60 * 60 * 1000;
 const NEGATIVE_CONTACT_NAME_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_PARTICIPANT_CONTACT_NAME_CACHE_ENTRIES = 2048;
 const SQLITE_MAX_BUFFER = 8 * 1024 * 1024;
+/** `sqlite3` dot-command `.parameter set` requires SQLite 3.31.0+ (Jan 2020). Older macOS system sqlite omits it. */
+const SQLITE_DOT_PARAMETER_MIN_VERSION: [number, number, number] = [3, 31, 0];
 const SQLITE_PHONE_DIGITS_SQL =
   "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(p.ZFULLNUMBER, ''), ' ', ''), '(', ''), ')', ''), '-', ''), '+', ''), '.', ''), '\n', ''), '\r', '')";
 
@@ -35,6 +37,8 @@ type ParticipantContactNameDeps = {
   readdir?: ReadDirRunner;
   access?: AccessRunner;
   execFileAsync?: ExecFileRunner;
+  /** When set, skips `sqlite3 --version` probe (tests only). */
+  sqliteDotParameterSupported?: boolean;
 };
 
 type ResolvedParticipantContactNameDeps = {
@@ -45,10 +49,12 @@ type ResolvedParticipantContactNameDeps = {
   readdir: ReadDirRunner;
   access: AccessRunner;
   execFileAsync: ExecFileRunner;
+  sqliteDotParameterSupported?: boolean;
 };
 
 const participantContactNameCache = new Map<string, ContactNameCacheEntry>();
 let participantContactNameDepsForTest: ParticipantContactNameDeps | undefined;
+let sqliteDotParameterSupportPromise: Promise<boolean> | null = null;
 
 function normalizePhoneLookupKey(value: string): string | null {
   const digits = value.replace(/\D/g, "");
@@ -68,6 +74,59 @@ function uniqueNormalizedPhoneLookupKeys(phoneKeys: string[]): string[] {
     }
   }
   return [...unique];
+}
+
+function parseLeadingSqliteVersionTriple(stdout: string): [number, number, number] | null {
+  const match = stdout.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return null;
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function isSqliteVersionAtLeast(
+  version: [number, number, number],
+  minimum: [number, number, number],
+): boolean {
+  const [maj, min, pat] = version;
+  const [minMaj, minMin, minPat] = minimum;
+  if (maj !== minMaj) {
+    return maj > minMaj;
+  }
+  if (min !== minMin) {
+    return min > minMin;
+  }
+  return pat >= minPat;
+}
+
+async function probeSqliteDotParameterSupport(
+  deps: ResolvedParticipantContactNameDeps,
+): Promise<boolean> {
+  try {
+    const { stdout } = await deps.execFileAsync("sqlite3", ["--version"], {
+      encoding: "utf8",
+      maxBuffer: SQLITE_MAX_BUFFER,
+    });
+    const triple = parseLeadingSqliteVersionTriple(stdout);
+    if (!triple) {
+      return false;
+    }
+    return isSqliteVersionAtLeast(triple, SQLITE_DOT_PARAMETER_MIN_VERSION);
+  } catch {
+    return false;
+  }
+}
+
+async function getSqliteDotParameterSupported(
+  deps: ResolvedParticipantContactNameDeps,
+): Promise<boolean> {
+  if (typeof deps.sqliteDotParameterSupported === "boolean") {
+    return deps.sqliteDotParameterSupported;
+  }
+  if (!sqliteDotParameterSupportPromise) {
+    sqliteDotParameterSupportPromise = probeSqliteDotParameterSupport(deps);
+  }
+  return sqliteDotParameterSupportPromise;
 }
 
 function resolveParticipantPhoneLookupKey(participant: BlueBubblesParticipant): string | null {
@@ -156,10 +215,12 @@ async function listContactsDatabases(deps: ResolvedParticipantContactNameDeps): 
   return databases;
 }
 
-function buildSqlitePhoneKeyList(phoneKeys: string[]): string {
-  return uniqueNormalizedPhoneLookupKeys(phoneKeys)
-    .map((phoneKey) => `'${phoneKey}'`)
-    .join(", ");
+/**
+ * Digit-only SQL literals for `IN (...)`. Safe here because callers pass values
+ * from `uniqueNormalizedPhoneLookupKeys`, which strips non-digits.
+ */
+function buildSqlitePhoneKeyList(uniqueKeys: string[]): string {
+  return uniqueKeys.map((phoneKey) => `'${phoneKey}'`).join(", ");
 }
 
 async function queryContactsDatabase(
@@ -167,10 +228,14 @@ async function queryContactsDatabase(
   phoneKeys: string[],
   deps: ResolvedParticipantContactNameDeps,
 ): Promise<Array<{ phoneKey: string; name: string }>> {
-  const sqlitePhoneKeyList = buildSqlitePhoneKeyList(phoneKeys);
-  if (!sqlitePhoneKeyList) {
+  const uniqueKeys = uniqueNormalizedPhoneLookupKeys(phoneKeys);
+  if (uniqueKeys.length === 0) {
     return [];
   }
+  const useDotParameter = await getSqliteDotParameterSupported(deps);
+  const inListSql = useDotParameter
+    ? uniqueKeys.map((_, i) => `?${i + 1}`).join(", ")
+    : buildSqlitePhoneKeyList(uniqueKeys);
   const sql = `
 SELECT digits, name
 FROM (
@@ -187,18 +252,22 @@ FROM (
   JOIN ZABCDPHONENUMBER p ON p.ZOWNER = r.Z_PK
   WHERE p.ZFULLNUMBER IS NOT NULL
 )
-WHERE digits IN (${sqlitePhoneKeyList})
+WHERE digits IN (${inListSql})
   AND name != '';
 `;
   const options: ExecFileOptionsWithStringEncoding = {
     encoding: "utf8",
     maxBuffer: SQLITE_MAX_BUFFER,
   };
-  const { stdout } = await deps.execFileAsync(
-    "sqlite3",
-    ["-separator", "\t", dbPath, sql],
-    options,
-  );
+  const args = ["-separator", "\t"];
+  if (useDotParameter) {
+    uniqueKeys.forEach((key, index) => {
+      args.push("-cmd", `.parameter set ?${index + 1} '${key}'`);
+    });
+  }
+  args.push(dbPath, sql);
+
+  const { stdout } = await deps.execFileAsync("sqlite3", args, options);
   const rows: Array<{ phoneKey: string; name: string }> = [];
   for (const line of stdout.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -266,6 +335,7 @@ function resolveLookupDeps(deps?: ParticipantContactNameDeps): ResolvedParticipa
     readdir: merged.readdir ?? readdir,
     access: merged.access ?? access,
     execFileAsync: merged.execFileAsync ?? execFileAsync,
+    sqliteDotParameterSupported: merged.sqliteDotParameterSupported,
   };
 }
 
@@ -368,6 +438,7 @@ export async function resolveBlueBubblesParticipantContactNamesFromMacOsContacts
 
 export function resetBlueBubblesParticipantContactNameCacheForTest(): void {
   participantContactNameCache.clear();
+  sqliteDotParameterSupportPromise = null;
 }
 
 export function setBlueBubblesParticipantContactDepsForTest(
@@ -375,4 +446,5 @@ export function setBlueBubblesParticipantContactDepsForTest(
 ): void {
   participantContactNameDepsForTest = deps;
   participantContactNameCache.clear();
+  sqliteDotParameterSupportPromise = null;
 }
