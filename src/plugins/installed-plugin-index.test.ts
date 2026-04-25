@@ -466,6 +466,40 @@ describe("installed plugin index", () => {
     ]);
   });
 
+  it("treats enablement changes as policy invalidation", () => {
+    const fixture = createRichPluginFixture();
+    const previous = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+    const current = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
+      "policy-changed",
+    ]);
+  });
+
   it("marks disabled plugins without dropping their cold contributions", () => {
     const fixture = createRichPluginFixture();
 

@@ -29,6 +29,7 @@ export type InstalledPluginIndexRefreshReason =
   | "stale-manifest"
   | "stale-package"
   | "source-changed"
+  | "policy-changed"
   | "host-contract-changed"
   | "compat-registry-changed"
   | "manual";
@@ -612,6 +613,9 @@ export function diffInstalledPluginIndexInvalidationReasons(
       previousPlugin.installRecordHash !== currentPlugin.installRecordHash
     ) {
       reasons.add("source-changed");
+    }
+    if (previousPlugin.enabled !== currentPlugin.enabled) {
+      reasons.add("policy-changed");
     }
     if (previousPlugin.manifestHash !== currentPlugin.manifestHash) {
       reasons.add("stale-manifest");
