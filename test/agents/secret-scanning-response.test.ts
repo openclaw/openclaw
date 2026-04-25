@@ -276,7 +276,7 @@ describe("secret-scanning response workflow script", () => {
             GITHUB_EVENT_PATH: eventPath,
             GITHUB_REPOSITORY: "openclaw/openclaw",
             SECRET_SCANNING_API_BASE_URL: baseUrl,
-            SECRET_SCANNING_ALLOWED_AUTHORS: "wangshu94",
+            SECRET_SCANNING_ALLOWED_AUTHORS: "hxy91819",
           },
           tempDir,
         );
