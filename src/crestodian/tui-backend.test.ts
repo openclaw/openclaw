@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +10,40 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../tui/tui.js", () => ({
   runTui: mocks.runTui,
+}));
+
+vi.mock("./probes.js", () => ({
+  probeLocalCommand: vi.fn(async (command: string) => ({
+    command,
+    found: false,
+    error: "not found",
+  })),
+  probeGatewayUrl: vi.fn(async (url: string) => ({ reachable: false, url, error: "offline" })),
+}));
+
+vi.mock("./overview.js", () => ({
+  formatCrestodianOverview: () => "Default model: openai/gpt-5.5",
+  loadCrestodianOverview: vi.fn(async () => ({
+    defaultAgentId: "main",
+    defaultModel: "openai/gpt-5.5",
+    agents: [{ id: "main", isDefault: true, model: "openai/gpt-5.5" }],
+    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
+    tools: {
+      codex: { command: "codex", found: false, error: "not found" },
+      claude: { command: "claude", found: false, error: "not found" },
+      apiKeys: { openai: true, anthropic: false },
+    },
+    gateway: {
+      url: "ws://127.0.0.1:18789",
+      source: "local loopback",
+      reachable: false,
+      error: "offline",
+    },
+    references: {
+      docsUrl: "https://docs.openclaw.ai",
+      sourceUrl: "https://github.com/openclaw/openclaw",
+    },
+  })),
 }));
 
 import { runCrestodianTui } from "./tui-backend.js";
@@ -25,6 +59,10 @@ function createRuntime(): RuntimeEnv {
 }
 
 describe("runCrestodianTui", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
     mocks.runTui.mockClear();
