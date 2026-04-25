@@ -516,6 +516,35 @@ function resolveRuntimePackageImportTarget(exportsField: unknown): string | null
   return null;
 }
 
+function collectRuntimePackageImportTargets(
+  pkg: RuntimeDependencyPackageJson,
+): Map<string, string> {
+  const targets = new Map<string, string>();
+  const exportsField = pkg.exports;
+  if (
+    exportsField &&
+    typeof exportsField === "object" &&
+    !Array.isArray(exportsField) &&
+    Object.keys(exportsField).some((key) => key.startsWith("."))
+  ) {
+    for (const [exportKey, exportValue] of Object.entries(exportsField)) {
+      if (!exportKey.startsWith(".") || exportKey.includes("*")) {
+        continue;
+      }
+      const resolved = resolveRuntimePackageImportTarget(exportValue);
+      if (resolved) {
+        targets.set(exportKey, resolved);
+      }
+    }
+    return targets;
+  }
+  const rootEntry = resolveRuntimePackageImportTarget(exportsField) ?? pkg.module ?? pkg.main;
+  if (rootEntry) {
+    targets.set(".", rootEntry);
+  }
+  return targets;
+}
+
 function registerBundledRuntimeDependencyJitiAliases(rootDir: string): void {
   const rootPackageJson = readRuntimeDependencyPackageJson(path.join(rootDir, "package.json"));
   if (!rootPackageJson) {
@@ -532,22 +561,19 @@ function registerBundledRuntimeDependencyJitiAliases(rootDir: string): void {
     if (!dependencyPackageJson) {
       continue;
     }
-    const entry =
-      resolveRuntimePackageImportTarget(dependencyPackageJson.exports) ??
-      dependencyPackageJson.module ??
-      dependencyPackageJson.main;
-    if (!entry || entry.startsWith("#")) {
-      continue;
-    }
     const dependencyRoot = path.dirname(dependencyPackageJsonPath);
-    const targetPath = path.resolve(dependencyRoot, entry);
-    if (!isPathInside(dependencyRoot, targetPath) || !fs.existsSync(targetPath)) {
-      continue;
+    for (const [exportKey, entry] of collectRuntimePackageImportTargets(dependencyPackageJson)) {
+      if (!entry || entry.startsWith("#")) {
+        continue;
+      }
+      const targetPath = path.resolve(dependencyRoot, entry);
+      if (!isPathInside(dependencyRoot, targetPath) || !fs.existsSync(targetPath)) {
+        continue;
+      }
+      const aliasKey =
+        exportKey === "." ? dependencyName : `${dependencyName}${exportKey.slice(1)}`;
+      bundledRuntimeDependencyJitiAliases.set(aliasKey, normalizeJitiAliasTargetPath(targetPath));
     }
-    bundledRuntimeDependencyJitiAliases.set(
-      dependencyName,
-      normalizeJitiAliasTargetPath(targetPath),
-    );
   }
 }
 

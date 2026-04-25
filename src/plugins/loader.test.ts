@@ -1586,6 +1586,9 @@ module.exports = {
           ".": {
             import: "./index.js",
           },
+          "./oauth": {
+            import: "./oauth.js",
+          },
         },
       }),
       "utf-8",
@@ -1596,10 +1599,18 @@ module.exports = {
       "utf-8",
     );
     fs.writeFileSync(
+      path.join(packageDepRoot, "oauth.js"),
+      "export const oauthMarker = 'oauth-ok';\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
       path.join(packageRoot, "dist", "manifest-support.js"),
-      [`import support from "root-support";`, `export const marker = support.marker;`, ""].join(
-        "\n",
-      ),
+      [
+        `import support from "root-support";`,
+        `import { oauthMarker } from "root-support/oauth";`,
+        `export const marker = [support.marker, oauthMarker].join(":");`,
+        "",
+      ].join("\n"),
       "utf-8",
     );
     fs.writeFileSync(
