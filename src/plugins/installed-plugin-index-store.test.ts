@@ -102,11 +102,13 @@ describe("installed plugin index persistence", () => {
 
     await expect(writePersistedInstalledPluginIndex(index, { stateDir })).resolves.toBe(filePath);
 
-    expect(fs.readFileSync(filePath, "utf8")).toContain('"pluginId": "demo"');
+    const raw = fs.readFileSync(filePath, "utf8");
+    expect(raw).toContain('"warning": "DO NOT EDIT.');
+    expect(raw).toContain('"pluginId": "demo"');
     if (process.platform !== "win32") {
       expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
     }
-    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toEqual(index);
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject(index);
   });
 
   it("returns null for missing or invalid persisted indexes", async () => {

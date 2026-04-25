@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import {
+  resolveInstalledPluginIndexPolicyHash,
+  type InstalledPluginIndex,
+} from "./installed-plugin-index.js";
 import {
   DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
   createPluginRegistryIdNormalizer,
@@ -91,7 +94,10 @@ function createCandidate(rootDir: string): PluginCandidate {
   };
 }
 
-function createIndex(pluginId = "demo"): InstalledPluginIndex {
+function createIndex(
+  pluginId = "demo",
+  overrides: Partial<InstalledPluginIndex> = {},
+): InstalledPluginIndex {
   return {
     version: 1,
     hostContractVersion: "2026.4.25",
@@ -127,6 +133,7 @@ function createIndex(pluginId = "demo"): InstalledPluginIndex {
       },
     ],
     diagnostics: [],
+    ...overrides,
   };
 }
 
@@ -241,11 +248,18 @@ describe("plugin registry facade", () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);
-    await writePersistedInstalledPluginIndex(createIndex("persisted"), { stateDir });
+    const config = {} as const;
+    await writePersistedInstalledPluginIndex(
+      createIndex("persisted", {
+        policyHash: resolveInstalledPluginIndexPolicyHash(config),
+      }),
+      { stateDir },
+    );
 
     const result = loadPluginRegistrySnapshotWithMetadata({
       stateDir,
       candidates: [candidate],
+      config,
       env: hermeticEnv(),
     });
 
@@ -253,6 +267,37 @@ describe("plugin registry facade", () => {
     expect(result.diagnostics).toEqual([]);
     expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
       "persisted",
+    ]);
+  });
+
+  it("falls back to the derived registry when persisted policy is stale", async () => {
+    const stateDir = makeTempDir();
+    const rootDir = makeTempDir();
+    const candidate = createCandidate(rootDir);
+    await writePersistedInstalledPluginIndex(
+      createIndex("persisted", {
+        policyHash: resolveInstalledPluginIndexPolicyHash({
+          plugins: { entries: { persisted: { enabled: true } } },
+        }),
+      }),
+      { stateDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      config: {
+        plugins: { entries: { demo: { enabled: true } } },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: "persisted-registry-stale-policy" }),
+    ]);
+    expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
+      "demo",
     ]);
   });
 

@@ -16,6 +16,7 @@ import {
   listInstalledPluginRecords,
   loadInstalledPluginIndex,
   resolveInstalledPluginContributionOwners,
+  resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginContributionKey,
   type InstalledPluginIndex,
   type InstalledPluginIndexRecord,
@@ -29,7 +30,8 @@ export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
 export type PluginRegistrySnapshotSource = "provided" | "persisted" | "derived";
 export type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-disabled"
-  | "persisted-registry-missing";
+  | "persisted-registry-missing"
+  | "persisted-registry-stale-policy";
 
 export type PluginRegistrySnapshotDiagnostic = {
   level: "info" | "warn";
@@ -163,17 +165,30 @@ export function loadPluginRegistrySnapshotWithMetadata(
   if (persistedReadsEnabled) {
     const persisted = readPersistedInstalledPluginIndexSync(params);
     if (persisted) {
-      return {
-        snapshot: persisted,
-        source: "persisted",
-        diagnostics,
-      };
+      if (
+        params.config &&
+        persisted.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config)
+      ) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-policy",
+          message:
+            "Persisted plugin registry policy does not match current config; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else {
+        return {
+          snapshot: persisted,
+          source: "persisted",
+          diagnostics,
+        };
+      }
+    } else {
+      diagnostics.push({
+        level: "info",
+        code: "persisted-registry-missing",
+        message: "Persisted plugin registry is missing or invalid; using derived plugin index.",
+      });
     }
-    diagnostics.push({
-      level: "info",
-      code: "persisted-registry-missing",
-      message: "Persisted plugin registry is missing or invalid; using derived plugin index.",
-    });
   } else {
     diagnostics.push({
       level: "warn",
