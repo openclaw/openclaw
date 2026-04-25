@@ -7,6 +7,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Repo: `https://github.com/openclaw/openclaw`
 - Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
 - Run docs list first: `pnpm docs:list` if available; read relevant docs only.
+- High-confidence answers only when fixing/triaging: verify source, tests, shipped/current behavior, and dependency contracts before deciding.
+- Dependency-backed behavior: read upstream dependency docs/source/types first. Do not assume APIs, defaults, errors, timing, or runtime behavior.
 - Missing deps: `pnpm install`, retry once, then report first actionable error.
 - CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
 - Wording: product/docs/UI/changelog say "plugin/plugins"; `extensions/` is internal.
