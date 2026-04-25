@@ -16,7 +16,7 @@ cache values still take precedence over transcript fallback values.
 
 Why this matters: lower token cost, faster responses, and more predictable performance for long-running sessions. Without caching, repeated prompts pay the full prompt cost on every turn even when most input did not change.
 
-This page covers all cache-related knobs that affect prompt reuse and token cost.
+The sections below cover every cache-related knob that affects prompt reuse and token cost.
 
 Provider references:
 
@@ -123,13 +123,23 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`) support explicit `cacheRetention` pass-through.
 - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
 
-### OpenRouter Anthropic models
+### OpenRouter models
 
 For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic
 `cache_control` on system/developer prompt blocks to improve prompt-cache
 reuse only when the request is still targeting a verified OpenRouter route
 (`openrouter` on its default endpoint, or any provider/base URL that resolves
 to `openrouter.ai`).
+
+For `openrouter/deepseek/*`, `openrouter/moonshot*/*`, and `openrouter/zai/*`
+model refs, `contextPruning.mode: "cache-ttl"` is allowed because OpenRouter
+handles provider-side prompt caching automatically. OpenClaw does not inject
+Anthropic `cache_control` markers into those requests.
+
+DeepSeek cache construction is best-effort and can take a few seconds. An
+immediate follow-up may still show `cached_tokens: 0`; verify with a repeated
+same-prefix request after a short delay and use `usage.prompt_tokens_details.cached_tokens`
+as the cache-hit signal.
 
 If you repoint the model at an arbitrary OpenAI-compatible proxy URL, OpenClaw
 stops injecting those OpenRouter-specific Anthropic cache markers.
@@ -338,9 +348,9 @@ Defaults:
 Related docs:
 
 - [Anthropic](/providers/anthropic)
-- [Token Use and Costs](/reference/token-use)
-- [Session Pruning](/concepts/session-pruning)
-- [Gateway Configuration Reference](/gateway/configuration-reference)
+- [Token use and costs](/reference/token-use)
+- [Session pruning](/concepts/session-pruning)
+- [Gateway configuration reference](/gateway/configuration-reference)
 
 ## Related
 

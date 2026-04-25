@@ -27,6 +27,7 @@ const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
   "anthropic/",
+  "deepseek/",
   "moonshot/",
   "moonshotai/",
   "zai/",

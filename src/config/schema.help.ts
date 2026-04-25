@@ -258,6 +258,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables browser capability wiring in the gateway so browser tools and CDP-driven workflows can run. Disable when browser automation is not needed to reduce surface area and startup work.",
   "browser.cdpUrl":
     "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
+  "browser.actionTimeoutMs":
+    "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
   "browser.color":
     "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
   "browser.executablePath":
@@ -468,6 +470,10 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
+  "gateway.nodes.pairing":
+    "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
+  "gateway.nodes.pairing.autoApproveCidrs":
+    "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
   "gateway.nodes.allowCommands":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
@@ -1309,6 +1315,8 @@ export const FIELD_HELP: Record<string, string> = {
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
   "mcp.servers":
     "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+  "mcp.sessionIdleTtlMs":
+    "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
   session:
     "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
   "session.scope":

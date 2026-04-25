@@ -603,6 +603,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
           },
+          actionTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Browser Action Timeout (ms)",
+            description:
+              "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
+          },
           color: {
             type: "string",
             title: "Browser Accent Color",
@@ -3446,6 +3454,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                     const: "continuation-skip",
+                  },
+                  {
+                    type: "string",
+                    const: "never",
                   },
                 ],
                 title: "Context Injection",
@@ -22040,6 +22052,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
+              pairing: {
+                type: "object",
+                properties: {
+                  autoApproveCidrs: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    title: "Gateway Node Pairing Auto-Approve CIDRs",
+                    description:
+                      "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Gateway Node Pairing",
+                description:
+                  "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
+              },
               allowCommands: {
                 type: "array",
                 items: {
@@ -22480,6 +22510,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "MCP Servers",
             description:
               "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+          },
+          sessionIdleTtlMs: {
+            type: "number",
+            minimum: 0,
+            title: "MCP Runtime Idle TTL",
+            description:
+              "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
           },
         },
         additionalProperties: false,
@@ -23904,6 +23941,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
       tags: ["advanced", "url-secret"],
     },
+    "browser.actionTimeoutMs": {
+      label: "Browser Action Timeout (ms)",
+      help: "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
+      tags: ["performance"],
+    },
     "browser.color": {
       label: "Browser Accent Color",
       help: "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
@@ -24879,6 +24921,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Gateway Node Browser Pin",
       help: "Pin browser routing to a specific node id or name (optional).",
       tags: ["network"],
+    },
+    "gateway.nodes.pairing": {
+      label: "Gateway Node Pairing",
+      help: "Node pairing policy settings. Defaults keep CIDR auto-approval disabled; enable only with explicit trusted CIDR/IP allowlists you control.",
+      tags: ["network"],
+    },
+    "gateway.nodes.pairing.autoApproveCidrs": {
+      label: "Gateway Node Pairing Auto-Approve CIDRs",
+      help: "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
+      tags: ["security", "access", "network", "advanced"],
     },
     "gateway.nodes.allowCommands": {
       label: "Gateway Node Allowlist (Extra Commands)",
@@ -26310,6 +26362,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "MCP Servers",
       help: "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
       tags: ["advanced"],
+    },
+    "mcp.sessionIdleTtlMs": {
+      label: "MCP Runtime Idle TTL",
+      help: "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
+      tags: ["storage"],
     },
     "ui.seamColor": {
       label: "Accent Color",

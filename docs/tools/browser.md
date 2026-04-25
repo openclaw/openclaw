@@ -129,6 +129,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
+    actionTimeoutMs: 60000, // default browser act timeout (ms)
     tabCleanup: {
       enabled: true, // default: true
       idleMinutes: 120, // set 0 to disable idle cleanup
@@ -173,6 +174,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 - Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). Overriding `gateway.port` or `OPENCLAW_GATEWAY_PORT` shifts the derived ports in the same family.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for remote CDP. `cdpUrl` defaults to the managed local CDP port when unset.
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP HTTP reachability checks; `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket handshakes.
+- `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
 - `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 
 </Accordion>
@@ -427,7 +429,7 @@ Defaults:
 
 All control endpoints accept `?profile=<name>`; the CLI uses `--browser-profile`.
 
-## Existing-session via Chrome DevTools MCP
+## Existing session via Chrome DevTools MCP
 
 OpenClaw can also attach to a running Chromium-based browser profile through the
 official Chrome DevTools MCP server. This reuses the tabs and login state
@@ -529,7 +531,7 @@ Notes:
 Compared to the managed `openclaw` profile, existing-session drivers are more constrained:
 
 - **Screenshots** — page captures and `--ref` element captures work; CSS `--element` selectors do not. `--full-page` cannot combine with `--ref` or `--element`. Playwright is not required for page or ref-based element screenshots.
-- **Actions** — `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
+- **Actions** — `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
 - **Wait / upload / dialog** — `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides.
 - **Managed-only features** — batch actions, PDF export, download interception, and `responsebody` still require the managed browser path.
 

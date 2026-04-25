@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
+  clickChromeMcpCoords,
   closeChromeMcpTab,
   dragChromeMcpElement,
   evaluateChromeMcpScript,
@@ -279,6 +280,8 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
         return EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers;
       }
       return null;
+    case "clickCoords":
+      return null;
     case "type":
       if (action.selector) {
         return EXISTING_SESSION_LIMITS.act.typeSelector;
@@ -421,6 +424,22 @@ export function registerBrowserAgentActRoutes(
                       doubleClick: action.doubleClick ?? false,
                       timeoutMs: action.timeoutMs,
                       signal: req.signal,
+                    }),
+                  guard: existingSessionNavigationGuard,
+                });
+                return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+              case "clickCoords":
+                await runExistingSessionActionWithNavigationGuard({
+                  execute: () =>
+                    clickChromeMcpCoords({
+                      profileName,
+                      userDataDir: profileCtx.profile.userDataDir,
+                      targetId: tab.targetId,
+                      x: action.x,
+                      y: action.y,
+                      doubleClick: action.doubleClick ?? false,
+                      button: action.button as "left" | "right" | "middle" | undefined,
+                      delayMs: action.delayMs,
                     }),
                   guard: existingSessionNavigationGuard,
                 });
@@ -610,6 +629,7 @@ export function registerBrowserAgentActRoutes(
                 result: result.result,
               });
             case "click":
+            case "clickCoords":
             case "resize":
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
             default:

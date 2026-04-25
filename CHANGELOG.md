@@ -2,6 +2,22 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Diagnostics/OTEL: emit bounded exec-process diagnostics and export them as `openclaw.exec` spans without exposing command text, working directories, or container identifiers. (#70424) Thanks @jlapenna.
+- Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#70424) Thanks @jlapenna.
+- Control UI: refine the agent Tool Access panel with compact live-tool chips, collapsible tool groups, direct per-tool toggles, and clearer runtime/source provenance. (#71405) Thanks @BunsDev.
+- Memory-core/hybrid search: expose raw `vectorScore` and `textScore` alongside the combined `score` on hybrid memory search results, so callers can inspect vector-versus-text retrieval contribution before temporal decay or MMR reordering. Fixes #68166. (#68286) Thanks @ajfonthemove.
+
+### Fixes
+
+- MCP: retire one-shot embedded bundled MCP runtimes at run end, skip bundle-MCP startup when a runtime tool allowlist cannot reach bundle-MCP tools, and add `mcp.sessionIdleTtlMs` idle eviction for leaked session runtimes. Fixes #71106, #71110, #70389, and #70808.
+- Gateway/restart continuation: durably hand restart continuations to a session-delivery queue before deleting the restart sentinel, recover queued continuation work after crashy restarts, and fall back to a session-only wake when no channel route survives reboot. (#70780) Thanks @fuller-stack-dev.
+- Agents/tool-result pruning: harden the tool-result character estimator and context-pruning loops against malformed `{ type: "text" }` blocks created by void or undefined tool handler results, serializing non-string text payloads for size accounting so they cannot bypass trimming as zero-sized. Fixes #34979. (#51267) Thanks @cgdusek.
+- Daemon/service-env: add Nix Home Manager profile bin directories to generated gateway service PATHs on macOS and Linux, honoring `NIX_PROFILES` right-to-left precedence and falling back to `~/.nix-profile/bin` when unset. Fixes #44402. (#59935) Thanks @jerome-benoit.
+
 ## 2026.4.24 (Unreleased)
 
 ### Breaking
@@ -10,8 +26,12 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/nodes: add disabled-by-default `gateway.nodes.pairing.autoApproveCidrs` for first-time node pairing from explicit trusted CIDRs, while keeping operator/browser pairing and all upgrade flows manual. Fixes #60800. Thanks @sahilsatralkar.
+- Browser: add viewport coordinate clicks for managed and existing-session automation, plus `openclaw browser click-coords` for CLI use. (#54452) Thanks @dluttz.
+- Browser: add `browser.actionTimeoutMs` and use a 60s default action budget so healthy long browser waits do not fail at the client transport boundary. (#62589) Thanks @andyylin.
 - Browser/config: support per-profile `browser.profiles.<name>.headless` overrides for locally launched browser profiles, so one profile can run headless without forcing all browser profiles headless. Thanks @nakamotoliu.
 - Plugins/PDF: move local PDF extraction into a bundled `document-extract` plugin so core no longer owns `pdfjs-dist` or PDF image-rendering dependencies. Thanks @vincentkoc.
+- Dependencies/memory: stop installing `node-llama-cpp` by default; local embeddings now load it only when operators install the optional runtime package. Thanks @vincentkoc.
 - Matrix: require full cross-signing identity trust for self-device verification and add `openclaw matrix verify self` so operators can establish that trust from the CLI. (#70401) Thanks @gumadeiras.
 - WebChat/sessions: keep runtime-only prompt context out of visible transcript history and scrub legacy wrappers from session history surfaces. Thanks @91wan.
 - Gradium: add a bundled text-to-speech provider with voice-note and telephony output support. (#64958) Thanks @LaurentMazare.
@@ -57,25 +77,55 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google Meet: add a bundled participant plugin with personal Google auth, explicit meeting URL joins, Chrome and Twilio transports, and realtime voice support. (#70765) Thanks @steipete.
 - Plugins/Google Meet: default Chrome realtime sessions to OpenAI plus SoX `rec`/`play` audio bridge commands, so the usual setup only needs the plugin enabled and `OPENAI_API_KEY`. Thanks @steipete.
 - Plugins/Google Meet: add a `chrome-node` transport so a paired macOS node, such as a Parallels VM, can own Chrome, BlackHole, and SoX while the Gateway machine keeps the agent and model key. Thanks @steipete.
+- Plugins/Google Meet: add `googlemeet artifacts` and `googlemeet attendance` commands plus matching tool/gateway actions for conference records, recordings, transcripts and transcript entries, smart notes, and participant sessions. Thanks @steipete.
+- Plugins/Google Meet: add markdown and file output for `googlemeet artifacts` and `googlemeet attendance` reports. Thanks @steipete.
+- Plugins/Google Meet: add `googlemeet latest` plus matching tool/gateway actions to find the newest conference record for a meeting. Thanks @steipete.
+- Plugins/Google Meet: make meeting-based artifact and attendance lookups use the latest conference record by default, with `--all-conference-records` for full history. Thanks @steipete.
+- Plugins/Google Meet: add `googlemeet doctor --oauth` so operators can verify OAuth token refresh, Meet space reads, and side-effecting space creation without printing secrets. Thanks @steipete.
 - Plugins/Voice Call: expose the shared `openclaw_agent_consult` realtime tool so live phone calls can ask the full OpenClaw agent for deeper/tool-backed answers. Thanks @steipete.
 - Plugins/Voice Call: add `voicecall setup` and a dry-run-by-default `voicecall smoke` command so Twilio/provider readiness can be checked before placing a live test call. Thanks @steipete.
 - Plugins/Google Meet: add `googlemeet doctor` and a `recover_current_tab`/`recover-tab` flow so agents can inspect an already-open Meet tab and report the blocker without opening another window. Thanks @steipete.
 - Plugins/Bonjour: move LAN Gateway discovery advertising into a default-enabled bundled plugin with its own `@homebridge/ciao` dependency, so users can disable Bonjour without cutting wide-area discovery. Thanks @vincentkoc.
 - Providers/Google: add a Gemini Live realtime voice provider for backend Voice Call and Google Meet audio bridges, with bidirectional audio and function-call support. Thanks @steipete.
+- Providers/Google: let Gemini TTS prepend configured `audioProfile` and `speakerName` prompt text for reusable speech style control. Thanks @tdack.
 - Plugins/Google Meet: let realtime Meet sessions consult the full OpenClaw agent for deeper answers while staying in the live voice loop. Thanks @steipete.
 - Gateway/VoiceClaw: add a realtime brain WebSocket endpoint backed by Gemini Live, with owner-auth gating and async OpenClaw tool handoff. (#70938) Thanks @yagudaev.
 - Providers/DeepSeek: add DeepSeek V4 Flash and V4 Pro to the bundled catalog and make V4 Flash the onboarding default. Thanks @lsdsjy.
 - CLI/Gateway: make `gateway status` start faster by skipping plugin loading on the read-only status path. (#71364) Thanks @andyylin.
+- Plugins/compatibility: add a central plugin compatibility registry and docs for SDK/config/setup/runtime deprecation records, including dated migration metadata for legacy harness naming and other plugin-facing aliases. Thanks @vincentkoc.
+- Agents/bootstrap: add `agents.defaults.contextInjection: "never"` to disable workspace bootstrap file injection for agents that fully own their prompt lifecycle. (#65006) Thanks @xDarkicex.
 
 ### Fixes
 
+- Feishu: back off streaming-card creation after HTTP 400 startup failures, so unsupported card setups fall back without delaying every message. Fixes #56981. Thanks @JinnanDuan.
+- Feishu/topic groups: key native Feishu/Lark topic-group sessions by `thread_id` so starter messages and replies with different `root_id` formats stay in the same `group_topic` conversation. Fixes #71438. Thanks @1335848090.
+- Feishu: suppress duplicate final card delivery when idle closes a streaming card before the final payload arrives. (#68491) Thanks @MoerAI.
+- Signal: preserve sender attachment filenames and resolve missing MIME types from those filenames, so Linux `signal-cli` voice notes without `contentType` still enter audio transcription. Fixes #48614. Thanks @mindfury.
+- Telegram/agents: suppress the phantom "Agent couldn't generate a response" fallback after a reply was already committed through the messaging tool. (#70623) Thanks @chinar-amrutkar.
+- Models/CLI: show provider runtime `contextTokens` beside native `contextWindow` in `openclaw models list`, and align `openai-codex/gpt-5.5` with Codex's 272K runtime cap plus 400K native window. Fixes #71403.
+- Dashboard/security: avoid writing tokenized Control UI URLs or SSH hints to runtime logs, keeping gateway bearer fragments out of console-captured logs readable through `logs.tail`. (#70029) Thanks @Ziy1-Tan.
+- Providers/OpenRouter: treat DeepSeek refs as cache-TTL eligible without injecting Anthropic cache-control markers, aligning context pruning with OpenRouter-managed prompt caching. (#51983) Thanks @QuinnH496.
+- Control UI/browser: defer temp-dir access-mode constants until Node-only temp-dir resolution runs, preventing browser bundles from crashing when `node:fs` constants are stubbed. (#48930) Thanks @Valentinws.
+- Discord/cron: deliver text-only isolated cron and heartbeat announce output from the canonical final assistant text once, avoiding duplicate Discord posts when streamed block payloads and the final answer contain the same content. Fixes #71406. Thanks @alexgross21.
+- macOS Gateway: wait for launchd to reload the exited Gateway LaunchAgent before bootstrapping repair fallback, preventing config-triggered restarts from leaving the service not loaded. Fixes #45178. Thanks @vincentkoc.
+- macOS Gateway: tolerate launchctl bootstrap's already-loaded exit during restart fallback and use non-killing kickstart after bootstrap, avoiding a second race that can unload the LaunchAgent. Fixes #41934. Thanks @zerone0x.
+- macOS Gateway: rewrite stale LaunchAgent plists before restart fallback bootstrap, matching install repair behavior when `gateway restart` has to re-register launchd. Thanks @maybegeeker.
+- TTS/hooks: preserve audio-only TTS transcripts for `message_sending` and `message_sent` hooks without rendering the transcript as a media caption. Thanks @zqchris.
+- WhatsApp/TTS: preserve `audioAsVoice` through shared media payload sends and the WhatsApp outbound adapter, so `[[audio_as_voice]]` reply payloads keep their voice-note intent when routed through `sendPayload`. Fixes #66053. Thanks @masatohoshino.
+- Control UI/WebChat: hide heartbeat prompts, `HEARTBEAT_OK` acknowledgments, and internal-only runtime context turns from visible chat history while leaving the underlying transcript intact. Fixes #71381. Thanks @gerald1950ggg-ai.
+- Control UI/chat: keep optimistic user and assistant tail messages visible when a final history refresh briefly returns an older snapshot, preventing message cards from flash-disappearing until the next refresh. Fixes #71371. Thanks @WolvenRA.
 - Talk/TTS: resolve configured extension speech providers from the active runtime registry before provider-list discovery, so Talk mode no longer rejects valid plugin speech providers as unsupported.
 - Sessions/subagents: stop stale ended runs and old store-only child reverse links from reappearing in `childSessions`, while keeping live descendants and recently-ended children visible. Fixes #57920.
+- Subagents: recover child sessions after recoverable wait transport failures without exposing an extra wait state, and keep terminal lifecycle timer ordering deterministic. (#71423) Thanks @ZiPengWei.
 - Subagents: stop stale unended runs from counting as active or pending forever, while preserving restart-aborted recovery for recoverable child sessions. Fixes #71252. Thanks @hclsys.
 - Gateway/tools: allow `POST /tools/invoke` to reach plugin-backed catalog tools such as `browser` when no core implementation exists, while still preferring built-in tools for real core names. Thanks @chat2way.
 - Browser/security: require `operator.admin` for the `browser.request` gateway method, matching the host/browser-node control authority exposed by that route. Thanks @RichardCao.
 - Browser/profiles: allow local managed profiles to override `browser.executablePath`, so different profiles can launch different Chromium-based browsers. Thanks @nobrainer-tech.
 - Agents/replay: repair displaced or missing tool results before strict provider replay, use Codex-compatible `aborted` outputs for OpenAI Responses history, and drop partial aborted/error transport turns before retries.
+- Browser/startup: deduplicate concurrent lazy-start calls per profile so simultaneous browser tool requests no longer race into duplicate Chrome launches and `PortInUseError`. (#61772) Thanks @sukhdeepjohar.
+- Browser/profiles: recover from stale Chromium `Singleton*` profile locks after crashes or host moves by clearing dead/foreign locks and retrying launch once. Thanks @seanc-dev.
+- Browser/existing-session: keep Chrome MCP status probes transport-only and ephemeral, and retry stale cached Playwright attaches once so idle profile checks no longer poison the next real attach. (#57245) Thanks @josephbergvinson.
+- Cron/exec: suppress automatic background exec completion wakes only for silent cron jobs with `delivery.mode="none"` while keeping webhook and announce runs observable. (#71391) Thanks @goldmar.
 - Reply media: allow sandboxed replies to deliver OpenClaw-managed `media/outbound` and `media/tool-*` attachments without treating them as sandbox escapes, while keeping alias-escape checks on the managed media root. Fixes #71138. Thanks @mayor686, @truffle-dev, and @neeravmakwana.
 - CLI/agent: keep `openclaw agent --json` stdout reserved for the JSON response by routing gateway, plugin, and embedded-fallback diagnostics to stderr before execution starts. Fixes #71319.
 - Agents/Gemini: retry reasoning-only, empty, and planning-only Gemini turns instead of letting sessions silently stall. Fixes #71074. (#71362) Thanks @neeravmakwana.
@@ -120,6 +170,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/sessions: copy the oversized `sessions.json` to a rotation backup before the atomic rewrite instead of renaming the live store away, so a crash during rotation keeps the existing session-to-transcript mapping authoritative. Fixes #68229. Thanks @jjjojoj.
 - Providers/OpenAI-compatible: strip OpenAI-only Completions `store` from proxy payloads and allow `extra_body`/`extraBody` passthrough params for provider-specific request fields. Fixes #61826 and #69717.
 - Discord/subagents: preserve thread-bound completion delivery by keeping the requester-agent announce path primary and falling back to direct thread sends only when the announce produces no visible output. (#71064) Thanks @DolencLuka.
+- Discord/proxy: serialize proxied multipart attachment uploads with undici `FormData`, so Discord media sends work through configured REST proxies. (#71383) Thanks @TC500.
 - Browser/tool: give Chrome MCP existing-session manage calls a longer default timeout, pass explicit tool timeouts through tab management, and recover stale selected-page MCP sessions instead of forcing a manual reset. Thanks @steipete.
 - Browser/sandbox: clean up idle tracked tabs opened by primary-agent browser sessions, while preserving active tab reuse and lifecycle cleanup for subagents, cron, and ACP sessions. Fixes #71165. Thanks @dwbutler.
 - Plugins/Voice Call: reuse the webhook runtime across in-process plugin contexts, avoiding `EADDRINUSE` when agent tools or CLI commands run while the Gateway already owns the voice webhook port. Fixes #58115. Thanks @sfbrian.
@@ -134,6 +185,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google Meet: tell agents to recover already-open Meet tabs after browser timeouts, and make the dev CLI release its build lock if compiler spawning fails. Thanks @steipete.
 - Plugins/Google Meet: return structured manual-action details when browser-based meeting creation needs login or permissions, so agents can guide the operator without opening duplicate Meet tabs. Thanks @steipete.
 - Plugins/CLI: provide Gateway-backed node inspection to plugin commands, so `googlemeet recover-tab` can inspect paired browser nodes from the terminal. Thanks @steipete.
+- Cron/isolated sessions: clear stale runtime, lifecycle, auth, model, exec, heartbeat, usage, privilege, routing, and delivery artifacts when creating a fresh isolated run, and persist per-run session rows as snapshots so old base-session state no longer leaks into new cron executions. Thanks @vincentkoc.
 - Gateway/sessions: recover main-agent turns interrupted by a gateway restart from stale transcript-lock evidence, avoiding stuck `status: "running"` sessions without broad post-boot transcript scans. Fixes #70555. Thanks @bitloi.
 - Codex approvals: sanitize MCP elicitation approval titles, descriptions, and display parameters before forwarding them to OpenClaw approval prompts. (#71343) Thanks @Lucenx9.
 - Codex approvals: keep command approval responses within Codex app-server `availableDecisions`, including deny/cancel fallbacks for prompts that do not offer `decline`. (#71338) Thanks @Lucenx9.
@@ -246,6 +298,7 @@ Docs: https://docs.openclaw.ai
 - Memory search: apply session visibility and agent-to-agent policy to session transcript hits, and keep `corpus=sessions` ranking scoped to session collections before result limiting. (#70761) Thanks @nefainl.
 - Agents/sessions: stop session write-lock timeouts from entering model failover, so local lock contention surfaces directly instead of cascading across providers. (#68700) Thanks @MonkeyLeeT.
 - Auto-reply: run inbound reply delivery through `message_sending` hooks so plugins can transform or cancel generated replies before they are sent. (#70118) Thanks @jzakirov.
+- CI/release-checks: pass workflow inputs and matrix values through step environment variables instead of embedding them directly into `run:` shell commands, reducing template-injection surface in the cross-OS release-check workflow. (#66884) Thanks @alexlomt.
 
 ## 2026.4.23
 

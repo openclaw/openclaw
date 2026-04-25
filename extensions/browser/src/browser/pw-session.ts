@@ -123,6 +123,27 @@ function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
 }
 
+function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
+  return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
+}
+
+function isRecoverableStalePageSelectionError(err: unknown, reusedCachedBrowser: boolean): boolean {
+  if (!reusedCachedBrowser) {
+    return false;
+  }
+  if (
+    err instanceof Error &&
+    err.message.includes("No pages available in the connected browser.")
+  ) {
+    return true;
+  }
+  if (err instanceof BrowserTabNotFoundError) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : formatErrorMessage(err);
+  return message.toLowerCase().includes("tab not found");
+}
+
 function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
   for (let i = state.requests.length - 1; i >= 0; i -= 1) {
     const candidate = state.requests[i];
@@ -625,7 +646,7 @@ async function resolvePageByTargetIdOrThrow(opts: {
   return page;
 }
 
-export async function getPageForTargetId(opts: {
+async function getPageForTargetIdOnce(opts: {
   cdpUrl: string;
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
@@ -669,6 +690,23 @@ export async function getPageForTargetId(opts: {
     return first;
   }
   throw new BrowserTabNotFoundError();
+}
+
+export async function getPageForTargetId(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<Page> {
+  const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
+  try {
+    return await getPageForTargetIdOnce(opts);
+  } catch (err) {
+    if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
+      throw err;
+    }
+    await closePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
+    return await getPageForTargetIdOnce(opts);
+  }
 }
 
 function isTopLevelNavigationRequest(page: Page, request: Request): boolean {

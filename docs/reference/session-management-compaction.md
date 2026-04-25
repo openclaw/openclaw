@@ -7,9 +7,7 @@ read_when:
 title: "Session management deep dive"
 ---
 
-# Session Management & Compaction (Deep Dive)
-
-This document explains how OpenClaw manages sessions end-to-end:
+This page explains how OpenClaw manages sessions end-to-end:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
@@ -21,12 +19,12 @@ This document explains how OpenClaw manages sessions end-to-end:
 
 If you want a higher-level overview first, start with:
 
-- [/concepts/session](/concepts/session)
-- [/concepts/compaction](/concepts/compaction)
-- [/concepts/memory](/concepts/memory)
-- [/concepts/memory-search](/concepts/memory-search)
-- [/concepts/session-pruning](/concepts/session-pruning)
-- [/reference/transcript-hygiene](/reference/transcript-hygiene)
+- [Session management](/concepts/session)
+- [Compaction](/concepts/compaction)
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Session pruning](/concepts/session-pruning)
+- [Transcript hygiene](/reference/transcript-hygiene)
 
 ---
 
@@ -102,6 +100,14 @@ Isolated cron runs also create session entries/transcripts, and they have dedica
 
 - `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
 - `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
+
+When cron force-creates a new isolated run session, it sanitizes the previous
+`cron:<jobId>` session entry before writing the new row. It carries safe
+preferences such as thinking/fast/verbose settings, labels, and explicit
+user-selected model/auth overrides. It drops ambient conversation context such
+as channel/group routing, send or queue policy, elevation, origin, and ACP
+runtime binding so a fresh isolated run cannot inherit stale delivery or
+runtime authority from an older run.
 
 ---
 

@@ -37,6 +37,7 @@ export function makeBrowserServerState(params?: {
     evaluateEnabled: false,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
+    actionTimeoutMs: 60_000,
     extraArgs: [],
     color: profile.color,
     headless: true,

@@ -39,7 +39,7 @@ Rules:
 - The web UI strips the shortcode from visible text and renders the embed inline.
 - `MEDIA:` is not an embed alias and should not be used for rich embed rendering.
 
-## Stored Rendering Shape
+## Stored rendering shape
 
 The normalized/stored assistant content block is a structured `canvas` item:
 

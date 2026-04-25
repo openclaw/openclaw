@@ -8,8 +8,8 @@ title: "ACP agents — setup"
 ---
 
 For the overview, operator runbook, and concepts, see [ACP agents](/tools/acp-agents).
-This page covers acpx harness config, plugin setup for the MCP bridges, and
-permission configuration.
+
+The sections below cover acpx harness config, plugin setup for the MCP bridges, and permission configuration.
 
 ## acpx harness support (current)
 

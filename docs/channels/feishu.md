@@ -430,6 +430,12 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - ✅ Thread replies
 - ✅ Media replies stay thread-aware when replying to a thread message
 
+For `groupSessionScope: "group_topic"` and `"group_topic_sender"`, native
+Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the canonical
+topic session key. Normal group replies that OpenClaw turns into threads keep
+using the reply root message ID (`om_*`) so the first turn and follow-up turn
+stay in the same session.
+
 ---
 
 ## Related

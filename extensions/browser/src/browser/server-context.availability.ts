@@ -46,6 +46,7 @@ type AvailabilityDeps = {
 
 type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
+  isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
   ensureBrowserAvailable: () => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
@@ -87,9 +88,21 @@ export function createProfileAvailability({
     );
   };
 
+  const isTransportAvailable = async (timeoutMs?: number) => {
+    if (capabilities.usesChromeMcp) {
+      const { ensureChromeMcpAvailable } = await getChromeMcpModule();
+      await ensureChromeMcpAvailable(profile.name, profile.userDataDir, {
+        ephemeral: true,
+        timeoutMs,
+      });
+      return true;
+    }
+    return await isReachable(timeoutMs);
+  };
+
   const isHttpReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
-      return await isReachable(timeoutMs);
+      return await isTransportAvailable(timeoutMs);
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, getCdpReachabilityPolicy());
@@ -200,7 +213,9 @@ export function createProfileAvailability({
     throw new BrowserProfileUnavailableError(formatChromeMcpAttachFailure(lastError));
   };
 
-  const ensureBrowserAvailable = async (): Promise<void> => {
+  let inflightEnsureBrowserAvailable: Promise<void> | null = null;
+
+  const ensureBrowserAvailableOnce = async (): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       if (profile.userDataDir && !fs.existsSync(profile.userDataDir)) {
@@ -305,6 +320,16 @@ export function createProfileAvailability({
     }
   };
 
+  const ensureBrowserAvailable = async (): Promise<void> => {
+    if (inflightEnsureBrowserAvailable) {
+      return inflightEnsureBrowserAvailable;
+    }
+    inflightEnsureBrowserAvailable = ensureBrowserAvailableOnce().finally(() => {
+      inflightEnsureBrowserAvailable = null;
+    });
+    return inflightEnsureBrowserAvailable;
+  };
+
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
@@ -329,6 +354,7 @@ export function createProfileAvailability({
 
   return {
     isHttpReachable,
+    isTransportAvailable,
     isReachable,
     ensureBrowserAvailable,
     stopRunningBrowser,

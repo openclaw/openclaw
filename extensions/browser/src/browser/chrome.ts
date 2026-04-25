@@ -53,6 +53,13 @@ import {
 } from "./constants.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
+const CHROME_SINGLETON_LOCK_PATHS = [
+  "SingletonLock",
+  "SingletonSocket",
+  "SingletonCookie",
+] as const;
+const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
+const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
 
 export type { BrowserExecutable } from "./chrome.executables.js";
 export {
@@ -79,6 +86,109 @@ function exists(filePath: string) {
   } catch {
     return false;
   }
+}
+
+function processExists(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
+}
+
+function clearChromeSingletonArtifacts(userDataDir: string) {
+  for (const basename of CHROME_SINGLETON_LOCK_PATHS) {
+    try {
+      fs.rmSync(path.join(userDataDir, basename), { force: true });
+    } catch {
+      // ignore best-effort cleanup
+    }
+  }
+}
+
+export function clearStaleChromeSingletonLocks(
+  userDataDir: string,
+  hostname = os.hostname(),
+): boolean {
+  const lockPath = path.join(userDataDir, "SingletonLock");
+  let target: string;
+  try {
+    target = fs.readlinkSync(lockPath);
+  } catch {
+    return false;
+  }
+
+  const match = /^(?<lockHost>.+)-(?<pid>\d+)$/.exec(target);
+  if (!match?.groups) {
+    return false;
+  }
+
+  const lockHost = normalizeOptionalString(match.groups.lockHost) ?? "";
+  const pid = Number.parseInt(match.groups.pid ?? "", 10);
+  if (lockHost === hostname && processExists(pid)) {
+    return false;
+  }
+
+  clearChromeSingletonArtifacts(userDataDir);
+  return true;
+}
+
+async function waitForChromeProcessExit(proc: ChildProcess, timeoutMs: number): Promise<void> {
+  if (proc.exitCode != null || proc.signalCode != null || proc.killed) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      proc.off("exit", onExit);
+      proc.off("close", onExit);
+      resolve();
+    }, timeoutMs);
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    proc.once("exit", onExit);
+    proc.once("close", onExit);
+  });
+}
+
+async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string) {
+  try {
+    proc.kill("SIGKILL");
+  } catch {
+    // ignore
+  }
+  await waitForChromeProcessExit(proc, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS);
+  clearStaleChromeSingletonLocks(userDataDir);
+}
+
+function chromeLaunchHints(params: {
+  stderrOutput: string;
+  resolved: ResolvedBrowserConfig;
+  profile: ResolvedBrowserProfile;
+}): string {
+  const hints: string[] = [];
+  if (process.platform === "linux" && !params.resolved.noSandbox) {
+    hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
+  }
+  if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !params.profile.headless) {
+    hints.push(
+      "No DISPLAY/X server was detected. Enable browser.headless: true, start Xvfb, or run the Gateway in a desktop session.",
+    );
+  }
+  if (CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput)) {
+    hints.push(
+      `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
+    );
+  }
+  return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
 }
 
 export type RunningChrome = {
@@ -363,66 +473,80 @@ export async function launchOpenClawChrome(
     log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
   }
 
-  const proc = spawnOnce();
+  const launchOnceAndWait = async (allowSingletonRecovery: boolean): Promise<RunningChrome> => {
+    const proc = spawnOnce();
 
-  // Collect stderr for diagnostics in case Chrome fails to start.
-  // The listener is removed on success to avoid unbounded memory growth
-  // from a long-lived Chrome process that emits periodic warnings.
-  const stderrChunks: Buffer[] = [];
-  const onStderr = (chunk: Buffer) => {
-    stderrChunks.push(chunk);
-  };
-  proc.stderr?.on("data", onStderr);
+    // Collect stderr for diagnostics in case Chrome fails to start.
+    // The listener is removed on success to avoid unbounded memory growth
+    // from a long-lived Chrome process that emits periodic warnings.
+    const stderrChunks: Buffer[] = [];
+    const onStderr = (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+    };
+    proc.stderr?.on("data", onStderr);
 
-  // Wait for CDP to come up.
-  const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
-  while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(profile.cdpUrl)) {
-      break;
-    }
-    await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
-  }
-
-  if (!(await isChromeReachable(profile.cdpUrl))) {
-    const diagnosticText = await diagnoseChromeCdp(profile.cdpUrl)
-      .then(formatChromeCdpDiagnostic)
-      .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
-    const stderrOutput =
-      normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
-    const stderrHint = stderrOutput
-      ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
-      : "";
-    const sandboxHint =
-      process.platform === "linux" && !resolved.noSandbox
-        ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
-        : "";
     try {
-      proc.kill("SIGKILL");
-    } catch {
-      // ignore
+      const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
+      while (Date.now() < readyDeadline) {
+        if (await isChromeReachable(profile.cdpUrl)) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
+      }
+
+      if (!(await isChromeReachable(profile.cdpUrl))) {
+        const diagnosticText = await diagnoseChromeCdp(profile.cdpUrl)
+          .then(formatChromeCdpDiagnostic)
+          .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
+        const stderrOutput =
+          normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+        if (
+          allowSingletonRecovery &&
+          CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+          clearStaleChromeSingletonLocks(userDataDir)
+        ) {
+          log.warn(
+            `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
+          );
+          await terminateChromeForRetry(proc, userDataDir);
+          return await launchOnceAndWait(false);
+        }
+        const stderrHint = stderrOutput
+          ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+          : "";
+        const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile });
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+        throw new Error(
+          `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrHint}`,
+        );
+      }
+
+      const pid = proc.pid ?? -1;
+      log.info(
+        `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
+      );
+
+      return {
+        pid,
+        exe,
+        userDataDir,
+        cdpPort: profile.cdpPort,
+        startedAt,
+        proc,
+      };
+    } finally {
+      // Chrome started successfully or launch failed — detach the stderr listener
+      // and release the buffer.
+      proc.stderr?.off("data", onStderr);
+      stderrChunks.length = 0;
     }
-    throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${sandboxHint}${stderrHint}`,
-    );
-  }
-
-  // Chrome started successfully — detach the stderr listener and release the buffer.
-  proc.stderr?.off("data", onStderr);
-  stderrChunks.length = 0;
-
-  const pid = proc.pid ?? -1;
-  log.info(
-    `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
-  );
-
-  return {
-    pid,
-    exe,
-    userDataDir,
-    cdpPort: profile.cdpPort,
-    startedAt,
-    proc,
   };
+
+  return await launchOnceAndWait(true);
 }
 
 export async function stopOpenClawChrome(

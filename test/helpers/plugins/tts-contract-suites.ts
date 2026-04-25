@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "../../../src/plugins/contracts/inventory/bundled-capability-metadata.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../../../src/plugins/types.js";
@@ -37,16 +38,12 @@ let formatTtsProviderError: TtsRuntimeModule["_test"]["formatTtsProviderError"];
 let sanitizeTtsErrorForLog: TtsRuntimeModule["_test"]["sanitizeTtsErrorForLog"];
 
 const SPEECH_PROVIDER_ENV_KEYS = [
-  "ELEVENLABS_API_KEY",
-  "GEMINI_API_KEY",
-  "GOOGLE_API_KEY",
-  "GRADIUM_API_KEY",
-  "MINIMAX_API_KEY",
-  "OPENAI_API_KEY",
-  "VYDRA_API_KEY",
-  "XAI_API_KEY",
-  "XI_API_KEY",
-] as const;
+  ...new Set(
+    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
+      entry.speechProviderIds.flatMap((providerId) => entry.providerAuthEnvVars[providerId] ?? []),
+    ),
+  ),
+].toSorted((left, right) => left.localeCompare(right));
 
 function isolatedSpeechProviderEnv(
   overrides: Record<string, string | undefined> = {},

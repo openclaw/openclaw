@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
 export {
   ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
@@ -47,9 +48,10 @@ export function createAnthropicVertexStreamFn(
   projectId: string | undefined,
   region: string,
   baseURL?: string,
+  deps?: AnthropicVertexStreamDeps,
 ): StreamFn {
   const streamFnPromise = import("./stream-runtime.js").then((runtime) =>
-    runtime.createAnthropicVertexStreamFn(projectId, region, baseURL),
+    runtime.createAnthropicVertexStreamFn(projectId, region, baseURL, deps),
   );
   return async (model, context, options) => {
     const streamFn = await streamFnPromise;
@@ -60,9 +62,10 @@ export function createAnthropicVertexStreamFn(
 export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,
+  deps?: AnthropicVertexStreamDeps,
 ): StreamFn {
   const streamFnPromise = import("./stream-runtime.js").then((runtime) =>
-    runtime.createAnthropicVertexStreamFnForModel(model, env),
+    runtime.createAnthropicVertexStreamFnForModel(model, env, deps),
   );
   return async (...args) => {
     const streamFn = await streamFnPromise;

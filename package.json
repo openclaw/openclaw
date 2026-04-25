@@ -1658,14 +1658,6 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
   },
-  "peerDependencies": {
-    "node-llama-cpp": "3.18.1"
-  },
-  "peerDependenciesMeta": {
-    "node-llama-cpp": {
-      "optional": true
-    }
-  },
   "overrides": {
     "axios": "1.15.0",
     "follow-redirects": "1.16.0",

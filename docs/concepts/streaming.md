@@ -7,8 +7,6 @@ read_when:
 title: "Streaming and chunking"
 ---
 
-# Streaming + chunking
-
 OpenClaw has two separate streaming layers:
 
 - **Block streaming (channels):** emit completed **blocks** as the assistant writes. These are normal channel messages (not token deltas).
