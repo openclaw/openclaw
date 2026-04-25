@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import JSZip from "jszip";
 import {
+  ARCHIVE_LIMIT_ERROR_CODE,
+  ArchiveLimitError,
   DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
   DEFAULT_MAX_ENTRIES,
   DEFAULT_MAX_EXTRACTED_BYTES,
@@ -460,18 +462,19 @@ function validateClawHubArchiveMetaJson(params: {
 }
 
 function mapClawHubArchiveReadFailure(error: unknown): ClawHubInstallFailure {
-  const message = formatErrorMessage(error);
-  if (message.includes("archive entry count exceeds limit")) {
-    return buildClawHubInstallFailure(
-      "ClawHub archive fallback verification exceeded the archive entry limit.",
-      CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-    );
-  }
-  if (message.includes("archive size exceeds limit")) {
-    return buildClawHubInstallFailure(
-      "ClawHub archive fallback verification rejected the downloaded archive because it exceeds the ZIP archive size limit.",
-      CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-    );
+  if (error instanceof ArchiveLimitError) {
+    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT) {
+      return buildClawHubInstallFailure(
+        "ClawHub archive fallback verification exceeded the archive entry limit.",
+        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      );
+    }
+    if (error.code === ARCHIVE_LIMIT_ERROR_CODE.ARCHIVE_SIZE_EXCEEDS_LIMIT) {
+      return buildClawHubInstallFailure(
+        "ClawHub archive fallback verification rejected the downloaded archive because it exceeds the ZIP archive size limit.",
+        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      );
+    }
   }
   return buildClawHubInstallFailure(
     "ClawHub archive fallback verification failed while reading the downloaded archive.",
