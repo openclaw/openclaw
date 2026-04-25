@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/memory-supabase",
+  "version": "0.1.0",
+  "description": "OpenClaw long-term memory backed by Supabase (Postgres + pgvector). Adds memory_remember and memory_search tools, auto-indexes inbound messages, and exposes a daily journal helper.",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "openai": "^6.34.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "defaultChoice": "local",
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.25"
+    }
+  }
+}

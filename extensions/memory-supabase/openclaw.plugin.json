@@ -1,0 +1,92 @@
+{
+  "id": "memory-supabase",
+  "kind": "memory",
+  "uiHints": {
+    "embedding.apiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true,
+      "placeholder": "${OPENAI_API_KEY}",
+      "help": "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "text-embedding-3-small",
+      "help": "OpenAI embedding model used for memory items"
+    },
+    "embedding.dimensions": {
+      "label": "Dimensions",
+      "placeholder": "1536",
+      "advanced": true,
+      "help": "Vector dimensions; must match the column in Supabase"
+    },
+    "supabase.url": {
+      "label": "Supabase URL",
+      "placeholder": "${SUPABASE_URL}",
+      "help": "Project URL, e.g. https://xxx.supabase.co"
+    },
+    "supabase.serviceRoleKey": {
+      "label": "Supabase Service Role Key",
+      "sensitive": true,
+      "placeholder": "${SUPABASE_SERVICE_ROLE_KEY}",
+      "help": "Backend-only service role key. Never expose to clients."
+    },
+    "supabase.userId": {
+      "label": "User ID",
+      "placeholder": "arhan",
+      "help": "Tenant key for memory_items.user_id (single-tenant by default)"
+    },
+    "autoIndex": {
+      "label": "Auto-Index",
+      "help": "Automatically index inbound messages into memory"
+    },
+    "consentDefault": {
+      "label": "Consent Default",
+      "help": "Default consent flag for auto-indexed items"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Inject the most relevant memories into prompts"
+    },
+    "captureMaxChars": {
+      "label": "Capture Max Chars",
+      "advanced": true,
+      "placeholder": "2000",
+      "help": "Maximum content length eligible for auto-indexing"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" },
+          "dimensions": { "type": "number" }
+        },
+        "required": ["apiKey"]
+      },
+      "supabase": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string" },
+          "serviceRoleKey": { "type": "string" },
+          "userId": { "type": "string" }
+        },
+        "required": ["url", "serviceRoleKey"]
+      },
+      "autoIndex": { "type": "boolean" },
+      "consentDefault": { "type": "boolean" },
+      "autoRecall": { "type": "boolean" },
+      "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 20000
+      }
+    },
+    "required": ["embedding", "supabase"]
+  }
+}
