@@ -10,7 +10,7 @@ describe("exec allowlist matching", () => {
 
   it("handles wildcard and path matching semantics", () => {
     const cases: Array<{ entries: ExecAllowlistEntry[]; expectedPattern: string | null }> = [
-      { entries: [{ pattern: "RG" }], expectedPattern: null },
+      { entries: [{ pattern: "not-rg" }], expectedPattern: null },
       { entries: [{ pattern: "/opt/**/rg" }], expectedPattern: "/opt/**/rg" },
       { entries: [{ pattern: "/opt/*/rg" }], expectedPattern: null },
     ];
@@ -18,6 +18,11 @@ describe("exec allowlist matching", () => {
       const match = matchAllowlist(entries, baseResolution);
       expect(match?.pattern ?? null).toBe(expectedPattern);
     }
+  });
+
+  it("matches bare command names against the resolved executable basename", () => {
+    expect(matchAllowlist([{ pattern: "rg" }], baseResolution)?.pattern).toBe("rg");
+    expect(matchAllowlist([{ pattern: "homebrew" }], baseResolution)).toBeNull();
   });
 
   it("matches bare wildcard patterns against arbitrary resolved executables", () => {

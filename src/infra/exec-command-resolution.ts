@@ -315,6 +315,24 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
   }
 }
 
+function allowlistPatternHasPathSelector(pattern: string): boolean {
+  return pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
+}
+
+function matchesExecutableBasenamePattern(
+  pattern: string,
+  resolution: ExecutableResolution,
+): boolean {
+  const candidates = new Set<string>();
+  if (resolution.executableName) {
+    candidates.add(resolution.executableName);
+  }
+  if (resolution.resolvedPath) {
+    candidates.add(path.basename(resolution.resolvedPath));
+  }
+  return [...candidates].some((candidate) => matchesExecAllowlistPattern(pattern, candidate));
+}
+
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: ExecutableResolution | null,
@@ -348,11 +366,10 @@ export function matchAllowlist(
     if (!pattern) {
       continue;
     }
-    const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
-    if (!hasPath) {
-      continue;
-    }
-    if (!matchesExecAllowlistPattern(pattern, resolvedPath)) {
+    const patternMatches = allowlistPatternHasPathSelector(pattern)
+      ? matchesExecAllowlistPattern(pattern, resolvedPath)
+      : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
+    if (!patternMatches) {
       continue;
     }
     if (!useArgPattern) {
