@@ -333,6 +333,15 @@ describe("refreshChatAvatar", () => {
   });
 
   it("ignores stale avatar responses after switching sessions", async () => {
+    const createObjectURL = vi.fn((...args) => `blob:avatar-${args.length}`);
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = createObjectURL;
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
     const mainRequest = createDeferred<{ avatarUrl?: string }>();
     const opsRequest = createDeferred<{ avatarUrl?: string }>();
     const fetchMock = vi.fn((input: string | URL | Request) => {
@@ -347,6 +356,12 @@ describe("refreshChatAvatar", () => {
         return Promise.resolve({
           ok: true,
           json: async () => opsRequest.promise,
+        });
+      }
+      if (url === "/avatar/main" || url === "/avatar/ops") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["avatar"]),
         });
       }
       throw new Error(`Unexpected avatar URL: ${url}`);
@@ -366,7 +381,7 @@ describe("refreshChatAvatar", () => {
     opsRequest.resolve({ avatarUrl: "/avatar/ops" });
     await secondRefresh;
 
-    expect(host.chatAvatarUrl).toBe("/avatar/ops");
+    expect(host.chatAvatarUrl).toBe("blob:avatar-1");
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/avatar/main?meta=1",
