@@ -1,8 +1,10 @@
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type { BrowserTab, BrowserTransport, SnapshotAriaNode } from "./client.types.js";
+import type { BrowserDoctorReport } from "./doctor.js";
 
 export type { BrowserTab, BrowserTransport, SnapshotAriaNode } from "./client.types.js";
+export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
 export type BrowserStatus = {
   enabled: boolean;
@@ -85,6 +87,16 @@ export async function browserStatus(
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
     timeoutMs: 1500,
+  });
+}
+
+export async function browserDoctor(
+  baseUrl?: string,
+  opts?: { profile?: string },
+): Promise<BrowserDoctorReport> {
+  const q = buildProfileQuery(opts?.profile);
+  return await fetchBrowserJson<BrowserDoctorReport>(withBaseUrl(baseUrl, `/doctor${q}`), {
+    timeoutMs: 3000,
   });
 }
 

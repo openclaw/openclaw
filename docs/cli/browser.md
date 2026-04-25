@@ -33,6 +33,8 @@ openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
+Agents can run the same readiness check with `browser({ action: "doctor" })`.
+
 ## Quick troubleshooting
 
 If `start` fails with `not reachable after start`, troubleshoot CDP readiness first. If `start` and `tabs` succeed but `open` or `navigate` fails, the browser control plane is healthy and the failure is usually navigation SSRF policy.
