@@ -44,6 +44,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched).
 - CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
 - Smart gate: `pnpm check:changed`; explain `pnpm changed:lanes --json`; staged preview `pnpm check:changed --staged`.
+- Sparse worktrees: `pnpm check:changed` is sparse-safe and may skip sparse-missing typecheck projects; do not expand sparse checkout just to satisfy changed-gate tsgo. Direct `pnpm tsgo*` remains strict; use a fuller worktree when you need direct typecheck proof.
 - Prod sweep: `pnpm check`; tests: `pnpm test`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; never raw `vitest`.
