@@ -22,9 +22,23 @@ const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
     state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
   }),
 );
+const loadSessionsMock = vi.hoisted(() =>
+  vi.fn(async (state: AppViewState) => {
+    const res = await state.client?.request("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    if (res) {
+      state.sessionsResult = res as AppViewState["sessionsResult"];
+    }
+  }),
+);
 
 vi.mock("../controllers/agents.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
+}));
+vi.mock("../controllers/sessions.ts", () => ({
+  loadSessions: loadSessionsMock,
 }));
 
 function createChatHeaderState(
@@ -146,11 +160,19 @@ function createChatHeaderState(
   return { state, request };
 }
 
-async function flushTasks() {
-  return new Promise<void>((resolve) => queueMicrotask(resolve));
+async function flushTasks(turns = 6) {
+  for (let i = 0; i < turns; i += 1) {
+    await Promise.resolve();
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  for (let i = 0; i < turns; i += 1) {
+    await Promise.resolve();
+  }
 }
 
 afterEach(() => {
+  loadSessionsMock.mockClear();
+  refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -174,13 +196,10 @@ describe("chat session controls", () => {
       model: "openai/gpt-5-mini",
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
-    await vi.waitFor(
-      () => {
-        expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
-        expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
-      },
-      { interval: 1, timeout: 100 },
-    );
+    await flushTasks();
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
   });
 
   it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
@@ -203,15 +222,11 @@ describe("chat session controls", () => {
 
     modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await vi.waitFor(
-      () => {
-        expect(request).toHaveBeenCalledWith("tools.effective", {
-          agentId: "main",
-          sessionKey: "main",
-        });
-      },
-      { interval: 1, timeout: 100 },
-    );
+    await flushTasks();
+    expect(request).toHaveBeenCalledWith("tools.effective", {
+      agentId: "main",
+      sessionKey: "main",
+    });
     expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
   });
 
@@ -233,12 +248,9 @@ describe("chat session controls", () => {
       key: "main",
       model: null,
     });
-    await vi.waitFor(
-      () => {
-        expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
-      },
-      { interval: 1, timeout: 100 },
-    );
+    await flushTasks();
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
   });
 
   it("disables the chat header model picker while a run is active", () => {
