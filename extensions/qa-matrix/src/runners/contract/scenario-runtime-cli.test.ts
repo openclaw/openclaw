@@ -24,6 +24,9 @@ describe("Matrix QA CLI runtime", () => {
     expect(formatMatrixQaCliCommand(["matrix", "account", "add", "--access-token=token-123"])).toBe(
       "openclaw matrix account add --access-token=[REDACTED]",
     );
+    expect(
+      formatMatrixQaCliCommand(["matrix", "verify", "device", "abcdef1234567890ghij", "--json"]),
+    ).toBe("openclaw matrix verify device [REDACTED] --json");
   });
 
   it("redacts Matrix token output before diagnostics and artifacts", () => {

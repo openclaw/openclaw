@@ -8,6 +8,7 @@ import {
   createMatrixQaE2eeScenarioClient,
   type MatrixQaE2eeScenarioClient,
 } from "../../substrate/e2ee-client.js";
+import { requestMatrixJson } from "../../substrate/request.js";
 import {
   buildMatrixQaE2eeScenarioRoomKey,
   type MatrixQaE2eeScenarioId,
@@ -634,19 +635,14 @@ async function deleteMatrixQaServerRoomKeyBackup(params: {
   baseUrl: string;
   version: string;
 }) {
-  const endpoint = new URL(
-    `/_matrix/client/v3/room_keys/version/${encodeURIComponent(params.version)}`,
-    params.baseUrl,
-  );
-  const response = await fetch(endpoint, {
+  const response = await requestMatrixJson<Record<string, never>>({
+    accessToken: params.accessToken,
+    baseUrl: params.baseUrl,
+    endpoint: `/_matrix/client/v3/room_keys/version/${encodeURIComponent(params.version)}`,
+    fetchImpl: fetch,
     method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${params.accessToken}`,
-    },
+    okStatuses: [200, 404],
   });
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Matrix server backup delete failed with HTTP ${response.status}`);
-  }
   return response.status;
 }
 
@@ -654,7 +650,6 @@ async function runMatrixQaExternalKeyRestore(params: {
   accountId: string;
   context: MatrixQaScenarioContext;
   deviceName: string;
-  encodedRecoveryKey: string;
   label: string;
   password: string;
   userId: string;
@@ -688,7 +683,6 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
     accountId: "external-key",
     context,
     deviceName: "OpenClaw Matrix QA External Key Restore",
-    encodedRecoveryKey: setup.encodedRecoveryKey,
     label: "state-loss-external-recovery-key",
     password: driverPassword,
     userId: context.driverUserId,
@@ -776,7 +770,9 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
     }
     return {
       artifacts: {
-        completedVerificationId: selfVerification?.completedOwner.id ?? null,
+        ...(selfVerification
+          ? { completedVerificationId: selfVerification.completedOwner.id }
+          : {}),
         recoveryDeviceId: device.deviceId,
         recoveryKeyId: setup.recoveryKeyId,
         restoreImported: restored.payload.imported,
@@ -826,7 +822,6 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
     accountId: "stored-key",
     context,
     deviceName: "OpenClaw Matrix QA Stored Key Restore",
-    encodedRecoveryKey: setup.encodedRecoveryKey,
     label: "state-loss-stored-recovery-key",
     password: driverPassword,
     userId: context.driverUserId,
@@ -908,7 +903,6 @@ export async function runMatrixQaE2eeStateLossNoRecoveryKeyScenario(
     accountId: "no-key",
     context,
     deviceName: "OpenClaw Matrix QA No Key Restore",
-    encodedRecoveryKey: setup.encodedRecoveryKey,
     label: "state-loss-no-recovery-key",
     password: driverPassword,
     userId: context.driverUserId,
@@ -968,7 +962,6 @@ export async function runMatrixQaE2eeStaleRecoveryKeyAfterBackupResetScenario(
     accountId: "stale-key",
     context,
     deviceName: "OpenClaw Matrix QA Stale Key Restore",
-    encodedRecoveryKey: setup.encodedRecoveryKey,
     label: "stale-recovery-key-after-backup-reset",
     password: driverPassword,
     userId: context.driverUserId,
@@ -1076,6 +1069,7 @@ async function waitForMatrixQaNonEmptyCliBackupRestore(params: {
   const startedAt = Date.now();
   let last: Awaited<ReturnType<typeof runMatrixQaCliJson<MatrixQaCliBackupStatus>>> | null = null;
   while (Date.now() - startedAt < params.timeoutMs) {
+    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
     const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
       args: [
         "matrix",
@@ -1090,7 +1084,7 @@ async function waitForMatrixQaNonEmptyCliBackupRestore(params: {
       ],
       label: params.label,
       runtime: params.cli,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: Math.max(1, remainingMs),
     });
     last = restored;
     assertMatrixQaCliBackupRestoreSucceeded(restored.payload, params.label);
@@ -1114,7 +1108,6 @@ export async function runMatrixQaE2eeServerBackupDeletedLocalReuploadRestoresSce
     accountId: "backup-reupload",
     context,
     deviceName: "OpenClaw Matrix QA Backup Reupload Restore",
-    encodedRecoveryKey: setup.encodedRecoveryKey,
     label: "server-backup-deleted-local-reupload-restores",
     password: driverPassword,
     userId: context.driverUserId,
@@ -1191,7 +1184,6 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
     accountId: "corrupt-idb",
     context,
     deviceName: "OpenClaw Matrix QA Corrupt IDB Restore",
-    encodedRecoveryKey: setup.encodedRecoveryKey,
     label: "corrupt-crypto-idb-snapshot",
     password: driverPassword,
     userId: context.driverUserId,
@@ -1268,7 +1260,6 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
     accountId: "deleted-device",
     context,
     deviceName: "OpenClaw Matrix QA Deleted Device",
-    encodedRecoveryKey: setup.encodedRecoveryKey,
     label: "server-device-deleted-local-state-intact",
     password: driverPassword,
     userId: context.driverUserId,
@@ -1316,7 +1307,6 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
     return {
       artifacts: {
         deletedDeviceId: device.deviceId,
-        ownerDeviceListContainsDeletedDevice,
         serverDeviceKnown: status.payload.serverDeviceKnown ?? null,
         statusError: status.payload.error,
         statusExitCode: status.result.exitCode,
@@ -1438,21 +1428,23 @@ export async function runMatrixQaE2eeWrongAccountRecoveryKeyScenario(
       client: observer,
       label: "observer",
     });
-    const device = await loginMatrixQaRecoveryDevice({
-      context,
-      deviceName: "OpenClaw Matrix QA Wrong Account Key",
-      password: observerPassword,
-      userId: context.observerUserId,
-    });
-    const cli = await createMatrixQaRecoveryCliRuntime({
-      accountId: "wrong-account",
-      accessToken: device.accessToken,
-      context,
-      deviceId: device.deviceId,
-      label: "wrong-account-recovery-key",
-      userId: device.userId,
-    });
+    let device: Awaited<ReturnType<typeof loginMatrixQaRecoveryDevice>> | undefined;
+    let cli: Awaited<ReturnType<typeof createMatrixQaRecoveryCliRuntime>> | undefined;
     try {
+      device = await loginMatrixQaRecoveryDevice({
+        context,
+        deviceName: "OpenClaw Matrix QA Wrong Account Key",
+        password: observerPassword,
+        userId: context.observerUserId,
+      });
+      cli = await createMatrixQaRecoveryCliRuntime({
+        accountId: "wrong-account",
+        accessToken: device.accessToken,
+        context,
+        deviceId: device.deviceId,
+        label: "wrong-account-recovery-key",
+        userId: device.userId,
+      });
       const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
         allowNonZero: true,
         args: [
@@ -1484,8 +1476,10 @@ export async function runMatrixQaE2eeWrongAccountRecoveryKeyScenario(
         ].join("\n"),
       };
     } finally {
-      await cli.dispose().catch(() => undefined);
-      await observer.deleteOwnDevices([device.deviceId]).catch(() => undefined);
+      await cli?.dispose().catch(() => undefined);
+      if (device) {
+        await observer.deleteOwnDevices([device.deviceId]).catch(() => undefined);
+      }
     }
   } finally {
     await observer.stop().catch(() => undefined);
@@ -1516,7 +1510,6 @@ export async function runMatrixQaE2eeHistoryExistsBackupEmptyScenario(
     accountId: "empty-backup",
     context,
     deviceName: "OpenClaw Matrix QA Empty Backup",
-    encodedRecoveryKey: freshEncodedKey,
     label: "history-exists-backup-empty",
     password: driverPassword,
     userId: context.driverUserId,

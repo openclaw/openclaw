@@ -1546,6 +1546,50 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("handles deeply nested image input shapes without recursive traversal failure", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    let content: unknown = {
+      type: "input_image",
+      source: {
+        type: "base64",
+        mime_type: "image/png",
+        data: QA_IMAGE_PNG_BASE64,
+      },
+    };
+    for (let index = 0; index < 4_000; index += 1) {
+      content = [{ type: "input_text", text: "nested" }, content];
+    }
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content,
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    const debug = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debug.status).toBe(200);
+    expect(await debug.json()).toMatchObject({
+      imageInputCount: 1,
+    });
+  });
+
   it("describes reattached generated images in the roundtrip flow", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

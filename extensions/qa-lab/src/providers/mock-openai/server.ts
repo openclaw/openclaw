@@ -339,21 +339,34 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
 }
 
 function countImageInputs(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.reduce((sum, entry) => sum + countImageInputs(entry), 0);
+  const seen = new WeakSet<object>();
+  const stack = [value];
+  let count = 0;
+  let visited = 0;
+  while (stack.length > 0 && visited < 50_000) {
+    visited += 1;
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const entry of current) {
+        stack.push(entry);
+      }
+      continue;
+    }
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+    if (type === "input_image" || type === "image" || type === "image_url" || type === "media") {
+      count += 1;
+    }
+    stack.push(record.content, record.image_url, record.source);
   }
-  if (!value || typeof value !== "object") {
-    return 0;
-  }
-  const record = value as Record<string, unknown>;
-  const type = typeof record.type === "string" ? record.type : "";
-  const imageLikeType =
-    type === "input_image" || type === "image" || type === "image_url" || type === "media";
-  const nested =
-    countImageInputs(record.content) +
-    countImageInputs(record.image_url) +
-    countImageInputs(record.source);
-  return (imageLikeType ? 1 : 0) + nested;
+  return count;
 }
 
 function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {

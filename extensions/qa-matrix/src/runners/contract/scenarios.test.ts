@@ -198,14 +198,15 @@ describe("matrix live qa scenarios", () => {
     const destructiveIndex = scenarioIds.indexOf(destructiveScenarioId);
 
     expect(scenarioIds.at(-1)).toBe(destructiveScenarioId);
-    for (const scenarioId of [
+    const protectedScenarioIds = [
       "matrix-e2ee-state-loss-external-recovery-key",
       "matrix-e2ee-state-loss-stored-recovery-key",
       "matrix-e2ee-device-sas-verification",
       "matrix-e2ee-qr-verification",
       "matrix-e2ee-dm-sas-verification",
       "matrix-e2ee-media-image",
-    ]) {
+    ] satisfies (typeof scenarioIds)[number][];
+    for (const scenarioId of protectedScenarioIds) {
       expect(destructiveIndex).toBeGreaterThan(scenarioIds.indexOf(scenarioId));
     }
   });

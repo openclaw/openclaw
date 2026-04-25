@@ -2,11 +2,11 @@ import { spawn as startOpenClawCliProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 export type MatrixQaCliRunResult = {
   args: string[];
@@ -30,6 +30,10 @@ export type MatrixQaCliSession = {
 
 const MATRIX_QA_CLI_SECRET_ARG_FLAGS = new Set(["--access-token", "--password", "--recovery-key"]);
 
+function isMatrixQaCliSecretPositionalArg(args: string[], index: number): boolean {
+  return args[0] === "matrix" && args[1] === "verify" && args[2] === "device" && index === 3;
+}
+
 function redactMatrixQaCliArgs(args: string[]): string[] {
   return args.map((arg, index) => {
     const [flag] = arg.split("=", 1);
@@ -38,6 +42,9 @@ function redactMatrixQaCliArgs(args: string[]): string[] {
     }
     const previous = args[index - 1];
     if (previous && MATRIX_QA_CLI_SECRET_ARG_FLAGS.has(previous)) {
+      return "[REDACTED]";
+    }
+    if (isMatrixQaCliSecretPositionalArg(args, index)) {
       return "[REDACTED]";
     }
     return arg;
@@ -249,7 +256,9 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
   runtimeEnv: NodeJS.ProcessEnv;
   userId: string;
 }) {
-  const rootDir = await mkdtemp(path.join(tmpdir(), "openclaw-matrix-cli-qa-"));
+  const rootDir = await mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-cli-qa-"),
+  );
   const artifactDir = path.join(
     params.outputDir,
     params.artifactLabel.replace(/[^A-Za-z0-9_-]/g, "-"),
