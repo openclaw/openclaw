@@ -454,6 +454,16 @@
         "cleanup"
       ]
     },
+    "skills_manage": {
+      "emoji": "🧠",
+      "title": "Skills Manage",
+      "detailKeys": [
+        "action",
+        "name",
+        "targetRoot",
+        "proposalId"
+      ]
+    },
     "subagents": {
       "emoji": "🤖",
       "title": "Subagents",

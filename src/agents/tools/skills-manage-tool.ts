@@ -66,6 +66,13 @@ function readContentParam(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "contents", { trim: false });
 }
 
+function hasProvidedField(value: unknown): boolean {
+  if (value == null) {
+    return false;
+  }
+  return typeof value === "string" ? value.length > 0 : true;
+}
+
 function err(
   action: string,
   errorCode: string,
@@ -104,7 +111,7 @@ export function createSkillsManageTool(opts: {
           "oldString",
           "newString",
           "proposalId",
-        ].filter((k) => params[k] != null && params[k] !== "");
+        ].filter((k) => hasProvidedField(params[k]));
         if (forbidden.length > 0) {
           return err(
             action,
@@ -162,8 +169,8 @@ export function createSkillsManageTool(opts: {
         if (!proposalId) {
           return err(action, "missing_argument", "proposalId is required");
         }
-        const forbidden = ["content", "contents", "name", "oldString", "newString"].some(
-          (k) => params[k] != null && String(params[k]).length > 0,
+        const forbidden = ["content", "contents", "name", "oldString", "newString"].some((k) =>
+          hasProvidedField(params[k]),
         );
         if (forbidden) {
           return err(
