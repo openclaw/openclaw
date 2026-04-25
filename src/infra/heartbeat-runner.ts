@@ -676,13 +676,12 @@ function resolveHeartbeatRunPrompt(params: {
     .map((event) => event.text);
   const execEvents = params.preflight.shouldInspectPendingEvents
     ? pendingEventEntries
-        .filter((event) => event.trusted !== false && isExecCompletionEvent(event.text))
+        .filter((event) => isExecCompletionEvent(event.text))
         .map((event) => event.text)
     : [];
   const hasExecCompletion = execEvents.length > 0;
   const hasCronEvents = cronEvents.length > 0;
 
-  // If tasks are defined, build a batched prompt with due tasks
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
     const tasks = params.preflight.tasks;
     const dueTasks = tasks.filter((task) =>
@@ -701,7 +700,6 @@ ${taskList}
 
 After completing all due tasks, reply HEARTBEAT_OK.`;
 
-      // Preserve HEARTBEAT.md directives (non-task content)
       if (params.heartbeatFileContent) {
         const directives = params.heartbeatFileContent
           .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
@@ -712,11 +710,9 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
       }
       return { prompt, hasExecCompletion: false, hasCronEvents: false };
     }
-    // No tasks due - skip this heartbeat to avoid wasteful API calls
     return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
   }
 
-  // Fallback to original behavior
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt(execEvents, { deliverToUser: params.canRelayToUser })
     : hasCronEvents
