@@ -49,6 +49,16 @@ describe("shared/frontmatter", () => {
     ).toEqual({ foo: 2 });
   });
 
+  test("resolveOpenClawManifestBlock reads legacy manifest keys", () => {
+    expect(
+      resolveOpenClawManifestBlock({
+        frontmatter: {
+          metadata: "{ clawdbot: { requires: { bins: ['op'] }, install: [] } }",
+        },
+      }),
+    ).toEqual({ requires: { bins: ["op"] }, install: [] });
+  });
+
   test("resolveOpenClawManifestBlock returns undefined for invalid input", () => {
     expect(resolveOpenClawManifestBlock({ frontmatter: {} })).toBeUndefined();
     expect(
