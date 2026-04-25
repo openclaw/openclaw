@@ -33,7 +33,7 @@ export type BrowserServerState = {
 };
 
 type BrowserProfileActions = {
-  ensureBrowserAvailable: () => Promise<void>;
+  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;

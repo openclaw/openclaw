@@ -109,6 +109,7 @@ const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
 export const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
 
 export type ManagedBrowserHeadlessSource =
+  | "request"
   | "env"
   | "profile"
   | "config"
@@ -118,6 +119,12 @@ export type ManagedBrowserHeadlessSource =
 export type ManagedBrowserHeadlessMode = {
   headless: boolean;
   source: ManagedBrowserHeadlessSource;
+};
+
+export type ManagedBrowserHeadlessOptions = {
+  headlessOverride?: boolean;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 };
 
 function normalizeHexColor(raw: string | undefined): string {
@@ -465,13 +472,14 @@ export function resolveProfile(
 export function resolveManagedBrowserHeadlessMode(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-  } = {},
+  params: ManagedBrowserHeadlessOptions = {},
 ): ManagedBrowserHeadlessMode {
   if (!isLocalManagedProfile(profile)) {
     return { headless: profile.headless, source: profile.headlessSource ?? "default" };
+  }
+
+  if (typeof params.headlessOverride === "boolean") {
+    return { headless: params.headlessOverride, source: "request" };
   }
 
   const env = params.env ?? process.env;
@@ -496,10 +504,7 @@ export function resolveManagedBrowserHeadlessMode(
 export function getManagedBrowserMissingDisplayError(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-  } = {},
+  params: ManagedBrowserHeadlessOptions = {},
 ): string | null {
   if (!isLocalManagedProfile(profile)) {
     return null;
@@ -516,11 +521,13 @@ export function getManagedBrowserMissingDisplayError(
   }
 
   const sourceHint =
-    mode.source === "env"
-      ? `${OPENCLAW_BROWSER_HEADLESS_ENV}=0`
-      : mode.source === "profile"
-        ? `browser.profiles.${profile.name}.headless=false`
-        : "browser.headless=false";
+    mode.source === "request"
+      ? "request override"
+      : mode.source === "env"
+        ? `${OPENCLAW_BROWSER_HEADLESS_ENV}=0`
+        : mode.source === "profile"
+          ? `browser.profiles.${profile.name}.headless=false`
+          : "browser.headless=false";
   return (
     `Headed browser start requested for profile "${profile.name}" via ${sourceHint}, ` +
     "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +

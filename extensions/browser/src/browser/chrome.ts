@@ -49,6 +49,8 @@ import {
 import {
   getManagedBrowserMissingDisplayError,
   resolveManagedBrowserHeadlessMode,
+  type ManagedBrowserHeadlessOptions,
+  type ManagedBrowserHeadlessSource,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
 } from "./config.js";
@@ -180,12 +182,17 @@ function chromeLaunchHints(params: {
   stderrOutput: string;
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
+  launchOptions?: ManagedBrowserHeadlessOptions;
 }): string {
   const hints: string[] = [];
   if (process.platform === "linux" && !params.resolved.noSandbox) {
     hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
   }
-  const headlessMode = resolveManagedBrowserHeadlessMode(params.resolved, params.profile);
+  const headlessMode = resolveManagedBrowserHeadlessMode(
+    params.resolved,
+    params.profile,
+    params.launchOptions,
+  );
   if (CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput) && !headlessMode.headless) {
     hints.push(
       "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
@@ -206,6 +213,8 @@ export type RunningChrome = {
   cdpPort: number;
   startedAt: number;
   proc: ChildProcess;
+  headless?: boolean;
+  headlessSource?: ManagedBrowserHeadlessSource;
 };
 
 function resolveBrowserExecutable(
@@ -230,6 +239,7 @@ export function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
   userDataDir: string;
+  headlessOverride?: boolean;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 }): string[] {
@@ -388,11 +398,17 @@ export async function isChromeCdpReady(
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
+  launchOptions: ManagedBrowserHeadlessOptions = {},
 ): Promise<RunningChrome> {
   if (!profile.cdpIsLoopback) {
     throw new Error(`Profile "${profile.name}" is remote; cannot launch local Chrome.`);
   }
-  const missingDisplayError = getManagedBrowserMissingDisplayError(resolved, profile);
+  const headlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, launchOptions);
+  const missingDisplayError = getManagedBrowserMissingDisplayError(
+    resolved,
+    profile,
+    launchOptions,
+  );
   if (missingDisplayError) {
     throw new BrowserProfileUnavailableError(missingDisplayError);
   }
@@ -422,6 +438,7 @@ export async function launchOpenClawChrome(
       resolved,
       profile,
       userDataDir,
+      ...launchOptions,
     });
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
@@ -531,7 +548,7 @@ export async function launchOpenClawChrome(
         const stderrHint = stderrOutput
           ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
           : "";
-        const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile });
+        const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
         try {
           proc.kill("SIGKILL");
         } catch {
@@ -554,6 +571,8 @@ export async function launchOpenClawChrome(
         cdpPort: profile.cdpPort,
         startedAt,
         proc,
+        headless: headlessMode.headless,
+        headlessSource: headlessMode.source,
       };
     } finally {
       // Chrome started successfully or launch failed — detach the stderr listener

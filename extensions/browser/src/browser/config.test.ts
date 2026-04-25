@@ -402,6 +402,24 @@ describe("browser config", () => {
       ).toEqual({ headless: true, source: "env" });
     });
 
+    it("lets request-local headless override beat env and profile/global config", () => {
+      const resolved = resolveBrowserConfig({
+        headless: false,
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          headlessOverride: true,
+          platform: "linux",
+          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "0" },
+        }),
+      ).toEqual({ headless: true, source: "request" });
+    });
+
     it("returns an actionable error only when headed mode is explicitly selected", () => {
       const defaultResolved = resolveBrowserConfig({});
       const defaultProfile = resolveProfile(defaultResolved, "openclaw")!;
