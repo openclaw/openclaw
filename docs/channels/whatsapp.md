@@ -152,6 +152,46 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
 
+## Plugin hooks and privacy
+
+WhatsApp inbound messages can contain personal message content, phone numbers,
+group identifiers, sender names, and session correlation fields. For that reason,
+WhatsApp does not broadcast inbound `message_received` hook payloads to plugins
+unless you explicitly opt in:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      pluginHooks: {
+        messageReceived: true,
+      },
+    },
+  },
+}
+```
+
+You can scope the opt-in to one account:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      accounts: {
+        work: {
+          pluginHooks: {
+            messageReceived: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Only enable this for plugins you trust to receive inbound WhatsApp message
+content and identifiers.
+
 ## Access control and activation
 
 <Tabs>
@@ -340,19 +380,20 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
 WhatsApp supports native reply quoting, where outbound replies visibly quote the inbound message. Control it with `channels.whatsapp.replyToMode`.
 
-| Value    | Behavior                                                                           |
-| -------- | ---------------------------------------------------------------------------------- |
-| `"auto"` | Quote the inbound message when the provider supports it; skip quoting otherwise    |
-| `"on"`   | Always quote the inbound message; fall back to a plain send if quoting is rejected |
-| `"off"`  | Never quote; send as a plain message                                               |
+| Value       | Behavior                                                              |
+| ----------- | --------------------------------------------------------------------- |
+| `"off"`     | Never quote; send as a plain message                                  |
+| `"first"`   | Quote only the first outbound reply chunk                             |
+| `"all"`     | Quote every outbound reply chunk                                      |
+| `"batched"` | Quote queued batched replies while leaving immediate replies unquoted |
 
-Default is `"auto"`. Per-account overrides use `channels.whatsapp.accounts.<id>.replyToMode`.
+Default is `"off"`. Per-account overrides use `channels.whatsapp.accounts.<id>.replyToMode`.
 
 ```json5
 {
   channels: {
     whatsapp: {
-      replyToMode: "on",
+      replyToMode: "first",
     },
   },
 }

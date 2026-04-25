@@ -225,7 +225,7 @@ describe("createCodexDynamicToolBridge", () => {
       pluginName: "Tokenjuice",
       rawHandler: handler,
       handler,
-      harnesses: ["codex-app-server"],
+      runtimes: ["codex"],
       source: "test",
     });
     setActivePluginRegistry(registry);
@@ -253,8 +253,85 @@ describe("createCodexDynamicToolBridge", () => {
         toolName: "exec",
         args: { command: "git status" },
       }),
-      expect.objectContaining({ harness: "codex-app-server" }),
+      expect.objectContaining({ runtime: "codex" }),
     );
+  });
+
+  it("passes raw tool failure state into agent tool result middleware", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(async (_event: { isError?: boolean }) => undefined);
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const bridge = createBridgeWithToolResult("exec", {
+      content: [{ type: "text", text: "failed output" }],
+      details: { status: "failed", exitCode: 1 },
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "false" },
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ isError: true }),
+      expect.objectContaining({ runtime: "codex" }),
+    );
+  });
+
+  it("uses raw tool provenance for media trust after middleware rewrites details", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
+      result: {
+        ...event.result,
+        content: [{ type: "text" as const, text: "Generated media reply." }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/unsafe.png",
+          },
+        },
+      },
+    }));
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const bridge = createBridgeWithToolResult("browser", {
+      content: [{ type: "text", text: "raw output" }],
+      details: {
+        mcpServer: "external",
+        mcpTool: "browser",
+      },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "browser",
+      arguments: {},
+    });
+
+    expect(result).toEqual(expectInputText("Generated media reply."));
+    expect(bridge.telemetry.toolMediaUrls).toEqual([]);
   });
 
   it("still applies legacy codex app-server extension factories after middleware", async () => {
@@ -506,7 +583,7 @@ describe("createCodexDynamicToolBridge", () => {
       pluginName: "Tokenjuice",
       rawHandler: handler,
       handler,
-      harnesses: ["codex-app-server"],
+      runtimes: ["codex"],
       source: "test",
     });
     setActivePluginRegistry(registry);

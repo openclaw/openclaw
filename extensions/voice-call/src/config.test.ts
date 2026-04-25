@@ -242,6 +242,8 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.streaming.provider).toBeUndefined();
     expect(normalized.streaming.providers).toEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
+    expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
+    expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
   });
@@ -300,6 +302,7 @@ describe("resolveVoiceCallConfig", () => {
     });
 
     expect(resolved.realtime.instructions).toBe("Stay concise.");
+    expect(resolved.realtime.toolPolicy).toBe("safe-read-only");
     expect(resolved.realtime.provider).toBeUndefined();
   });
 

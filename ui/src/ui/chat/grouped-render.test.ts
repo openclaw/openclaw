@@ -6,6 +6,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import {
   renderMessageGroup,
+  resolveAssistantTextAvatar,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
@@ -258,6 +259,52 @@ describe("grouped chat rendering", () => {
     const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
     expect(avatar).not.toBeNull();
     expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
+  });
+
+  it("renders a blob: assistant avatar as an image", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "hello",
+        timestamp: 1000,
+      },
+      { assistantAvatar: "blob:managed-image", assistantName: "Val" },
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.tagName).toBe("IMG");
+    expect(avatar?.getAttribute("src")).toBe("blob:managed-image");
+  });
+
+  it("renders a configured assistant text avatar", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "hello",
+        timestamp: 1000,
+      },
+      { assistantAvatar: "VC", assistantName: "Val" },
+    );
+
+    const avatar = container.querySelector<HTMLElement>(".chat-avatar.assistant");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.tagName).toBe("DIV");
+    expect(avatar?.textContent).toContain("VC");
+    expect(avatar?.getAttribute("aria-label")).toBe("Val");
+  });
+
+  it("rejects unsafe invisible controls in assistant text avatars", () => {
+    expect(resolveAssistantTextAvatar("VC")).toBe("VC");
+    expect(resolveAssistantTextAvatar("\u{1F43E}")).toBe("\u{1F43E}");
+    expect(resolveAssistantTextAvatar("V\u202eC")).toBeNull();
+    expect(resolveAssistantTextAvatar("V\u200bC")).toBeNull();
   });
 
   it("includes cache tokens when rendering assistant context usage", () => {

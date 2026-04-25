@@ -366,6 +366,21 @@ activation. The loader still falls back to `activate(api)` for older plugins,
 but bundled plugins and new external plugins should treat `register` as the
 public contract.
 
+`api.registrationMode` tells a plugin why its entry is being loaded:
+
+| Mode            | Meaning                                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------------------ |
+| `full`          | Runtime activation. Register tools, hooks, services, commands, routes, and other live side effects.    |
+| `discovery`     | Read-only capability discovery. Register providers and metadata, but skip expensive live side effects. |
+| `setup-only`    | Channel setup metadata loading through a lightweight setup entry.                                      |
+| `setup-runtime` | Channel setup loading that also needs the runtime entry.                                               |
+| `cli-metadata`  | CLI command metadata collection only.                                                                  |
+
+Plugin entries that open sockets, databases, background workers, or long-lived
+clients should guard those side effects with `api.registrationMode === "full"`.
+Discovery loads are cached separately from activating loads and do not replace
+the running Gateway registry.
+
 Common registration methods:
 
 | Method                                  | What it registers           |

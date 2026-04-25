@@ -8,7 +8,13 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+import {
+  browserDoctor,
+  browserOpenTab,
+  browserSnapshot,
+  browserStatus,
+  browserTabs,
+} from "./client.js";
 
 describe("browser client", () => {
   function stubSnapshotFetch(calls: string[]) {
@@ -220,6 +226,22 @@ describe("browser client", () => {
             }),
           } as unknown as Response;
         }
+        if (url.endsWith("/doctor")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              profile: "openclaw",
+              transport: "cdp",
+              checks: [],
+              status: {
+                enabled: true,
+                running: true,
+                cdpPort: 18792,
+              },
+            }),
+          } as unknown as Response;
+        }
         return {
           ok: true,
           json: async () => ({
@@ -243,6 +265,10 @@ describe("browser client", () => {
     await expect(browserStatus("http://127.0.0.1:18791")).resolves.toMatchObject({
       running: true,
       cdpPort: 18792,
+    });
+    await expect(browserDoctor("http://127.0.0.1:18791")).resolves.toMatchObject({
+      ok: true,
+      profile: "openclaw",
     });
 
     await expect(browserTabs("http://127.0.0.1:18791")).resolves.toHaveLength(1);
@@ -280,6 +306,7 @@ describe("browser client", () => {
     ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
 
     expect(calls.some((c) => c.url.endsWith("/tabs"))).toBe(true);
+    expect(calls.some((c) => c.url.endsWith("/doctor"))).toBe(true);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
 

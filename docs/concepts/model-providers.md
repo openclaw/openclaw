@@ -24,6 +24,12 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Plugin auto-enable follows that same boundary: `openai-codex/<model>` belongs
   to the OpenAI plugin, while the Codex plugin is enabled by
   `embeddedHarness.runtime: "codex"` or legacy `codex/<model>` refs.
+- CLI runtimes use the same split: choose canonical model refs such as
+  `anthropic/claude-*`, `google/gemini-*`, or `openai/gpt-*`, then set
+  `agents.defaults.embeddedHarness.runtime` to `claude-cli`,
+  `google-gemini-cli`, or `codex-cli` when you want a local CLI backend.
+  Legacy `claude-cli/*`, `google-gemini-cli/*`, and `codex-cli/*` refs migrate
+  back to canonical provider refs with the runtime recorded separately.
 - GPT-5.5 is currently available through subscription/OAuth routes:
   `openai-codex/gpt-5.5` in PI or `openai/gpt-5.5` with the Codex app-server
   harness. The direct API-key route for `openai/gpt-5.5` is supported once
@@ -260,7 +266,7 @@ Quirks worth knowing:
 
 - **OpenRouter** applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
 - **Kilo Gateway** Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
-- **MiniMax** API-key onboarding writes explicit M2.7 model definitions with `input: ["text", "image"]`; the bundled catalog keeps chat refs text-only until that config is materialized.
+- **MiniMax** API-key onboarding writes explicit text-only M2.7 chat model definitions; image understanding stays on the plugin-owned `MiniMax-VL-01` media provider.
 - **xAI** uses the xAI Responses path. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
 - **Cerebras** GLM models use `zai-glm-4.7` / `zai-glm-4.6`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
 

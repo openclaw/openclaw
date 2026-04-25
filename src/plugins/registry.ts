@@ -29,7 +29,10 @@ import {
 } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
-import { normalizeAgentToolResultMiddlewareHarnesses } from "./agent-tool-result-middleware.js";
+import {
+  normalizeAgentToolResultMiddlewareRuntimeIds,
+  normalizeAgentToolResultMiddlewareRuntimes,
+} from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
@@ -196,6 +199,27 @@ const activePluginHookRegistrations = resolveGlobalSingleton<
 type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
 type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
 
+type PluginRegistrationCapabilities = {
+  /** Broad registry writes that discovery and live activation both need. */
+  capabilityHandlers: boolean;
+  /** Runtime channel registration is suppressed for setup-only metadata loads. */
+  runtimeChannel: boolean;
+};
+
+/**
+ * Keep mode decoding centralized. PluginRegistrationMode is the public label;
+ * registry code should consume these booleans instead of duplicating string
+ * checks across individual registration handlers.
+ */
+function resolvePluginRegistrationCapabilities(
+  mode: PluginRegistrationMode,
+): PluginRegistrationCapabilities {
+  return {
+    capabilityHandlers: mode === "full" || mode === "discovery",
+    runtimeChannel: mode !== "setup-only",
+  };
+}
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
@@ -336,6 +360,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
   ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register agent tool result middleware",
+      });
+      return;
+    }
     if (typeof (handler as unknown) !== "function") {
       pushDiagnostic({
         level: "error",
@@ -345,18 +378,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const harnesses = normalizeAgentToolResultMiddlewareHarnesses(options);
-    if (harnesses.length === 0) {
+    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
+    if (runtimes.length === 0) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "agent tool result middleware must target at least one supported harness",
+        message: "agent tool result middleware must target at least one supported runtime",
       });
       return;
     }
-    const declared = record.contracts?.agentToolResultMiddleware ?? [];
-    const missing = harnesses.filter((harness) => !declared.includes(harness));
+    const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
+      record.contracts?.agentToolResultMiddleware,
+    );
+    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
     if (missing.length > 0) {
       pushDiagnostic({
         level: "error",
@@ -370,18 +405,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      existing.harnesses = [...new Set([...existing.harnesses, ...harnesses])];
+      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
       return;
     }
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
       try {
         return await handler(event, ctx);
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
         registryParams.logger.warn(
-          `[plugins] agent tool result middleware failed for ${record.id}: ${detail}`,
+          `[plugins] agent tool result middleware failed for ${record.id}`,
         );
-        return undefined;
+        throw error;
       }
     };
     registry.agentToolResultMiddlewares.push({
@@ -389,7 +423,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       rawHandler: handler,
       handler: safeHandler,
-      harnesses,
+      runtimes,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -613,7 +647,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (!existing) {
         return;
       }
-      if (!params.replaceExisting) {
+      if (!params.replaceExisting && existing.pluginId !== record.id) {
         pushDiagnostic({
           level: "error",
           pluginId: record.id,
@@ -663,6 +697,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
   ) => {
+    const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
         ? (registration as OpenClawPluginChannelRegistration)
@@ -678,7 +713,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const id = plugin.id;
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
-    if (mode !== "setup-only" && existingRuntime) {
+    if (registrationCapabilities.runtimeChannel && existingRuntime) {
+      if (existingRuntime.pluginId === record.id) {
+        existingRuntime.plugin = plugin;
+        existingRuntime.pluginName = record.name;
+        existingRuntime.source = record.source;
+        existingRuntime.rootDir = record.rootDir;
+        const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+        if (existingSetup) {
+          existingSetup.plugin = plugin;
+          existingSetup.pluginName = record.name;
+          existingSetup.source = record.source;
+          existingSetup.enabled = record.enabled;
+          existingSetup.rootDir = record.rootDir;
+        }
+        return;
+      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -689,6 +739,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
     if (existingSetup) {
+      if (existingSetup.pluginId === record.id) {
+        existingSetup.plugin = plugin;
+        existingSetup.pluginName = record.name;
+        existingSetup.source = record.source;
+        existingSetup.enabled = record.enabled;
+        existingSetup.rootDir = record.rootDir;
+        return;
+      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -706,7 +764,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       enabled: record.enabled,
       rootDir: record.rootDir,
     });
-    if (mode === "setup-only") {
+    if (!registrationCapabilities.runtimeChannel) {
       return;
     }
     registry.channels.push({
@@ -1404,6 +1462,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
+    const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -1418,7 +1477,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       logger: normalizeLogger(registryParams.logger),
       resolvePath: (input: string) => resolveUserPath(input),
       handlers: {
-        ...(registrationMode === "full"
+        ...(registrationCapabilities.capabilityHandlers
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
               registerHook: (events, handler, opts) =>

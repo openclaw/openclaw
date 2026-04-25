@@ -478,6 +478,204 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("reports non-bundled providerAuthEnvVars as deprecated compat metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-openai",
+      providers: ["openai"],
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-openai",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
+      openai: ["OPENAI_API_KEY"],
+    });
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        pluginId: "external-openai",
+        source: path.join(dir, "openclaw.plugin.json"),
+        message: expect.stringContaining(
+          "providerAuthEnvVars is deprecated compatibility metadata",
+        ),
+      }),
+    );
+  });
+
+  it("sanitizes manifest-controlled fields in provider auth compatibility diagnostics", () => {
+    const dir = makeTempDir();
+    const lineBreak = String.fromCharCode(10);
+    const ansiRed = `${String.fromCharCode(27)}[31m`;
+    writeManifest(dir, {
+      id: `external${lineBreak}openai${ansiRed}`,
+      providers: ["openai"],
+      providerAuthEnvVars: {
+        [`openai${lineBreak}${ansiRed}`]: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-openai",
+      rootDir: dir,
+      origin: "global",
+    });
+    const diagnostic = registry.diagnostics.find((entry) =>
+      entry.message.includes("providerAuthEnvVars is deprecated compatibility metadata"),
+    );
+
+    expect(diagnostic?.pluginId).toBe("externalopenai");
+    expect(diagnostic?.message).toContain("openai");
+    expect(diagnostic?.message).not.toContain(lineBreak);
+    expect(diagnostic?.message).not.toContain(ansiRed);
+  });
+
+  it("reports non-bundled channel manifests without channel config descriptors", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.channels).toEqual(["external-chat"]);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        pluginId: "external-chat",
+        source: path.join(dir, "openclaw.plugin.json"),
+        message: expect.stringContaining("without channelConfigs metadata"),
+      }),
+    );
+  });
+
+  it("sanitizes manifest-controlled fields in channel config descriptor diagnostics", () => {
+    const dir = makeTempDir();
+    const lineBreak = String.fromCharCode(10);
+    const ansiRed = `${String.fromCharCode(27)}[31m`;
+    writeManifest(dir, {
+      id: `external${lineBreak}chat${ansiRed}`,
+      channels: [`external${lineBreak}channel${ansiRed}`],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+    const diagnostic = registry.diagnostics.find((entry) =>
+      entry.message.includes("without channelConfigs metadata"),
+    );
+
+    expect(diagnostic?.pluginId).toBe("externalchat");
+    expect(diagnostic?.message).toContain("externalchannel");
+    expect(diagnostic?.message).not.toContain(lineBreak);
+    expect(diagnostic?.message).not.toContain(ansiRed);
+  });
+
+  it("accepts non-bundled channel manifests with channel config descriptors", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        "external-chat": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              token: { type: "string" },
+            },
+          },
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+
+    expect(registry.plugins[0]?.channelConfigs?.["external-chat"]?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+    });
+    expect(
+      registry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+  });
+
+  it("drops prototype-polluting channel config keys from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeTextFile(
+      dir,
+      "openclaw.plugin.json",
+      JSON.stringify({
+        id: "external-chat",
+        channels: ["safe-chat"],
+        configSchema: { type: "object" },
+        channelConfigs: {
+          ["__proto__"]: {
+            schema: {
+              type: "object",
+              properties: {
+                polluted: { const: true },
+              },
+            },
+          },
+          constructor: {
+            schema: { type: "object" },
+          },
+          prototype: {
+            schema: { type: "object" },
+          },
+          "safe-chat": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    );
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "external-chat",
+      rootDir: dir,
+      origin: "global",
+    });
+    const channelConfigs = registry.plugins[0]?.channelConfigs;
+
+    expect(channelConfigs).toBeDefined();
+    expect(Object.getPrototypeOf(channelConfigs)).toBe(null);
+    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "__proto__")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "constructor")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(channelConfigs, "prototype")).toBe(false);
+    expect(channelConfigs?.["safe-chat"]?.schema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+    });
+  });
+
   it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

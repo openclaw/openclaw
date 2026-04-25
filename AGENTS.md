@@ -7,6 +7,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Repo: `https://github.com/openclaw/openclaw`
 - Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
 - Run docs list first: `pnpm docs:list` if available; read relevant docs only.
+- High-confidence answers only when fixing/triaging: verify source, tests, shipped/current behavior, and dependency contracts before deciding.
+- Dependency-backed behavior: read upstream dependency docs/source/types first. Do not assume APIs, defaults, errors, timing, or runtime behavior.
 - Missing deps: `pnpm install`, retry once, then report first actionable error.
 - CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
 - Wording: product/docs/UI/changelog say "plugin/plugins"; `extensions/` is internal.
@@ -15,17 +17,9 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 ## Map
 
-- Core TS: `src/`, `ui/`, `packages/`
-- Bundled plugins: `extensions/`
-- Public SDK: `src/plugin-sdk/*`
-- Channel internals: `src/channels/*`
-- Plugin loader/contracts: `src/plugins/*`
-- Gateway protocol: `src/gateway/protocol/*`
-- Docs: `docs/`
-- Apps: `apps/`, `Swabble/`
-- Installers: sibling `../openclaw.ai`
-
-Scoped guides: `extensions/`, `src/plugin-sdk/`, `src/channels/`, `src/plugins/`, `src/gateway/`, `src/gateway/protocol/`, `src/agents/`, `test/helpers/`, `test/helpers/channels/`, `docs/`, `ui/`, `scripts/`.
+- Core TS: `src/`, `ui/`, `packages/`; plugins: `extensions/`; SDK: `src/plugin-sdk/*`; channels: `src/channels/*`; loader: `src/plugins/*`; protocol: `src/gateway/protocol/*`; docs/apps: `docs/`, `apps/`, `Swabble/`.
+- Installers: sibling `../openclaw.ai`.
+- Scoped guides exist in: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,gateway/protocol,agents}/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
 
 ## Architecture
 
@@ -48,19 +42,14 @@ Scoped guides: `extensions/`, `src/plugin-sdk/`, `src/channels/`, `src/plugins/`
 
 - Runtime: Node 22+. Keep Node + Bun paths working.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched).
-- CLI: `pnpm openclaw ...` or `pnpm dev`
-- Build: `pnpm build`
-- Smart gate: `pnpm check:changed`; explain with `pnpm changed:lanes --json`; staged preview `pnpm check:changed --staged`.
-- Prod sweep: `pnpm check` (prod type/lint/guards, no tests).
-- Tests: `pnpm test`; changed `pnpm test:changed`; serial `pnpm test:serial`; coverage `pnpm test:coverage`.
-- Extension tests: `pnpm test:extensions` / `pnpm test extensions` / `pnpm test extensions/<id>`.
+- CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
+- Smart gate: `pnpm check:changed`; explain `pnpm changed:lanes --json`; staged preview `pnpm check:changed --staged`.
+- Prod sweep: `pnpm check`; tests: `pnpm test`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`.
+- Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; never raw `vitest`.
-- Shard timings: `.artifacts/vitest-shard-timings.json`; disable `OPENCLAW_TEST_PROJECTS_TIMINGS=0`.
-- Format: `pnpm format:check` / `pnpm format`.
-- Typecheck: `pnpm tsgo`, `pnpm tsgo:prod`, `pnpm check:test-types`/`pnpm tsgo:test`, `pnpm tsgo:all`; profile `pnpm tsgo:profile [...]`.
-- Type policy: use `tsgo`; do not add `tsc --noEmit`, `typecheck`, `check:types`. `tsc` only for declaration/package-boundary emit gaps.
-- Lint: `pnpm lint`, `pnpm lint:core`, `pnpm lint:extensions`, `pnpm lint:scripts`, `pnpm lint:apps`, `pnpm lint:all`.
-- Local heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
+- Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); do not add `tsc --noEmit`, `typecheck`, `check:types`.
+- Format/lint: `pnpm format:check`/`pnpm format`; `pnpm lint*` lanes.
+- Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
 - Local first. Use repo `pnpm` lanes before Blacksmith/Testbox. Remote only for parity-only failures, secrets/services, or explicit ask.
 
 ## GitHub / CI
@@ -69,11 +58,17 @@ Scoped guides: `extensions/`, `src/plugin-sdk/`, `src/channels/`, `src/plugins/`
 - Search/dedupe: prefer `gh search issues 'repo:openclaw/openclaw is:open <terms>' --json number,title,state,updatedAt --limit 20`.
 - PR shortlist: `gh pr list ...`; then `gh pr view <n> --json number,title,body,closingIssuesReferences,files,statusCheckRollup,reviewDecision`.
 - After landing PR: search duplicate open issues/PRs. Before closing: comment why + canonical link.
+- GH comments with markdown backticks, `$`, or shell snippets: avoid inline double-quoted `--body`; use single quotes or `--body-file`.
+- PR review answer must explicitly cover: what bug/behavior we are trying to fix; PR/issue URL(s) and affected endpoint/surface; whether this is the best possible fix, with high-certainty evidence from code, tests, CI, and shipped/current behavior.
 - CI polling: exact SHA, needed fields only. Example: `gh api repos/<owner>/<repo>/actions/runs/<id> --jq '{status,conclusion,head_sha,updated_at,name,path}'`.
-- Background workflows: `Auto response`, `Docs Sync Publish Repo`, `Docs Agent`, `Test Performance Agent`. Do not wait/rerun/fix unless asked or task is that workflow.
-- Post-land wait: minimal. Check required workflows for landed SHA only. If superseded on `main`, same-branch `cancel-in-progress` cancellations are expected; stop once local touched-surface proof exists. Do not wait for newer unrelated `main` commits unless asked.
-- `/landpr`: do not idle on `auto-response` or `check-docs`. Treat docs as local proof unless `check-docs` already failed with actionable relevant error. If product/code gates + touched local gates are green, proceed.
-- Poll lightly, 30-60s. Fetch jobs/logs/artifacts only after failure/completion or concrete need.
+- Post-land wait: minimal. Exact landed SHA only. If superseded on `main`, same-branch `cancel-in-progress` cancellations are expected; stop once local touched-surface proof exists. Never wait for newer unrelated `main` unless asked.
+- Wait matrix:
+  - never: `Auto response`, `Labeler`, `Docs Sync Publish Repo`, `Docs Agent`, `Test Performance Agent`, `Stale`.
+  - conditional: `CI` exact SHA only; `Docs` only docs task/no local docs proof; `Workflow Sanity` only workflow/composite/CI-policy edits; `Plugin NPM Release` only plugin package/release metadata.
+  - release/manual only: `Docker Release`, `OpenClaw NPM Release`, `macOS Release`, `OpenClaw Release Checks`, `Cross-OS Release Checks`, `NPM Telegram Beta E2E`.
+  - explicit/surface only: `QA-Lab - All Lanes`, `Scheduled Live And E2E`, `Install Smoke`, `CodeQL`, `Sandbox Common Smoke`, `Parity gate`, `Blacksmith Testbox`, `Control UI Locale Refresh`.
+- `/landpr`: do not idle on `auto-response` or `check-docs`. Treat docs as local proof unless `check-docs` already failed with actionable relevant error.
+- Poll 30-60s. Fetch jobs/logs/artifacts only after failure/completion or concrete need.
 
 ## Gates
 
@@ -108,17 +103,13 @@ Scoped guides: `extensions/`, `src/plugin-sdk/`, `src/channels/`, `src/plugins/`
 
 ## Tests
 
-- Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`.
-- Example models: `sonnet-4.6`, `gpt-5.4`.
+- Vitest. Colocated `*.test.ts`; e2e `*.e2e.test.ts`; example models `sonnet-4.6`, `gpt-5.4`.
 - Clean timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` safe.
-- Hot tests: avoid per-test `vi.resetModules()` + heavy imports. Prefer static/`beforeAll` imports + direct state reset.
-- Measure first: `pnpm test:perf:imports <file>`, `pnpm test:perf:hotspots --limit N`.
-- Seam depth: unit-test pure helpers/contracts; one integration smoke per boundary.
-- Mock expensive seams directly: scanners, manifests, package registries, fs crawls, provider SDKs, network/process launch.
-- Prefer injection over module mocks; if mocking modules, mock narrow local `*.runtime.ts`, not broad barrels.
-- Share fixtures/builders. Do not recreate temp/plugin workspaces per case unless isolation needs it.
-- Delete duplicate assertions. Assert behavior that can regress here.
-- Avoid broad `importOriginal()` / `openclaw/plugin-sdk/*` partial mocks; add narrow runtime seam.
+- Hot tests: avoid per-test `vi.resetModules()` + heavy imports. Measure with `pnpm test:perf:imports <file>` / `pnpm test:perf:hotspots --limit N`.
+- Seam depth: pure helper/contract unit tests; one integration smoke per boundary.
+- Mock expensive seams directly: scanners, manifests, registries, fs crawls, provider SDKs, network/process launch.
+- Prefer injection; if module mocking, mock narrow local `*.runtime.ts`, not broad barrels or `openclaw/plugin-sdk/*`.
+- Share fixtures/builders; delete duplicate assertions; assert behavior that can regress here.
 - Do not edit baseline/inventory/ignore/snapshot/expected-failure files to silence checks without explicit approval.
 - Test workers max 16. Memory pressure: `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`.
 - Live: `OPENCLAW_LIVE_TEST=1 pnpm test:live`; verbose `OPENCLAW_LIVE_TEST_QUIET=0`.
@@ -157,17 +148,14 @@ Scoped guides: `extensions/`, `src/plugin-sdk/`, `src/channels/`, `src/plugins/`
 - Before simulator/emulator testing, check real iOS/Android devices.
 - "restart iOS/Android apps" = rebuild/reinstall/relaunch, not kill/launch.
 - SwiftUI: Observation (`@Observable`, `@Bindable`) over new `ObservableObject`.
-- Mac gateway: use app or `openclaw gateway restart/status --deep`; no ad-hoc tmux gateway. Rebuild mac app locally.
-- Mac logs: `./scripts/clawlog.sh`.
+- Mac gateway: use app or `openclaw gateway restart/status --deep`; no ad-hoc tmux gateway. Logs: `./scripts/clawlog.sh`.
 - Version bump touches: `package.json`, `apps/android/app/build.gradle.kts`, `apps/ios/version.json` + `pnpm ios:version:sync`, macOS `Info.plist`, `docs/install/updating.md`. Appcast only for Sparkle release.
-- iOS Team ID: `security find-identity -p codesigning -v`; fallback `defaults read com.apple.dt.Xcode IDEProvisioningTeamIdentifiers`.
 - Mobile LAN pairing: plaintext `ws://` loopback-only. Private-network `ws://` needs `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; Tailscale/public use `wss://` or tunnel.
 - A2UI hash `src/canvas-host/a2ui/.bundle.hash`: generated; ignore unless running `pnpm canvas:a2ui:bundle`; commit separately.
 
 ## Ops / Footguns
 
-- Remote install docs: `docs/install/exe-dev.md`, `docs/install/fly.md`, `docs/install/hetzner.md`.
-- Parallels smoke: `$openclaw-parallels-smoke`; Discord roundtrip: `parallels-discord-roundtrip`.
+- Remote install docs: `docs/install/{exe-dev,fly,hetzner}.md`. Parallels smoke: `$openclaw-parallels-smoke`; Discord roundtrip: `parallels-discord-roundtrip`.
 - Rebrand/migration/config warnings: run `openclaw doctor`.
 - Never edit `node_modules`.
 - Local-only `.agents` ignores: `.git/info/exclude`, not repo `.gitignore`.
