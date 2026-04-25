@@ -110,7 +110,9 @@ function resolveBoundConversationOrigin(params: {
   });
   const inferredThreadId =
     boundTarget.threadId ??
-    (parentConversationId && parentConversationId !== conversationId ? conversationId : undefined) ??
+    (parentConversationId && parentConversationId !== conversationId
+      ? conversationId
+      : undefined) ??
     (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
       ? String(params.requesterOrigin.threadId)
       : undefined);
