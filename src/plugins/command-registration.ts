@@ -8,6 +8,7 @@ import {
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
   isPluginCommandRegistryLocked,
+  listProviderPluginCommandSpecs,
   pluginCommands,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
@@ -21,7 +22,7 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * output chunk, so any module-level const/let would be uninitialized when
  * first accessed during plugin registration.
  */
-var reservedCommands: Set<string> | undefined;
+let reservedCommands: Set<string> | undefined;
 
 export type CommandRegistrationResult = {
   ok: boolean;
@@ -196,5 +197,10 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-export { clearPluginCommands, clearPluginCommandsForPlugin, getPluginCommandSpecs };
+export {
+  clearPluginCommands,
+  clearPluginCommandsForPlugin,
+  getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
+};
 export type { RegisteredPluginCommand };

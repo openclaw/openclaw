@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStorePath, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import {
+  resolveStorePath,
+  resolveSessionTranscriptsDirForAgent,
+} from "../config/sessions/paths.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
@@ -11,6 +14,7 @@ vi.mock("../channels/plugins/bundled-ids.js", () => ({
 }));
 
 vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
+  listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
   hasBundledChannelPersistedAuthState: () => false,
 }));
 
@@ -92,6 +96,23 @@ function writeSessionStore(
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
   await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock });
   return stateIntegrityText();
+}
+
+async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir: string) {
+  const cfg: OpenClawConfig = {
+    memory: {
+      backend: "qmd",
+      qmd: {
+        sessions: { enabled },
+      },
+    },
+  };
+  setupSessionState(cfg, process.env, homeDir);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => homeDir);
+  fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+  const confirmRuntimeRepair = vi.fn(async () => false);
+  await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+  return confirmRuntimeRepair;
 }
 
 describe("doctor state integrity oauth dir checks", () => {
@@ -282,20 +303,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
-    const cfg: OpenClawConfig = {
-      memory: {
-        backend: "qmd",
-        qmd: {
-          sessions: { enabled: true },
-        },
-      },
-    };
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-
-    const confirmRuntimeRepair = vi.fn(async () => false);
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
 
     expect(stateIntegrityText()).not.toContain(
       "These .jsonl files are no longer referenced by sessions.json",
@@ -304,20 +312,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it("still detects orphan transcripts when QMD sessions are disabled", async () => {
-    const cfg: OpenClawConfig = {
-      memory: {
-        backend: "qmd",
-        qmd: {
-          sessions: { enabled: false },
-        },
-      },
-    };
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-
-    const confirmRuntimeRepair = vi.fn(async () => false);
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(false, tempHome);
 
     expect(stateIntegrityText()).toContain(
       "These .jsonl files are no longer referenced by sessions.json",

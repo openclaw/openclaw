@@ -28,12 +28,12 @@ import {
   sanitizeToolUseResultPairing,
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
+import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import {
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
 } from "../transcript-policy.js";
-import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,
@@ -51,6 +51,37 @@ type ModelSnapshotEntry = {
   modelApi?: string | null;
   modelId?: string;
 };
+
+type ProviderReplayHookParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  provider: string;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+  sessionId?: string;
+};
+
+function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
+  const context = {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    provider: params.provider,
+    modelId: params.modelId,
+    modelApi: params.modelApi,
+    model: params.model,
+    sessionId: params.sessionId,
+  };
+  return {
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context,
+  };
+}
 
 function buildInterSessionPrefix(message: AgentMessage): string {
   const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
@@ -191,6 +222,24 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
       ...candidateRecord,
       usage: makeZeroUsageSnapshot(),
     } as unknown as AgentMessage;
+    touched = true;
+  }
+  return touched ? out : messages;
+}
+
+export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out = [...messages];
+  for (let i = 0; i < out.length; i += 1) {
+    const message = out[i];
+    const replayContent = (message as { content?: unknown } | undefined)?.content;
+    if (!message || message.role !== "assistant" || typeof replayContent !== "string") {
+      continue;
+    }
+    out[i] = {
+      ...message,
+      content: [{ type: "text", text: replayContent }],
+    };
     touched = true;
   }
   return touched ? out : messages;
@@ -408,44 +457,6 @@ export async function sanitizeSessionHistory(params: {
     modelApi: params.modelApi,
     policy,
   });
-  const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
-    "session:history",
-    {
-      sanitizeMode: policy.sanitizeMode,
-      sanitizeToolCallIds: policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay,
-      toolCallIdMode: policy.toolCallIdMode,
-      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
-      preserveSignatures: policy.preserveSignatures,
-      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
-      ...resolveImageSanitizationLimits(params.config),
-    },
-  );
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
-    : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
-    allowedToolNames: params.allowedToolNames,
-    allowProviderOwnedThinkingReplay,
-  });
-  const sanitizedToolIds =
-    policy.sanitizeToolCallIds && policy.toolCallIdMode
-      ? sanitizeToolCallIdsForCloudCodeAssist(sanitizedToolCalls, policy.toolCallIdMode, {
-          preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
-          preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
-          allowedToolNames: params.allowedToolNames,
-        })
-      : sanitizedToolCalls;
-  const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolIds, {
-        erroredAssistantResultPolicy: "drop",
-      })
-    : sanitizedToolIds;
-  const sanitizedToolResults = stripToolResultDetails(repairedTools);
-  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
-    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
-  );
-
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
@@ -460,35 +471,86 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI = isOpenAIResponsesApi
-    ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
-      )
-    : sanitizedCompactionUsage;
-  const provider = params.provider?.trim();
-  const providerSanitized =
-    provider && provider.length > 0
-      ? await sanitizeProviderReplayHistoryWithPlugin({
-          provider,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          context: {
-            config: params.config,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
-            provider,
-            modelId: params.modelId,
-            modelApi: params.modelApi,
-            model: params.model,
-            sessionId: params.sessionId,
-            messages: sanitizedOpenAI,
-            allowedToolNames: params.allowedToolNames,
-            sessionState: createProviderReplaySessionState(params.sessionManager),
-          },
+  const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
+  const sanitizedImages = await sanitizeSessionMessagesImages(
+    normalizedAssistantReplay,
+    "session:history",
+    {
+      sanitizeMode: policy.sanitizeMode,
+      sanitizeToolCallIds:
+        policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
+      toolCallIdMode: policy.toolCallIdMode,
+      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+      preserveSignatures: policy.preserveSignatures,
+      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      ...resolveImageSanitizationLimits(params.config),
+    },
+  );
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(sanitizedImages)
+    : sanitizedImages;
+  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+    allowedToolNames: params.allowedToolNames,
+    allowProviderOwnedThinkingReplay,
+  });
+  // OpenAI Responses rejects orphan/missing function_call_output items. Upstream
+  // Codex repairs those gaps with "aborted"; keep that before the fc_* downgrade
+  // so both call and result ids are rewritten together. Covered by unit replay
+  // tests plus live OpenAI/Codex and generic replay-repair model tests.
+  const openAIRepairedToolCalls =
+    isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+          erroredAssistantResultPolicy: "drop",
+          // Match upstream Codex history normalization for OpenAI Responses:
+          // missing function_call_output entries are model-visible "aborted".
+          missingToolResultText: "aborted",
         })
-      : undefined;
-  const sanitizedWithProvider = providerSanitized ?? sanitizedOpenAI;
+      : sanitizedToolCalls;
+  const openAISafeToolCalls = isOpenAIResponsesApi
+    ? downgradeOpenAIFunctionCallReasoningPairs(
+        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
+          dropReplayableReasoning: modelChanged,
+        }),
+      )
+    : sanitizedToolCalls;
+  const sanitizedToolIds =
+    policy.sanitizeToolCallIds && policy.toolCallIdMode
+      ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+          preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+          allowedToolNames: params.allowedToolNames,
+        })
+      : openAISafeToolCalls;
+  // Gemini/Anthropic-class providers also require tool results to stay adjacent
+  // to their assistant tool calls. They do not use Codex's "aborted" text, but
+  // the same ordering repair is live-tested with Gemini 3 Flash.
+  const repairedTools =
+    !isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(sanitizedToolIds, {
+          erroredAssistantResultPolicy: "drop",
+        })
+      : sanitizedToolIds;
+  const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
+    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+  );
+  const provider = params.provider?.trim();
+  let providerSanitized: AgentMessage[] | undefined;
+  if (provider && provider.length > 0) {
+    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
+    const providerResult = await sanitizeProviderReplayHistoryWithPlugin({
+      ...pluginParams,
+      context: {
+        ...pluginParams.context,
+        sessionId: params.sessionId ?? "",
+        messages: sanitizedCompactionUsage,
+        allowedToolNames: params.allowedToolNames,
+        sessionState: createProviderReplaySessionState(params.sessionManager),
+      },
+    });
+    providerSanitized = providerResult ?? undefined;
+  }
+  const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -541,20 +603,11 @@ export async function validateReplayTurns(params: {
     });
   const provider = params.provider?.trim();
   if (provider) {
+    const pluginParams = createProviderReplayPluginParams({ ...params, provider });
     const providerValidated = await validateProviderReplayTurnsWithPlugin({
-      provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
+      ...pluginParams,
       context: {
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-        provider,
-        modelId: params.modelId,
-        modelApi: params.modelApi,
-        model: params.model,
-        sessionId: params.sessionId,
+        ...pluginParams.context,
         messages: params.messages,
       },
     });

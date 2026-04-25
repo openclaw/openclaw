@@ -88,12 +88,15 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   webFetchProviders: [],
   webSearchProviders: [],
   memoryEmbeddingProviders: [],
+  codexAppServerExtensionFactories: [],
+  agentToolResultMiddlewares: [],
   textTransforms: [],
   agentHarnesses: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
+  gatewayDiscoveryServices: [],
   conversationBindingResolvedHandlers: [],
   diagnostics,
 });
@@ -200,8 +203,7 @@ async function createSubagentRuntime(
 
 async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
   vi.resetModules();
-  await loadTestModules();
-  return serverPluginsModule;
+  return await import("./server-plugins.js");
 }
 
 function loadGatewayPluginsForTest(
@@ -524,6 +526,29 @@ describe("loadGatewayPlugins", () => {
     expect(typeof subagent?.getSession).toBe("function");
   });
 
+  test("filters connected plugin nodes locally without sending unsupported node.list params", async () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("nodes-list-filter"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.req.method).toBe("node.list");
+      opts.respond(true, {
+        nodes: [
+          { nodeId: "connected", connected: true },
+          { nodeId: "offline", connected: false },
+        ],
+      });
+    });
+
+    const runtime = runtimeModule.createPluginRuntime({
+      allowGatewaySubagentBinding: true,
+    });
+    const result = await runtime.nodes.list({ connected: true });
+
+    expect(getLastDispatchedParams()).toEqual({});
+    expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
+  });
+
   test("forwards provider and model overrides when the request scope is authorized", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
@@ -554,6 +579,68 @@ describe("loadGatewayPlugins", () => {
       model: "claude-haiku-4-5",
       deliver: false,
     });
+  });
+
+  test("forwards caller-supplied idempotencyKey on subagent run", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("idempotency-forward"));
+
+    await runtime.run({
+      sessionKey: "s-idem-forward",
+      message: "hello",
+      deliver: false,
+      idempotencyKey: "caller-provided-key",
+    });
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-idem-forward",
+      message: "hello",
+      idempotencyKey: "caller-provided-key",
+    });
+  });
+
+  test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("light-context-forward"));
+
+    await runtime.run({
+      sessionKey: "s-light-context",
+      message: "hello",
+      lightContext: true,
+      lane: "dreaming-narrative:s-light-context",
+      deliver: false,
+    });
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-light-context",
+      message: "hello",
+      lane: "dreaming-narrative:s-light-context",
+      bootstrapContextMode: "lightweight",
+      deliver: false,
+    });
+  });
+
+  test("generates a non-empty idempotencyKey when the caller omits it", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("idempotency-generate"));
+
+    await runtime.run({
+      sessionKey: "s-idem-generate",
+      message: "hello",
+      deliver: false,
+    });
+
+    const params = getLastDispatchedParams();
+    expect(params).toBeDefined();
+    // The gateway `agent` schema requires `idempotencyKey: NonEmptyString`, so
+    // the runtime must always send a populated value. A missing field here
+    // would reproduce the memory-core dreaming-narrative regression.
+    const generated = params?.idempotencyKey;
+    expect(typeof generated).toBe("string");
+    expect((generated as string).length).toBeGreaterThan(0);
   });
 
   test("rejects provider/model overrides for fallback runs without explicit authorization", async () => {

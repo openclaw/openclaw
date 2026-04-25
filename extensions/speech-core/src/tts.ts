@@ -397,7 +397,7 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
     autoMode === "inbound"
       ? "Only use TTS when the user's last message includes audio/voice."
       : autoMode === "tagged"
-        ? "Only use TTS when you include [[tts]] or [[tts:text]] tags."
+        ? "Only use TTS when you include [[tts:key=value]] directives or a [[tts:text]]...[[/tts:text]] block."
         : undefined;
   return [
     "Voice (TTS) is enabled.",
@@ -475,9 +475,11 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
     return normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider;
   }
 
-  for (const provider of sortSpeechProvidersForAutoSelection()) {
+  const effectiveCfg = config.sourceConfig;
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
     if (
       provider.isConfigured({
+        cfg: effectiveCfg,
         providerConfig: config.providerConfigs[provider.id] ?? {},
         timeoutMs: config.timeoutMs,
       })
@@ -752,6 +754,7 @@ export async function textToSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  timeoutMs?: number;
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
@@ -790,6 +793,7 @@ export async function synthesizeSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
   disableFallback?: boolean;
+  timeoutMs?: number;
 }): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -803,6 +807,7 @@ export async function synthesizeSpeech(params: {
   }
 
   const { config, providers } = setup;
+  const timeoutMs = params.timeoutMs ?? config.timeoutMs;
   const target = supportsNativeVoiceNoteTts(params.channel) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
@@ -839,7 +844,7 @@ export async function synthesizeSpeech(params: {
         providerConfig: resolvedProvider.providerConfig,
         target,
         providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
-        timeoutMs: config.timeoutMs,
+        timeoutMs,
       });
       const latencyMs = Date.now() - providerStart;
       attempts.push({
@@ -931,9 +936,19 @@ export async function textToSpeechTelephony(params: {
         logVerbose(`TTS telephony: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
-      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
-        typeof resolvedProvider.provider.synthesizeTelephony
-      >;
+      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony;
+      if (!synthesizeTelephony) {
+        const message = `${provider}: unsupported for telephony`;
+        errors.push(message);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: "unsupported_for_telephony",
+          error: message,
+        });
+        logVerbose(`TTS telephony: provider ${provider} skipped (${message})`);
+        continue;
+      }
       const synthesis = await synthesizeTelephony({
         text: params.text,
         cfg: params.cfg,
@@ -1035,12 +1050,14 @@ export async function maybeApplyTtsToPayload(params: {
     return params.payload;
   }
   const config = resolveTtsConfig(params.cfg);
+  const activeProvider = getTtsProvider(config, prefsPath);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
   const directives = parseTtsDirectives(text, config.modelOverrides, {
     cfg: params.cfg,
     providerConfigs: config.providerConfigs,
+    preferredProviderId: activeProvider,
   });
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
@@ -1048,9 +1065,8 @@ export async function maybeApplyTtsToPayload(params: {
 
   if (isVerbose()) {
     const effectiveProvider = directives.overrides?.provider
-      ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ??
-        getTtsProvider(config, prefsPath))
-      : getTtsProvider(config, prefsPath);
+      ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ?? activeProvider)
+      : activeProvider;
     logVerbose(
       `TTS: auto mode enabled (${autoMode}), channel=${params.channel}, selected provider=${effectiveProvider}, config.provider=${config.provider}, config.providerSource=${config.providerSource}`,
     );

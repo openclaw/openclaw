@@ -3,12 +3,14 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   PluginHookAgentContext,
+  PluginHookBeforeAgentReplyResult,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { FailoverReason } from "../pi-embedded-helpers/types.js";
+import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 type MockCompactionResult =
@@ -32,6 +34,12 @@ type MockCompactionResult =
 
 export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
+  runBeforeAgentReply: vi.fn(
+    async (
+      _event: { cleanedBody: string },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
+  ),
   runBeforeAgentStart: vi.fn(
     async (
       _event: { prompt: string; messages?: unknown[] },
@@ -65,13 +73,21 @@ export const mockedContextEngine = {
 
 export const mockedContextEngineCompact = mockedContextEngine.compact;
 export const mockedCompactDirect = mockedContextEngine.compact;
+export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
+export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+export const mockedBuildEmbeddedRunPayloads = vi.fn<
+  (
+    ...args: Parameters<typeof buildEmbeddedRunPayloads>
+  ) => ReturnType<typeof buildEmbeddedRunPayloads>
+>(() => []);
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
+export const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
 type MockTruncateOversizedToolResultsResult = {
   truncated: boolean;
   truncatedCount: number;
@@ -169,6 +185,14 @@ export const mockedResolveContextWindowInfo = vi.fn(() => ({
   tokens: 200000,
   source: "model",
 }));
+export const mockedFormatContextWindowWarningMessage = vi.fn(
+  (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
+    `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
+);
+export const mockedFormatContextWindowBlockMessage = vi.fn(
+  (params: { guard: { tokens: number; source: string } }) =>
+    `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
+);
 export const mockedGetApiKeyForModel = vi.fn(
   async ({ profileId }: { profileId?: string } = {}) => ({
     apiKey: "test-key",
@@ -193,6 +217,8 @@ export const overflowBaseRunParams = {
 export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+  mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
+  mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
   mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforePromptBuild.mockReset();
@@ -205,6 +231,10 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedGlobalHookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   mockedContextEngine.info.ownsCompaction = false;
+  mockedResolveContextEngine.mockReset();
+  mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
+  mockedBuildAgentRuntimePlan.mockReset();
+  mockedBuildAgentRuntimePlan.mockReturnValue({});
   mockedContextEngineCompact.mockReset();
   mockedContextEngineCompact.mockResolvedValue({
     ok: false,
@@ -216,10 +246,14 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedPrepareProviderRuntimeAuth.mockReset();
   mockedPrepareProviderRuntimeAuth.mockResolvedValue(undefined);
   mockedRunEmbeddedAttempt.mockReset();
+  mockedBuildEmbeddedRunPayloads.mockReset();
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
+  mockedResolveLiveToolResultMaxChars.mockReset();
+  mockedResolveLiveToolResultMaxChars.mockReturnValue(32_000);
   mockedTruncateOversizedToolResultsInSession.mockReset();
   mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
     truncated: false,
@@ -300,6 +334,16 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     tokens: 200000,
     source: "model",
   });
+  mockedFormatContextWindowWarningMessage.mockReset();
+  mockedFormatContextWindowWarningMessage.mockImplementation(
+    (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
+      `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
+  );
+  mockedFormatContextWindowBlockMessage.mockReset();
+  mockedFormatContextWindowBlockMessage.mockImplementation(
+    (params: { guard: { tokens: number; source: string } }) =>
+      `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
+  );
   mockedGetApiKeyForModel.mockReset();
   mockedGetApiKeyForModel.mockImplementation(
     async ({ profileId }: { profileId?: string } = {}) => ({
@@ -331,16 +375,21 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureContextEnginesInitialized: vi.fn(),
   }));
   vi.doMock("../../context-engine/registry.js", () => ({
-    resolveContextEngine: vi.fn(async () => mockedContextEngine),
+    resolveContextEngine: mockedResolveContextEngine,
   }));
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
   }));
 
+  vi.doMock("../runtime-plan/build.js", () => ({
+    buildAgentRuntimePlan: mockedBuildAgentRuntimePlan,
+  }));
+
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
+    resolveProviderAuthProfileId: vi.fn(() => undefined),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
   }));
@@ -402,6 +451,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./tool-result-truncation.js", () => ({
+    resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
   }));
@@ -443,6 +493,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
     CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
+    formatContextWindowBlockMessage: mockedFormatContextWindowBlockMessage,
+    formatContextWindowWarningMessage: mockedFormatContextWindowWarningMessage,
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
@@ -481,10 +533,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./run/payloads.js", () => ({
-    buildEmbeddedRunPayloads: vi.fn(() => []),
+    buildEmbeddedRunPayloads: mockedBuildEmbeddedRunPayloads,
   }));
 
-  vi.doMock("./compact.js", () => ({
+  vi.doMock("./compaction-hooks.js", () => ({
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 

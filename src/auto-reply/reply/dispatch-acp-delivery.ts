@@ -82,9 +82,6 @@ async function shouldTreatDeliveredTextAsVisible(params: {
       text: params.text,
     });
   }
-  if (!params.routed) {
-    return channelId === "telegram";
-  }
   return false;
 }
 
@@ -159,6 +156,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   ctx: FinalizedMsgContext;
   dispatcher: ReplyDispatcher;
   inboundAudio: boolean;
+  sessionKey?: string;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
@@ -185,6 +183,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
   const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
   const resolvedAccountId =
     explicitAccountId ??
@@ -215,6 +214,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
+    // When delivery is suppressed (e.g. sendPolicy: "deny"), do not fire the
+    // onReplyStart callback — channels wire it to typing indicators / lifecycle
+    // notifications that should not leak outbound events while the session is
+    // under a deny policy. See #53328.
+    if (params.suppressUserDelivery) {
+      return;
+    }
     void Promise.resolve(params.onReplyStart?.()).catch((error) => {
       logVerbose(
         `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -315,7 +321,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         payload: ttsPayload,
         channel: params.originatingChannel,
         to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
+        sessionKey: deliverySessionKey,
+        ...(deliverySessionKey !== params.ctx.SessionKey
+          ? { policySessionKey: params.ctx.SessionKey }
+          : {}),
         accountId: resolvedAccountId,
         requesterSenderId: params.ctx.SenderId,
         requesterSenderName: params.ctx.SenderName,

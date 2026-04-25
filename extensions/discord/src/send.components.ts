@@ -5,8 +5,13 @@ import {
   type RequestClient,
 } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  requireRuntimeConfig,
+  type MarkdownTableMode,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
@@ -141,7 +146,7 @@ function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string
 }
 
 type DiscordComponentSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   accountId?: string;
   token?: string;
   rest?: RequestClient;
@@ -157,6 +162,10 @@ type DiscordComponentSendOpts = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   filename?: string;
+  textLimit?: number;
+  maxLinesPerMessage?: number;
+  tableMode?: MarkdownTableMode;
+  chunkMode?: ChunkMode;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -244,7 +253,7 @@ async function buildDiscordComponentPayload(params: {
 export async function sendDiscordComponentMessage(
   to: string,
   spec: DiscordComponentMessageSpec,
-  opts: DiscordComponentSendOpts = {},
+  opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
   const classicDecision = getClassicDiscordMessageDecision(spec);
   if (opts.mediaUrl && classicDecision.mode === "classic") {
@@ -260,13 +269,17 @@ export async function sendDiscordComponentMessage(
       mediaAccess: opts.mediaAccess,
       replyTo: opts.replyTo,
       silent: opts.silent,
+      textLimit: opts.textLimit,
+      maxLinesPerMessage: opts.maxLinesPerMessage,
+      tableMode: opts.tableMode,
+      chunkMode: opts.chunkMode,
     });
   }
 
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   const channelType = await resolveDiscordChannelType(rest, channelId);
@@ -293,6 +306,7 @@ export async function sendDiscordComponentMessage(
   } catch (err) {
     throw await buildDiscordSendError(err, {
       channelId,
+      cfg,
       rest,
       token,
       hasMedia: Boolean(opts.mediaUrl),
@@ -320,12 +334,12 @@ export async function editDiscordComponentMessage(
   to: string,
   messageId: string,
   spec: DiscordComponentMessageSpec,
-  opts: DiscordComponentSendOpts = {},
+  opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const { body, buildResult } = await buildDiscordComponentPayload({
     spec,
@@ -345,6 +359,7 @@ export async function editDiscordComponentMessage(
   } catch (err) {
     throw await buildDiscordSendError(err, {
       channelId,
+      cfg,
       rest,
       token,
       hasMedia: Boolean(opts.mediaUrl),

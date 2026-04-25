@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -95,7 +96,7 @@ function resolveEffectiveModelCompat(params: {
     return undefined;
   }
   try {
-    return resolveModel(provider, modelId, params.agentDir, params.cfg).model?.compat;
+    return extractModelCompat(resolveModel(provider, modelId, params.agentDir, params.cfg).model);
   } catch {
     return undefined;
   }
@@ -157,13 +158,15 @@ export function resolveEffectiveToolInventory(
     effectiveTools
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool);
-        return {
-          id: tool.name,
-          label: resolveEffectiveToolLabel(tool),
-          description: summarizeToolDescription(tool),
-          rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
-          ...source,
-        } satisfies EffectiveToolInventoryEntry;
+        return Object.assign(
+          {
+            id: tool.name,
+            label: resolveEffectiveToolLabel(tool),
+            description: summarizeToolDescription(tool),
+            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+          },
+          source,
+        ) satisfies EffectiveToolInventoryEntry;
       })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );

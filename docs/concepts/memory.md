@@ -1,12 +1,10 @@
 ---
-title: "Memory Overview"
 summary: "How OpenClaw remembers things across sessions"
+title: "Memory overview"
 read_when:
   - You want to understand how memory works
   - You want to know what memory files to write
 ---
-
-# Memory Overview
 
 OpenClaw remembers things by writing **plain Markdown files** in your agent's
 workspace. The model only "remembers" what gets saved to disk -- there is no
@@ -20,7 +18,7 @@ Your agent has three memory-related files:
   decisions. Loaded at the start of every DM session.
 - **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
   Today and yesterday's notes are loaded automatically.
-- **`DREAMS.md`** (experimental, optional) -- Dream Diary and dreaming sweep
+- **`DREAMS.md`** (optional) -- Dream Diary and dreaming sweep
   summaries for human review, including grounded historical backfill entries.
 
 These files live in the agent workspace (default `~/.openclaw/workspace`).
@@ -114,7 +112,7 @@ important facts in the conversation that are not yet written to a file, they
 will be saved automatically before the summary happens.
 </Tip>
 
-## Dreaming (experimental)
+## Dreaming
 
 Dreaming is an optional background consolidation pass for memory. It collects
 short-term signals, scores candidates, and promotes only qualified items into
@@ -131,7 +129,7 @@ It is designed to keep long-term memory high signal:
   for human review.
 
 For phase behavior, scoring signals, and Dream Diary details, see
-[Dreaming (experimental)](/concepts/dreaming).
+[Dreaming](/concepts/dreaming).
 
 ## Grounded backfill and live promotion
 
@@ -184,7 +182,14 @@ openclaw memory index --force   # Rebuild the index
 - [Memory Wiki](/plugins/memory-wiki) -- compiled knowledge vault and wiki-native tools
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
-- [Dreaming (experimental)](/concepts/dreaming) -- background promotion
+- [Dreaming](/concepts/dreaming) -- background promotion
   from short-term recall to long-term memory
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
 - [Compaction](/concepts/compaction) -- how compaction interacts with memory
+
+## Related
+
+- [Active memory](/concepts/active-memory)
+- [Memory search](/concepts/memory-search)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Honcho memory](/concepts/memory-honcho)

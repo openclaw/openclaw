@@ -6,8 +6,6 @@ read_when:
 title: "Web"
 ---
 
-# Web (Gateway)
-
 The Gateway serves a small **browser Control UI** (Vite + Lit) from the same port as the Gateway WebSocket:
 
 - default: `http://<host>:18789/`
@@ -122,5 +120,5 @@ Open:
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build
 ```

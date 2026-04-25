@@ -4,7 +4,7 @@ import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "../../src/media-understanding/audio.test-helpers.js";
-import { describeGeminiVideo } from "./media-understanding-provider.js";
+import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understanding-provider.js";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 
 installPinnedHostnameTestHooks();
@@ -79,7 +79,7 @@ describe("describeGeminiVideo", () => {
       fileName: "clip.mp4",
       apiKey: "test-key",
       timeoutMs: 1500,
-      baseUrl: "https://example.com/v1beta/",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
       model: "gemini-3-pro",
       headers: { "X-Other": "1" },
       fetchFn,
@@ -88,7 +88,9 @@ describe("describeGeminiVideo", () => {
 
     expect(result.model).toBe("gemini-3-pro-preview");
     expect(result.text).toBe("first\nsecond");
-    expect(seenUrl).toBe("https://example.com/v1beta/models/gemini-3-pro-preview:generateContent");
+    expect(seenUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent",
+    );
     expect(seenInit?.method).toBe("POST");
     expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
 
@@ -108,6 +110,49 @@ describe("describeGeminiVideo", () => {
     expect(body.contents?.[0]?.parts?.[1]?.inline_data?.mime_type).toBe("video/mp4");
     expect(body.contents?.[0]?.parts?.[1]?.inline_data?.data).toBe(
       Buffer.from("video-bytes").toString("base64"),
+    );
+  });
+
+  it("rejects non-Google video base URLs before sending authenticated requests", async () => {
+    await expect(
+      describeGeminiVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        baseUrl: "https://example.com/v1beta/",
+        fetchFn: async () => {
+          throw new Error("fetch should not run");
+        },
+      }),
+    ).rejects.toThrow(
+      "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",
+    );
+  });
+
+  it("formats Google audio transcription HTTP errors with provider details", async () => {
+    await expect(
+      transcribeGeminiAudio({
+        buffer: Buffer.from("audio-bytes"),
+        fileName: "clip.wav",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        fetchFn: async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "Unsupported audio",
+                status: "INVALID_ARGUMENT",
+              },
+            }),
+            {
+              status: 400,
+              headers: { "x-request-id": "google_audio_req" },
+            },
+          ),
+      }),
+    ).rejects.toThrow(
+      "Audio transcription failed (400): Unsupported audio [code=INVALID_ARGUMENT] [request_id=google_audio_req]",
     );
   });
 });

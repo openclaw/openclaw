@@ -12,6 +12,7 @@ import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
@@ -73,6 +74,7 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
+  options?: { registry?: PluginManifestCommandAliasRegistry },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
   if (!normalizedPluginId) {
@@ -88,6 +90,7 @@ export function resolveMissingPluginCommandMessage(
   const commandAlias = resolveManifestCommandAliasOwner({
     command: normalizedPluginId,
     config,
+    registry: options?.registry,
   });
   const parentPluginId = commandAlias?.pluginId;
   if (parentPluginId) {
@@ -118,6 +121,9 @@ export function resolveMissingPluginCommandMessage(
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
+    if (parentPluginId && allow.includes(parentPluginId)) {
+      return null;
+    }
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
       `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
@@ -204,12 +210,17 @@ export async function runCli(argv: string[] = process.argv) {
     // Capture all console output into structured logs while keeping stdout/stderr behavior.
     enableConsoleCapture();
 
-    const [{ buildProgram }, { installUnhandledRejectionHandler }, { restoreTerminalState }] =
-      await Promise.all([
-        import("./program.js"),
-        import("../infra/unhandled-rejections.js"),
-        import("../terminal/restore.js"),
-      ]);
+    const [
+      { buildProgram },
+      { runFatalErrorHooks },
+      { installUnhandledRejectionHandler },
+      { restoreTerminalState },
+    ] = await Promise.all([
+      import("./program.js"),
+      import("../infra/fatal-error-hooks.js"),
+      import("../infra/unhandled-rejections.js"),
+      import("../terminal/restore.js"),
+    ]);
     const program = buildProgram();
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
@@ -218,6 +229,9 @@ export async function runCli(argv: string[] = process.argv) {
 
     process.on("uncaughtException", (error) => {
       console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+      for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+        console.error("[openclaw]", message);
+      }
       restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
       process.exit(1);
     });
@@ -239,7 +253,10 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     const hasBuiltinPrimary =
-      primary !== null && program.commands.some((command) => command.name() === primary);
+      primary !== null &&
+      program.commands.some(
+        (command) => command.name() === primary || command.aliases().includes(primary),
+      );
     const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
       argv: parseArgv,
       primary,
@@ -258,7 +275,12 @@ export async function runCli(argv: string[] = process.argv) {
         },
       );
       if (config) {
-        if (primary && !program.commands.some((command) => command.name() === primary)) {
+        if (
+          primary &&
+          !program.commands.some(
+            (command) => command.name() === primary || command.aliases().includes(primary),
+          )
+        ) {
           const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
           if (missingPluginCommandMessage) {
             throw new Error(missingPluginCommandMessage);

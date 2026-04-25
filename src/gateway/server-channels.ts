@@ -26,6 +26,7 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   jitter: 0.1,
 };
 const MAX_RESTART_ATTEMPTS = 10;
+const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -72,6 +73,31 @@ function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAc
   return { ...resolveDefaultRuntime(channelId), accountId };
 }
 
+async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, timeoutMs: number) {
+  if (!task) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    }, timeoutMs);
+    timer.unref?.();
+    const resolveSettled = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    void task.then(resolveSettled, resolveSettled);
+  });
+}
+
 function applyDescribedAccountFields(
   next: ChannelAccountSnapshot,
   described: ChannelAccountSnapshot | undefined,
@@ -103,8 +129,8 @@ type ChannelManagerOptions = {
    * plugins to access advanced Plugin SDK features (AI dispatch, routing,
    * text processing, etc.).
    *
-   * Built-in channels (slack, discord, telegram) typically don't use this
-   * because they can directly import internal modules from the monorepo.
+   * Bundled channels typically don't use this because they can directly
+   * import internal modules from the monorepo.
    *
    * This field is optional - omitting it maintains backward compatibility
    * with existing channels. When provided, it must be a real
@@ -527,6 +553,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         }
         manuallyStopped.add(restartKey(channelId, id));
         abort?.abort();
+        const log = channelLogs[channelId];
         if (plugin?.gateway?.stopAccount) {
           const account = plugin.config.resolveAccount(cfg, id);
           await plugin.gateway.stopAccount({
@@ -540,10 +567,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             setStatus: (next) => setRuntime(channelId, id, next),
           });
         }
-        try {
-          await task;
-        } catch {
-          // ignore
+        const stoppedCleanly = await waitForChannelStopGracefully(
+          task,
+          CHANNEL_STOP_ABORT_TIMEOUT_MS,
+        );
+        if (!stoppedCleanly) {
+          log.warn?.(
+            `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
+          );
+          setRuntime(channelId, id, {
+            accountId: id,
+            running: true,
+            restartPending: false,
+            lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+          });
+          return;
         }
         store.aborts.delete(id);
         store.tasks.delete(id);
@@ -558,15 +596,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    for (const plugin of listChannelPlugins()) {
-      try {
-        await startChannel(plugin.id);
-      } catch (err) {
-        channelLogs[plugin.id]?.error?.(
-          `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
+    const pending = [...listChannelPlugins()];
+    const workerCount = Math.min(8, pending.length);
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        for (;;) {
+          const plugin = pending.shift();
+          if (!plugin) {
+            return;
+          }
+          try {
+            await startChannel(plugin.id);
+          } catch (err) {
+            channelLogs[plugin.id]?.error?.(
+              `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+      }),
+    );
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {

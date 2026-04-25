@@ -6,8 +6,6 @@ read_when:
 title: "Compaction"
 ---
 
-# Compaction
-
 Every model has a context window -- the maximum number of tokens it can process.
 When a conversation approaches that limit, OpenClaw **compacts** older messages
 into a summary so the chat can continue.
@@ -115,6 +113,11 @@ the summary:
 /compact Focus on the API design decisions
 ```
 
+When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction
+honors that Pi cut-point and keeps the recent tail in rebuilt context. Without
+an explicit keep budget, manual compaction behaves as a hard checkpoint and
+continues from the new summary alone.
+
 ## Using a different model
 
 By default, compaction uses your agent's primary model. You can use a more
@@ -132,10 +135,10 @@ capable model for better summaries:
 }
 ```
 
-## Compaction start notice
+## Compaction notices
 
-By default, compaction runs silently. To show a brief notice when compaction
-starts, enable `notifyUser`:
+By default, compaction runs silently. To show brief notices when compaction
+starts and when it completes, enable `notifyUser`:
 
 ```json5
 {
@@ -149,8 +152,8 @@ starts, enable `notifyUser`:
 }
 ```
 
-When enabled, the user sees a short message (for example, "Compacting
-context...") at the start of each compaction run.
+When enabled, the user sees short status messages around each compaction run
+(for example, "Compacting context..." and "Compaction complete").
 
 ## Compaction vs pruning
 

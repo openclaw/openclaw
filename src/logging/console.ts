@@ -130,12 +130,26 @@ export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }
 
-export function shouldLogSubsystemToConsole(subsystem: string): boolean {
+function normalizeConsoleSubsystem(subsystem?: string | null): string | null {
+  if (typeof subsystem !== "string") {
+    return null;
+  }
+  const normalized = subsystem.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean {
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
     return true;
   }
-  return filter.some((prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`));
+  const normalizedSubsystem = normalizeConsoleSubsystem(subsystem);
+  if (!normalizedSubsystem) {
+    return false;
+  }
+  return filter.some(
+    (prefix) => normalizedSubsystem === prefix || normalizedSubsystem.startsWith(`${prefix}/`),
+  );
 }
 
 const SUPPRESSED_CONSOLE_PREFIXES = [
@@ -146,23 +160,11 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
-const SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS = [
-  "DiscordMessageListener",
-  "DiscordReactionListener",
-  "DiscordReactionRemoveListener",
-] as const;
-
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
   }
   if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
-    return true;
-  }
-  if (
-    message.startsWith("[EventQueue] Slow listener detected") &&
-    SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS.some((listener) => message.includes(listener))
-  ) {
     return true;
   }
   return false;
@@ -176,7 +178,7 @@ function isEpipeError(err: unknown): boolean {
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
   if (style === "pretty") {
-    return formatTimestamp(now, { style: "short" });
+    return formatTimestamp(now, { style: "short" }).replace(/[+-]\d{2}:\d{2}$/, "");
   }
   return formatLocalIsoWithOffset(now);
 }

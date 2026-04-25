@@ -160,9 +160,7 @@ type ResolveProviderRequestPolicyConfigParams = {
   callerHeaders?: Record<string, string>;
   precedence?: ProviderRequestHeaderPrecedence;
   authHeader?: boolean;
-  compat?: {
-    supportsStore?: boolean;
-  } | null;
+  compat?: unknown;
   modelId?: string | null;
   allowPrivateNetwork?: boolean;
   request?: ModelProviderRequestTransportOverrides;
@@ -661,7 +659,7 @@ export function resolveProviderRequestPolicyConfig(
     tls: resolveTlsOverride(params.request?.tls),
     policy,
     capabilities,
-    allowPrivateNetwork: params.allowPrivateNetwork ?? false,
+    allowPrivateNetwork: params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork ?? false,
   };
 }
 

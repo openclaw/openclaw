@@ -3,10 +3,8 @@ summary: "How OpenClaw manages conversation sessions"
 read_when:
   - You want to understand session routing and isolation
   - You want to configure DM scope for multi-user setups
-title: "Session Management"
+title: "Session management"
 ---
-
-# Session Management
 
 OpenClaw organizes conversations into **sessions**. Each message is routed to a
 session based on where it came from -- DMs, group chats, cron jobs, etc.
@@ -69,6 +67,10 @@ Sessions are reused until they expire:
 
 When both daily and idle resets are configured, whichever expires first wins.
 
+Sessions with an active provider-owned CLI session are not cut by the implicit
+daily default. Use `/reset` or configure `session.reset` explicitly when those
+sessions should expire on a timer.
+
 ## Where state lives
 
 All session state is owned by the **gateway**. UI clients query the gateway for
@@ -114,3 +116,9 @@ Preview with `openclaw sessions cleanup --dry-run`.
 - [Multi-Agent](/concepts/multi-agent) — routing and session isolation across agents
 - [Background Tasks](/automation/tasks) — how detached work creates task records with session references
 - [Channel Routing](/channels/channel-routing) — how inbound messages are routed to sessions
+
+## Related
+
+- [Session pruning](/concepts/session-pruning)
+- [Session tools](/concepts/session-tool)
+- [Command queue](/concepts/queue)

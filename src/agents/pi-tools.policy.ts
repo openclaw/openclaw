@@ -1,4 +1,4 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
@@ -19,7 +19,9 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
+  resolveSubagentCapabilityStore,
   resolveStoredSubagentCapabilities,
+  type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagent-capabilities.js";
 import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
@@ -33,8 +35,6 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
   "gateway",
   "agents_list",
-  // Interactive setup - not a task
-  "whatsapp_login",
   // Status/scheduling - main agent coordinates
   "session_status",
   "cron",
@@ -100,9 +100,19 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
 export function resolveSubagentToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string,
+  opts?: {
+    store?: SessionCapabilityStore;
+  },
 ): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
-  const capabilities = resolveStoredSubagentCapabilities(sessionKey, { cfg });
+  const store = resolveSubagentCapabilityStore(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  const capabilities = resolveStoredSubagentCapabilities(sessionKey, {
+    cfg,
+    store,
+  });
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const explicitAllow = new Set(
@@ -174,7 +184,7 @@ function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   return [raw];
 }
 
-function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
+export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
   groupIds?: string[];
 } {
@@ -388,7 +398,7 @@ export function resolveGroupToolPolicy(params: {
   }
   let plugin;
   try {
-    plugin = getChannelPlugin(channel);
+    plugin = getLoadedChannelPlugin(channel);
   } catch {
     plugin = undefined;
   }

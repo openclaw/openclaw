@@ -1,4 +1,4 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import {
   AgentEventSchema,
   AgentIdentityParamsSchema,
@@ -50,9 +50,12 @@ import {
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 import {
+  ChannelsStartParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
+  TalkRealtimeSessionParamsSchema,
+  TalkRealtimeSessionResultSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
   ChannelsStatusParamsSchema,
@@ -278,10 +281,13 @@ export const ProtocolSchemas = {
   TalkModeParams: TalkModeParamsSchema,
   TalkConfigParams: TalkConfigParamsSchema,
   TalkConfigResult: TalkConfigResultSchema,
+  TalkRealtimeSessionParams: TalkRealtimeSessionParamsSchema,
+  TalkRealtimeSessionResult: TalkRealtimeSessionResultSchema,
   TalkSpeakParams: TalkSpeakParamsSchema,
   TalkSpeakResult: TalkSpeakResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
+  ChannelsStartParams: ChannelsStartParamsSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,

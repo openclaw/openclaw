@@ -7,7 +7,7 @@ import {
   ensureExplicitGatewayAuth,
   resolveExplicitGatewayAuth,
 } from "../gateway/call.js";
-import { GatewayClient } from "../gateway/client.js";
+import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -23,7 +23,15 @@ import {
 } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { VERSION } from "../version.js";
-import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
+import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
+import type {
+  ChatSendOptions,
+  TuiAgentsList,
+  TuiBackend,
+  TuiEvent,
+  TuiModelChoice,
+  TuiSessionList,
+} from "./tui-backend.js";
 
 export type GatewayConnectionOptions = {
   url?: string;
@@ -31,20 +39,11 @@ export type GatewayConnectionOptions = {
   password?: string;
 };
 
-export type ChatSendOptions = {
-  sessionKey: string;
-  message: string;
-  thinking?: string;
-  deliver?: boolean;
-  timeoutMs?: number;
-  runId?: string;
-};
+export type GatewayEvent = TuiEvent;
 
-export type GatewayEvent = {
-  event: string;
-  payload?: unknown;
-  seq?: number;
-};
+const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
+const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
+const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 
 type ResolvedGatewayConnection = {
   url: string;
@@ -63,70 +62,39 @@ function throwGatewayAuthResolutionError(reason: string): never {
   );
 }
 
-export type GatewaySessionList = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults?: {
-    model?: string | null;
-    modelProvider?: string | null;
-    contextTokens?: number | null;
-  };
-  sessions: Array<
-    Pick<
-      SessionInfo,
-      | "thinkingLevel"
-      | "fastMode"
-      | "verboseLevel"
-      | "reasoningLevel"
-      | "model"
-      | "contextTokens"
-      | "inputTokens"
-      | "outputTokens"
-      | "totalTokens"
-      | "modelProvider"
-      | "displayName"
-    > & {
-      key: string;
-      sessionId?: string;
-      updatedAt?: number | null;
-      fastMode?: boolean;
-      sendPolicy?: string;
-      responseUsage?: ResponseUsageMode;
-      label?: string;
-      provider?: string;
-      groupChannel?: string;
-      space?: string;
-      subject?: string;
-      chatType?: string;
-      lastProvider?: string;
-      lastTo?: string;
-      lastAccountId?: string;
-      derivedTitle?: string;
-      lastMessagePreview?: string;
-    }
-  >;
-};
+function isRetryableStartupUnavailable(
+  err: unknown,
+  method: string,
+): err is GatewayClientRequestError {
+  if (!(err instanceof GatewayClientRequestError)) {
+    return false;
+  }
+  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
+    return false;
+  }
+  const details = err.details;
+  if (!details || typeof details !== "object") {
+    return true;
+  }
+  const detailMethod = (details as { method?: unknown }).method;
+  return typeof detailMethod !== "string" || detailMethod === method;
+}
 
-export type GatewayAgentsList = {
-  defaultId: string;
-  mainKey: string;
-  scope: SessionScope;
-  agents: Array<{
-    id: string;
-    name?: string;
-  }>;
-};
+function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
+  const retryAfterMs =
+    typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
+  return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
+}
 
-export type GatewayModelChoice = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-};
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-export class GatewayChatClient {
+export type GatewaySessionList = TuiSessionList;
+export type GatewayAgentsList = TuiAgentsList;
+export type GatewayModelChoice = TuiModelChoice;
+
+export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
@@ -222,10 +190,23 @@ export class GatewayChatClient {
   }
 
   async loadHistory(opts: { sessionKey: string; limit?: number }) {
-    return await this.client.request("chat.history", {
-      sessionKey: opts.sessionKey,
-      limit: opts.limit,
-    });
+    const startedAt = Date.now();
+    for (;;) {
+      try {
+        return await this.client.request("chat.history", {
+          sessionKey: opts.sessionKey,
+          limit: opts.limit,
+        });
+      } catch (err) {
+        const withinStartupRetryWindow =
+          Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
+        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
+          await sleep(resolveStartupRetryDelayMs(err));
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 
   async listSessions(opts?: SessionsListParams) {
@@ -272,6 +253,7 @@ export async function resolveGatewayConnection(
   const env = process.env;
   const gatewayAuthMode = config.gateway?.auth?.mode;
   const isRemoteMode = config.gateway?.mode === "remote";
+  const preferConfiguredAuth = env[TUI_SETUP_AUTH_SOURCE_ENV] === TUI_SETUP_AUTH_SOURCE_CONFIG;
 
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
@@ -349,6 +331,7 @@ export async function resolveGatewayConnection(
     config,
     env,
     explicitAuth,
+    suppressEnvAuthFallback: preferConfiguredAuth,
     surface: "local",
   });
   if (resolved.failureReason) {

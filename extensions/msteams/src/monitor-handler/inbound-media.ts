@@ -136,6 +136,7 @@ export async function resolveMSTeamsInboundMedia(params: {
             allowHosts,
             authAllowHosts: params.authAllowHosts,
             preserveFilenames,
+            log,
             logger: log,
           });
           attempts.push({

@@ -2,33 +2,27 @@ import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
-import { qqbotSetupAdapterShared } from "./channel-config-shared.js";
+import type { JsonSchemaObject } from "../../../src/shared/json-schema.types.js";
+import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  resolveDefaultQQBotAccountId,
+  resolveQQBotAccount,
+} from "./bridge/config.js";
 import { qqbotSetupPlugin } from "./channel.setup.js";
 import { QQBotConfigSchema } from "./config-schema.js";
-import { DEFAULT_ACCOUNT_ID, resolveDefaultQQBotAccountId, resolveQQBotAccount } from "./config.js";
+import { makeQqbotDefaultAccountConfig, makeQqbotSecretRefConfig } from "./qqbot-test-support.js";
 
 describe("qqbot config", () => {
   it("accepts top-level speech overrides in the manifest schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
-    ) as { configSchema: Record<string, unknown> };
+    ) as { configSchema: JsonSchemaObject };
 
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
       cacheKey: "qqbot.manifest.speech-overrides",
       value: {
-        tts: {
-          provider: "openai",
-          baseUrl: "https://example.com/v1",
-          apiKey: "tts-key",
-          model: "gpt-4o-mini-tts",
-          voice: "alloy",
-          authStyle: "api-key",
-          queryParams: {
-            format: "wav",
-          },
-          speed: 1.1,
-        },
         stt: {
           provider: "openai",
           baseUrl: "https://example.com/v1",
@@ -44,7 +38,7 @@ describe("qqbot config", () => {
   it("accepts defaultAccount in the manifest schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
-    ) as { configSchema: Record<string, unknown> };
+    ) as { configSchema: JsonSchemaObject };
 
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
@@ -118,7 +112,7 @@ describe("qqbot config", () => {
       accounts: {
         bot2: {
           appId: "654321",
-          tts: {
+          stt: {
             provider: "openai",
           },
         },
@@ -184,18 +178,7 @@ describe("qqbot config", () => {
   });
 
   it("rejects unresolved SecretRefs on runtime resolution", () => {
-    const cfg = {
-      channels: {
-        qqbot: {
-          appId: "123456",
-          clientSecret: {
-            source: "env",
-            provider: "default",
-            id: "QQBOT_CLIENT_SECRET",
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = makeQqbotSecretRefConfig();
 
     expect(() => resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID)).toThrow(
       'channels.qqbot.clientSecret: unresolved SecretRef "env:default:QQBOT_CLIENT_SECRET"',
@@ -203,18 +186,7 @@ describe("qqbot config", () => {
   });
 
   it("allows unresolved SecretRefs for setup/status flows", () => {
-    const cfg = {
-      channels: {
-        qqbot: {
-          appId: "123456",
-          clientSecret: {
-            source: "env",
-            provider: "default",
-            id: "QQBOT_CLIENT_SECRET",
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = makeQqbotSecretRefConfig();
 
     const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID, {
       allowUnresolvedSecretRef: true,
@@ -347,16 +319,7 @@ describe("qqbot config", () => {
 
     expect(
       runtimeSetup.resolveAccountId?.({
-        cfg: {
-          channels: {
-            qqbot: {
-              defaultAccount: "bot2",
-              accounts: {
-                bot2: { appId: "123456" },
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: makeQqbotDefaultAccountConfig(),
         accountId: undefined,
       } as never),
     ).toBe("bot2");

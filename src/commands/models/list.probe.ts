@@ -121,6 +121,9 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
   if (reason === "timeout") {
     return "timeout";
   }
+  if (reason === "model_not_found") {
+    return "format";
+  }
   if (reason === "format") {
     return "format";
   }
@@ -476,6 +479,8 @@ async function probeTarget(params: {
       reasoningLevel: "off",
       verboseLevel: "off",
       streamParams: { maxTokens },
+      disableTools: true,
+      cleanupBundleMcpOnRunEnd: true,
     });
     return buildResult("ok");
   } catch (err) {

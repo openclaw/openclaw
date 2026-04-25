@@ -1,11 +1,10 @@
-import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
+  recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
@@ -83,6 +82,7 @@ export async function generateMusic(
         durationSeconds: sanitized.durationSeconds,
         format: sanitized.format,
         inputImages: params.inputImages,
+        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
         throw new Error("Music generation provider returned no tracks.");
@@ -104,14 +104,11 @@ export async function generateMusic(
       };
     } catch (err) {
       lastError = err;
-      const described = isFailoverError(err) ? describeFailoverError(err) : undefined;
-      attempts.push({
+      recordCapabilityCandidateFailure({
+        attempts,
         provider: candidate.provider,
         model: candidate.model,
-        error: described?.message ?? formatErrorMessage(err),
-        reason: described?.reason,
-        status: described?.status,
-        code: described?.code,
+        error: err,
       });
       log.debug(`music-generation candidate failed: ${candidate.provider}/${candidate.model}`);
     }
