@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 
 - Discord/subagents: preserve thread-bound completion delivery by keeping the requester-agent announce path primary and falling back to direct thread sends only when the announce produces no visible output. (#71064) Thanks @DolencLuka.
 - Browser/tool: give Chrome MCP existing-session manage calls a longer default timeout, pass explicit tool timeouts through tab management, and recover stale selected-page MCP sessions instead of forcing a manual reset. Thanks @steipete.
+- Browser/sandbox: clean up idle tracked tabs opened by primary-agent browser sessions, while preserving active tab reuse and lifecycle cleanup for subagents, cron, and ACP sessions. Fixes #71165. Thanks @dwbutler.
 - Plugins/Voice Call: pin voice response sessions to `responseModel` before embedded agent runs, avoiding live-session model switch failures when the global default model differs. Fixes #60118. Thanks @xinbenlv.
 - Media tools: honor the configured web-fetch SSRF policy for media understanding, image/music/video generation references, and PDF inputs, so explicit RFC2544 opt-ins cover WebChat OSS uploads without weakening defaults. Fixes #71300. (#71321) Thanks @neeravmakwana.
 - Gateway/sessions: recover main-agent turns interrupted by a gateway restart from stale transcript-lock evidence, avoiding stuck `status: "running"` sessions without broad post-boot transcript scans. Fixes #70555. Thanks @bitloi.

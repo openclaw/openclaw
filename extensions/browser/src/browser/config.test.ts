@@ -58,6 +58,12 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
+    expect(resolved.tabCleanup).toEqual({
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    });
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
@@ -114,6 +120,39 @@ describe("browser config", () => {
     });
     expect(resolved.remoteCdpTimeoutMs).toBe(2200);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
+  });
+
+  it("supports custom browser tab cleanup policy", () => {
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        enabled: false,
+        idleMinutes: 0,
+        maxTabsPerSession: 0,
+        sweepMinutes: 15,
+      },
+    });
+    expect(resolved.tabCleanup).toEqual({
+      enabled: false,
+      idleMinutes: 0,
+      maxTabsPerSession: 0,
+      sweepMinutes: 15,
+    });
+  });
+
+  it("normalizes invalid browser tab cleanup numbers to defaults", () => {
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        idleMinutes: -1,
+        maxTabsPerSession: -2,
+        sweepMinutes: 0,
+      },
+    });
+    expect(resolved.tabCleanup).toEqual({
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    });
   });
 
   it("falls back to default color for invalid hex", () => {

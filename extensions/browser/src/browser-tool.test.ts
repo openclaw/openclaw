@@ -146,6 +146,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
 });
 
 const sessionTabRegistryMocks = vi.hoisted(() => ({
+  touchSessionBrowserTab: vi.fn(),
   trackSessionBrowserTab: vi.fn(),
   untrackSessionBrowserTab: vi.fn(),
 }));
@@ -953,6 +954,28 @@ describe("browser tool url alias support", () => {
     expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       targetId: "tab-123",
+      baseUrl: undefined,
+      profile: undefined,
+    });
+  });
+
+  it("touches tracked tabs for direct tab activity", async () => {
+    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "tab-live",
+      url: "https://example.com",
+      snapshot: "ok",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      targetId: "tab-live",
+    });
+
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      targetId: "tab-live",
       baseUrl: undefined,
       profile: undefined,
     });

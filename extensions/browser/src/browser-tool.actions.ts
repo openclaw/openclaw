@@ -232,6 +232,7 @@ export async function executeSnapshotAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = browserToolActionDeps.loadConfig().browser?.snapshotDefaults;
@@ -310,6 +311,7 @@ export async function executeSnapshotAction(params: {
     refsFallback = "role";
     snapshot = await readSnapshot(withRoleRefsFallback(snapshotQuery));
   }
+  params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
@@ -410,6 +412,7 @@ export async function executeActAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   try {
@@ -423,6 +426,10 @@ export async function executeActAction(params: {
       : await browserToolActionDeps.browserAct(baseUrl, request, {
           profile,
         });
+    params.onTabActivity?.(
+      readStringValue((result as { targetId?: unknown }).targetId) ??
+        readStringValue(request.targetId),
+    );
     return jsonResult(result);
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
@@ -450,6 +457,10 @@ export async function executeActAction(params: {
             : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
                 profile,
               });
+          params.onTabActivity?.(
+            readStringValue((retryResult as { targetId?: unknown }).targetId) ??
+              readStringValue(retryRequest.targetId),
+          );
           return jsonResult(retryResult);
         } catch {
           // Fall through to explicit stale-target guidance.

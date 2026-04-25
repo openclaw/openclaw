@@ -637,6 +637,12 @@ describe("browser chrome launch args", () => {
         noSandbox: false,
         attachOnly: false,
         ssrfPolicy: { allowPrivateNetwork: true },
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 120,
+          maxTabsPerSession: 8,
+          sweepMinutes: 5,
+        },
         defaultProfile: "openclaw",
         profiles: {
           openclaw: { cdpPort: 18800, color: "#FF4500" },

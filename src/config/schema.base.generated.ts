@@ -26338,6 +26338,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Default snapshot extraction mode controlling how page content is transformed for agent consumption. Choose the mode that balances readability, fidelity, and token footprint for your workflows.",
       tags: ["advanced"],
     },
+    "browser.tabCleanup": {
+      label: "Browser Tab Cleanup",
+      help: "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.enabled": {
+      label: "Browser Tab Cleanup Enabled",
+      help: "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.idleMinutes": {
+      label: "Browser Tab Cleanup Idle Minutes",
+      help: "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+      tags: ["advanced"],
+    },
+    "browser.tabCleanup.maxTabsPerSession": {
+      label: "Browser Tab Cleanup Max Tabs Per Session",
+      help: "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+      tags: ["performance", "storage"],
+    },
+    "browser.tabCleanup.sweepMinutes": {
+      label: "Browser Tab Cleanup Sweep Minutes",
+      help: "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
+      tags: ["advanced"],
+    },
     "browser.ssrfPolicy": {
       label: "Browser SSRF Policy",
       help: "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
