@@ -74,6 +74,14 @@ const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
+const REMINDER_TEXT_PATTERNS = [
+  /\bremind(?:er| me)?\b/i,
+  /\bremember to\b/i,
+  /\bdon'?t forget\b/i,
+  /提醒/u,
+  /记得/u,
+  /别忘/u,
+];
 
 function isMissingOrEmptyObject(value: unknown): boolean {
   return !value || (isRecord(value) && Object.keys(value).length === 0);
@@ -443,6 +451,58 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
+function hasOwn(obj: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function looksLikeReminderText(text: string): boolean {
+  const baseText = stripExistingContext(text);
+  return REMINDER_TEXT_PATTERNS.some((pattern) => pattern.test(baseText));
+}
+
+function shouldPromoteChatReminderJob(params: {
+  rawJob: Record<string, unknown>;
+  job: unknown;
+  inferredDelivery: CronDelivery | null;
+}): params is {
+  rawJob: Record<string, unknown>;
+  job: { payload: { kind: "systemEvent"; text: string } };
+  inferredDelivery: CronDelivery;
+} {
+  if (!params.inferredDelivery) {
+    return false;
+  }
+  if (hasOwn(params.rawJob, "sessionTarget") || hasOwn(params.rawJob, "delivery")) {
+    return false;
+  }
+  if (!isRecord(params.job)) {
+    return false;
+  }
+  const payload = isRecord(params.job.payload) ? params.job.payload : null;
+  if (payload?.kind !== "systemEvent" || typeof payload.text !== "string" || !payload.text.trim()) {
+    return false;
+  }
+  return looksLikeReminderText(payload.text);
+}
+
+function buildChatReminderAgentTurnMessage(params: {
+  reminderText: string;
+  contextLines: string[];
+}): string {
+  const lines = [
+    "This is a scheduled reminder created from an active chat.",
+    "When it runs, send the reminder back to the user in the original chat.",
+    "Reply with the reminder text exactly as written below and nothing else.",
+    "",
+    "Reminder text:",
+    stripExistingContext(params.reminderText),
+  ];
+  if (params.contextLines.length > 0) {
+    lines.push("", "Recent context:", ...params.contextLines);
+  }
+  return lines.join("\n").trim();
+}
+
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
@@ -484,6 +544,10 @@ DEFAULT BEHAVIOR (unchanged for backward compatibility):
 - payload.kind="systemEvent" → defaults to "main"
 - payload.kind="agentTurn" → defaults to "isolated"
 To use current session binding, explicitly set sessionTarget="current".
+
+CHAT REMINDER DEFAULT:
+- When a reminder is created from an active chat with payload.kind="systemEvent" and no explicit sessionTarget/delivery, the tool promotes it to an isolated announce job so the reminder is delivered back to the originating chat.
+- Set sessionTarget="main" explicitly if you want an internal-only system event instead of a user-visible reminder.
 
 SCHEDULE TYPES (schedule.kind):
 - "at": One-shot at absolute time
@@ -582,6 +646,44 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }
           }
 
+          const contextMessages =
+            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
+              ? params.contextMessages
+              : 0;
+          const inferredDelivery = inferDeliveryFromSessionKey(opts?.agentSessionKey);
+          const rawJob = isRecord(params.job) ? params.job : null;
+          const promotableReminderJob =
+            rawJob &&
+            shouldPromoteChatReminderJob({
+              rawJob,
+              job,
+              inferredDelivery,
+            })
+              ? (job as {
+                  payload:
+                    | { kind: "systemEvent"; text: string }
+                    | { kind: "agentTurn"; message: string };
+                  sessionTarget?: string;
+                })
+              : null;
+          if (promotableReminderJob?.payload.kind === "systemEvent") {
+            const contextLines = await buildReminderContextLines({
+              agentSessionKey: opts?.agentSessionKey,
+              gatewayOpts,
+              contextMessages,
+              callGatewayTool: callGateway,
+            });
+            const reminderText = promotableReminderJob.payload.text;
+            promotableReminderJob.payload = {
+              kind: "agentTurn",
+              message: buildChatReminderAgentTurnMessage({
+                reminderText,
+                contextLines,
+              }),
+            };
+            promotableReminderJob.sessionTarget = "isolated";
+          }
+
           if (
             opts?.agentSessionKey &&
             job &&
@@ -613,20 +715,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (mode === "" || mode === "announce") &&
               !hasTarget;
             if (shouldInfer) {
-              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
-              if (inferred) {
+              if (inferredDelivery) {
                 (job as { delivery?: unknown }).delivery = {
                   ...delivery,
-                  ...inferred,
+                  ...inferredDelivery,
                 } satisfies CronDelivery;
               }
             }
           }
-
-          const contextMessages =
-            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
-              ? params.contextMessages
-              : 0;
           if (
             job &&
             typeof job === "object" &&

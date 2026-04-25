@@ -37,6 +37,11 @@ describe("cron tool", () => {
     return params?.payload?.text ?? "";
   }
 
+  function readCronPayloadMessage(index = 0): string {
+    const params = readGatewayCall(index).params as { payload?: { message?: string } } | undefined;
+    return params?.payload?.message ?? "";
+  }
+
   function expectSingleGatewayCallMethod(method: string) {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const call = readGatewayCall(0);
@@ -295,6 +300,64 @@ describe("cron tool", () => {
     expect(sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
 
+  it("promotes chat reminders into isolated announce jobs", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:main:slack:channel:general" });
+    await tool.execute("call-promoted-reminder", {
+      action: "add",
+      job: {
+        name: "rent-reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "Reminder: pay rent today." },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | {
+          sessionTarget?: string;
+          delivery?: { mode?: string; channel?: string; to?: string };
+          payload?: { kind?: string; message?: string };
+        }
+      | undefined;
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.delivery).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "general",
+    });
+    expect(params?.payload?.kind).toBe("agentTurn");
+    expect(params?.payload?.message).toContain(
+      "Reply with the reminder text exactly as written below and nothing else.",
+    );
+    expect(params?.payload?.message).toContain("Reminder: pay rent today.");
+  });
+
+  it("keeps explicit main reminder jobs internal", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:main:slack:channel:general" });
+    await tool.execute("call-explicit-main-reminder", {
+      action: "add",
+      job: {
+        name: "internal-reminder",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "Reminder: update the tracker." },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | {
+          sessionTarget?: string;
+          delivery?: unknown;
+          payload?: { kind?: string; text?: string };
+        }
+      | undefined;
+    expect(params?.sessionTarget).toBe("main");
+    expect(params?.delivery).toBeUndefined();
+    expect(params?.payload).toEqual({
+      kind: "systemEvent",
+      text: "Reminder: update the tracker.",
+    });
+  });
+
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
@@ -322,6 +385,42 @@ describe("cron tool", () => {
     expect(text).toContain("User: Discussed Q2 budget");
     expect(text).toContain("Assistant: We agreed to review on Tuesday.");
     expect(text).toContain("User: Remind me about the thing at 2pm");
+  });
+
+  it("adds recent context to promoted chat reminders as agent-turn instructions", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Payroll closes today" }] },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "I can remind you in this thread." }],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:slack:channel:general" });
+    await tool.execute("call-promoted-context", {
+      action: "add",
+      contextMessages: 2,
+      job: {
+        name: "payroll-reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "Reminder: submit payroll." },
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(0).method).toBe("chat.history");
+    const cronCall = readGatewayCall(1);
+    expect(cronCall.method).toBe("cron.add");
+    const message = readCronPayloadMessage(1);
+    expect(message).toContain("Reminder text:");
+    expect(message).toContain("Reminder: submit payroll.");
+    expect(message).toContain("Recent context:");
+    expect(message).toContain("User: Payroll closes today");
+    expect(message).toContain("Assistant: I can remind you in this thread.");
   });
 
   it("caps contextMessages at 10", async () => {
