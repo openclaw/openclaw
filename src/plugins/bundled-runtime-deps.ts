@@ -578,12 +578,13 @@ export function createBundledRuntimeDepsInstallEnv(
   env: NodeJS.ProcessEnv,
   options: { cacheDir?: string } = {},
 ): NodeJS.ProcessEnv {
+  const cacheDir = options.cacheDir ?? os.tmpdir();
   return {
     ...createNestedNpmInstallEnv(env),
     npm_config_legacy_peer_deps: "true",
     npm_config_package_lock: "false",
     npm_config_save: "false",
-    ...(options.cacheDir ? { npm_config_cache: options.cacheDir } : {}),
+    npm_config_cache: cacheDir,
   };
 }
 
@@ -697,7 +698,6 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (entry?.enabled === true) {
     return true;
   }
-  let hasExplicitChannelDisable = false;
   for (const channelId of readBundledPluginChannels(params.pluginDir)) {
     const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!normalizedChannelId) {
@@ -709,24 +709,16 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
     if (
       channelConfig &&
       typeof channelConfig === "object" &&
-      !Array.isArray(channelConfig) &&
-      (channelConfig as { enabled?: unknown }).enabled === false
+      !Array.isArray(channelConfig)
     ) {
-      hasExplicitChannelDisable = true;
-      continue;
+      const enabled = (channelConfig as { enabled?: unknown }).enabled;
+      if (enabled === false) {
+        continue;
+      }
+      if (params.includeConfiguredChannels || enabled === true) {
+        return true;
+      }
     }
-    if (
-      channelConfig &&
-      typeof channelConfig === "object" &&
-      !Array.isArray(channelConfig) &&
-      (params.includeConfiguredChannels ||
-        (channelConfig as { enabled?: unknown }).enabled === true)
-    ) {
-      return true;
-    }
-  }
-  if (hasExplicitChannelDisable) {
-    return false;
   }
   return readBundledPluginEnabledByDefault(params.pluginDir);
 }
