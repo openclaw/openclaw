@@ -561,7 +561,9 @@ You can override with `browser.executablePath`.
 Platforms:
 
 - macOS: checks `/Applications` and `~/Applications`.
-- Linux: looks for `google-chrome`, `brave`, `microsoft-edge`, `chromium`, etc.
+- Linux: checks common Chrome/Brave/Edge/Chromium locations under `/usr/bin`,
+  `/snap/bin`, `/opt/google`, `/opt/brave.com`, `/usr/lib/chromium`, and
+  `/usr/lib/chromium-browser`.
 - Windows: checks common install locations.
 
 ## Control API (optional)
