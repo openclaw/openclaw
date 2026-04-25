@@ -436,7 +436,10 @@ function sanitizePermissionPathValue(value: string): string {
     .replace(/^\/home\/(?!\.{1,2}(?=\/|$))[^/]+(?=\/|$)/, "~")
     .replace(/^\/Users\/(?!\.{1,2}(?=\/|$))[^/]+(?=\/|$)/, "~")
     .replace(/^[A-Za-z]:[\\/]Users[\\/](?!\.{1,2}(?=[\\/]|$))[^\\/]+(?=[\\/]|$)/i, "~");
-  return truncate(homeCompacted, PERMISSION_VALUE_MAX_LENGTH);
+  const displayPath = homeCompacted.startsWith("~")
+    ? homeCompacted.replace(/\\/g, "/")
+    : homeCompacted;
+  return truncate(displayPath, PERMISSION_VALUE_MAX_LENGTH);
 }
 
 function sanitizePermissionScalar(value: string): string {

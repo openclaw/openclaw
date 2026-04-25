@@ -641,7 +641,7 @@ describe("Codex app-server approval bridge", () => {
 
     const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
     const description = (requestPayload as { description: string }).description;
-    expect(description).toContain("File system roots: ~; readPaths: ~\\.ssh\\id_rsa, ~/project");
+    expect(description).toContain("File system roots: ~; readPaths: ~/.ssh/id_rsa, ~/project");
     expect(description).not.toContain("High-risk targets");
   });
 
