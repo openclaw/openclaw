@@ -1279,6 +1279,11 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
             speed: 1.0,
           },
         },
+        microsoft: {
+          voice: "en-US-AvaMultilingualNeural",
+          lang: "en-US",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        },
         openai: {
           apiKey: "openai_api_key",
           baseUrl: "https://api.openai.com/v1",
@@ -1295,6 +1300,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
 - API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- Bundled speech providers are plugin-owned. If `plugins.allow` is set, include each TTS provider plugin you want to use, for example `microsoft` for Edge TTS. The legacy `edge` provider id is accepted as an alias for `microsoft`.
 - `providers.openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
 - When `providers.openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
 
