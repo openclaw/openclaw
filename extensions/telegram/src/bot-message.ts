@@ -117,6 +117,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         replyToMode: resolveTelegramReplyToModeByChatType({
           account: telegramCfg,
           chatType: context.isGroup ? "group" : "direct",
+          fallbackReplyToMode: replyToMode,
         }),
         streamMode,
         textLimit,

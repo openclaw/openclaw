@@ -2748,6 +2748,38 @@ describe("createTelegramBot", () => {
       }
     }
   });
+
+  it("keeps runtime replyToMode when per-chat Telegram config is absent", async () => {
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    replySpy.mockResolvedValue({ text: "a".repeat(4500) });
+
+    createTelegramBot({ token: "tok", replyToMode: "first" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    await handler({
+      message: {
+        chat: { id: 5, type: "private" },
+        text: "hi",
+        date: 1736380800,
+        message_id: 103,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
+    const replyThreadedCalls = sendMessageSpy.mock.calls.filter(
+      (call) =>
+        (call[2] as { reply_to_message_id?: number } | undefined)?.reply_to_message_id === 103,
+    );
+    const nonThreadedCalls = sendMessageSpy.mock.calls.filter(
+      (call) =>
+        (call[2] as { reply_to_message_id?: number } | undefined)?.reply_to_message_id !== 103,
+    );
+
+    expect(replyThreadedCalls).toHaveLength(1);
+    expect(nonThreadedCalls.length).toBeGreaterThan(0);
+  });
   it("honors routed group activation from session store", async () => {
     const storePath = "/tmp/openclaw-telegram-group-activation.json";
     const routedGroupEntry = {

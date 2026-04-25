@@ -825,6 +825,7 @@ export const registerTelegramNativeCommands = ({
           const effectiveReplyToMode = resolveTelegramReplyToModeByChatType({
             account: runtimeTelegramCfg,
             chatType: isGroup ? "group" : "direct",
+            fallbackReplyToMode: _replyToMode,
           });
           const menuReplyParams =
             effectiveReplyToMode === "off"
@@ -891,6 +892,7 @@ export const registerTelegramNativeCommands = ({
           replyToMode: resolveTelegramReplyToModeByChatType({
             account: runtimeTelegramCfg,
             chatType: isGroup ? "group" : "direct",
+            fallbackReplyToMode: _replyToMode,
           }),
         });
         const conversationLabel = isGroup
@@ -1083,6 +1085,7 @@ export const registerTelegramNativeCommands = ({
           replyToMode: resolveTelegramReplyToModeByChatType({
             account: runtimeTelegramCfg,
             chatType: isGroup ? "group" : "direct",
+            fallbackReplyToMode: _replyToMode,
           }),
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;

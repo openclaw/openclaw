@@ -11,6 +11,7 @@ import {
   resolveTelegramPollActionGateState,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
+  resolveTelegramReplyToModeByChatType,
 } from "./accounts.js";
 
 const { warnMock } = vi.hoisted(() => ({
@@ -122,6 +123,33 @@ describe("resolveTelegramAccount", () => {
     const lines = warnMock.mock.calls.map(([line]) => String(line));
     expect(lines).toContain("listTelegramAccountIds [ 'work' ]");
     expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
+  });
+});
+
+describe("resolveTelegramReplyToModeByChatType", () => {
+  it("prefers per-chat settings, then runtime fallback, then account fallback", () => {
+    expect(
+      resolveTelegramReplyToModeByChatType({
+        account: { replyToModeByChatType: { direct: "all" }, replyToMode: "first" },
+        chatType: "direct",
+        fallbackReplyToMode: "off",
+      }),
+    ).toBe("all");
+
+    expect(
+      resolveTelegramReplyToModeByChatType({
+        account: { replyToMode: "first" },
+        chatType: "direct",
+        fallbackReplyToMode: "all",
+      }),
+    ).toBe("all");
+
+    expect(
+      resolveTelegramReplyToModeByChatType({
+        account: { replyToMode: "first" },
+        chatType: "direct",
+      }),
+    ).toBe("first");
   });
 });
 
