@@ -141,7 +141,6 @@ export type {
   TtsPersonaConfig,
   TtsPersonaFallbackPolicy,
   TtsPersonaPromptConfig,
-  TtsPersonaRewriteConfig,
   TtsProvider,
 } from "../config/types.js";
 export {

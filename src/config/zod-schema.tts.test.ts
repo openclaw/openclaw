@@ -59,12 +59,6 @@ describe("TtsConfigSchema openai speed and instructions", () => {
               pacing: "Measured.",
               constraints: ["Do not read configuration values aloud."],
             },
-            rewrite: {
-              enabled: false,
-              preserveMeaning: true,
-              compressForSpeech: true,
-              maxChars: 1500,
-            },
             providers: {
               google: {
                 model: "gemini-3.1-flash-tts-preview",
@@ -81,5 +75,19 @@ describe("TtsConfigSchema openai speed and instructions", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("rejects persona rewrite config until runtime behavior exists", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        personas: {
+          alfred: {
+            ["rewrite"]: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 });
