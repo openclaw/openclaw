@@ -198,7 +198,12 @@ export async function inspectPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<InstalledPluginIndex> {
-  const index = refreshInstalledPluginIndex(params);
+  const persisted = params.installRecords ? null : await readPersistedInstalledPluginIndex(params);
+  const index = refreshInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
   await writePersistedInstalledPluginIndex(index, params);
   return index;
 }
@@ -206,7 +211,12 @@ export async function refreshPersistedInstalledPluginIndex(
 export function refreshPersistedInstalledPluginIndexSync(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): InstalledPluginIndex {
-  const index = refreshInstalledPluginIndex(params);
+  const persisted = params.installRecords ? null : readPersistedInstalledPluginIndexSync(params);
+  const index = refreshInstalledPluginIndex({
+    ...params,
+    installRecords:
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+  });
   writePersistedInstalledPluginIndexSync(index, params);
   return index;
 }
