@@ -14,7 +14,9 @@ describe("browser doctor readiness", () => {
       },
       {
         noteFn,
+        platform: "linux",
         env: { DISPLAY: ":99" },
+        getUid: () => 1000,
         resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
       },
     );
@@ -34,6 +36,8 @@ describe("browser doctor readiness", () => {
       {
         noteFn,
         platform: "linux",
+        env: { DISPLAY: ":99" },
+        getUid: () => 1000,
         resolveManagedExecutable: () => null,
       },
     );
