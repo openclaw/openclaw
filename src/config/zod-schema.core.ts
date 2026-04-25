@@ -102,6 +102,7 @@ const SecretsFileProviderSchema = z
       .positive()
       .max(20 * 1024 * 1024)
       .optional(),
+    allowInsecurePath: z.boolean().optional(),
   })
   .strict();
 
@@ -201,6 +202,7 @@ export const ModelCompatSchema = z
       .union([
         z.literal("openai"),
         z.literal("openrouter"),
+        z.literal("deepseek"),
         z.literal("zai"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
@@ -308,6 +310,7 @@ export const ModelDefinitionSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
+    baseUrl: z.string().min(1).optional(),
     reasoning: z.boolean().optional(),
     input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
     cost: z
@@ -337,6 +340,7 @@ export const ModelDefinitionSchema = z
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    metadataSource: z.literal("models-add").optional(),
   })
   .strict();
 
@@ -546,6 +550,7 @@ export const CliBackendSchema = z
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     jsonlDialect: z.literal("claude-stream-json").optional(),
+    liveSession: z.literal("claude-stdio").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
     env: z.record(z.string(), z.string()).optional(),
@@ -560,6 +565,7 @@ export const CliBackendSchema = z
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
+    systemPromptFileArg: z.string().optional(),
     systemPromptFileConfigArg: z.string().optional(),
     systemPromptFileConfigKey: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),

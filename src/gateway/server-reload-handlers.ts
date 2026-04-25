@@ -1,3 +1,5 @@
+import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -56,6 +58,31 @@ type GatewayReloadLog = {
   warn: (msg: string) => void;
 };
 
+const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
+
+async function disposeMcpRuntimesWithTimeout(params: {
+  dispose: () => Promise<void>;
+  timeoutMs: number;
+  onWarn: (message: string) => void;
+  label: string;
+}) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const disposePromise = params.dispose().catch((error: unknown) => {
+    params.onWarn(`${params.label} failed: ${String(error)}`);
+  });
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), params.timeoutMs);
+    timer.unref?.();
+  });
+  const result = await Promise.race([disposePromise.then(() => "done" as const), timeoutPromise]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  if (result === "timeout") {
+    params.onWarn(`${params.label} exceeded ${params.timeoutMs}ms; continuing`);
+  }
+}
+
 type GatewayReloadHandlerParams = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
@@ -80,6 +107,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
 > & {
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
+  initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
@@ -101,6 +129,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
+
+    if (
+      plan.changedPaths.some(
+        (path) =>
+          path === "models" ||
+          path.startsWith("models.") ||
+          path === "agents.defaults.model" ||
+          path.startsWith("agents.defaults.model.") ||
+          path === "agents.defaults.models" ||
+          path.startsWith("agents.defaults.models."),
+      )
+    ) {
+      resetModelCatalogCache();
+    }
 
     if (plan.reloadHooks) {
       try {
@@ -133,6 +175,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
       nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
+    }
+
+    if (plan.disposeMcpRuntimes) {
+      await disposeMcpRuntimesWithTimeout({
+        dispose: disposeAllSessionMcpRuntimes,
+        timeoutMs: MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS,
+        onWarn: params.logReload.warn,
+        label: "bundle-mcp runtime disposal during config reload",
+      });
     }
 
     if (plan.restartGmailWatcher) {
@@ -246,6 +297,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             restartPending = false;
             params.logReload.info("all operations and replies completed; restarting gateway now");
           },
+          onStillPending: (_pending, elapsedMs) => {
+            const remaining = formatActiveDetails(getActiveCounts());
+            params.logReload.warn(
+              `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active`,
+            );
+          },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
             restartPending = false;
@@ -262,15 +319,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         },
       });
       return true;
-    } else {
-      // No active operations or pending replies, restart immediately
-      params.logReload.warn(`config change requires gateway restart (${reasons})`);
-      const emitted = emitGatewayRestart();
-      if (!emitted) {
-        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
-      }
-      return true;
     }
+    // No active operations or pending replies, restart immediately
+    params.logReload.warn(`config change requires gateway restart (${reasons})`);
+    const emitted = emitGatewayRestart();
+    if (!emitted) {
+      params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+    }
+    return true;
   };
 
   return { applyHotReload, requestGatewayRestart };
@@ -301,6 +357,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
 
   return startGatewayConfigReloader({
     initialConfig: params.initialConfig,
+    initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
     recoverSnapshot: async (snapshot, reason) =>

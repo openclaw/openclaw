@@ -5,6 +5,7 @@ import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
@@ -40,6 +41,21 @@ function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
   return cfg.memory?.backend === "qmd";
 }
 
+function isConfiguredCliBackendPrimary(params: {
+  cfg: OpenClawConfig;
+  explicitPrimary: string;
+  normalizeProviderId: (provider: string) => string;
+}): boolean {
+  const slashIndex = params.explicitPrimary.indexOf("/");
+  if (slashIndex <= 0) {
+    return false;
+  }
+  const provider = params.normalizeProviderId(params.explicitPrimary.slice(0, slashIndex));
+  return Object.keys(params.cfg.agents?.defaults?.cliBackends ?? {}).some(
+    (backend) => params.normalizeProviderId(backend) === provider,
+  );
+}
+
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
   return hasInternalHookListeners("gateway", "startup");
@@ -54,13 +70,23 @@ async function prewarmConfiguredPrimaryModel(params: {
   if (!explicitPrimary) {
     return;
   }
+  const { normalizeProviderId } = await import("../agents/provider-id.js");
+  if (
+    isConfiguredCliBackendPrimary({
+      cfg: params.cfg,
+      explicitPrimary,
+      normalizeProviderId,
+    })
+  ) {
+    return;
+  }
   const [
     { resolveOpenClawAgentDir },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { selectAgentHarness },
     { isCliProvider, resolveConfiguredModelRef },
     { ensureOpenClawModelsJson },
-    { resolveModel },
+    { resolveModel, resolveModelAsync },
     { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
     import("../agents/agent-paths.js"),
@@ -93,10 +119,12 @@ async function prewarmConfiguredPrimaryModel(params: {
       skipProviderRuntimeHooks: true,
     });
     if (!resolved.model) {
-      throw new Error(
-        resolved.error ??
-          `Unknown model: ${provider}/${model} (startup warmup only checks static model resolution)`,
-      );
+      const asyncResolved = await resolveModelAsync(provider, model, agentDir, params.cfg);
+      if (!asyncResolved.model) {
+        throw new Error(
+          resolved.error ?? asyncResolved.error ?? `Unknown model: ${provider}/${model}`,
+        );
+      }
     }
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
@@ -129,12 +157,20 @@ export async function startGatewaySidecars(params: {
       const stateDir = resolveStateDir(process.env);
       const sessionDirs = await resolveAgentSessionDirs(stateDir);
       for (const sessionsDir of sessionDirs) {
-        await cleanStaleLockFiles({
+        const result = await cleanStaleLockFiles({
           sessionsDir,
           staleMs: SESSION_LOCK_STALE_MS,
           removeStale: true,
           log: { warn: (message) => params.log.warn(message) },
         });
+        if (result.cleaned.length > 0) {
+          const { markRestartAbortedMainSessionsFromLocks } =
+            await import("../agents/main-session-restart-recovery.js");
+          await markRestartAbortedMainSessionsFromLocks({
+            sessionsDir,
+            cleanedLocks: result.cleaned,
+          });
+        }
       }
     } catch (err) {
       params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
@@ -326,6 +362,12 @@ export async function startGatewaySidecars(params: {
     scheduleSubagentOrphanRecovery();
   });
 
+  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
+    const { scheduleRestartAbortedMainSessionRecovery } =
+      await import("../agents/main-session-restart-recovery.js");
+    scheduleRestartAbortedMainSessionRecovery();
+  });
+
   return { pluginServices };
 }
 
@@ -392,7 +434,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
-    awaitSidecars?: boolean;
+    deferSidecars?: boolean;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -474,7 +516,15 @@ export async function startGatewayPostAttachRuntime(
       const hookRunner = await runtimeDeps.getGlobalHookRunner();
       if (hookRunner?.hasHooks("gateway_start")) {
         void hookRunner
-          .runGatewayStart({ port: params.port }, { port: params.port })
+          .runGatewayStart(
+            { port: params.port },
+            {
+              port: params.port,
+              config: params.gatewayPluginConfigAtStart,
+              workspaceDir: params.defaultWorkspaceDir,
+              getCron: () => params.deps.cron as PluginHookGatewayCronService | undefined,
+            },
+          )
           .catch((err) => {
             params.log.warn(`gateway_start hook failed: ${String(err)}`);
           });
@@ -484,7 +534,7 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
-  if (params.awaitSidecars === true) {
+  if (params.deferSidecars !== true) {
     const [stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
       stopGatewayUpdateCheckPromise,
       tailscaleCleanupPromise,

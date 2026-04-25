@@ -10,6 +10,7 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
+import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import {
   buildPluginShapeSummary,
@@ -37,6 +38,7 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 export type PluginCompatibilityNotice = {
   pluginId: string;
   code: "legacy-before-agent-start" | "hook-only";
+  compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
 };
@@ -68,6 +70,7 @@ export type PluginInspectReport = {
   commands: string[];
   cliCommands: string[];
   services: string[];
+  gatewayDiscoveryServices: string[];
   gatewayMethods: string[];
   mcpServers: Array<{
     name: string;
@@ -82,6 +85,7 @@ export type PluginInspectReport = {
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
+    allowConversationAccess?: boolean;
     allowModelOverride?: boolean;
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
@@ -98,6 +102,7 @@ function buildCompatibilityNoticesForInspect(
     warnings.push({
       pluginId: inspect.plugin.id,
       code: "legacy-before-agent-start",
+      compatCode: "legacy-before-agent-start",
       severity: "warn",
       message:
         "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
@@ -107,6 +112,7 @@ function buildCompatibilityNoticesForInspect(
     warnings.push({
       pluginId: inspect.plugin.id,
       code: "hook-only",
+      compatCode: "hook-only-plugin-shape",
       severity: "info",
       message:
         "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
@@ -340,6 +346,7 @@ export function buildPluginInspectReport(params: {
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
+    gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
     gatewayMethods: [...plugin.gatewayMethods],
     mcpServers,
     lspServers,
@@ -348,6 +355,7 @@ export function buildPluginInspectReport(params: {
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
+      allowConversationAccess: policyEntry?.hooks?.allowConversationAccess,
       allowModelOverride: policyEntry?.subagent?.allowModelOverride,
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
@@ -404,6 +412,18 @@ export function buildPluginCompatibilityNotices(params?: {
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+}
+
+export function buildPluginCompatibilitySnapshotNotices(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginCompatibilityNotice[] {
+  const report = buildPluginSnapshotReport(params);
+  return buildPluginCompatibilityNotices({
+    ...params,
+    report,
+  });
 }
 
 export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {

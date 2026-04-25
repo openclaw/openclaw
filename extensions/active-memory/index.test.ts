@@ -42,10 +42,36 @@ describe("active-memory plugin", () => {
   const runEmbeddedPiAgent = vi.fn();
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
+  let pluginConfig: Record<string, unknown> = {
+    agents: ["main"],
+    logging: true,
+  };
+  const syncRuntimePluginConfig = (nextPluginConfig: Record<string, unknown>) => {
+    pluginConfig = nextPluginConfig;
+    const plugins = configFile.plugins as Record<string, unknown> | undefined;
+    const entries = plugins?.entries as Record<string, unknown> | undefined;
+    const existingEntry = entries?.["active-memory"] as Record<string, unknown> | undefined;
+    configFile = {
+      ...configFile,
+      plugins: {
+        ...plugins,
+        entries: {
+          ...entries,
+          "active-memory": {
+            ...existingEntry,
+            enabled: true,
+            config: nextPluginConfig,
+          },
+        },
+      },
+    };
+  };
   const api: any = {
-    pluginConfig: {
-      agents: ["main"],
-      logging: true,
+    get pluginConfig() {
+      return pluginConfig;
+    },
+    set pluginConfig(nextPluginConfig: Record<string, unknown>) {
+      syncRuntimePluginConfig(nextPluginConfig);
     },
     config: {},
     id: "active-memory",
@@ -93,10 +119,10 @@ describe("active-memory plugin", () => {
         },
       },
     };
-    api.pluginConfig = {
+    syncRuntimePluginConfig({
       agents: ["main"],
       logging: true,
-    };
+    });
     api.config = {
       agents: {
         defaults: {
@@ -134,6 +160,24 @@ describe("active-memory plugin", () => {
 
   it("registers a before_prompt_build hook", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+  });
+
+  it("runs recall without recording shared auth-profile failures", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileFailurePolicy: "local",
+      }),
+    );
   });
 
   it("registers a session-scoped active-memory toggle command", async () => {
@@ -308,6 +352,56 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses live runtime config for before_prompt_build enablement", async () => {
+    configFile = {
+      plugins: {
+        entries: {
+          "active-memory": {
+            enabled: true,
+            config: {
+              enabled: false,
+              agents: ["main"],
+            },
+          },
+        },
+      },
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order after a live config disable?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:live-config-disable",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the live active-memory plugin entry is removed", async () => {
+    configFile = {
+      plugins: {
+        entries: {},
+      },
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order after active memory is removed?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:live-config-removed",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 
   it("does not run for agents that are not explicitly targeted", async () => {
@@ -490,6 +584,7 @@ describe("active-memory plugin", () => {
           },
         },
       },
+      cleanupBundleMcpOnRunEnd: true,
     });
   });
 
@@ -577,6 +672,9 @@ describe("active-memory plugin", () => {
       "You receive conversation context, including the user's latest message.",
     );
     expect(runParams?.prompt).toContain("Use only memory_search and memory_get.");
+    expect(runParams?.prompt).toContain(
+      "When searching for preference or habit recall, use a permissive memory_search threshold before deciding that no useful memory exists.",
+    );
     expect(runParams?.prompt).toContain(
       "If the user is directly asking about favorites, preferences, habits, routines, or personal facts, treat that as a strong recall signal.",
     );

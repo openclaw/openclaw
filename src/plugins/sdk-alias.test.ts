@@ -916,12 +916,16 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("keeps bundled plugin dist modules on the aliased Jiti path", () => {
+  it("prefers native jiti for bundled plugin dist .js modules, keeps .ts on aliased path", () => {
+    // Built .js/.mjs/.cjs files under dist/extensions/ should now delegate
+    // to shouldPreferNativeJiti() — which returns true on Linux/macOS for
+    // compiled artifacts, avoiding the slow jiti transform path.
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
+    // TypeScript source files still need jiti's transform pipeline.
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
         preferBuiltDist: true,
@@ -1261,5 +1265,39 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(second).toEqual(first);
     // Same key set
     expect(Object.keys(second).toSorted()).toEqual(Object.keys(first).toSorted());
+  });
+});
+
+describe("buildPluginLoaderJitiOptions", () => {
+  it("pre-normalizes and marks alias maps for Jiti", () => {
+    const marker = Symbol.for("pathe:normalizedAlias");
+    const aliasMap = {
+      "openclaw/plugin-sdk/core": "/repo/src/plugin-sdk/core.ts",
+      "openclaw/plugin-sdk": "/repo/src/plugin-sdk/root-alias.cjs",
+      "@openclaw/plugin-sdk": "/repo/src/plugin-sdk/root-alias.cjs",
+    };
+
+    const first = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+    const second = buildPluginLoaderJitiOptions({ ...aliasMap }).alias as Record<string, string>;
+
+    expect(second).toBe(first);
+    expect((first as Record<symbol, unknown>)[marker]).toBe(true);
+    expect(Object.prototype.propertyIsEnumerable.call(first, marker)).toBe(false);
+  });
+
+  it("applies Jiti alias-target normalization before caching", () => {
+    const aliasMap = {
+      alpha: "/repo/alpha",
+      beta: "alpha/sub",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias).not.toBe(aliasMap);
+    expect(alias.beta).toBe("/repo/alpha/sub");
+  });
+
+  it("does not attach an empty alias map", () => {
+    expect(buildPluginLoaderJitiOptions({})).not.toHaveProperty("alias");
   });
 });
