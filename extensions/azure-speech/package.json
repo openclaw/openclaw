@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/azure-speech",
+  "version": "2026.3.31",
+  "private": true,
+  "description": "OpenClaw Azure Speech TTS plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
