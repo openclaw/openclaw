@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
+const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn<
   (config: unknown, agentDir: unknown) => Promise<{ agentDir: string; wrote: boolean }>
 >(async () => ({ agentDir: "/tmp/agent", wrote: false }));
@@ -38,6 +39,30 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
     options?: unknown,
   ) => resolveModelAsyncMock(provider, modelId, agentDir, cfg, options),
 }));
+
+vi.mock("../infra/net/undici-global-dispatcher.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/net/undici-global-dispatcher.js")>(
+    "../infra/net/undici-global-dispatcher.js",
+  );
+  return {
+    ...actual,
+    ensureGlobalUndiciEnvProxyDispatcher: ensureGlobalUndiciEnvProxyDispatcherMock,
+  };
+});
+
+describe("gateway startup network bootstrap", () => {
+  beforeEach(() => {
+    ensureGlobalUndiciEnvProxyDispatcherMock.mockClear();
+  });
+
+  it("installs the env proxy dispatcher for gateway-side provider requests", async () => {
+    const { __testing } = await import("./server-startup.js");
+
+    __testing.bootstrapGatewayNetworkEnvironment();
+
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("gateway startup primary model warmup", () => {
   beforeEach(() => {

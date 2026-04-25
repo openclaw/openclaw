@@ -24,6 +24,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -34,6 +35,10 @@ import {
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+
+export function bootstrapGatewayNetworkEnvironment(): void {
+  ensureGlobalUndiciEnvProxyDispatcher();
+}
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -226,5 +231,6 @@ export async function startGatewaySidecars(params: {
 }
 
 export const __testing = {
+  bootstrapGatewayNetworkEnvironment,
   prewarmConfiguredPrimaryModel,
 };
