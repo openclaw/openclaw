@@ -939,9 +939,16 @@ module.exports = {
       "utf-8",
     );
     const installedSpecs: string[] = [];
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      logger,
       config: {
         plugins: {
           enabled: true,
@@ -953,6 +960,9 @@ module.exports = {
         },
       },
       bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
+        expect(logger.info).toHaveBeenCalledWith(
+          "[plugins] discord staging bundled runtime deps (1 missing, 1 install specs): discord-runtime@1.0.0",
+        );
         installedSpecs.push(...missingSpecs);
         expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(plugin.dir));
         fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
@@ -968,6 +978,11 @@ module.exports = {
 
     expect(installedSpecs).toEqual(["discord-runtime@1.0.0"]);
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[plugins\] discord installed bundled runtime deps in \d+ms: discord-runtime@1\.0\.0$/u,
+      ),
+    );
   });
 
   it("keeps bundled runtime dep install logs off non-activating loads", () => {
@@ -1039,6 +1054,9 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
     expect(logger.info).not.toHaveBeenCalledWith(
       "[plugins] discord installed bundled runtime deps: discord-runtime@1.0.0",
+    );
+    expect(logger.info).not.toHaveBeenCalledWith(
+      "[plugins] discord staging bundled runtime deps (1 missing, 1 install specs): discord-runtime@1.0.0",
     );
   });
 
