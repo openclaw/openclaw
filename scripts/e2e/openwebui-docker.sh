@@ -152,7 +152,7 @@ docker_cmd docker run -d \
   --network "$NET_NAME" \
   -e ENV=prod \
   -e WEBUI_NAME="OpenClaw E2E" \
-  -e WEBUI_SECRET_KEY="openclaw-openwebui-e2e-secret" \
+  -e WEBUI_SECRET_KEY="openclaw-openwebui-e2e-secret-key-v1" \
   -e OFFLINE_MODE=True \
   -e ENABLE_VERSION_UPDATE_CHECK=False \
   -e ENABLE_PERSISTENT_CONFIG=False \
