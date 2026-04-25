@@ -1329,6 +1329,8 @@
     "check:timed": "node scripts/check-timed.mjs",
     "check:timed:all-types": "node scripts/check-timed.mjs --include-test-types",
     "check:timed:architecture": "node scripts/check-timed.mjs --include-architecture",
+    "ci:timings": "node scripts/ci-run-timings.mjs --latest-main",
+    "ci:timings:recent": "node scripts/ci-run-timings.mjs --recent 10",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import tsx scripts/sync-codex-app-server-protocol.ts",
     "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",

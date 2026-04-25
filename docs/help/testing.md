@@ -396,7 +396,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include one extension validation pass because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field.
     - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
     - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
-    - `auto-reply` has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
+    - `auto-reply` has dedicated buckets for top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. CI further splits the reply subtree into agent-runner, dispatch, and commands/state-routing shards so one import-heavy bucket does not own the full Node tail.
 
   </Accordion>
 
@@ -462,6 +462,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
       import-breakdown output.
     - `pnpm test:perf:imports:changed` scopes the same profiling view to
       files changed since `origin/main`.
+    - Shard timing data is written to `.artifacts/vitest-shard-timings.json`.
+      Whole-config runs use the config path as the key; include-pattern CI
+      shards append the shard name so filtered shards can be tracked
+      separately.
     - When one hot test still spends most of its time in startup imports,
       keep heavy dependencies behind a narrow local `*.runtime.ts` seam and
       mock that seam directly instead of deep-importing runtime helpers just
