@@ -150,7 +150,7 @@ const GoogleMeetToolSchema = Type.Object({
       "test_speech",
     ],
     description:
-      "Google Meet action to run. create creates a meeting and joins it by default; pass join=false to only mint a meeting URL.",
+      "Google Meet action to run. create creates and joins by default; pass join=false to only mint a URL. After a timeout or unclear browser state, call recover_current_tab before retrying join.",
   }),
   join: Type.Optional(
     Type.Boolean({
@@ -391,7 +391,8 @@ export default definePluginEntry({
     api.registerTool({
       name: "google_meet",
       label: "Google Meet",
-      description: "Join and track Google Meet sessions through Chrome or Twilio.",
+      description:
+        "Join and track Google Meet sessions through Chrome or Twilio. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);
