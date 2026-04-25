@@ -46,7 +46,7 @@ Docs: https://docs.openclaw.ai
 - Agents/tool-result pruning: harden the tool-result character estimator and context-pruning loops against malformed `{ type: "text" }` blocks created by void or undefined tool handler results, serializing non-string text payloads for size accounting so they cannot bypass trimming as zero-sized. Fixes #34979. (#51267) Thanks @cgdusek, @alvinttang, and @coffeexcoin.
 - Daemon/service-env: add Nix Home Manager profile bin directories to generated gateway service PATHs on macOS and Linux, honoring `NIX_PROFILES` right-to-left precedence and falling back to `~/.nix-profile/bin` when unset. Fixes #44402. (#59935) Thanks @jerome-benoit.
 
-## 2026.4.24 (Unreleased)
+## 2026.4.25 (Unreleased)
 
 ### Breaking
 

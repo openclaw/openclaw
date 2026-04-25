@@ -5,7 +5,7 @@ sidebarTitle: "Migrate to SDK"
 read_when:
   - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
   - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
-  - You used api.registerEmbeddedExtensionFactory before OpenClaw 2026.4.24
+  - You used api.registerEmbeddedExtensionFactory before OpenClaw 2026.4.25
   - You are updating a plugin to the modern plugin architecture
   - You maintain an external OpenClaw plugin
 ---
