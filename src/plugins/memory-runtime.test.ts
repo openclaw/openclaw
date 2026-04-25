@@ -187,4 +187,32 @@ describe("memory runtime auto-enable loading", () => {
   ] as const)("$name", async ({ config, setup }) => {
     await expectCloseMemoryRuntimeCase({ config, setup });
   });
+
+  it("forwards backend resolution to the active runtime for the requested agent", () => {
+    const runtime = {
+      getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
+      resolveMemoryBackendConfig: vi.fn(() => ({
+        backend: "qmd" as const,
+        qmd: { command: "qmd" },
+      })),
+    };
+    const cfg = {
+      agents: {
+        list: [{ id: "research", memory: { backend: "qmd" } }],
+      },
+    };
+    getMemoryRuntimeMock.mockReturnValue(runtime);
+
+    const result = resolveActiveMemoryBackendConfig({
+      cfg: cfg as never,
+      agentId: "research",
+    });
+
+    expect(result).toEqual({ backend: "qmd", qmd: { command: "qmd" } });
+    expect(runtime.resolveMemoryBackendConfig).toHaveBeenCalledWith({
+      cfg,
+      agentId: "research",
+    });
+    expectNoMemoryRuntimeBootstrap();
+  });
 });
