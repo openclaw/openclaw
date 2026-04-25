@@ -5,10 +5,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  type InstalledPluginIndex,
-  loadInstalledPluginIndex,
-  resolveInstalledPluginContributionOwners,
-} from "../../plugins/installed-plugin-index.js";
+  loadPluginRegistrySnapshot,
+  resolvePluginContributionOwners,
+  resolveProviderOwners,
+  type PluginRegistrySnapshot,
+} from "../../plugins/plugin-registry.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -37,18 +38,27 @@ function providerMatchesFilter(params: {
 }
 
 function collectMatchingContributionOwners(
-  index: InstalledPluginIndex,
+  index: PluginRegistrySnapshot,
   contribution: "providers" | "cliBackends",
   providerFilter: string,
   options: { includeDisabled?: boolean } = {},
 ): string[] {
+  if (contribution === "providers") {
+    return [
+      ...resolveProviderOwners({
+        index,
+        providerId: providerFilter,
+        includeDisabled: options.includeDisabled,
+      }),
+    ];
+  }
   return [
-    ...resolveInstalledPluginContributionOwners(
+    ...resolvePluginContributionOwners({
       index,
-      contribution,
-      (contributionId) => normalizeProviderId(contributionId) === providerFilter,
-      options,
-    ),
+      contribution: "cliBackends",
+      matches: (contributionId) => normalizeProviderId(contributionId) === providerFilter,
+      includeDisabled: options.includeDisabled,
+    }),
   ];
 }
 
@@ -57,7 +67,7 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   env?: NodeJS.ProcessEnv;
   providerFilter: string;
 }): string[] | undefined {
-  const index = loadInstalledPluginIndex({
+  const index = loadPluginRegistrySnapshot({
     config: params.cfg,
     env: params.env,
   });
