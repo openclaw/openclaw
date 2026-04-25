@@ -154,6 +154,30 @@ describe("installed plugin index persistence", () => {
       },
     });
 
+    await expect(
+      inspectPersistedInstalledPluginIndex({
+        stateDir,
+        candidates: [candidate],
+        config: {
+          plugins: {
+            entries: {
+              demo: {
+                enabled: false,
+              },
+            },
+          },
+        },
+        env,
+      }),
+    ).resolves.toMatchObject({
+      state: "stale",
+      refreshReasons: ["policy-changed"],
+      persisted: current,
+      current: {
+        plugins: [expect.objectContaining({ pluginId: "demo", enabled: false })],
+      },
+    });
+
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({
