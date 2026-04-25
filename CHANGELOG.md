@@ -77,6 +77,7 @@ Docs: https://docs.openclaw.ai
 - Agents/MCP: validate draft-2020-12 MCP tool output schemas with a draft-aware bundle-MCP client validator, so external MCP servers no longer fail catalog/tool execution with missing schema refs. Fixes #68772 and #70196. Thanks @mwiesen.
 - Dashboard/Windows: open Control UI and OAuth URLs through the system URL handler without `cmd.exe` parsing or PATH-based `rundll32` lookup, and reject non-HTTP browser-open inputs. Fixes #71098. Thanks @Sanjays2402.
 - Config/doctor: reject legacy `secretref-env:<ENV_VAR>` marker strings on SecretRef credential paths and migrate valid markers to structured env SecretRefs with `openclaw doctor --fix`. Fixes #51794. Thanks @halointellicore.
+- Plugin SDK/browser: export the resolved browser tab-cleanup config type through the browser profile facade, keeping SDK subpath contracts aligned.
 - Providers/OpenAI: separate API-key and Codex sign-in onboarding groups, and avoid replaying stale OpenAI Responses reasoning blocks after a model route switch.
 - Providers/OpenAI-compatible: forward `prompt_cache_key` on Completions requests only for providers that opt in with `compat.supportsPromptCacheKey`, keeping default proxy payloads unchanged. Fixes #69272.
 - Providers/OpenAI-compatible: skip null or non-object streaming chunks from custom providers instead of failing the turn after partial output. Fixes #51112.
