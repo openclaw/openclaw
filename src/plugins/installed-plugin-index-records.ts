@@ -5,7 +5,6 @@ import {
   readPersistedInstalledPluginIndexSync,
   refreshPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
-  type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
 import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
