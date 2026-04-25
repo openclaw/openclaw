@@ -41,7 +41,6 @@ import {
   buildMediaReferenceDetails,
   isCapabilityProviderConfigured,
   normalizeMediaReferenceInputs,
-  readGenerationTimeoutMs,
   resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
@@ -164,12 +163,6 @@ const ImageGenerateToolSchema = Type.Object({
       description: `Optional number of images to request (1-${MAX_COUNT}).`,
       minimum: 1,
       maximum: MAX_COUNT,
-    }),
-  ),
-  timeoutMs: Type.Optional(
-    Type.Number({
-      description: "Optional provider request timeout in milliseconds.",
-      minimum: 1,
     }),
   ),
 });
@@ -664,7 +657,11 @@ export function createImageGenerateTool(options?: {
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
-      const timeoutMs = readGenerationTimeoutMs(params) ?? imageGenerationModelConfig.timeoutMs;
+      // Image generation can take 20-90s legitimately; do not let the model
+      // pin a short request-level timeout via tool args. Operator-configured
+      // imageGenerationModel.timeoutMs still takes effect; otherwise provider
+      // defaults (e.g. 180_000ms) are the source of truth.
+      const timeoutMs = imageGenerationModelConfig.timeoutMs;
       const quality = normalizeQuality(readStringParam(params, "quality"));
       const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
       const background = normalizeBackground(readStringParam(params, "background"));
