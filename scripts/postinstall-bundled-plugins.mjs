@@ -32,6 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
@@ -663,6 +664,11 @@ async function importInstalledDistModule(params, distPath) {
 export async function runPluginRegistryPostinstallMigration(params = {}) {
   const log = params.log ?? console;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const env = params.env ?? process.env;
+
+  if (env[DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]?.trim()) {
+    return { status: "disabled", migrated: false, reason: "disabled-env" };
+  }
 
   try {
     const migrationModule = await importInstalledDistModule(
@@ -677,7 +683,7 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
     }
 
     const result = await migrationModule.migratePluginRegistryForInstall({
-      env: params.env ?? process.env,
+      env,
       packageRoot,
     });
     for (const warning of result.preflight?.deprecationWarnings ?? []) {

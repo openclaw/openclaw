@@ -5,10 +5,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { listPluginCompatRecords, type PluginCompatCode } from "./compat/registry.js";
-import {
-  normalizePluginsConfigWithResolver,
-  resolveEffectiveEnableState,
-} from "./config-policy.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import {
   describePluginInstallSource,
@@ -353,7 +350,7 @@ function resolveCompatRegistryVersion(): string {
 }
 
 function resolvePolicyHash(config: OpenClawConfig | undefined): string {
-  const normalized = normalizePluginsConfigWithResolver(config?.plugins);
+  const normalized = normalizePluginsConfig(config?.plugins);
   const channelPolicy: Record<string, boolean> = {};
   const channels = config?.channels;
   if (channels && typeof channels === "object" && !Array.isArray(channels)) {
@@ -404,7 +401,7 @@ function resolveRegistry(params: LoadInstalledPluginIndexParams): {
     };
   }
 
-  const normalized = normalizePluginsConfigWithResolver(params.config?.plugins);
+  const normalized = normalizePluginsConfig(params.config?.plugins);
   const discovery = discoverOpenClawPlugins({
     workspaceDir: params.workspaceDir,
     extraPaths: normalized.loadPaths,
@@ -430,7 +427,7 @@ function buildInstalledPluginIndex(
   const env = params.env ?? process.env;
   const { candidates, registry } = resolveRegistry(params);
   const candidateByRootDir = buildCandidateLookup(candidates);
-  const normalizedConfig = normalizePluginsConfigWithResolver(params.config?.plugins);
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const diagnostics: PluginDiagnostic[] = [...registry.diagnostics];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const plugins = registry.plugins.map((record): InstalledPluginIndexRecord => {
@@ -528,7 +525,7 @@ export function listEnabledInstalledPluginRecords(
   if (!config) {
     return index.plugins.filter((plugin) => plugin.enabled);
   }
-  const normalizedConfig = normalizePluginsConfigWithResolver(config?.plugins);
+  const normalizedConfig = normalizePluginsConfig(config?.plugins);
   return index.plugins.filter(
     (plugin) =>
       resolveEffectiveEnableState({
@@ -560,7 +557,7 @@ export function isInstalledPluginEnabled(
   if (!config) {
     return record.enabled;
   }
-  const normalizedConfig = normalizePluginsConfigWithResolver(config?.plugins);
+  const normalizedConfig = normalizePluginsConfig(config?.plugins);
   return resolveEffectiveEnableState({
     id: record.pluginId,
     origin: record.origin,
