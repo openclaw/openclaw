@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeStoredProviderModelOverride } from "../agents/model-ref-shared.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type ModelOverrideSelection = {
@@ -16,6 +17,12 @@ export function applyModelOverrideToSessionEntry(params: {
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
+  const normalizedSelection = normalizeStoredProviderModelOverride({
+    providerOverride: selection.provider,
+    modelOverride: selection.model,
+  });
+  const selectionProvider = normalizedSelection.providerOverride ?? selection.provider;
+  const selectionModel = normalizedSelection.modelOverride ?? selection.model;
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
   let updated = false;
@@ -37,13 +44,13 @@ export function applyModelOverrideToSessionEntry(params: {
       updated = true;
     }
   } else {
-    if (entry.providerOverride !== selection.provider) {
-      entry.providerOverride = selection.provider;
+    if (entry.providerOverride !== selectionProvider) {
+      entry.providerOverride = selectionProvider;
       updated = true;
       selectionUpdated = true;
     }
-    if (entry.modelOverride !== selection.model) {
-      entry.modelOverride = selection.model;
+    if (entry.modelOverride !== selectionModel) {
+      entry.modelOverride = selectionModel;
       updated = true;
       selectionUpdated = true;
     }
@@ -60,8 +67,8 @@ export function applyModelOverrideToSessionEntry(params: {
   const runtimeProvider = normalizeOptionalString(entry.modelProvider) ?? "";
   const runtimePresent = runtimeModel.length > 0 || runtimeProvider.length > 0;
   const runtimeAligned =
-    runtimeModel === selection.model &&
-    (runtimeProvider.length === 0 || runtimeProvider === selection.provider);
+    runtimeModel === selectionModel &&
+    (runtimeProvider.length === 0 || runtimeProvider === selectionProvider);
   if (runtimePresent && (selectionUpdated || !runtimeAligned)) {
     if (entry.model !== undefined) {
       delete entry.model;

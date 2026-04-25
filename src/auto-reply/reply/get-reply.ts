@@ -5,6 +5,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import { tryEnsureRuntimePluginsLoaded } from "../../agents/runtime-plugins.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -227,6 +228,12 @@ export async function getReplyFromConfig(
       });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
+  if (!useFastTestRuntime) {
+    tryEnsureRuntimePluginsLoaded({
+      config: cfg,
+      workspaceDir,
+    });
+  }
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
@@ -293,6 +300,13 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  const spawnedWorkspaceDir = normalizeOptionalString(sessionEntry.spawnedWorkspaceDir);
+  if (!useFastTestRuntime && spawnedWorkspaceDir && spawnedWorkspaceDir !== workspaceDir) {
+    tryEnsureRuntimePluginsLoaded({
+      config: cfg,
+      workspaceDir: spawnedWorkspaceDir,
+    });
+  }
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({

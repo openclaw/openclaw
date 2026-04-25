@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
+  normalizeStoredOverrideModel,
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { tryEnsureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -435,8 +437,18 @@ export async function applySessionsPatchToStore(params: {
   }
 
   if (next.thinkingLevel) {
-    const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
-    const effectiveModel = next.modelOverride ?? resolvedDefault.model;
+    tryEnsureRuntimePluginsLoaded({
+      config: cfg,
+      workspaceDir:
+        normalizeOptionalString(next.spawnedWorkspaceDir) ??
+        resolveAgentWorkspaceDir(cfg, sessionAgentId),
+    });
+    const normalizedOverride = normalizeStoredOverrideModel({
+      providerOverride: next.providerOverride,
+      modelOverride: next.modelOverride,
+    });
+    const effectiveProvider = normalizedOverride.providerOverride ?? resolvedDefault.provider;
+    const effectiveModel = normalizedOverride.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
     if (!thinkingLevel) {
       delete next.thinkingLevel;

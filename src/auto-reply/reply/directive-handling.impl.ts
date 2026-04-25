@@ -366,7 +366,11 @@ export async function handleDirectiveOnly(
     if (directives.hasFastDirective && directives.fastMode !== undefined) {
       sessionEntry.fastMode = directives.fastMode;
     }
-    if (shouldRemapUnsupportedThinkLevel && remappedUnsupportedThinkLevel) {
+    if (
+      shouldRemapUnsupportedThinkLevel &&
+      remappedUnsupportedThinkLevel &&
+      sessionEntry.thinkingLevel === nextThinkLevel
+    ) {
       sessionEntry.thinkingLevel = remappedUnsupportedThinkLevel;
     }
     if (

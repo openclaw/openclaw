@@ -17,6 +17,7 @@ vi.mock("../plugins/runtime.js", () => ({
 
 describe("ensureRuntimePluginsLoaded", () => {
   let ensureRuntimePluginsLoaded: typeof import("./runtime-plugins.js").ensureRuntimePluginsLoaded;
+  let tryEnsureRuntimePluginsLoaded: typeof import("./runtime-plugins.js").tryEnsureRuntimePluginsLoaded;
 
   beforeEach(async () => {
     hoisted.resolveRuntimePluginRegistry.mockReset();
@@ -24,7 +25,9 @@ describe("ensureRuntimePluginsLoaded", () => {
     hoisted.getActivePluginRuntimeSubagentMode.mockReset();
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("default");
     vi.resetModules();
-    ({ ensureRuntimePluginsLoaded } = await import("./runtime-plugins.js"));
+    ({ ensureRuntimePluginsLoaded, tryEnsureRuntimePluginsLoaded } = await import(
+      "./runtime-plugins.js"
+    ));
   });
 
   it("does not reactivate plugins when a process already has an active registry", async () => {
@@ -83,5 +86,19 @@ describe("ensureRuntimePluginsLoaded", () => {
         allowGatewaySubagentBinding: true,
       },
     });
+  });
+
+  it("allows best-effort callers to continue when plugin activation fails", async () => {
+    hoisted.resolveRuntimePluginRegistry.mockImplementation(() => {
+      throw new Error("broken plugin");
+    });
+
+    expect(
+      tryEnsureRuntimePluginsLoaded({
+        config: {} as never,
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toBe(false);
+    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 });

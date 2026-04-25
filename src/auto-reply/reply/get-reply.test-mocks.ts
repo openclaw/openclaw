@@ -24,6 +24,11 @@ vi.mock("../../agents/model-selection.js", async () => {
   };
 });
 
+vi.mock("../../agents/runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: vi.fn(),
+  tryEnsureRuntimePluginsLoaded: vi.fn(() => true),
+}));
+
 vi.mock("../../agents/timeout.js", () => ({
   resolveAgentTimeoutMs: vi.fn(() => 60000),
 }));

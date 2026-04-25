@@ -10,6 +10,16 @@ export type StaticModelRef = {
   model: string;
 };
 
+export type StoredProviderModelOverride = {
+  providerOverride?: string | null;
+  modelOverride?: string | null;
+};
+
+export type NormalizedStoredProviderModelOverride = {
+  providerOverride?: string;
+  modelOverride?: string;
+};
+
 export function modelKey(provider: string, model: string): string {
   const providerId = provider.trim();
   const modelId = model.trim();
@@ -24,6 +34,56 @@ export function modelKey(provider: string, model: string): string {
   )
     ? modelId
     : `${providerId}/${modelId}`;
+}
+
+export function stripOwnProviderPrefix(provider: string, model: string): string {
+  const normalizedProvider = normalizeProviderId(provider);
+  let trimmed = model.trim();
+  if (!normalizedProvider || !trimmed) {
+    return trimmed;
+  }
+  while (trimmed) {
+    const slashIndex = trimmed.indexOf("/");
+    if (slashIndex <= 0) {
+      break;
+    }
+    const prefixProvider = trimmed.slice(0, slashIndex).trim();
+    if (normalizeProviderId(prefixProvider) !== normalizedProvider) {
+      break;
+    }
+    const stripped = trimmed.slice(slashIndex + 1).trim();
+    trimmed = stripped;
+    if (!trimmed) {
+      break;
+    }
+  }
+  return trimmed;
+}
+
+export function normalizeStoredProviderModelOverride(
+  params: StoredProviderModelOverride,
+): NormalizedStoredProviderModelOverride {
+  const providerOverride = params.providerOverride?.trim();
+  const modelOverride = params.modelOverride?.trim();
+  if (!providerOverride || !modelOverride) {
+    return {
+      providerOverride,
+      modelOverride,
+    };
+  }
+
+  return {
+    providerOverride,
+    modelOverride: stripOwnProviderPrefix(providerOverride, modelOverride),
+  };
+}
+
+export function canonicalizeProviderModelId(provider: string, model: string): string {
+  const normalizedProvider = normalizeProviderId(provider);
+  return normalizeStaticProviderModelId(
+    normalizedProvider,
+    stripOwnProviderPrefix(normalizedProvider, model),
+  );
 }
 
 export function normalizeAnthropicModelId(model: string): string {
