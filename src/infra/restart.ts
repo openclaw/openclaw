@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -120,9 +121,7 @@ export function writeGatewayRestartIntentSync(opts: {
     };
     tmpPath = path.join(
       path.dirname(intentPath),
-      `.${path.basename(intentPath)}.${process.pid}.${Date.now()}.${Math.random()
-        .toString(16)
-        .slice(2)}.tmp`,
+      `.${path.basename(intentPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
     );
     let fd: number | undefined;
     try {
