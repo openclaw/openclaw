@@ -55,7 +55,7 @@ export async function runCrestodian(
       {
         label: "Loading Crestodian overview…",
         indeterminate: true,
-        delayMs: 120,
+        delayMs: 0,
         fallback: "none",
       },
       async () => await loadCrestodianOverview(),

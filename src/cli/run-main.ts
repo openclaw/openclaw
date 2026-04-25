@@ -252,7 +252,7 @@ export async function runCli(argv: string[] = process.argv) {
       const progress = createCliProgress({
         label: "Starting Crestodian…",
         indeterminate: true,
-        delayMs: 120,
+        delayMs: 0,
         fallback: "none",
       });
       let progressStopped = false;
@@ -290,7 +290,7 @@ export async function runCli(argv: string[] = process.argv) {
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
-      delayMs: 120,
+      delayMs: 0,
       fallback: "none",
     });
     let startupProgressStopped = false;
