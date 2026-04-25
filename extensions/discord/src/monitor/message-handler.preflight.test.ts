@@ -366,6 +366,47 @@ describe("preflightDiscordMessage", () => {
     });
   });
 
+  it("preflights direct-message voice notes without mention gating", async () => {
+    transcribeFirstAudioMock.mockResolvedValue("hello openclaw from dm audio");
+
+    const result = await runDmPreflight({
+      channelId: "dm-channel-audio-1",
+      message: createDiscordMessage({
+        id: "m-dm-audio-1",
+        channelId: "dm-channel-audio-1",
+        content: "",
+        attachments: [
+          {
+            id: "att-dm-audio-1",
+            url: "https://cdn.discordapp.com/attachments/voice.ogg",
+            content_type: "audio/ogg",
+            filename: "voice.ogg",
+          },
+        ],
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          MediaUrls: ["https://cdn.discordapp.com/attachments/voice.ogg"],
+          MediaTypes: ["audio/ogg"],
+        }),
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result?.isDirectMessage).toBe(true);
+  });
+
   it("falls back to the default discord account for omitted-account dm authorization", async () => {
     const message = createDiscordMessage({
       id: "m-dm-default-account",
