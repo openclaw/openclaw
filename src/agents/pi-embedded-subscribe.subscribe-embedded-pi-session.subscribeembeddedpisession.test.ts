@@ -414,6 +414,34 @@ describe("subscribeEmbeddedPiSession", () => {
     );
   });
 
+  it("keeps orphaned tool media available for non-block final payload assembly", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      builtinToolNames: new Set(["tts"]),
+    });
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+    emit({ type: "agent_end" });
+
+    expect(subscription.getPendingToolMediaReply()).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {

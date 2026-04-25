@@ -9,6 +9,7 @@ import {
   handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
+  readPendingToolMediaReply,
   recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
 } from "./pi-embedded-subscribe.handlers.messages.js";
@@ -394,6 +395,21 @@ describe("consumePendingToolMediaIntoReply", () => {
 });
 
 describe("consumePendingToolMediaReply", () => {
+  it("reads a media-only reply without consuming queued tool media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
+    };
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(state.pendingToolAudioAsVoice).toBe(true);
+  });
+
   it("builds a media-only reply for orphaned tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],

@@ -2044,6 +2044,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTexts,
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
+        getPendingToolMediaReply,
         getSuccessfulCronAdds,
         getReplayState,
         didSendViaMessagingTool,
@@ -2994,6 +2995,7 @@ export async function runEmbeddedAttempt(
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         successfulCronAdds: getSuccessfulCronAdds(),
       });
+      const pendingToolMediaReply = getPendingToolMediaReply();
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
@@ -3077,6 +3079,8 @@ export async function runEmbeddedAttempt(
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
+        toolMediaUrls: pendingToolMediaReply?.mediaUrls,
+        toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         successfulCronAdds: getSuccessfulCronAdds(),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),

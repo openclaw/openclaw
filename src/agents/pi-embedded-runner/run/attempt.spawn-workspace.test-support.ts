@@ -90,6 +90,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
+    getPendingToolMediaReply: () => null,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
       replayInvalid: false,
