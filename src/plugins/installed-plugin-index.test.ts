@@ -8,6 +8,7 @@ import {
   refreshInstalledPluginIndex,
   resolveInstalledPluginContributions,
 } from "./installed-plugin-index.js";
+import { recordPluginInstall } from "./installs.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -248,6 +249,80 @@ describe("installed plugin index", () => {
       },
     });
     expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("indexes npm install ledger records written before a process reload", () => {
+    const fixture = createRichPluginFixture();
+    const cfg = recordPluginInstall(
+      {},
+      {
+        pluginId: "demo",
+        source: "npm",
+        spec: "@vendor/demo-plugin@latest",
+        installPath: fixture.rootDir,
+        version: "1.2.3",
+        resolvedName: "@vendor/demo-plugin",
+        resolvedVersion: "1.2.3",
+        resolvedSpec: "@vendor/demo-plugin@1.2.3",
+        integrity: "sha512-installed",
+        shasum: "abc123",
+        resolvedAt: "2026-04-25T11:00:00.000Z",
+        installedAt: "2026-04-25T11:01:00.000Z",
+      },
+    );
+
+    const index = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: cfg,
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "demo",
+      installRecord: {
+        source: "npm",
+        spec: "@vendor/demo-plugin@latest",
+        installPath: fixture.rootDir,
+        version: "1.2.3",
+        resolvedName: "@vendor/demo-plugin",
+        resolvedVersion: "1.2.3",
+        resolvedSpec: "@vendor/demo-plugin@1.2.3",
+        integrity: "sha512-installed",
+        shasum: "abc123",
+        resolvedAt: "2026-04-25T11:00:00.000Z",
+        installedAt: "2026-04-25T11:01:00.000Z",
+      },
+    });
+  });
+
+  it("indexes local fallback install ledger records written before a process reload", () => {
+    const fixture = createRichPluginFixture();
+    const cfg = recordPluginInstall(
+      {},
+      {
+        pluginId: "demo",
+        source: "path",
+        sourcePath: "./plugins/demo",
+        spec: "@vendor/demo-plugin@1.2.3",
+        installedAt: "2026-04-25T11:01:00.000Z",
+      },
+    );
+
+    const index = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: cfg,
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "demo",
+      installRecord: {
+        source: "path",
+        sourcePath: "./plugins/demo",
+        spec: "@vendor/demo-plugin@1.2.3",
+        installedAt: "2026-04-25T11:01:00.000Z",
+      },
+    });
   });
 
   it("does not treat package install intent as source invalidation", () => {
