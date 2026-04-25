@@ -415,6 +415,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
+          let trackedPromise: Promise<unknown> | undefined;
+          const isCurrentTask = () =>
+            trackedPromise !== undefined && store.tasks.get(id) === trackedPromise;
+          const setRuntimeForCurrentTask = (patch: ChannelAccountSnapshot) => {
+            if (!isCurrentTask()) {
+              return;
+            }
+            setRuntime(channelId, id, patch);
+          };
           const task = Promise.resolve().then(() =>
             startAccount({
               cfg,
@@ -424,32 +433,32 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               abortSignal: abort.signal,
               log,
               getStatus: () => getRuntime(channelId, id),
-              setStatus: (next) => setRuntime(channelId, id, next),
+              setStatus: setRuntimeForCurrentTask,
               ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
             }),
           );
-          const trackedPromise = task
+          trackedPromise = task
             .catch((err) => {
               const message = formatErrorMessage(err);
-              setRuntime(channelId, id, { accountId: id, lastError: message });
+              setRuntimeForCurrentTask({ accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .finally(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
-              setRuntime(channelId, id, {
+              setRuntimeForCurrentTask({
                 accountId: id,
                 running: false,
                 lastStopAt: Date.now(),
               });
             })
             .then(async () => {
-              if (manuallyStopped.has(rKey)) {
+              if (!isCurrentTask() || manuallyStopped.has(rKey)) {
                 return;
               }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
               restartAttempts.set(rKey, attempt);
               if (attempt > MAX_RESTART_ATTEMPTS) {
-                setRuntime(channelId, id, {
+                setRuntimeForCurrentTask({
                   accountId: id,
                   restartPending: false,
                   reconnectAttempts: attempt,
@@ -461,17 +470,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.info?.(
                 `[${id}] auto-restart attempt ${attempt}/${MAX_RESTART_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
               );
-              setRuntime(channelId, id, {
+              setRuntimeForCurrentTask({
                 accountId: id,
                 restartPending: true,
                 reconnectAttempts: attempt,
               });
               try {
                 await sleepWithAbort(delayMs, abort.signal);
-                if (manuallyStopped.has(rKey)) {
+                if (!isCurrentTask() || manuallyStopped.has(rKey)) {
                   return;
                 }
-                if (store.tasks.get(id) === trackedPromise) {
+                if (trackedPromise && store.tasks.get(id) === trackedPromise) {
                   store.tasks.delete(id);
                 }
                 if (store.aborts.get(id) === abort) {
@@ -486,7 +495,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
             })
             .finally(() => {
-              if (store.tasks.get(id) === trackedPromise) {
+              if (trackedPromise && store.tasks.get(id) === trackedPromise) {
                 store.tasks.delete(id);
               }
               if (store.aborts.get(id) === abort) {
@@ -583,8 +592,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           // task may still be blocked on its HTTP read; when the next
           // getUpdates fires Telegram returns 409 conflict and terminates it.
           // (#71412)
-          store.aborts.delete(id);
-          store.tasks.delete(id);
+          if (store.aborts.get(id) === abort) {
+            store.aborts.delete(id);
+          }
+          if (task && store.tasks.get(id) === task) {
+            store.tasks.delete(id);
+          }
           setRuntime(channelId, id, {
             accountId: id,
             running: false,

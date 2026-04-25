@@ -93,12 +93,18 @@ function createTestPlugin(params?: {
   };
 }
 
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+function createDeferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (reason?: unknown) => void;
+} {
   let resolvePromise = () => {};
-  const promise = new Promise<void>((resolve) => {
+  let rejectPromise: (reason?: unknown) => void = () => {};
+  const promise = new Promise<void>((resolve, reject) => {
     resolvePromise = resolve;
+    rejectPromise = reject;
   });
-  return { promise, resolve: resolvePromise };
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
 function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
@@ -256,6 +262,60 @@ describe("server-channels auto restart", () => {
     expect(account?.restartPending).toBe(false);
     // lastError from the timed-out stop is overwritten by the successful restart;
     // we just want to confirm a fresh start happened, not the stale error.
+  });
+
+  it("ignores status and settlement writes from a task replaced after stop timeout", async () => {
+    const firstTask = createDeferred();
+    const secondTask = createDeferred();
+    const contexts: ChannelGatewayContext<TestAccount>[] = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      contexts.push(ctx);
+      if (contexts.length === 1) {
+        return await firstTask.promise;
+      }
+      return await secondTask.promise;
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    contexts[1]?.setStatus({
+      accountId: DEFAULT_ACCOUNT_ID,
+      connected: true,
+      lastTransportActivityAt: 123,
+    });
+    contexts[0]?.setStatus({
+      accountId: DEFAULT_ACCOUNT_ID,
+      connected: false,
+      running: false,
+      restartPending: true,
+      reconnectAttempts: 99,
+      lastError: "stale status",
+    });
+    firstTask.reject(new Error("stale exit"));
+    await vi.advanceTimersByTimeAsync(20);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(account).toMatchObject({
+      running: true,
+      connected: true,
+      restartPending: false,
+      reconnectAttempts: 0,
+      lastError: null,
+      lastTransportActivityAt: 123,
+    });
   });
 
   it("marks enabled/configured when account descriptors omit them", () => {
