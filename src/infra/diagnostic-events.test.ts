@@ -147,12 +147,12 @@ describe("diagnostic-events", () => {
     ]);
   });
 
-  it("does not derive trust from mutable global diagnostic state", async () => {
-    const stateKey = Symbol.for("openclaw.diagnosticEventsState");
+  it("does not expose mutable diagnostic state on a global symbol", async () => {
     const globalStore = globalThis as Record<PropertyKey, unknown>;
-    const state = globalStore[stateKey] as Record<string, unknown>;
-    state.trustedEvents = { has: () => true };
     const events: boolean[] = [];
+    globalStore[Symbol.for("openclaw.diagnosticEventsState")] = {
+      listeners: new Set([() => events.push(true)]),
+    };
     onInternalDiagnosticEvent((_event, metadata) => {
       events.push(metadata.trusted);
     });
@@ -166,12 +166,31 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(Object.getOwnPropertyDescriptor(globalStore, stateKey)).toMatchObject({
-      configurable: false,
-      writable: false,
-    });
     expect(events).toEqual([false]);
-    delete state.trustedEvents;
+    delete globalStore[Symbol.for("openclaw.diagnosticEventsState")];
+  });
+
+  it("keeps trusted internal events off the public diagnostic stream", async () => {
+    const publicEvents: string[] = [];
+    const internalEvents: Array<{ trusted: boolean; type: string }> = [];
+    onDiagnosticEvent((event) => {
+      publicEvents.push(event.type);
+    });
+    onInternalDiagnosticEvent((event, metadata) => {
+      internalEvents.push({ trusted: metadata.trusted, type: event.type });
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(publicEvents).toEqual([]);
+    expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
   });
 
   it("isolates trusted event trace context from listener mutation", async () => {

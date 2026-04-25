@@ -402,46 +402,18 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.error",
   "log.record",
 ]);
-const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEventsState");
 
-function isDiagnosticEventsGlobalState(value: unknown): value is DiagnosticEventsGlobalState {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<DiagnosticEventsGlobalState>;
-  return (
-    typeof candidate.enabled === "boolean" &&
-    typeof candidate.seq === "number" &&
-    candidate.listeners instanceof Set &&
-    typeof candidate.dispatchDepth === "number" &&
-    Array.isArray(candidate.asyncQueue) &&
-    typeof candidate.asyncDrainScheduled === "boolean"
-  );
-}
+const diagnosticEventsState: DiagnosticEventsGlobalState = {
+  enabled: true,
+  seq: 0,
+  listeners: new Set<DiagnosticEventListener>(),
+  dispatchDepth: 0,
+  asyncQueue: [],
+  asyncDrainScheduled: false,
+};
 
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
-  const globalStore = globalThis as typeof globalThis & {
-    [DIAGNOSTIC_EVENTS_STATE_KEY]?: DiagnosticEventsGlobalState;
-  };
-  const existing = globalStore[DIAGNOSTIC_EVENTS_STATE_KEY];
-  if (isDiagnosticEventsGlobalState(existing)) {
-    return existing;
-  }
-  const state = {
-    enabled: true,
-    seq: 0,
-    listeners: new Set<DiagnosticEventListener>(),
-    dispatchDepth: 0,
-    asyncQueue: [],
-    asyncDrainScheduled: false,
-  } satisfies DiagnosticEventsGlobalState;
-  Object.defineProperty(globalStore, DIAGNOSTIC_EVENTS_STATE_KEY, {
-    configurable: false,
-    enumerable: false,
-    value: state,
-    writable: false,
-  });
-  return state;
+  return diagnosticEventsState;
 }
 
 export function isDiagnosticsEnabled(config?: OpenClawConfig): boolean {
@@ -571,8 +543,8 @@ export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): ()
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
-  return onInternalDiagnosticEvent((event) => {
-    if (event.type === "log.record") {
+  return onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted || event.type === "log.record") {
       return;
     }
     listener(event);
