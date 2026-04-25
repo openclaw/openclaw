@@ -155,9 +155,8 @@ tool output back into the model.
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
 middleware, but new result transforms should use the runtime-neutral API.
-The Pi-only `api.registerEmbeddedExtensionFactory(...)` hook is deprecated for
-tool-result transforms; keep it only for bundled compatibility code that still
-needs direct Pi embedded-runner events.
+The Pi-only `api.registerEmbeddedExtensionFactory(...)` hook has been removed;
+Pi tool-result transforms must use runtime-neutral middleware.
 
 ### Native Codex harness mode
 

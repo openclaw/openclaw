@@ -3,7 +3,6 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
-import { listEmbeddedExtensionFactories } from "../../plugins/embedded-extension-factory.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -176,7 +175,6 @@ export function buildEmbeddedExtensionFactories(params: {
     factories.push(pruningFactory);
   }
   factories.push(buildAgentToolResultMiddlewareFactory());
-  factories.push(...listEmbeddedExtensionFactories());
   return factories;
 }
 
