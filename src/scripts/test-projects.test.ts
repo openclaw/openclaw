@@ -815,10 +815,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes browser extension targets to the extensions config", () => {
+  it("routes browser extension targets to the browser config", () => {
     expect(buildVitestRunPlans(["extensions/browser/index.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.extensions.config.ts",
+        config: "test/vitest/vitest.extension-browser.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/browser/index.test.ts"],
         watchMode: false,
@@ -859,10 +859,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("keeps non-provider extension file targets on the shared extensions config", () => {
+  it("routes misc extension file targets to the misc extensions config", () => {
     expect(buildVitestRunPlans(["extensions/firecrawl/index.test.ts"])).toEqual([
       {
-        config: "test/vitest/vitest.extensions.config.ts",
+        config: "test/vitest/vitest.extension-misc.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/firecrawl/index.test.ts"],
         watchMode: false,

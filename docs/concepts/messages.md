@@ -7,8 +7,6 @@ read_when:
 title: "Messages"
 ---
 
-# Messages
-
 This page ties together how OpenClaw handles inbound messages, sessions, queueing,
 streaming, and reasoning visibility.
 
@@ -151,7 +149,7 @@ Outbound message formatting is centralized in `messages`:
 - `messages.responsePrefix`, `channels.<channel>.responsePrefix`, and `channels.<channel>.accounts.<id>.responsePrefix` (outbound prefix cascade), plus `channels.whatsapp.messagePrefix` (WhatsApp inbound prefix)
 - Reply threading via `replyToMode` and per-channel defaults
 
-Details: [Configuration](/gateway/configuration-reference#messages) and channel docs.
+Details: [Configuration](/gateway/config-agents#messages) and channel docs.
 
 ## Silent replies
 
@@ -166,6 +164,10 @@ OpenClaw resolves that behavior by conversation type:
 Defaults live under `agents.defaults.silentReply` and
 `agents.defaults.silentReplyRewrite`; `surfaces.<id>.silentReply` and
 `surfaces.<id>.silentReplyRewrite` can override them per surface.
+
+When the parent session has one or more pending spawned subagent runs, bare
+silent replies are dropped on all surfaces instead of being rewritten, so the
+parent stays quiet until the child completion event delivers the real reply.
 
 ## Related
 

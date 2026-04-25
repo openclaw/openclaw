@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   AcpRuntime,
@@ -7,6 +8,7 @@ import type {
   PluginLogger,
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
+import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import {
   resolveAcpxPluginConfig,
   toAcpMcpServers,
@@ -78,9 +80,52 @@ function warnOnIgnoredLegacyCompatibilityConfig(params: {
   );
 }
 
-function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
-  const detailText = report.details?.filter(Boolean).join("; ").trim();
+function formatDoctorDetail(detail: unknown): string | null {
+  if (!detail) {
+    return null;
+  }
+  if (typeof detail === "string") {
+    return detail.trim() || null;
+  }
+  if (detail instanceof Error) {
+    return formatErrorMessage(detail);
+  }
+  if (typeof detail === "object") {
+    try {
+      return JSON.stringify(detail) ?? inspect(detail, { breakLength: Infinity, depth: 3 });
+    } catch {
+      return inspect(detail, { breakLength: Infinity, depth: 3 });
+    }
+  }
+  if (
+    typeof detail === "number" ||
+    typeof detail === "boolean" ||
+    typeof detail === "bigint" ||
+    typeof detail === "symbol"
+  ) {
+    return detail.toString();
+  }
+  return inspect(detail, { breakLength: Infinity, depth: 3 });
+}
+
+function formatDoctorFailureMessage(report: { message: string; details?: unknown[] }): string {
+  const detailText = report.details?.map(formatDoctorDetail).filter(Boolean).join("; ").trim();
   return detailText ? `${report.message} (${detailText})` : report.message;
+}
+
+function normalizeProbeAgent(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): string | undefined {
+  for (const agent of ctx.config.acp?.allowedAgents ?? []) {
+    const normalized = normalizeProbeAgent(agent);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
 }
 
 export function createAcpxRuntimeService(
@@ -97,9 +142,18 @@ export function createAcpxRuntimeService(
         return;
       }
 
-      const pluginConfig = resolveAcpxPluginConfig({
+      const basePluginConfig = resolveAcpxPluginConfig({
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
+      });
+      const effectiveBasePluginConfig: ResolvedAcpxPluginConfig = {
+        ...basePluginConfig,
+        probeAgent: basePluginConfig.probeAgent ?? resolveAllowedAgentsProbeAgent(ctx),
+      };
+      const pluginConfig = await prepareAcpxCodexAuthConfig({
+        pluginConfig: effectiveBasePluginConfig,
+        stateDir: ctx.stateDir,
+        logger: ctx.logger,
       });
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
       warnOnIgnoredLegacyCompatibilityConfig({

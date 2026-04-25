@@ -89,13 +89,13 @@ describe("listMemoryFiles", () => {
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
   });
 
-  it("uses lowercase memory.md as the root fallback when MEMORY.md is absent", async () => {
+  it("ignores lowercase root memory.md when canonical MEMORY.md is absent", async () => {
     const tmpDir = getTmpDir();
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
 
-    const files = await listMemoryFiles(tmpDir);
+    const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md")]);
 
-    expect(files).toEqual([path.join(tmpDir, "memory.md")]);
+    expect(files).toEqual([]);
   });
 
   it("prefers MEMORY.md when both root files exist", async () => {
@@ -103,9 +103,22 @@ describe("listMemoryFiles", () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
 
-    const files = await listMemoryFiles(tmpDir);
+    const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md"), tmpDir]);
 
     expect(files).toEqual([path.join(tmpDir, "MEMORY.md")]);
+  });
+
+  it("skips root-memory repair backups from extra workspace paths", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory", "2026-04-23");
+    await fs.mkdir(repairDir, { recursive: true });
+    await fs.writeFile(path.join(repairDir, "memory.md"), "# Archived legacy memory");
+
+    const files = await listMemoryFiles(tmpDir, [tmpDir]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toBe(path.join(tmpDir, "MEMORY.md"));
   });
 
   it("handles relative paths in additional paths", async () => {
@@ -252,26 +265,31 @@ describe("buildFileEntry", () => {
     expect(built?.structuredInputBytes).toBeGreaterThan(0);
   });
 
-  it("skips lazy multimodal indexing when the file grows after discovery", async () => {
-    const tmpDir = getTmpDir();
-    const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
+  it("skips lazy multimodal indexing when file state changes after discovery", async () => {
+    for (const testCase of [
+      {
+        name: "grows",
+        mutate: async (target: string, entrySize: number) => {
+          await fs.writeFile(target, Buffer.alloc(entrySize + 32, 1));
+        },
+      },
+      {
+        name: "bytes change",
+        mutate: async (target: string) => {
+          await fs.writeFile(target, Buffer.from("gif"));
+        },
+      },
+    ] as const) {
+      const tmpDir = getTmpDir();
+      const target = path.join(tmpDir, `${testCase.name}.png`);
+      await fs.writeFile(target, Buffer.from("png"));
 
-    const entry = await buildFileEntry(target, tmpDir, multimodal);
-    await fs.writeFile(target, Buffer.alloc(entry!.size + 32, 1));
+      const entry = await buildFileEntry(target, tmpDir, multimodal);
+      expect(entry, testCase.name).not.toBeNull();
+      await testCase.mutate(target, entry!.size);
 
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
-  });
-
-  it("skips lazy multimodal indexing when file bytes change after discovery", async () => {
-    const tmpDir = getTmpDir();
-    const target = path.join(tmpDir, "diagram.png");
-    await fs.writeFile(target, Buffer.from("png"));
-
-    const entry = await buildFileEntry(target, tmpDir, multimodal);
-    await fs.writeFile(target, Buffer.from("gif"));
-
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
+      await expect(buildMultimodalChunkForIndexing(entry!), testCase.name).resolves.toBeNull();
+    }
   });
 });
 

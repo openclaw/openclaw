@@ -12,6 +12,7 @@ describe("live-agent-probes", () => {
     expect(normalizeLiveAgentFamily("claude-cli")).toBe("claude");
     expect(normalizeLiveAgentFamily("codex")).toBe("codex");
     expect(normalizeLiveAgentFamily("google-gemini-cli")).toBe("gemini");
+    expect(normalizeLiveAgentFamily("opencode-ai")).toBe("opencode");
   });
 
   it("accepts only cat for the shared image probe reply", () => {
@@ -20,7 +21,10 @@ describe("live-agent-probes", () => {
   });
 
   it("builds a retryable cron prompt with provider-specific fallback wording", () => {
-    const spec = createLiveCronProbeSpec();
+    const spec = createLiveCronProbeSpec({
+      agentId: "codex",
+      sessionKey: "agent:codex:acp:test",
+    });
     expect(
       buildLiveCronProbeMessage({
         agent: "claude-cli",
@@ -28,7 +32,7 @@ describe("live-agent-probes", () => {
         attempt: 1,
         exactReply: spec.name,
       }),
-    ).toContain(`reply exactly: ${spec.name}`);
+    ).toContain("openclaw-tools/cron");
     expect(
       buildLiveCronProbeMessage({
         agent: "codex",
@@ -45,6 +49,15 @@ describe("live-agent-probes", () => {
         exactReply: spec.name,
       }),
     ).toContain("previous OpenClaw cron MCP tool call was cancelled");
+    expect(JSON.parse(spec.argsJson)).toEqual(
+      expect.objectContaining({
+        job: expect.objectContaining({
+          sessionTarget: "session:agent:codex:acp:test",
+          agentId: "codex",
+          sessionKey: "agent:codex:acp:test",
+        }),
+      }),
+    );
   });
 
   it("validates cron cli job shape for the shared live probe", () => {

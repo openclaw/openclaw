@@ -127,19 +127,29 @@ describe("resolveBuildAllSteps", () => {
     expect(BUILD_ALL_PROFILES.full).toEqual(BUILD_ALL_STEPS.map((step) => step.label));
   });
 
-  it("uses a runtime-only profile for ci artifacts", () => {
+  it("uses a runtime artifact plus plugin SDK export profile for ci artifacts", () => {
     expect(resolveBuildAllSteps("ciArtifacts").map((step) => step.label)).toEqual([
       "canvas:a2ui:bundle",
       "tsdown",
       "runtime-postbuild",
-      "write-npm-update-compat-sidecars",
       "build-stamp",
+      "build:plugin-sdk:dts",
+      "write-plugin-sdk-entry-dts",
+      "check-plugin-sdk-exports",
       "canvas-a2ui-copy",
       "copy-hook-metadata",
       "copy-export-html-templates",
       "write-build-info",
       "write-cli-startup-metadata",
       "write-cli-compat",
+    ]);
+  });
+
+  it("uses a minimal built runtime profile for gateway watch regression", () => {
+    expect(resolveBuildAllSteps("gatewayWatch").map((step) => step.label)).toEqual([
+      "tsdown",
+      "runtime-postbuild",
+      "build-stamp",
     ]);
   });
 

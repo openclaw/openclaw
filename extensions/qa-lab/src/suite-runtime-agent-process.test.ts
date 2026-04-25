@@ -20,6 +20,8 @@ vi.mock("./suite-runtime-gateway.js", () => ({
 }));
 
 import {
+  findManagedDreamingCronJob,
+  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
@@ -97,6 +99,48 @@ describe("qa suite runtime agent process helpers", () => {
       expect.objectContaining({
         cwd: "/tmp/runtime",
         env: { PATH: "/usr/bin" },
+      }),
+    );
+  });
+
+  it("merges isolated env overrides into qa cli runs", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: { PATH: "/usr/bin", OPENCLAW_STATE_DIR: "/tmp/default-state" },
+        },
+        primaryModel: "openai/gpt-5.4",
+        alternateModel: "openai/gpt-5.4-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["crestodian", "-m", "overview"],
+      {
+        env: {
+          OPENCLAW_STATE_DIR: "/tmp/isolated-state",
+          OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.json",
+        },
+      },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit("data", Buffer.from("ok\n"));
+    child.emit("exit", 0);
+
+    await expect(pending).resolves.toBe("ok");
+    expect(spawnMock).toHaveBeenCalledWith(
+      "/usr/bin/node",
+      ["/repo/dist/index.js", "crestodian", "-m", "overview"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          PATH: "/usr/bin",
+          OPENCLAW_STATE_DIR: "/tmp/isolated-state",
+          OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.json",
+        }),
       }),
     );
   });
@@ -219,6 +263,32 @@ describe("qa suite runtime agent process helpers", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
+    const legacy = {
+      id: "legacy",
+      name: "Memory Dreaming Promotion",
+      payload: {
+        kind: "systemEvent",
+        text: "__openclaw_memory_core_short_term_promotion_dream__",
+      },
+    };
+    const current = {
+      id: "current",
+      name: "Memory Dreaming Promotion",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
+        lightContext: true,
+      },
+      sessionTarget: "isolated",
+      delivery: { mode: "none" },
+    };
+
+    expect(isManagedDreamingCronJob(legacy)).toBe(true);
+    expect(isManagedDreamingCronJob(current)).toBe(true);
+    expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, current])).toBe(current);
   });
 
   it("waits for an agent run and fails when the run does not finish ok", async () => {

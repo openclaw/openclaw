@@ -9,7 +9,9 @@ export type CliRoutedCommandId =
   | "config-get"
   | "config-unset"
   | "models-list"
-  | "models-status";
+  | "models-status"
+  | "channels-list"
+  | "channels-status";
 
 export type CliCommandPathPolicy = {
   bypassConfigGuard: boolean;
@@ -30,30 +32,37 @@ export type CliCommandCatalogEntry = {
 };
 
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
+  {
+    commandPath: ["crestodian"],
+    policy: { bypassConfigGuard: true, loadPlugins: "never", ensureCliPath: false },
+  },
   { commandPath: ["agent"], policy: { loadPlugins: "always" } },
   { commandPath: ["message"], policy: { loadPlugins: "always" } },
   { commandPath: ["channels"], policy: { loadPlugins: "always" } },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
   { commandPath: ["agents"], policy: { loadPlugins: "always" } },
-  { commandPath: ["configure"], policy: { loadPlugins: "always" } },
+  { commandPath: ["configure"], policy: { bypassConfigGuard: true, loadPlugins: "never" } },
   {
     commandPath: ["status"],
     policy: {
-      loadPlugins: "text-only",
+      loadPlugins: "never",
       routeConfigGuard: "when-suppressed",
       ensureCliPath: false,
     },
-    route: { id: "status", preloadPlugins: true },
+    route: { id: "status" },
   },
   {
     commandPath: ["health"],
-    policy: { loadPlugins: "text-only", ensureCliPath: false },
-    route: { id: "health", preloadPlugins: true },
+    policy: { loadPlugins: "never", ensureCliPath: false },
+    route: { id: "health" },
   },
   {
     commandPath: ["gateway", "status"],
     exact: true,
-    policy: { routeConfigGuard: "always" },
+    policy: {
+      routeConfigGuard: "always",
+      loadPlugins: "never",
+    },
     route: { id: "gateway-status" },
   },
   {
@@ -81,13 +90,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["models", "list"],
     exact: true,
-    policy: { ensureCliPath: false },
+    policy: { ensureCliPath: false, routeConfigGuard: "always" },
     route: { id: "models-list" },
   },
   {
     commandPath: ["models", "status"],
     exact: true,
-    policy: { ensureCliPath: false },
+    policy: { ensureCliPath: false, routeConfigGuard: "always" },
     route: { id: "models-status" },
   },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true } },
@@ -125,5 +134,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["channels", "add"],
     exact: true,
     policy: { loadPlugins: "never" },
+  },
+  {
+    commandPath: ["channels", "status"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+    route: { id: "channels-status" },
+  },
+  {
+    commandPath: ["channels", "list"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+    route: { id: "channels-list" },
   },
 ];

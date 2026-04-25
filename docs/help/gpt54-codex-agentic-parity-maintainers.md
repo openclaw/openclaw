@@ -1,4 +1,10 @@
-# GPT-5.4 / Codex Parity Maintainer Notes
+---
+summary: "How to review the GPT-5.4 / Codex parity program as four merge units"
+title: "GPT-5.4 / Codex parity maintainer notes"
+read_when:
+  - Reviewing the GPT-5.4 / Codex parity PR series
+  - Maintaining the six-contract agentic architecture behind the parity program
+---
 
 This note explains how to review the GPT-5.4 / Codex parity program as four merge units without losing the original six-contract architecture.
 
@@ -143,6 +149,28 @@ The parity harness is not the only evidence source. Keep this split explicit in 
 - PR D owns the scenario-based GPT-5.4 vs Opus 4.6 comparison
 - PR B deterministic suites still own auth/proxy/DNS and full-access truthfulness evidence
 
+## Quick maintainer merge workflow
+
+Use this when you are ready to land a parity PR and want a repeatable, low-risk sequence.
+
+1. Confirm evidence bar is met before merge:
+   - reproducible symptom or failing test
+   - verified root cause in touched code
+   - fix in the implicated path
+   - regression test or explicit manual verification note
+2. Triage/label before merge:
+   - apply any `r:*` auto-close labels when the PR should not land
+   - keep merge candidates free of unresolved blocker threads
+3. Validate locally on the touched surface:
+   - `pnpm check:changed`
+   - `pnpm test:changed` when tests changed or bug-fix confidence depends on test coverage
+4. Land with the standard maintainer flow (`/landpr` process), then verify:
+   - linked issues auto-close behavior
+   - CI and post-merge status on `main`
+5. After landing, run duplicate search for related open PRs/issues and close only with a canonical reference.
+
+If any one of the evidence bar items is missing, request changes instead of merging.
+
 ## Goal-to-evidence map
 
 | Completion gate item                     | Primary owner | Review artifact                                                     |
@@ -162,3 +190,7 @@ The parity harness is not the only evidence source. Keep this split explicit in 
 | `/elevated full` hints were sometimes misleading            | PR B ties guidance to actual runtime capability and blocked reasons                     |
 | Long tasks could disappear into replay/compaction ambiguity | PR C emits explicit paused, blocked, abandoned, and replay-invalid state                |
 | Parity claims were anecdotal                                | PR D produces a report plus JSON verdict with the same scenario coverage on both models |
+
+## Related
+
+- [GPT-5.4 / Codex agentic parity](/help/gpt54-codex-agentic-parity)

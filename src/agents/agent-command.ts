@@ -58,6 +58,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -247,6 +248,7 @@ async function prepareAgentCommandExecution(
     throw new Error("Message (--message) is required");
   }
   const body = prependInternalEventContext(message, opts.internalEvents);
+  const transcriptBody = opts.transcriptMessage ?? message;
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -367,6 +369,7 @@ async function prepareAgentCommandExecution(
 
   return {
     body,
+    transcriptBody,
     cfg,
     normalizedSpawned,
     agentCfg,
@@ -401,6 +404,7 @@ async function agentCommandInternal(
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
+    transcriptBody,
     cfg,
     normalizedSpawned,
     agentCfg,
@@ -522,6 +526,7 @@ async function agentCommandInternal(
         const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
         sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
+          transcriptBody,
           finalText: finalTextRaw,
           sessionId,
           sessionKey,
@@ -756,7 +761,14 @@ async function agentCommandInternal(
         const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        if (!profile || profile.provider !== providerForAuthProfileValidation) {
+        const profileAuthProvider = profile
+          ? resolveProviderIdForAuth(profile.provider, { config: cfg, workspaceDir })
+          : undefined;
+        const validationAuthProvider = resolveProviderIdForAuth(providerForAuthProfileValidation, {
+          config: cfg,
+          workspaceDir,
+        });
+        if (!profile || profileAuthProvider !== validationAuthProvider) {
           if (sessionStore && sessionKey) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,
@@ -906,6 +918,13 @@ async function agentCommandInternal(
               sessionHasHistory:
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
               onAgentEvent: (evt) => {
+                if (evt.stream.startsWith("codex_app_server.")) {
+                  emitAgentEvent({
+                    runId,
+                    stream: evt.stream,
+                    data: evt.data ?? {},
+                  });
+                }
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&
@@ -1053,6 +1072,7 @@ async function agentCommandInternal(
       try {
         sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
+          transcriptBody,
           result,
           sessionId,
           sessionKey: sessionKey ?? sessionId,

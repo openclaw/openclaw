@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   isDiagnosticsEnabled,
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
 } from "./diagnostic-events.js";
+import { createDiagnosticTraceContext } from "./diagnostic-trace-context.js";
 
 describe("diagnostic-events", () => {
   beforeEach(() => {
@@ -87,6 +90,92 @@ describe("diagnostic-events", () => {
     expect(seen).toEqual(["webhook.received"]);
   });
 
+  it("carries explicit trace context without creating retained trace state", () => {
+    const trace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+    });
+    const events: Array<{ trace: typeof trace | undefined; type: string }> = [];
+    const stop = onDiagnosticEvent((event) => {
+      events.push({ trace: event.trace, type: event.type });
+    });
+
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "telegram",
+      trace,
+    });
+    stop();
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "telegram",
+      trace,
+    });
+
+    expect(events).toEqual([{ trace, type: "message.queued" }]);
+  });
+
+  it("dispatches high-frequency tool and model lifecycle events asynchronously", async () => {
+    const events: string[] = [];
+    onDiagnosticEvent((event) => {
+      events.push(event.type);
+    });
+
+    emitDiagnosticEvent({
+      type: "tool.execution.started",
+      toolName: "read",
+    });
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(events).toEqual([]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(events).toEqual(["tool.execution.started", "model.call.started"]);
+  });
+
+  it("keeps log records off the public diagnostic event stream", async () => {
+    const publicEvents: string[] = [];
+    const internalEvents: string[] = [];
+    onDiagnosticEvent((event) => {
+      publicEvents.push(event.type);
+    });
+    onInternalDiagnosticEvent((event) => {
+      internalEvents.push(event.type);
+    });
+
+    emitDiagnosticEvent({
+      type: "log.record",
+      level: "INFO",
+      message: "private log",
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(publicEvents).toEqual([]);
+    expect(internalEvents).toEqual(["log.record"]);
+  });
+
+  it("skips event enrichment and subscribers when diagnostics are disabled", () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    const seen: string[] = [];
+    onDiagnosticEvent((event) => {
+      seen.push(event.type);
+    });
+    setDiagnosticsEnabledForProcess(false);
+
+    emitDiagnosticEvent({
+      type: "webhook.received",
+      channel: "telegram",
+    });
+
+    expect(seen).toEqual([]);
+    expect(nowSpy).not.toHaveBeenCalled();
+  });
+
   it("drops recursive emissions after the guard threshold", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     let calls = 0;
@@ -113,8 +202,10 @@ describe("diagnostic-events", () => {
     );
   });
 
-  it("requires an explicit true diagnostics flag", () => {
-    expect(isDiagnosticsEnabled()).toBe(false);
+  it("enables diagnostics unless explicitly disabled", () => {
+    expect(isDiagnosticsEnabled()).toBe(true);
+    expect(isDiagnosticsEnabled({} as never)).toBe(true);
+    expect(isDiagnosticsEnabled({ diagnostics: {} } as never)).toBe(true);
     expect(isDiagnosticsEnabled({ diagnostics: { enabled: false } } as never)).toBe(false);
     expect(isDiagnosticsEnabled({ diagnostics: { enabled: true } } as never)).toBe(true);
   });

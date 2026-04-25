@@ -6,6 +6,7 @@ import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-repl
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
+import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -66,6 +67,18 @@ function summarizeToolErrorForUi(lastToolError: ToolErrorSummary): string | unde
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
+}
+
+function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
+  if (!lastAssistant) {
+    return "";
+  }
+  return (
+    normalizeOptionalString(
+      extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" }) ??
+        extractAssistantTextForPhase(lastAssistant),
+    ) ?? ""
+  );
 }
 
 function shouldIncludeToolErrorDetails(params: {
@@ -236,6 +249,7 @@ export function buildEmbeddedRunPayloads(params: {
   const fallbackAnswerText = params.lastAssistant
     ? extractAssistantVisibleText(params.lastAssistant)
     : "";
+  const fallbackRawAnswerText = resolveRawAssistantAnswerText(params.lastAssistant);
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -286,13 +300,34 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
+  const rawAnswerDirectiveState = fallbackRawAnswerText
+    ? parseReplyDirectives(fallbackRawAnswerText)
+    : null;
+  const rawAnswerHasMedia =
+    (rawAnswerDirectiveState?.mediaUrls?.length ?? 0) > 0 || rawAnswerDirectiveState?.audioAsVoice;
+  const assistantTextsHaveMedia = params.assistantTexts.some((text) => {
+    const parsed = parseReplyDirectives(text);
+    return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
+  });
+  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
+  const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
+  const shouldPreferRawAnswerText =
+    rawAnswerHasMedia &&
+    (!nonEmptyAssistantTexts.length ||
+      (!assistantTextsHaveMedia &&
+        normalizedAssistantTexts.length > 0 &&
+        normalizedAssistantTexts === normalizedRawAnswerText));
+  const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
-        : fallbackAnswerText
-          ? [fallbackAnswerText]
-          : []
+    : (shouldPreferRawAnswerText && fallbackRawAnswerText
+        ? [fallbackRawAnswerText]
+        : hasAssistantTextPayload
+          ? nonEmptyAssistantTexts
+          : fallbackAnswerText
+            ? [fallbackAnswerText]
+            : []
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
@@ -368,16 +403,27 @@ export function buildEmbeddedRunPayloads(params: {
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
-    .map((item) => ({
-      text: normalizeOptionalString(item.text),
-      mediaUrls: item.media?.length ? item.media : undefined,
-      mediaUrl: item.media?.[0],
-      isError: item.isError,
-      replyToId: item.replyToId,
-      replyToTag: item.replyToTag,
-      replyToCurrent: item.replyToCurrent,
-      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
-    }))
+    .map((item) => {
+      const payload = {
+        text: normalizeOptionalString(item.text),
+        mediaUrls: item.media?.length ? item.media : undefined,
+        mediaUrl: item.media?.[0],
+        isError: item.isError,
+        replyToId: item.replyToId,
+        replyToTag: item.replyToTag,
+        replyToCurrent: item.replyToCurrent,
+        audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      };
+      if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
+        const silentText = payload.text;
+        payload.text = undefined;
+        if (hasOutboundReplyContent(payload)) {
+          return payload;
+        }
+        payload.text = silentText;
+      }
+      return payload;
+    })
     .filter((p) => {
       if (!hasOutboundReplyContent(p)) {
         return false;
