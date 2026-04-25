@@ -55,7 +55,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["gateway", "status"],
     exact: true,
-    policy: { routeConfigGuard: "always" },
+    policy: {
+      routeConfigGuard: "always",
+      // `gateway status` is a built-in daemon/RPC health path. Loading the
+      // full plugin registry here eagerly scans and validates every channel
+      // plugin before the command can even connect to the already-running
+      // gateway, which makes this frequently-used status check painfully slow.
+      loadPlugins: "never",
+    },
     route: { id: "gateway-status" },
   },
   {
