@@ -37,7 +37,32 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
-const TOOL_CALL_CONTENT_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_CONTENT_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
+
+function suppressPendingAssistantVisibleOutput(ctx: EmbeddedPiSubscribeContext) {
+  ctx.state.suppressBlockChunks = true;
+  ctx.state.deltaBuffer = "";
+  ctx.state.blockBuffer = "";
+  ctx.blockChunker?.reset();
+  ctx.state.lastStreamedAssistant = undefined;
+  ctx.state.lastStreamedAssistantCleaned = undefined;
+  ctx.state.emittedAssistantUpdate = false;
+  ctx.state.lastBlockReplyText = undefined;
+  ctx.state.pendingAssistantReplyDirectives = undefined;
+  if (ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline) {
+    ctx.state.assistantTexts.splice(ctx.state.assistantTextBaseline);
+    ctx.state.lastAssistantTextMessageIndex = -1;
+    ctx.state.lastAssistantTextNormalized = undefined;
+    ctx.state.lastAssistantTextTrimmed = undefined;
+  }
+}
 
 function hasToolUseContinuation(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
@@ -436,6 +461,7 @@ export function handleMessageUpdate(
   ctx.noteLastAssistant(msg);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
   if (suppressVisibleAssistantOutput) {
+    suppressPendingAssistantVisibleOutput(ctx);
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
@@ -533,6 +559,7 @@ export function handleMessageUpdate(
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
   if (shouldSuppressAssistantVisibleOutput(partialAssistant)) {
+    suppressPendingAssistantVisibleOutput(ctx);
     return;
   }
   if (isPhasePendingOpenAiResponsesTextItem) {
@@ -689,6 +716,7 @@ export function handleMessageEnd(
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
+    suppressPendingAssistantVisibleOutput(ctx);
     return;
   }
   promoteThinkingTagsToBlocks(assistantMessage);
