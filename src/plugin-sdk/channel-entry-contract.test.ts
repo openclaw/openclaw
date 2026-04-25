@@ -172,7 +172,8 @@ async function expectBuiltArtifactNodeRequireFastPath(
     const importerPath = path.join(pluginRoot, "index.js");
     const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.cjs");
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-    // CommonJS so `nodeRequire` succeeds without falling back to jiti.
+    // CommonJS so `nodeRequire` succeeds without falling back to jiti, even
+    // after runtime-deps mirroring writes a `type: "module"` package boundary.
     fs.writeFileSync(sidecarPath, "module.exports = { sentinel: 7 };\n", "utf8");
 
     expect(

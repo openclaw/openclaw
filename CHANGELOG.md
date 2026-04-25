@@ -95,6 +95,9 @@ Docs: https://docs.openclaw.ai
   equivalent transcripts.
 - Agents/replies: forward sanitized underlying agent failure details on external
   channels instead of replacing unknown failures with a generic retry message.
+- CLI/MCP: translate OpenClaw `mcp.servers.*.transport` entries into
+  Claude/Gemini CLI `type` fields so streamable HTTP MCP servers load in CLI
+  backend sessions. (#71724) Thanks @Blockchain-Oracle.
 - Browser/CDP: honor configured remote and `attachOnly` CDP HTTP/WebSocket
   timeouts when opening tabs through raw CDP or `/json/new` fallback. (#54238)
   Thanks @FuncWei.
