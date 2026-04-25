@@ -676,6 +676,8 @@ openclaw googlemeet attendance --conference-record conferenceRecords/abc123 \
   --format csv --output meet-attendance.csv
 openclaw googlemeet export --conference-record conferenceRecords/abc123 \
   --include-doc-bodies --zip --output meet-export
+openclaw googlemeet export --conference-record conferenceRecords/abc123 \
+  --include-doc-bodies --dry-run
 ```
 
 `artifacts` returns conference record metadata plus participant, recording,
@@ -700,6 +702,10 @@ fresh OAuth login that includes the Drive Meet readonly scope. Without
 entries only. If Google returns a partial artifact failure, such as a smart-note
 listing, transcript-entry, or Drive document-body error, the summary and
 manifest keep the warning instead of failing the whole export.
+Use `--dry-run` to fetch the same artifact/attendance data and print the
+manifest JSON without creating the folder or ZIP. That is useful before writing
+a large export or when an agent only needs counts, selected records, and
+warnings.
 
 Agents can also create the same bundle through the `google_meet` tool:
 
@@ -712,6 +718,8 @@ Agents can also create the same bundle through the `google_meet` tool:
   "zip": true
 }
 ```
+
+Set `"dryRun": true` to return only the export manifest and skip file writes.
 
 Run the guarded live smoke against a real retained meeting:
 
