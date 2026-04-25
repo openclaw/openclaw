@@ -1812,6 +1812,7 @@ function mapStopReason(reason: string | null) {
     case "length":
       return { stopReason: "length" };
     case "function_call":
+    case "tool_call":
     case "tool_calls":
       return { stopReason: "toolUse" };
     case "content_filter":
