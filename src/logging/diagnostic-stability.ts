@@ -318,6 +318,13 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
       break;
+    case "context.assembled":
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      record.count = event.messageCount;
+      record.bytes = event.promptChars;
+      break;
     case "log.record":
       record.level = event.level;
       record.source = event.loggerName;
