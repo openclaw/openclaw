@@ -180,10 +180,16 @@ export async function captureScreenshot(opts: {
   );
 }
 
+export type CdpActionTimeouts = {
+  httpTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
+};
+
 export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
   ssrfPolicy?: SsrFPolicy;
+  timeouts?: CdpActionTimeouts;
 }): Promise<{ targetId: string }> {
   await assertBrowserNavigationAllowed({
     url: opts.url,
@@ -208,7 +214,7 @@ export async function createTargetViaCdp(opts: {
     try {
       version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
         appendCdpPath(discoveryUrl, "/json/version"),
-        1500,
+        opts.timeouts?.httpTimeoutMs,
         undefined,
         opts.ssrfPolicy,
       );
@@ -238,16 +244,20 @@ export async function createTargetViaCdp(opts: {
   for (const candidateWsUrl of candidateWsUrls) {
     try {
       await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy);
-      return await withCdpSocket(candidateWsUrl, async (send) => {
-        const created = (await send("Target.createTarget", { url: opts.url })) as {
-          targetId?: string;
-        };
-        const targetId = created?.targetId?.trim() ?? "";
-        if (!targetId) {
-          throw new Error("CDP Target.createTarget returned no targetId");
-        }
-        return { targetId };
-      });
+      return await withCdpSocket(
+        candidateWsUrl,
+        async (send) => {
+          const created = (await send("Target.createTarget", { url: opts.url })) as {
+            targetId?: string;
+          };
+          const targetId = created?.targetId?.trim() ?? "";
+          if (!targetId) {
+            throw new Error("CDP Target.createTarget returned no targetId");
+          }
+          return { targetId };
+        },
+        { handshakeTimeoutMs: opts.timeouts?.handshakeTimeoutMs },
+      );
     } catch (err) {
       lastError = err;
     }

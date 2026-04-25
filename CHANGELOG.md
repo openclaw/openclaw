@@ -38,6 +38,9 @@ Docs: https://docs.openclaw.ai
 - Agents/replies: forward sanitized underlying agent failure details on external
   channels instead of replacing unknown failures with a generic retry message.
   Thanks @steipete.
+- Browser/CDP: honor configured remote and `attachOnly` CDP HTTP/WebSocket
+  timeouts when opening tabs through raw CDP or `/json/new` fallback. (#54238)
+  Thanks @FuncWei.
 - Agents/TTS: preserve `[[audio_as_voice]]` directives on trusted text
   tool-result `MEDIA:` payloads so generated audio still delivers as a voice
   note. (#46535) Thanks @azade-c.
