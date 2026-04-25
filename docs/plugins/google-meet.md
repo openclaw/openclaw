@@ -480,6 +480,27 @@ Run preflight before media work:
 openclaw googlemeet preflight --meeting https://meet.google.com/abc-defg-hij
 ```
 
+List meeting artifacts and attendance after Meet has created conference records:
+
+```bash
+openclaw googlemeet artifacts --meeting https://meet.google.com/abc-defg-hij
+openclaw googlemeet attendance --meeting https://meet.google.com/abc-defg-hij
+```
+
+If you already know the conference record id, address it directly:
+
+```bash
+openclaw googlemeet artifacts --conference-record conferenceRecords/abc123 --json
+openclaw googlemeet attendance --conference-record conferenceRecords/abc123 --json
+```
+
+`artifacts` returns conference record metadata plus participant, recording,
+transcript, and smart-note resource metadata when Google exposes it for the
+meeting. `attendance` expands participants into participant-session rows with
+join/leave timestamps. These commands use the Meet REST API only; transcript or
+smart-note document body download is intentionally out of scope because that
+requires separate Google Docs/Drive access.
+
 Create a fresh Meet space:
 
 ```bash

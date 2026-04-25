@@ -15,7 +15,12 @@ import {
   createMeetFromParams,
   shouldJoinCreatedMeet,
 } from "./src/create.js";
-import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./src/meet.js";
+import {
+  buildGoogleMeetPreflightReport,
+  fetchGoogleMeetArtifacts,
+  fetchGoogleMeetAttendance,
+  fetchGoogleMeetSpace,
+} from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
@@ -145,6 +150,8 @@ const GoogleMeetToolSchema = Type.Object({
       "setup_status",
       "resolve_space",
       "preflight",
+      "artifacts",
+      "attendance",
       "recover_current_tab",
       "leave",
       "speak",
@@ -175,6 +182,10 @@ const GoogleMeetToolSchema = Type.Object({
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
+  conferenceRecord: Type.Optional(
+    Type.String({ description: "Meet conferenceRecords/{id} resource name or id" }),
+  ),
+  pageSize: Type.Optional(Type.Number({ description: "Meet API page size for list actions" })),
   accessToken: Type.Optional(Type.String({ description: "Access token override" })),
   refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
   clientId: Type.Optional(Type.String({ description: "OAuth client id override" })),
@@ -211,20 +222,56 @@ function resolveMeetingInput(config: GoogleMeetConfig, value: unknown): string {
   return meeting;
 }
 
-async function resolveSpaceFromParams(config: GoogleMeetConfig, raw: Record<string, unknown>) {
-  const meeting = resolveMeetingInput(config, raw.meeting);
-  const token = await resolveGoogleMeetAccessToken({
+function resolveOptionalPositiveInteger(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = typeof value === "number" ? value : Number(normalizeOptionalString(value));
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error("Expected pageSize to be a positive integer");
+  }
+  return parsed;
+}
+
+async function resolveGoogleMeetTokenFromParams(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+) {
+  return resolveGoogleMeetAccessToken({
     clientId: normalizeOptionalString(raw.clientId) ?? config.oauth.clientId,
     clientSecret: normalizeOptionalString(raw.clientSecret) ?? config.oauth.clientSecret,
     refreshToken: normalizeOptionalString(raw.refreshToken) ?? config.oauth.refreshToken,
     accessToken: normalizeOptionalString(raw.accessToken) ?? config.oauth.accessToken,
     expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : config.oauth.expiresAt,
   });
+}
+
+async function resolveSpaceFromParams(config: GoogleMeetConfig, raw: Record<string, unknown>) {
+  const meeting = resolveMeetingInput(config, raw.meeting);
+  const token = await resolveGoogleMeetTokenFromParams(config, raw);
   const space = await fetchGoogleMeetSpace({
     accessToken: token.accessToken,
     meeting,
   });
   return { meeting, token, space };
+}
+
+async function resolveArtifactQueryFromParams(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+) {
+  const meeting = normalizeOptionalString(raw.meeting) ?? config.defaults.meeting;
+  const conferenceRecord = normalizeOptionalString(raw.conferenceRecord);
+  if (!meeting && !conferenceRecord) {
+    throw new Error("Meeting input or conferenceRecord required");
+  }
+  const token = await resolveGoogleMeetTokenFromParams(config, raw);
+  return {
+    token,
+    meeting,
+    conferenceRecord,
+    pageSize: resolveOptionalPositiveInteger(raw.pageSize),
+  };
 }
 
 export default definePluginEntry({
@@ -331,6 +378,48 @@ export default definePluginEntry({
         try {
           const rt = await ensureRuntime();
           respond(true, await rt.setupStatus());
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "googlemeet.artifacts",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          const resolved = await resolveArtifactQueryFromParams(config, raw);
+          respond(
+            true,
+            await fetchGoogleMeetArtifacts({
+              accessToken: resolved.token.accessToken,
+              meeting: resolved.meeting,
+              conferenceRecord: resolved.conferenceRecord,
+              pageSize: resolved.pageSize,
+            }),
+          );
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "googlemeet.attendance",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          const resolved = await resolveArtifactQueryFromParams(config, raw);
+          respond(
+            true,
+            await fetchGoogleMeetAttendance({
+              accessToken: resolved.token.accessToken,
+              meeting: resolved.meeting,
+              conferenceRecord: resolved.conferenceRecord,
+              pageSize: resolved.pageSize,
+            }),
+          );
         } catch (err) {
           sendError(respond, err);
         }
@@ -466,6 +555,28 @@ export default definePluginEntry({
                   space,
                   previewAcknowledged: config.preview.enrollmentAcknowledged,
                   tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+                }),
+              );
+            }
+            case "artifacts": {
+              const resolved = await resolveArtifactQueryFromParams(config, raw);
+              return json(
+                await fetchGoogleMeetArtifacts({
+                  accessToken: resolved.token.accessToken,
+                  meeting: resolved.meeting,
+                  conferenceRecord: resolved.conferenceRecord,
+                  pageSize: resolved.pageSize,
+                }),
+              );
+            }
+            case "attendance": {
+              const resolved = await resolveArtifactQueryFromParams(config, raw);
+              return json(
+                await fetchGoogleMeetAttendance({
+                  accessToken: resolved.token.accessToken,
+                  meeting: resolved.meeting,
+                  conferenceRecord: resolved.conferenceRecord,
+                  pageSize: resolved.pageSize,
                 }),
               );
             }

@@ -9,6 +9,8 @@ import { resolveGoogleMeetConfig, resolveGoogleMeetConfigWithEnv } from "./src/c
 import {
   buildGoogleMeetPreflightReport,
   createGoogleMeetSpace,
+  fetchGoogleMeetArtifacts,
+  fetchGoogleMeetAttendance,
   fetchGoogleMeetSpace,
   normalizeGoogleMeetSpaceName,
 } from "./src/meet.js";
@@ -62,6 +64,112 @@ function setup(
   options?: Parameters<typeof setupGoogleMeetPlugin>[2],
 ) {
   return setupGoogleMeetPlugin(plugin, config, options);
+}
+
+function jsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function requestUrl(input: RequestInfo | URL): URL {
+  if (typeof input === "string") {
+    return new URL(input);
+  }
+  if (input instanceof URL) {
+    return input;
+  }
+  return new URL(input.url);
+}
+
+function stubMeetArtifactsApi() {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = requestUrl(input);
+    if (url.pathname === "/v2/spaces/abc-defg-hij") {
+      return jsonResponse({
+        name: "spaces/abc-defg-hij",
+        meetingCode: "abc-defg-hij",
+        meetingUri: "https://meet.google.com/abc-defg-hij",
+      });
+    }
+    if (url.pathname === "/v2/conferenceRecords") {
+      return jsonResponse({
+        conferenceRecords: [
+          {
+            name: "conferenceRecords/rec-1",
+            space: "spaces/abc-defg-hij",
+            startTime: "2026-04-25T10:00:00Z",
+            endTime: "2026-04-25T10:30:00Z",
+          },
+        ],
+      });
+    }
+    if (url.pathname === "/v2/conferenceRecords/rec-1") {
+      return jsonResponse({
+        name: "conferenceRecords/rec-1",
+        space: "spaces/abc-defg-hij",
+        startTime: "2026-04-25T10:00:00Z",
+        endTime: "2026-04-25T10:30:00Z",
+      });
+    }
+    if (url.pathname === "/v2/conferenceRecords/rec-1/participants") {
+      return jsonResponse({
+        participants: [
+          {
+            name: "conferenceRecords/rec-1/participants/p1",
+            earliestStartTime: "2026-04-25T10:00:00Z",
+            latestEndTime: "2026-04-25T10:30:00Z",
+            signedinUser: { user: "users/alice", displayName: "Alice" },
+          },
+        ],
+      });
+    }
+    if (url.pathname === "/v2/conferenceRecords/rec-1/participants/p1/participantSessions") {
+      return jsonResponse({
+        participantSessions: [
+          {
+            name: "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+            startTime: "2026-04-25T10:00:00Z",
+            endTime: "2026-04-25T10:30:00Z",
+          },
+        ],
+      });
+    }
+    if (url.pathname === "/v2/conferenceRecords/rec-1/recordings") {
+      return jsonResponse({
+        recordings: [
+          {
+            name: "conferenceRecords/rec-1/recordings/r1",
+            driveDestination: { file: "drive/file-1" },
+          },
+        ],
+      });
+    }
+    if (url.pathname === "/v2/conferenceRecords/rec-1/transcripts") {
+      return jsonResponse({
+        transcripts: [
+          {
+            name: "conferenceRecords/rec-1/transcripts/t1",
+            docsDestination: { document: "docs/doc-1" },
+          },
+        ],
+      });
+    }
+    if (url.pathname === "/v2/conferenceRecords/rec-1/smartNotes") {
+      return jsonResponse({
+        smartNotes: [
+          {
+            name: "conferenceRecords/rec-1/smartNotes/sn1",
+            docsDestination: { document: "docs/doc-2" },
+          },
+        ],
+      });
+    }
+    return new Response(`unexpected ${url.pathname}`, { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 type TestBridgeProcess = {
@@ -218,6 +326,8 @@ describe("google-meet plugin", () => {
             "setup_status",
             "resolve_space",
             "preflight",
+            "artifacts",
+            "attendance",
             "recover_current_tab",
             "leave",
             "speak",
@@ -306,6 +416,82 @@ describe("google-meet plugin", () => {
         }),
         policy: { allowedHostnames: ["meet.googleapis.com"] },
         auditContext: "google-meet.spaces.create",
+      }),
+    );
+  });
+
+  it("lists Meet artifact metadata for conference records", async () => {
+    const fetchMock = stubMeetArtifactsApi();
+
+    await expect(
+      fetchGoogleMeetArtifacts({
+        accessToken: "token",
+        meeting: "abc-defg-hij",
+        pageSize: 2,
+      }),
+    ).resolves.toMatchObject({
+      input: "abc-defg-hij",
+      space: { name: "spaces/abc-defg-hij" },
+      conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
+      artifacts: [
+        {
+          conferenceRecord: { name: "conferenceRecords/rec-1" },
+          participants: [{ name: "conferenceRecords/rec-1/participants/p1" }],
+          recordings: [{ name: "conferenceRecords/rec-1/recordings/r1" }],
+          transcripts: [{ name: "conferenceRecords/rec-1/transcripts/t1" }],
+          smartNotes: [{ name: "conferenceRecords/rec-1/smartNotes/sn1" }],
+        },
+      ],
+    });
+
+    const listCall = fetchMock.mock.calls.find(([input]) => {
+      const url = requestUrl(input);
+      return url.pathname === "/v2/conferenceRecords";
+    });
+    if (!listCall) {
+      throw new Error("Expected conferenceRecords.list fetch call");
+    }
+    const listUrl = requestUrl(listCall[0]);
+    expect(listUrl.searchParams.get("filter")).toBe('space.name = "spaces/abc-defg-hij"');
+    expect(listUrl.searchParams.get("pageSize")).toBe("2");
+    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://meet.googleapis.com/v2/conferenceRecords/rec-1/smartNotes?pageSize=2",
+        auditContext: "google-meet.conferenceRecords.smartNotes.list",
+      }),
+    );
+  });
+
+  it("lists Meet attendance rows with participant sessions", async () => {
+    const fetchMock = stubMeetArtifactsApi();
+
+    await expect(
+      fetchGoogleMeetAttendance({
+        accessToken: "token",
+        conferenceRecord: "rec-1",
+        pageSize: 3,
+      }),
+    ).resolves.toMatchObject({
+      input: "rec-1",
+      conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
+      attendance: [
+        {
+          conferenceRecord: "conferenceRecords/rec-1",
+          participant: "conferenceRecords/rec-1/participants/p1",
+          displayName: "Alice",
+          user: "users/alice",
+          sessions: [
+            {
+              name: "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+            },
+          ],
+        },
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://meet.googleapis.com/v2/conferenceRecords/rec-1",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer token" }),
       }),
     );
   });
@@ -452,6 +638,27 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "setup_status" });
 
     expect(result.details.ok).toBe(true);
+  });
+
+  it("reports attendance through the tool", async () => {
+    stubMeetArtifactsApi();
+    const { tools } = setup();
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { attendance?: Array<{ displayName?: string }> } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "attendance",
+      accessToken: "token",
+      expiresAt: Date.now() + 120_000,
+      conferenceRecord: "rec-1",
+      pageSize: 3,
+    });
+
+    expect(result.details.attendance).toEqual([expect.objectContaining({ displayName: "Alice" })]);
   });
 
   it("fails setup status when the configured Chrome node is not connected", async () => {
@@ -625,6 +832,81 @@ describe("google-meet plugin", () => {
         ok: false,
         checks: [{ id: "twilio-voice-call-plugin", ok: false }],
       });
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI artifacts prints JSON output", async () => {
+    stubMeetArtifactsApi();
+    const program = new Command();
+    const stdout = captureStdout();
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () => ({}) as unknown as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(
+        [
+          "googlemeet",
+          "artifacts",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--json",
+        ],
+        { from: "user" },
+      );
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
+        artifacts: [
+          {
+            recordings: [{ name: "conferenceRecords/rec-1/recordings/r1" }],
+            transcripts: [{ name: "conferenceRecords/rec-1/transcripts/t1" }],
+            smartNotes: [{ name: "conferenceRecords/rec-1/smartNotes/sn1" }],
+          },
+        ],
+        tokenSource: "cached-access-token",
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI attendance prints participant sessions by default", async () => {
+    stubMeetArtifactsApi();
+    const program = new Command();
+    const stdout = captureStdout();
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () => ({}) as unknown as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(
+        [
+          "googlemeet",
+          "attendance",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain("attendance rows: 1");
+      expect(stdout.output()).toContain("participant: Alice");
+      expect(stdout.output()).toContain(
+        "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
+      );
     } finally {
       stdout.restore();
     }
