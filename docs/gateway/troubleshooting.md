@@ -55,9 +55,9 @@ Fix options:
 
 Related:
 
-- [/providers/anthropic](/providers/anthropic)
-- [/reference/token-use](/reference/token-use)
-- [/help/faq-first-run#why-am-i-seeing-http-429-ratelimiterror-from-anthropic](/help/faq-first-run#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
+- [Anthropic](/providers/anthropic)
+- [Token use and costs](/reference/token-use)
+- [Why am I seeing HTTP 429 from Anthropic?](/help/faq-first-run#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
 
 ## Local OpenAI-compatible backend passes direct probes but agent runs fail
 
@@ -110,9 +110,9 @@ Fix options:
 
 Related:
 
-- [/gateway/local-models](/gateway/local-models)
-- [/gateway/configuration](/gateway/configuration)
-- [/gateway/configuration-reference#openai-compatible-endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [Local models](/gateway/local-models)
+- [Configuration](/gateway/configuration)
+- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
 
 ## No replies
 
@@ -140,9 +140,9 @@ Common signatures:
 
 Related:
 
-- [/channels/troubleshooting](/channels/troubleshooting)
-- [/channels/pairing](/channels/pairing)
-- [/channels/groups](/channels/groups)
+- [Channel troubleshooting](/channels/troubleshooting)
+- [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
 
 ## Dashboard control ui connectivity
 
@@ -223,11 +223,11 @@ If `openclaw devices rotate` / `revoke` / `remove` is denied unexpectedly:
 
 Related:
 
-- [/web/control-ui](/web/control-ui)
-- [/gateway/configuration](/gateway/configuration) (gateway auth modes)
-- [/gateway/trusted-proxy-auth](/gateway/trusted-proxy-auth)
-- [/gateway/remote](/gateway/remote)
-- [/cli/devices](/cli/devices)
+- [Control UI](/web/control-ui)
+- [Configuration](/gateway/configuration) (gateway auth modes)
+- [Trusted proxy auth](/gateway/trusted-proxy-auth)
+- [Remote access](/gateway/remote)
+- [Devices](/cli/devices)
 
 ## Gateway service not running
 
@@ -258,9 +258,9 @@ Common signatures:
 
 Related:
 
-- [/gateway/background-process](/gateway/background-process)
-- [/gateway/configuration](/gateway/configuration)
-- [/gateway/doctor](/gateway/doctor)
+- [Background exec and process tool](/gateway/background-process)
+- [Configuration](/gateway/configuration)
+- [Doctor](/gateway/doctor)
 
 ## Gateway restored last-known-good config
 
@@ -287,6 +287,9 @@ What happened:
 - OpenClaw preserved the rejected payload as `.clobbered.*`.
 - The active config was restored from the last validated last-known-good copy.
 - The next main-agent turn is warned not to blindly rewrite the rejected config.
+- If all validation issues were under `plugins.entries.<id>...`, OpenClaw would
+  not restore the whole file. Plugin-local failures stay loud while unrelated
+  user settings remain in the active config.
 
 Inspect and repair:
 
@@ -315,10 +318,10 @@ Fix options:
 
 Related:
 
-- [/gateway/configuration#strict-validation](/gateway/configuration#strict-validation)
-- [/gateway/configuration#config-hot-reload](/gateway/configuration#config-hot-reload)
-- [/cli/config](/cli/config)
-- [/gateway/doctor](/gateway/doctor)
+- [Configuration: strict validation](/gateway/configuration#strict-validation)
+- [Configuration: hot reload](/gateway/configuration#config-hot-reload)
+- [Config](/cli/config)
+- [Doctor](/gateway/doctor)
 
 ## Gateway probe warnings
 
@@ -345,9 +348,9 @@ Common signatures:
 
 Related:
 
-- [/cli/gateway](/cli/gateway)
-- [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host)
-- [/gateway/remote](/gateway/remote)
+- [Gateway](/cli/gateway)
+- [Multiple gateways on the same host](/gateway#multiple-gateways-same-host)
+- [Remote access](/gateway/remote)
 
 ## Channel connected messages not flowing
 
@@ -375,10 +378,10 @@ Common signatures:
 
 Related:
 
-- [/channels/troubleshooting](/channels/troubleshooting)
-- [/channels/whatsapp](/channels/whatsapp)
-- [/channels/telegram](/channels/telegram)
-- [/channels/discord](/channels/discord)
+- [Channel troubleshooting](/channels/troubleshooting)
+- [WhatsApp](/channels/whatsapp)
+- [Telegram](/channels/telegram)
+- [Discord](/channels/discord)
 
 ## Cron and heartbeat delivery
 
@@ -410,9 +413,9 @@ Common signatures:
 
 Related:
 
-- [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
-- [/automation/cron-jobs](/automation/cron-jobs)
-- [/gateway/heartbeat](/gateway/heartbeat)
+- [Scheduled tasks: troubleshooting](/automation/cron-jobs#troubleshooting)
+- [Scheduled tasks](/automation/cron-jobs)
+- [Heartbeat](/gateway/heartbeat)
 
 ## Node paired tool fails
 
@@ -441,9 +444,9 @@ Common signatures:
 
 Related:
 
-- [/nodes/troubleshooting](/nodes/troubleshooting)
-- [/nodes/index](/nodes/index)
-- [/tools/exec-approvals](/tools/exec-approvals)
+- [Node troubleshooting](/nodes/troubleshooting)
+- [Nodes](/nodes/index)
+- [Exec approvals](/tools/exec-approvals)
 
 ## Browser tool fails
 
@@ -482,13 +485,15 @@ Common signatures:
 - `existing-session file uploads do not support element selectors; use ref/inputRef.` → Chrome MCP upload hooks need snapshot refs, not CSS selectors.
 - `existing-session file uploads currently support one file at a time.` → send one upload per call on Chrome MCP profiles.
 - `existing-session dialog handling does not support timeoutMs.` → dialog hooks on Chrome MCP profiles do not support timeout overrides.
+- `existing-session type does not support timeoutMs overrides.` → omit `timeoutMs` for `act:type` on `profile="user"` / Chrome MCP existing-session profiles, or use a managed/CDP browser profile when a custom timeout is required.
+- `existing-session evaluate does not support timeoutMs overrides.` → omit `timeoutMs` for `act:evaluate` on `profile="user"` / Chrome MCP existing-session profiles, or use a managed/CDP browser profile when a custom timeout is required.
 - `response body is not supported for existing-session profiles yet.` → `responsebody` still requires a managed browser or raw CDP profile.
 - stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release Playwright/CDP emulation state without restarting the whole gateway.
 
 Related:
 
-- [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
-- [/tools/browser](/tools/browser)
+- [Browser troubleshooting](/tools/browser-linux-troubleshooting)
+- [Browser (OpenClaw-managed)](/tools/browser)
 
 ## If you upgraded and something suddenly broke
 
@@ -561,9 +566,9 @@ openclaw gateway restart
 
 Related:
 
-- [/gateway/pairing](/gateway/pairing)
-- [/gateway/authentication](/gateway/authentication)
-- [/gateway/background-process](/gateway/background-process)
+- [Gateway-owned pairing](/gateway/pairing)
+- [Authentication](/gateway/authentication)
+- [Background exec and process tool](/gateway/background-process)
 
 ## Related
 

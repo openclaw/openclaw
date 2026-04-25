@@ -517,7 +517,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       envVar: "OPENCODE_API_KEY",
       promptMessage: "Enter OpenCode API key",
       profileIds: ["opencode-go:default", "opencode:default"],
-      defaultModel: "opencode-go/kimi-k2.5",
+      defaultModel: "opencode-go/kimi-k2.6",
       expectedProviders: ["opencode", "opencode-go"],
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       noteTitle: "OpenCode",
@@ -994,6 +994,35 @@ describe("applyAuthChoice", () => {
       expect(profile?.key).toBe(scenario.expectedKey);
       expect(profile?.keyRef).toBeUndefined();
     }
+  });
+
+  it("keeps an existing default model when configure re-applies provider auth", async () => {
+    await setupTempState();
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-openrouter-test");
+    const note = vi.fn();
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn();
+    const existingPrimary = "anthropic/claude-opus-4-6";
+    const prompter = createPrompter({ text, confirm, note });
+
+    const result = await applyAuthChoice({
+      authChoice: "openrouter-api-key",
+      config: { agents: { defaults: { model: { primary: existingPrimary } } } },
+      prompter,
+      runtime: createExitThrowingRuntime(),
+      setDefaultModel: true,
+      preserveExistingDefaultModel: true,
+    });
+
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      existingPrimary,
+    );
+    expect(result.config.agents?.defaults?.models?.["openrouter/auto"]).toEqual({});
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "Kept existing default model anthropic/claude-opus-4-6; openrouter/auto is available.",
+      "Model configured",
+    );
   });
 
   it("uses explicit env for plugin auth resolution instead of host env", async () => {

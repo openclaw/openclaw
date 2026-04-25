@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
 import {
   __testing,
@@ -69,6 +70,25 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator<{ url: string }>({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        url: { type: "string" },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    });
+
+    expect(validator({ url: "https://example.com" })).toEqual({
+      valid: true,
+      data: { url: "https://example.com" },
+      errorMessage: undefined,
+    });
+    expect(validator({ url: 42 }).valid).toBe(false);
+  });
+
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
     const catalogA = [
       { toolName: "alpha?", description: "question" },

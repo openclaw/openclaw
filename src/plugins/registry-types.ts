@@ -1,10 +1,13 @@
-import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareRuntime,
+} from "./agent-tool-result-middleware-types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginActivationSource } from "./config-state.js";
 import type {
@@ -27,6 +30,7 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   OpenClawPluginGatewayRuntimeScopeSurface,
+  OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteMatch,
@@ -147,19 +151,20 @@ export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 export type PluginMemoryEmbeddingProviderRegistration =
   PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
-export type PluginEmbeddedExtensionFactoryRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  rawFactory: ExtensionFactory;
-  factory: ExtensionFactory;
-  source: string;
-  rootDir?: string;
-};
 export type PluginCodexAppServerExtensionFactoryRegistration = {
   pluginId: string;
   pluginName?: string;
   rawFactory: CodexAppServerExtensionFactory;
   factory: CodexAppServerExtensionFactory;
+  source: string;
+  rootDir?: string;
+};
+export type PluginAgentToolResultMiddlewareRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  rawHandler: AgentToolResultMiddleware;
+  handler: AgentToolResultMiddleware;
+  runtimes: AgentToolResultMiddlewareRuntime[];
   source: string;
   rootDir?: string;
 };
@@ -183,6 +188,14 @@ export type PluginServiceRegistration = {
   pluginId: string;
   pluginName?: string;
   service: OpenClawPluginService;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginGatewayDiscoveryServiceRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  service: OpenClawGatewayDiscoveryService;
   source: string;
   rootDir?: string;
 };
@@ -271,6 +284,7 @@ export type PluginRecord = {
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
+  gatewayDiscoveryServiceIds: string[];
   commands: string[];
   httpRoutes: number;
   hookCount: number;
@@ -300,8 +314,8 @@ export type PluginRegistry = {
   musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
-  embeddedExtensionFactories: PluginEmbeddedExtensionFactoryRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
+  agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
@@ -312,6 +326,7 @@ export type PluginRegistry = {
   nodeHostCommands?: PluginNodeHostCommandRegistration[];
   securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
+  gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];

@@ -279,7 +279,15 @@ works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
       "metrics": true,
       "logs": true,
       "sampleRate": 0.2,
-      "flushIntervalMs": 60000
+      "flushIntervalMs": 60000,
+      "captureContent": {
+        "enabled": false,
+        "inputMessages": false,
+        "outputMessages": false,
+        "toolInputs": false,
+        "toolOutputs": false,
+        "systemPrompt": false
+      }
     }
   }
 }
@@ -293,6 +301,9 @@ Notes:
   counters/histograms (webhooks, queueing, session state, queue depth/wait).
 - Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
   include model usage spans plus webhook/message processing spans when enabled.
+- Raw model/tool content is not exported by default. Use
+  `diagnostics.otel.captureContent` only when your collector and retention policy
+  are approved for prompt, response, tool, or system prompt text.
 - Set `headers` when your collector requires auth.
 - Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
@@ -341,8 +352,17 @@ Queues + sessions:
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
-  - `openclaw.sessionKey`, `openclaw.sessionId`
   - `openclaw.tokens.*` (input/output/cache_read/cache_write/total)
+- `openclaw.run`
+  - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`,
+    `openclaw.model`, `openclaw.errorCategory`
+- `openclaw.model.call`
+  - `gen_ai.system`, `gen_ai.request.model`, `gen_ai.operation.name`,
+    `openclaw.provider`, `openclaw.model`, `openclaw.api`,
+    `openclaw.transport`
+- `openclaw.tool.execution`
+  - `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.errorCategory`,
+    `openclaw.tool.params.*`
 - `openclaw.webhook.processed`
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`
 - `openclaw.webhook.error`
@@ -350,11 +370,13 @@ Queues + sessions:
     `openclaw.error`
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`,
-    `openclaw.messageId`, `openclaw.sessionKey`, `openclaw.sessionId`,
-    `openclaw.reason`
+    `openclaw.messageId`, `openclaw.reason`
 - `openclaw.session.stuck`
-  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`,
-    `openclaw.sessionKey`, `openclaw.sessionId`
+  - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
+
+When content capture is explicitly enabled, model/tool spans can also include
+bounded, redacted `openclaw.content.*` attributes for the specific content
+classes you opted into.
 
 ### Sampling + flushing
 

@@ -25,7 +25,7 @@ import {
   OPENAI_CODEX_DEVICE_PAIRING_LABEL,
   OPENAI_CODEX_LOGIN_HINT,
   OPENAI_CODEX_LOGIN_LABEL,
-  OPENAI_WIZARD_GROUP,
+  OPENAI_CODEX_WIZARD_GROUP,
 } from "./auth-choice-copy.js";
 import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
@@ -426,7 +426,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           choiceLabel: OPENAI_CODEX_LOGIN_LABEL,
           choiceHint: OPENAI_CODEX_LOGIN_HINT,
           assistantPriority: OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY,
-          ...OPENAI_WIZARD_GROUP,
+          ...OPENAI_CODEX_WIZARD_GROUP,
         },
         run: async (ctx) => await runOpenAICodexOAuth(ctx),
       },
@@ -440,7 +440,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           choiceLabel: OPENAI_CODEX_DEVICE_PAIRING_LABEL,
           choiceHint: OPENAI_CODEX_DEVICE_PAIRING_HINT,
           assistantPriority: OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY,
-          ...OPENAI_WIZARD_GROUP,
+          ...OPENAI_CODEX_WIZARD_GROUP,
         },
         run: async (ctx) => {
           try {

@@ -117,11 +117,15 @@ describe("openai codex provider", () => {
 
     expect(oauth?.wizard).toMatchObject({
       choiceLabel: "OpenAI Codex Browser Login",
-      groupHint: "API key or Codex sign-in",
+      groupId: "openai-codex",
+      groupLabel: "OpenAI Codex",
+      groupHint: "ChatGPT/Codex sign-in",
     });
     expect(deviceCode?.wizard).toMatchObject({
       choiceLabel: "OpenAI Codex Device Pairing",
-      groupHint: "API key or Codex sign-in",
+      groupId: "openai-codex",
+      groupLabel: "OpenAI Codex",
+      groupHint: "ChatGPT/Codex sign-in",
     });
   });
 
@@ -224,7 +228,7 @@ describe("openai codex provider", () => {
           },
         },
       ],
-      defaultModel: "openai/gpt-5.5",
+      defaultModel: "openai-codex/gpt-5.5",
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
     expect(result?.profiles[0]?.credential).not.toHaveProperty("accountId");

@@ -7,8 +7,10 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
@@ -52,7 +54,6 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   retireSessionMcpRuntime,
@@ -74,6 +75,9 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
+import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -413,15 +417,36 @@ export async function runEmbeddedPiAgent(
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       if (lockedProfileId) {
-        const lockedProfile = authStore.profiles[lockedProfileId];
-        if (
-          !lockedProfile ||
-          normalizeProviderId(lockedProfile.provider) !== normalizeProviderId(provider)
-        ) {
-          lockedProfileId = undefined;
+        if (pluginHarnessOwnsTransport) {
+          const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+            provider,
+            authProfileProvider: lockedProfileId.split(":", 1)[0],
+            sessionAuthProfileId: lockedProfileId,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            harnessId: agentHarness.id,
+          });
+          if (!runtimeAuthPlan.forwardedAuthProfileId) {
+            lockedProfileId = undefined;
+          }
+        } else {
+          const lockedProfile = authStore.profiles[lockedProfileId];
+          const lockedProfileProvider = lockedProfile
+            ? resolveProviderIdForAuth(lockedProfile.provider, {
+                config: params.config,
+                workspaceDir: resolvedWorkspace,
+              })
+            : undefined;
+          const runProvider = resolveProviderIdForAuth(provider, {
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+          });
+          if (!lockedProfile || !lockedProfileProvider || lockedProfileProvider !== runProvider) {
+            lockedProfileId = undefined;
+          }
         }
       }
-      if (lockedProfileId) {
+      if (lockedProfileId && !pluginHarnessOwnsTransport) {
         const eligibility = resolveAuthProfileEligibility({
           cfg: params.config,
           store: authStore,
@@ -440,10 +465,35 @@ export async function runEmbeddedPiAgent(
             provider,
             preferredProfile: preferredProfileId,
           });
+      const providerPreferredProfileId = lockedProfileId
+        ? undefined
+        : resolveProviderAuthProfileId({
+            provider,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            context: {
+              config: params.config,
+              agentDir,
+              workspaceDir: resolvedWorkspace,
+              provider,
+              modelId,
+              preferredProfileId,
+              lockedProfileId,
+              profileOrder,
+              authStore,
+            },
+          });
+      const providerOrderedProfiles =
+        providerPreferredProfileId && profileOrder.includes(providerPreferredProfileId)
+          ? [
+              providerPreferredProfileId,
+              ...profileOrder.filter((profileId) => profileId !== providerPreferredProfileId),
+            ]
+          : profileOrder;
       const profileCandidates = lockedProfileId
         ? [lockedProfileId]
-        : profileOrder.length > 0
-          ? profileOrder
+        : providerOrderedProfiles.length > 0
+          ? providerOrderedProfiles
           : [undefined];
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
@@ -513,6 +563,8 @@ export async function runEmbeddedPiAgent(
       // vendor-token refresh attempts before the plugin gets control.
       if (!pluginHarnessOwnsTransport) {
         await initializeAuthProfile();
+      } else if (lockedProfileId) {
+        lastProfileId = lockedProfileId;
       }
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
@@ -725,6 +777,7 @@ export async function runEmbeddedPiAgent(
                 sessionId: params.sessionId,
                 provider,
                 model: model.id,
+                contextTokens: ctxInfo.tokens,
                 usageAccumulator,
                 lastRunPromptUsage,
                 lastTurnTotal,
@@ -757,6 +810,26 @@ export async function runEmbeddedPiAgent(
           if (!runtimeAuthState && apiKeyInfo) {
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
           }
+          const runtimePlan = buildAgentRuntimePlan({
+            provider,
+            modelId,
+            model: effectiveModel,
+            modelApi: effectiveModel.api,
+            harnessId: agentHarness.id,
+            harnessRuntime: agentHarness.id,
+            allowHarnessAuthProfileForwarding: pluginHarnessOwnsTransport,
+            authProfileProvider: lastProfileId?.split(":", 1)[0],
+            sessionAuthProfileId: lastProfileId,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            agentDir,
+            agentId: workspaceResolution.agentId,
+            thinkingLevel: thinkLevel,
+            extraParamsOverride: {
+              ...params.streamParams,
+              fastMode: params.fastMode,
+            },
+          });
 
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
@@ -794,6 +867,7 @@ export async function runEmbeddedPiAgent(
             contextTokenBudget: ctxInfo.tokens,
             skillsSnapshot: params.skillsSnapshot,
             prompt,
+            transcriptPrompt: params.transcriptPrompt,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
@@ -804,6 +878,7 @@ export async function runEmbeddedPiAgent(
             // attempt too. Otherwise plugin-owned transports can skip PI auth
             // bootstrap but drift back to PI when the attempt is created.
             agentHarnessId: agentHarness.id,
+            runtimePlan,
             model: applyAuthHeaderOverride(
               applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
               // When runtime auth exchange produced a different credential
@@ -1297,6 +1372,7 @@ export async function runEmbeddedPiAgent(
                   sessionId: sessionIdUsed,
                   provider,
                   model: model.id,
+                  contextTokens: ctxInfo.tokens,
                   usageAccumulator,
                   lastRunPromptUsage,
                   lastAssistant: sessionLastAssistant,
@@ -1352,6 +1428,7 @@ export async function runEmbeddedPiAgent(
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
+                    contextTokens: ctxInfo.tokens,
                     usageAccumulator,
                     lastRunPromptUsage,
                     lastAssistant: sessionLastAssistant,
@@ -1391,6 +1468,7 @@ export async function runEmbeddedPiAgent(
                     sessionId: sessionIdUsed,
                     provider,
                     model: model.id,
+                    contextTokens: ctxInfo.tokens,
                     usageAccumulator,
                     lastRunPromptUsage,
                     lastAssistant: sessionLastAssistant,
@@ -1702,6 +1780,7 @@ export async function runEmbeddedPiAgent(
             sessionId: sessionIdUsed,
             provider: sessionLastAssistant?.provider ?? provider,
             model: sessionLastAssistant?.model ?? model.id,
+            contextTokens: ctxInfo.tokens,
             agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
@@ -1733,6 +1812,10 @@ export async function runEmbeddedPiAgent(
             payloads,
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
+          });
+          const attemptToolSummary = buildTraceToolSummary({
+            toolMetas: attempt.toolMetas,
+            hadFailure: Boolean(attempt.lastToolError),
           });
 
           // Timeout aborts can leave the run without any assistant payloads.
@@ -1773,6 +1856,8 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1933,6 +2018,8 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1980,6 +2067,8 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -2089,6 +2178,8 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -2134,6 +2225,9 @@ export async function runEmbeddedPiAgent(
           });
           return {
             payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
+            ...(attempt.diagnosticTrace
+              ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
+              : {}),
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
@@ -2144,6 +2238,7 @@ export async function runEmbeddedPiAgent(
               finalAssistantRawText,
               replayInvalid,
               livenessState,
+              agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.
@@ -2184,10 +2279,7 @@ export async function runEmbeddedPiAgent(
                 ...(params.verboseLevel ? { verbose: params.verboseLevel } : {}),
                 ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
               },
-              toolSummary: buildTraceToolSummary({
-                toolMetas: attempt.toolMetas,
-                hadFailure: Boolean(attempt.lastToolError),
-              }),
+              toolSummary: attemptToolSummary,
               completion: {
                 ...(stopReason ? { stopReason } : {}),
                 ...(stopReason ? { finishReason: stopReason } : {}),

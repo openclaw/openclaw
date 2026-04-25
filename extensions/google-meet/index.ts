@@ -10,10 +10,16 @@ import {
   type GoogleMeetMode,
   type GoogleMeetTransport,
 } from "./src/config.js";
+import {
+  createAndJoinMeetFromParams,
+  createMeetFromParams,
+  shouldJoinCreatedMeet,
+} from "./src/create.js";
 import { buildGoogleMeetPreflightReport, fetchGoogleMeetSpace } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
+import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
 
 const googleMeetConfigSchema = {
   parse(value: unknown) {
@@ -35,7 +41,7 @@ const googleMeetConfigSchema = {
     },
     defaultMode: {
       label: "Default Mode",
-      help: "Realtime voice is the default.",
+      help: "Realtime starts the duplex voice model loop. Transcribe joins/observes without the realtime talk-back bridge.",
     },
     "chrome.audioBackend": {
       label: "Chrome Audio Backend",
@@ -43,6 +49,23 @@ const googleMeetConfigSchema = {
     },
     "chrome.launch": { label: "Launch Chrome" },
     "chrome.browserProfile": { label: "Chrome Profile", advanced: true },
+    "chrome.guestName": {
+      label: "Guest Name",
+      help: "Used when Chrome lands on the signed-out Meet guest-name screen.",
+    },
+    "chrome.reuseExistingTab": {
+      label: "Reuse Existing Meet Tab",
+      help: "Avoids opening duplicate tabs for the same Meet URL.",
+    },
+    "chrome.autoJoin": {
+      label: "Auto Join Guest Screen",
+      help: "Best-effort guest-name fill and Join Now click through OpenClaw browser automation.",
+    },
+    "chrome.waitForInCallMs": {
+      label: "Wait For In-Call (ms)",
+      help: "Waits for Chrome to report that the Meet tab is in-call before the realtime intro speaks.",
+      advanced: true,
+    },
     "chrome.audioInputCommand": {
       label: "Audio Input Command",
       help: "Command that writes 8 kHz G.711 mu-law meeting audio to stdout.",
@@ -88,6 +111,10 @@ const googleMeetConfigSchema = {
     },
     "realtime.model": { label: "Realtime Model", advanced: true },
     "realtime.instructions": { label: "Realtime Instructions", advanced: true },
+    "realtime.introMessage": {
+      label: "Realtime Intro Message",
+      help: "Spoken once when the realtime bridge is ready. Set to an empty string to join silently.",
+    },
     "realtime.toolPolicy": {
       label: "Realtime Tool Policy",
       help: "Safe read-only tools are available by default; owner requests can unlock broader tools.",
@@ -111,18 +138,42 @@ const googleMeetConfigSchema = {
 
 const GoogleMeetToolSchema = Type.Object({
   action: Type.String({
-    enum: ["join", "status", "setup_status", "resolve_space", "preflight", "leave"],
-    description: "Google Meet action to run",
+    enum: [
+      "join",
+      "create",
+      "status",
+      "setup_status",
+      "resolve_space",
+      "preflight",
+      "recover_current_tab",
+      "leave",
+      "speak",
+      "test_speech",
+    ],
+    description:
+      "Google Meet action to run. create creates and joins by default; pass join=false to only mint a URL. After a timeout or unclear browser state, call recover_current_tab before retrying join.",
   }),
+  join: Type.Optional(
+    Type.Boolean({
+      description: "For action=create, set false to create the URL without joining.",
+    }),
+  ),
   url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
   transport: Type.Optional(
     Type.String({ enum: ["chrome", "chrome-node", "twilio"], description: "Join transport" }),
   ),
-  mode: Type.Optional(Type.String({ enum: ["realtime", "transcribe"], description: "Join mode" })),
+  mode: Type.Optional(
+    Type.String({
+      enum: ["realtime", "transcribe"],
+      description:
+        "Join mode. realtime starts live listen/talk-back through the realtime voice model; transcribe joins without the realtime talk-back bridge.",
+    }),
+  ),
   dialInNumber: Type.Optional(Type.String({ description: "Meet dial-in number for Twilio" })),
   pin: Type.Optional(Type.String({ description: "Meet phone PIN for Twilio" })),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
+  message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
   accessToken: Type.Optional(Type.String({ description: "Access token override" })),
   refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
@@ -200,8 +251,11 @@ export default definePluginEntry({
       return runtime;
     };
 
+    const formatGatewayError = (err: unknown) =>
+      isGoogleMeetBrowserManualActionError(err) ? err.payload : { error: formatErrorMessage(err) };
+
     const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
-      respond(false, { error: formatErrorMessage(err) });
+      respond(false, formatGatewayError(err));
     };
 
     api.registerGatewayMethod(
@@ -216,8 +270,31 @@ export default definePluginEntry({
             dialInNumber: normalizeOptionalString(params?.dialInNumber),
             pin: normalizeOptionalString(params?.pin),
             dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
+            message: normalizeOptionalString(params?.message),
           });
           respond(true, result);
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "googlemeet.create",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          respond(
+            true,
+            shouldJoinCreatedMeet(raw)
+              ? await createAndJoinMeetFromParams({
+                  config,
+                  runtime: api.runtime,
+                  raw,
+                  ensureRuntime,
+                })
+              : await createMeetFromParams({ config, runtime: api.runtime, raw }),
+          );
         } catch (err) {
           sendError(respond, err);
         }
@@ -237,11 +314,23 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.recoverCurrentTab",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const rt = await ensureRuntime();
+          respond(true, await rt.recoverCurrentTab({ url: normalizeOptionalString(params?.url) }));
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.setup",
       async ({ respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, rt.setupStatus());
+          respond(true, await rt.setupStatus());
         } catch (err) {
           sendError(respond, err);
         }
@@ -265,10 +354,49 @@ export default definePluginEntry({
       },
     );
 
+    api.registerGatewayMethod(
+      "googlemeet.speak",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const sessionId = normalizeOptionalString(params?.sessionId);
+          if (!sessionId) {
+            respond(false, { error: "sessionId required" });
+            return;
+          }
+          const rt = await ensureRuntime();
+          respond(true, rt.speak(sessionId, normalizeOptionalString(params?.message)));
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "googlemeet.testSpeech",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const rt = await ensureRuntime();
+          const result = await rt.testSpeech({
+            url: resolveMeetingInput(config, params?.url),
+            transport: normalizeTransport(params?.transport),
+            mode: normalizeMode(params?.mode),
+            dialInNumber: normalizeOptionalString(params?.dialInNumber),
+            pin: normalizeOptionalString(params?.pin),
+            dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
+            message: normalizeOptionalString(params?.message),
+          });
+          respond(true, result);
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
     api.registerTool({
       name: "google_meet",
       label: "Google Meet",
-      description: "Join and track Google Meet sessions through Chrome or Twilio.",
+      description:
+        "Join and track Google Meet sessions through Chrome or Twilio. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);
@@ -284,6 +412,33 @@ export default definePluginEntry({
                   dialInNumber: normalizeOptionalString(raw.dialInNumber),
                   pin: normalizeOptionalString(raw.pin),
                   dtmfSequence: normalizeOptionalString(raw.dtmfSequence),
+                  message: normalizeOptionalString(raw.message),
+                }),
+              );
+            }
+            case "create": {
+              return json(
+                shouldJoinCreatedMeet(raw)
+                  ? await createAndJoinMeetFromParams({
+                      config,
+                      runtime: api.runtime,
+                      raw,
+                      ensureRuntime,
+                    })
+                  : await createMeetFromParams({ config, runtime: api.runtime, raw }),
+              );
+            }
+            case "test_speech": {
+              const rt = await ensureRuntime();
+              return json(
+                await rt.testSpeech({
+                  url: resolveMeetingInput(config, raw.url),
+                  transport: normalizeTransport(raw.transport),
+                  mode: normalizeMode(raw.mode),
+                  dialInNumber: normalizeOptionalString(raw.dialInNumber),
+                  pin: normalizeOptionalString(raw.pin),
+                  dtmfSequence: normalizeOptionalString(raw.dtmfSequence),
+                  message: normalizeOptionalString(raw.message),
                 }),
               );
             }
@@ -291,9 +446,13 @@ export default definePluginEntry({
               const rt = await ensureRuntime();
               return json(rt.status(normalizeOptionalString(raw.sessionId)));
             }
+            case "recover_current_tab": {
+              const rt = await ensureRuntime();
+              return json(await rt.recoverCurrentTab({ url: normalizeOptionalString(raw.url) }));
+            }
             case "setup_status": {
               const rt = await ensureRuntime();
-              return json(rt.setupStatus());
+              return json(await rt.setupStatus());
             }
             case "resolve_space": {
               const { token: _token, ...result } = await resolveSpaceFromParams(config, raw);
@@ -318,11 +477,19 @@ export default definePluginEntry({
               }
               return json(await rt.leave(sessionId));
             }
+            case "speak": {
+              const rt = await ensureRuntime();
+              const sessionId = normalizeOptionalString(raw.sessionId);
+              if (!sessionId) {
+                throw new Error("sessionId required");
+              }
+              return json(rt.speak(sessionId, normalizeOptionalString(raw.message)));
+            }
             default:
               throw new Error("unknown google_meet action");
           }
         } catch (err) {
-          return json({ error: formatErrorMessage(err) });
+          return json(formatGatewayError(err));
         }
       },
     });

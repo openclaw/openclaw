@@ -137,6 +137,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toBeNull();
   });
 
+  it("routes precise plugin contract helpers without broad-running every shard", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/helpers/plugins/tts-contract-suites.ts",
+      ]),
+    ).toEqual([
+      "src/plugins/contracts/core-extension-facade-boundary.test.ts",
+      "src/plugins/contracts/tts.contract.test.ts",
+    ]);
+  });
+
   it("keeps the broad changed run for unknown root surfaces", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
@@ -259,6 +270,22 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes changed ui support files to the ui lane without dead include globs", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/src/styles/base.css",
+      "ui/src/test-helpers/lit-warnings.setup.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes auto-reply route source files to route regression tests", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -274,7 +301,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
     });
   });
-
   it("routes changed utils and shared files to their light scoped lanes", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/shared/string-normalization.ts",

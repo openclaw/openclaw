@@ -77,7 +77,9 @@ Options:
 For a node connecting to a non-loopback `ws://` Gateway on a trusted private
 network, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`. Without it, node startup
 fails closed and asks you to use `wss://`, an SSH tunnel, or Tailscale.
-`openclaw node install` persists this opt-in into the supervised node service.
+This is a process-environment opt-in, not an `openclaw.json` config key.
+`openclaw node install` persists it into the supervised node service when it is
+present in the install command environment.
 
 ## Service (background)
 
@@ -120,6 +122,25 @@ Approve it via:
 openclaw devices list
 openclaw devices approve <requestId>
 ```
+
+On tightly controlled node networks, the Gateway operator can explicitly opt in
+to auto-approving first-time node pairing from trusted CIDRs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+This is disabled by default. It only applies to fresh `role: node` pairing with
+no requested scopes. Operator/browser clients, Control UI, WebChat, and role,
+scope, metadata, or public-key upgrades still require manual approval.
 
 If the node retries pairing with changed auth details (role/scopes/public key),
 the previous pending request is superseded and a new `requestId` is created.

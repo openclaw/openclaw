@@ -16,6 +16,10 @@ type AllModelRowSources = {
   useProviderCatalogFastPath: boolean;
 };
 
+type AppendAllModelRowSourcesResult = {
+  requiresRegistryFallback: boolean;
+};
+
 export function modelRowSourcesRequireRegistry(params: {
   all?: boolean;
   providerFilter?: string;
@@ -30,7 +34,9 @@ export function modelRowSourcesRequireRegistry(params: {
   return true;
 }
 
-export async function appendAllModelRowSources(params: AllModelRowSources): Promise<void> {
+export async function appendAllModelRowSources(
+  params: AllModelRowSources,
+): Promise<AppendAllModelRowSourcesResult> {
   if (params.context.filter.provider && params.useProviderCatalogFastPath) {
     let seenKeys = new Set<string>();
     appendConfiguredProviderRows({
@@ -45,13 +51,16 @@ export async function appendAllModelRowSources(params: AllModelRowSources): Prom
       staticOnly: true,
     });
     if (catalogRows === 0) {
-      seenKeys = appendDiscoveredRows({
+      if (!params.modelRegistry) {
+        return { requiresRegistryFallback: true };
+      }
+      appendDiscoveredRows({
         rows: params.rows,
-        models: params.modelRegistry?.getAll() ?? [],
+        models: params.modelRegistry.getAll(),
         context: params.context,
       });
     }
-    return;
+    return { requiresRegistryFallback: false };
   }
 
   const seenKeys = appendDiscoveredRows({
@@ -73,7 +82,7 @@ export async function appendAllModelRowSources(params: AllModelRowSources): Prom
       context: params.context,
       seenKeys,
     });
-    return;
+    return { requiresRegistryFallback: false };
   }
 
   await appendProviderCatalogRows({
@@ -81,6 +90,7 @@ export async function appendAllModelRowSources(params: AllModelRowSources): Prom
     context: params.context,
     seenKeys,
   });
+  return { requiresRegistryFallback: false };
 }
 
 export function appendConfiguredModelRowSources(params: {

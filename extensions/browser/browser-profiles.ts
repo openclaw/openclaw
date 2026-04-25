@@ -10,4 +10,5 @@ export {
   resolveProfile,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
+  type ResolvedBrowserTabCleanupConfig,
 } from "./src/browser/config.js";

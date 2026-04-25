@@ -55,7 +55,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["gateway", "status"],
     exact: true,
-    policy: { routeConfigGuard: "always" },
+    policy: {
+      routeConfigGuard: "always",
+      loadPlugins: "never",
+    },
     route: { id: "gateway-status" },
   },
   {

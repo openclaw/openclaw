@@ -167,6 +167,30 @@ describe("loadProviderCatalogModelsForList", () => {
     );
   });
 
+  it("returns an empty catalog when a static provider catalog throws", async () => {
+    providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValueOnce([
+      {
+        id: "moonshot",
+        pluginId: "moonshot",
+        label: "Moonshot",
+        auth: [],
+        staticCatalog: {
+          run: async () => {
+            throw new Error("catalog offline");
+          },
+        },
+      },
+    ]);
+
+    await expect(
+      loadProviderCatalogModelsForList({
+        ...baseParams,
+        providerFilter: "moonshot",
+        staticOnly: true,
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("only skips registry for providers with actual static catalogs", async () => {
     providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValue([catalogOnlyProvider]);
 

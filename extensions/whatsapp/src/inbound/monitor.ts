@@ -573,6 +573,7 @@ export async function attachWebInboxToSocket(
       conversationId: inbound.from,
       to: self.e164 ?? "me",
       accountId: inbound.access.resolvedAccountId,
+      accessControlPassed: true,
       body: enriched.body,
       pushName: senderName,
       timestamp,

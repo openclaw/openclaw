@@ -49,9 +49,11 @@ native OpenClaw plugin registers against one or more capability types:
 | Web fetch              | `api.registerWebFetchProvider(...)`              | `firecrawl`                          |
 | Web search             | `api.registerWebSearchProvider(...)`             | `google`                             |
 | Channel / messaging    | `api.registerChannel(...)`                       | `msteams`, `matrix`                  |
+| Gateway discovery      | `api.registerGatewayDiscoveryService(...)`       | `bonjour`                            |
 
-A plugin that registers zero capabilities but provides hooks, tools, or
-services is a **legacy hook-only** plugin. That pattern is still fully supported.
+A plugin that registers zero capabilities but provides hooks, tools, discovery
+services, or background services is a **legacy hook-only** plugin. That pattern
+is still fully supported.
 
 ### External compatibility stance
 
@@ -146,9 +148,12 @@ reserve root command names before parsing.
 
 The important design boundary:
 
-- discovery + config validation should work from **manifest/schema metadata**
+- manifest/config validation should work from **manifest/schema metadata**
   without executing plugin code
+- native capability discovery may load trusted plugin entry code to build a
+  non-activating registry snapshot
 - native runtime behavior comes from the plugin module's `register(api)` path
+  with `api.registrationMode === "full"`
 
 That split lets OpenClaw validate config, explain missing/disabled plugins, and
 build UI/schema hints before the full runtime is active.
