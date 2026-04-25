@@ -513,6 +513,39 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     Language and prompt hints are forwarded to OpenAI when supplied by the
     shared audio media config or per-call transcription request.
 
+    For self-hosted OpenAI-compatible transcription endpoints (for example a
+    local Whisper server), set `baseUrl` on the audio model entry. If the
+    endpoint is on a private address, explicitly opt in with
+    `tools.media.audio.request.allowPrivateNetwork`. Request-level auth can be
+    used when the local endpoint expects a dummy bearer or proxy token instead
+    of a real OpenAI API key:
+
+    ```json5
+    {
+      tools: {
+        media: {
+          audio: {
+            request: {
+              allowPrivateNetwork: true,
+              auth: {
+                mode: "authorization-bearer",
+                token: "local-token",
+              },
+            },
+            models: [
+              {
+                type: "provider",
+                provider: "openai",
+                model: "whisper-1",
+                baseUrl: "http://127.0.0.1:8000/v1",
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
   </Accordion>
 
   <Accordion title="Realtime transcription">

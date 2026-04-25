@@ -153,7 +153,9 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Mistral setup details: [Mistral](/providers/mistral).
 - SenseAudio picks up `SENSEAUDIO_API_KEY` when `provider: "senseaudio"` is used.
 - SenseAudio setup details: [SenseAudio](/providers/senseaudio).
-- Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
+- Audio providers can override `baseUrl`, `headers`, `providerOptions`, and low-level `request` settings via `tools.media.audio`.
+- For trusted self-hosted/private STT endpoints, set `tools.media.audio.request.allowPrivateNetwork: true` explicitly. This keeps private-network access opt-in while allowing OpenAI-compatible local Whisper servers on RFC1918/tailnet addresses.
+- `tools.media.audio.request.auth` can provide request-level bearer/header auth for proxy-backed or local OpenAI-compatible STT endpoints when provider-default API-key auth is not appropriate.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Tiny/empty audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.

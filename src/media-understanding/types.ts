@@ -84,7 +84,7 @@ export type MediaUnderstandingProviderRequestTransportOverrides = {
   auth?: MediaUnderstandingProviderRequestAuthOverride;
   proxy?: MediaUnderstandingProviderRequestProxyOverride;
   tls?: MediaUnderstandingProviderRequestTlsOverride;
-  /** Runtime-only flag from trusted model-provider config; media config rejects it. */
+  /** Trusted private-network opt-in from model-provider or audio request config. */
   allowPrivateNetwork?: boolean;
 };
 

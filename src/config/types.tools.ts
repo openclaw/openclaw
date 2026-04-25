@@ -3,7 +3,10 @@ import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
-import type { ConfiguredProviderRequest } from "./types.provider-request.js";
+import type {
+  ConfiguredModelProviderRequest,
+  ConfiguredProviderRequest,
+} from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -33,7 +36,9 @@ export type MediaUnderstandingAttachmentsConfig = {
   prefer?: "first" | "last" | "path" | "url";
 };
 
-type MediaProviderRequestConfig = {
+type MediaProviderRequestConfig<
+  RequestConfig extends ConfiguredProviderRequest = ConfiguredProviderRequest,
+> = {
   /** Optional provider-specific query params (merged into requests). */
   providerOptions?: Record<string, Record<string, string | number | boolean>>;
   /** @deprecated Use providerOptions.deepgram instead. */
@@ -47,10 +52,12 @@ type MediaProviderRequestConfig = {
   /** Optional headers merged into provider requests. */
   headers?: Record<string, string>;
   /** Optional request transport overrides for provider HTTP calls. */
-  request?: ConfiguredProviderRequest;
+  request?: RequestConfig;
 };
 
-export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
+export type MediaUnderstandingModelConfig<
+  RequestConfig extends ConfiguredProviderRequest = ConfiguredProviderRequest,
+> = MediaProviderRequestConfig<RequestConfig> & {
   /** provider API id (e.g. openai, google). */
   provider?: string;
   /** Model id for provider-based understanding. */
@@ -79,7 +86,13 @@ export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
   preferredProfile?: string;
 };
 
-export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
+export type AudioMediaUnderstandingModelConfig = Omit<MediaUnderstandingModelConfig, "request"> & {
+  request?: ConfiguredModelProviderRequest;
+};
+
+export type MediaUnderstandingConfig<
+  RequestConfig extends ConfiguredProviderRequest = ConfiguredProviderRequest,
+> = MediaProviderRequestConfig<RequestConfig> & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
   /** Optional scope gating for understanding. */
@@ -97,7 +110,7 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
-  models?: MediaUnderstandingModelConfig[];
+  models?: MediaUnderstandingModelConfig<RequestConfig>[];
   /**
    * Echo the audio transcript back to the originating chat before agent processing.
    * Lets users verify what was heard. Default: false.
@@ -108,6 +121,11 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
    * Default: '📝 "{transcript}"'
    */
   echoFormat?: string;
+};
+
+export type AudioMediaUnderstandingConfig = Omit<MediaUnderstandingConfig, "request" | "models"> & {
+  request?: ConfiguredModelProviderRequest;
+  models?: AudioMediaUnderstandingModelConfig[];
 };
 
 export type LinkModelConfig = {
@@ -147,7 +165,7 @@ export type MediaToolsConfig = {
     directSend?: boolean;
   };
   image?: MediaUnderstandingConfig;
-  audio?: MediaUnderstandingConfig;
+  audio?: AudioMediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;
 };
 
