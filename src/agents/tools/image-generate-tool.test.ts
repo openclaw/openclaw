@@ -702,6 +702,34 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("passes web_fetch SSRF policy to remote reference images", async () => {
+    stubImageGenerationProviders();
+    stubEditedImageFlow({ width: 1024, height: 1024 });
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: { imageGenerationModel: { primary: "google/gemini-3-pro-image-preview" } },
+          },
+          tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await tool.execute("call-edit-rfc2544", {
+      prompt: "Use this reference.",
+      image: "http://198.18.0.153/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      "http://198.18.0.153/reference.png",
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
+  });
+
   it("ignores non-finite mediaMaxMb when loading reference images", async () => {
     stubImageGenerationProviders();
     stubEditedImageFlow({ width: 3200, height: 1800 });

@@ -307,6 +307,7 @@ export function createImageTool(options?: {
   if (!imageModelConfig) {
     return null;
   }
+  const remoteMediaSsrfPolicy = options?.config?.tools?.web?.fetch?.ssrfPolicy;
 
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
@@ -491,6 +492,7 @@ export function createImageTool(options?: {
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 localRoots: mediaLocalRoots,
+                ssrfPolicy: remoteMediaSsrfPolicy,
               });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);
