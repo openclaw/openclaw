@@ -150,9 +150,11 @@ This gives high user value with limited architecture risk.
 
 ## Frontend skill update
 
-Use this section to update a frontend-focused `SKILL.md`. Keep the frontmatter
-that already exists in the target skill, then add or replace the body guidance
-with the following content.
+Use this section to update the frontend-focused `SKILL.md` supplied with the
+modernization task. If adopting this guidance as a repo-local OpenClaw skill,
+create `.agents/skills/openclaw-frontend/SKILL.md` first, keep the frontmatter
+that belongs in that target skill, then add or replace the body guidance with
+the following content.
 
 ```markdown
 # Frontend Delivery Standards
