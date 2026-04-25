@@ -1,6 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
@@ -14,7 +12,6 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   DEFAULT_MINIMAX_TTS_BASE_URL,
   MINIMAX_TTS_MODELS,
@@ -209,41 +206,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   }
 }
 
-async function transcodeMp3ToOpus(audioBuffer: Buffer, timeoutMs: number | undefined) {
-  const tempRoot = resolvePreferredOpenClawTmpDir();
-  await mkdir(tempRoot, { recursive: true, mode: 0o700 });
-  const tempDir = await mkdtemp(path.join(tempRoot, "tts-minimax-"));
-  try {
-    const inputPath = path.join(tempDir, "input.mp3");
-    const outputPath = path.join(tempDir, "voice.opus");
-    await writeFile(inputPath, audioBuffer, { mode: 0o600 });
-    await runFfmpeg(
-      [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        inputPath,
-        "-vn",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "64k",
-        "-ar",
-        "48000",
-        "-ac",
-        "1",
-        outputPath,
-      ],
-      { timeoutMs },
-    );
-    return await readFile(outputPath);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-}
-
 export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "minimax",
@@ -326,7 +288,12 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs,
       });
       if (req.target === "voice-note") {
-        const opusBuffer = await transcodeMp3ToOpus(audioBuffer, req.timeoutMs);
+        const opusBuffer = await transcodeAudioBufferToOpus({
+          audioBuffer,
+          inputExtension: "mp3",
+          tempPrefix: "tts-minimax-",
+          timeoutMs: req.timeoutMs,
+        });
         return {
           audioBuffer: opusBuffer,
           outputFormat: "opus",

@@ -1,3 +1,4 @@
+import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
@@ -394,6 +395,19 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         speakerName: overrides.speakerName ?? config.speakerName,
         timeoutMs: req.timeoutMs,
       });
+      if (req.target === "voice-note") {
+        return {
+          audioBuffer: await transcodeAudioBufferToOpus({
+            audioBuffer: wrapPcm16MonoToWav(pcm),
+            inputExtension: "wav",
+            tempPrefix: "tts-google-",
+            timeoutMs: req.timeoutMs,
+          }),
+          outputFormat: "opus",
+          fileExtension: ".opus",
+          voiceCompatible: true,
+        };
+      }
       return {
         audioBuffer: wrapPcm16MonoToWav(pcm),
         outputFormat: "wav",

@@ -1,5 +1,12 @@
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
+}));
+
 import { buildGoogleSpeechProvider, __testing } from "./speech-provider.js";
 
 function installGoogleTtsFetchMock(pcm = Buffer.from([1, 0, 2, 0])) {
@@ -31,6 +38,7 @@ describe("Google speech provider", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    transcodeAudioBufferToOpusMock.mockReset();
   });
 
   it("synthesizes Gemini PCM as WAV and preserves audio tags in the request text", async () => {
@@ -82,6 +90,39 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
     expect(result.audioBuffer.readUInt32LE(24)).toBe(__testing.GOOGLE_TTS_SAMPLE_RATE);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
+    expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
+  });
+
+  it("transcodes Gemini PCM to Opus for voice-note targets", async () => {
+    installGoogleTtsFetchMock(Buffer.from([5, 0, 6, 0]));
+    transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("google-opus"));
+    const provider = buildGoogleSpeechProvider();
+
+    const result = await provider.synthesize({
+      text: "Send this as a voice note.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+      },
+      target: "voice-note",
+      timeoutMs: 12_000,
+    });
+
+    expect(result).toEqual({
+      audioBuffer: Buffer.from("google-opus"),
+      outputFormat: "opus",
+      fileExtension: ".opus",
+      voiceCompatible: true,
+    });
+    expect(transcodeAudioBufferToOpusMock).toHaveBeenCalledWith({
+      audioBuffer: expect.any(Buffer),
+      inputExtension: "wav",
+      tempPrefix: "tts-google-",
+      timeoutMs: 12_000,
+    });
+    const [{ audioBuffer }] = transcodeAudioBufferToOpusMock.mock.calls[0];
+    expect(audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    expect(audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
   });
 
   it("falls back to GEMINI_API_KEY and configured Google API base URL", async () => {

@@ -59,6 +59,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/Google: transcode Gemini TTS PCM to Opus for voice-note targets so
+  WhatsApp and other native voice-note replies can play as voice messages.
 - iOS/macOS Talk Mode: allow `talk.speechLocale` to set the speech
   recognition locale for non-English voice conversations. Fixes #44688.
 - Plugins/providers: honor explicit plugin candidate lists instead of reading a

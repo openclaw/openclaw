@@ -1,6 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -14,7 +12,6 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 export const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
 export const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
@@ -242,45 +239,6 @@ export async function xiaomiTTS(params: {
   }
 }
 
-async function transcodeAudioToOpus(params: {
-  audioBuffer: Buffer;
-  inputExtension: string;
-  timeoutMs: number | undefined;
-}) {
-  const tempRoot = resolvePreferredOpenClawTmpDir();
-  await mkdir(tempRoot, { recursive: true, mode: 0o700 });
-  const tempDir = await mkdtemp(path.join(tempRoot, "tts-xiaomi-"));
-  try {
-    const inputPath = path.join(tempDir, `input.${params.inputExtension}`);
-    const outputPath = path.join(tempDir, "voice.opus");
-    await writeFile(inputPath, params.audioBuffer, { mode: 0o600 });
-    await runFfmpeg(
-      [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        inputPath,
-        "-vn",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "64k",
-        "-ar",
-        "48000",
-        "-ac",
-        "1",
-        outputPath,
-      ],
-      { timeoutMs: params.timeoutMs },
-    );
-    return await readFile(outputPath);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-}
-
 export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "xiaomi",
@@ -313,9 +271,10 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs,
       });
       if (req.target === "voice-note") {
-        const opusBuffer = await transcodeAudioToOpus({
+        const opusBuffer = await transcodeAudioBufferToOpus({
           audioBuffer,
           inputExtension: outputFormat,
+          tempPrefix: "tts-xiaomi-",
           timeoutMs: req.timeoutMs,
         });
         return {
