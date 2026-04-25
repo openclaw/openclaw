@@ -164,6 +164,18 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
   pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 ```
 
+Cheap Gemini MCP config smoke:
+
+```bash
+OPENCLAW_LIVE_TEST=1 \
+  pnpm test:live src/agents/cli-runner/bundle-mcp.gemini.live.test.ts
+```
+
+This does not ask Gemini to generate a response. It writes the same system
+settings OpenClaw gives Gemini, then runs `gemini --debug mcp list` to prove a
+saved `transport: "streamable-http"` server is normalized to Gemini's HTTP MCP
+shape and can connect.
+
 Docker recipe:
 
 ```bash

@@ -384,6 +384,11 @@ Important behavior:
   milliseconds of idle time (default 10 minutes; set `0` to disable) and
   one-shot embedded runs clean them up at run end
 
+Runtime adapters may normalize this shared registry into the shape their
+downstream client expects. For example, embedded Pi consumes OpenClaw
+`transport` values directly, while Claude Code and Gemini receive CLI-native
+`type` values such as `http`, `sse`, or `stdio`.
+
 ## Saved MCP server definitions
 
 OpenClaw also stores a lightweight MCP server registry in config for surfaces
