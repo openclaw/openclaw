@@ -16,7 +16,8 @@ import {
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
-vi.mock("node:child_process", () => ({
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: vi.fn(),
 }));
 
