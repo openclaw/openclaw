@@ -1095,6 +1095,13 @@ stage_root() {
   printf "%s/.openclaw/plugin-runtime-deps" "$HOME"
 }
 
+poison_home_npm_project() {
+  printf '{"name":"openclaw-home-prefix-poison","private":true}\n' >"$HOME/package.json"
+  rm -rf "$HOME/node_modules"
+  mkdir -p "$HOME/node_modules"
+  chmod 500 "$HOME/node_modules"
+}
+
 find_external_dep_package() {
   local dep_path="$1"
   find "$(stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
@@ -1255,6 +1262,10 @@ assert_no_package_dep_available() {
       exit 1
     fi
   done
+  if [ -f "$HOME/node_modules/$dep_path/package.json" ]; then
+    echo "bundled runtime deps should not use HOME npm project for $channel: $HOME/node_modules/$dep_path/package.json" >&2
+    exit 1
+  fi
 }
 
 assert_dep_available() {
@@ -1357,6 +1368,7 @@ echo "Installing current candidate as update baseline..."
 echo "Update targets: $UPDATE_TARGETS"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-update-baseline-install.log 2>&1
 command -v openclaw >/dev/null
+poison_home_npm_project
 baseline_root="$(package_root)"
 test -d "$baseline_root/dist/extensions/telegram"
 test -d "$baseline_root/dist/extensions/feishu"
