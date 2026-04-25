@@ -88,4 +88,20 @@ describe("splitTrailingAuthProfile", () => {
       model: "lmstudio-mb-pro/gemma-4-31b@8bit",
     });
   });
+
+  it("keeps @iq* quant suffixes (LM Studio) in model ids", () => {
+    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq3_xxs")).toEqual({
+      model: "lmstudio/qwen3.6-27b@iq3_xxs",
+    });
+    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq4_xs")).toEqual({
+      model: "lmstudio/qwen3.6-27b@iq4_xs",
+    });
+  });
+
+  it("supports auth profiles after @iq* quant suffixes", () => {
+    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq3_xxs@work")).toEqual({
+      model: "lmstudio/qwen3.6-27b@iq3_xxs",
+      profile: "work",
+    });
+  });
 });
