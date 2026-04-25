@@ -53,7 +53,8 @@ describe("loadCrestodianOverview", () => {
       )}\n`,
     );
 
-    const { formatCrestodianOverview, loadCrestodianOverview } = await import("./overview.js");
+    const { formatCrestodianOverview, formatCrestodianStartupMessage, loadCrestodianOverview } =
+      await import("./overview.js");
     const overview = await loadCrestodianOverview();
 
     expect(overview.config).toMatchObject({
@@ -72,7 +73,15 @@ describe("loadCrestodianOverview", () => {
     expect(overview.references.docsPath).toMatch(/docs$/);
     expect(overview.references.sourceUrl).toBe("https://github.com/openclaw/openclaw");
     expect(formatCrestodianOverview(overview)).toContain(
-      'Next: say "gateway status" or "restart gateway"',
+      'Next: run "gateway status" or "restart gateway"',
     );
+    const startup = formatCrestodianStartupMessage(overview);
+    expect(startup).toContain("## Hi, I'm Crestodian.");
+    expect(startup).toContain("Using: openai/gpt-5.2");
+    expect(startup).toContain("Gateway: not reachable");
+    expect(startup).toContain("I can start debugging with `gateway status`");
+    expect(startup).not.toContain("Codex:");
+    expect(startup).not.toContain("Claude Code:");
+    expect(startup).not.toContain("API keys:");
   });
 });
