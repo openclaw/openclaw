@@ -43,8 +43,45 @@ function resolveCursorSeq(cursor: string | undefined): number | undefined {
 function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
   return messages.filter(
     (message): message is SessionHistoryMessage =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
+      Boolean(message) &&
+      typeof message === "object" &&
+      !Array.isArray(message) &&
+      !isEmptyVisibleSessionHistoryMessage(message),
   );
+}
+
+function isVisibleTranscriptRole(role: string): boolean {
+  return role === "user" || role === "assistant" || role === "system" || role === "unknown";
+}
+
+function isEmptyVisibleSessionHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  if (!isVisibleTranscriptRole(role)) {
+    return false;
+  }
+  if (typeof entry.content === "string") {
+    return !entry.content.trim();
+  }
+  if (typeof entry.text === "string") {
+    return !entry.text.trim();
+  }
+  if (!Array.isArray(entry.content)) {
+    return false;
+  }
+  if (entry.content.length === 0) {
+    return true;
+  }
+  return entry.content.every((item) => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    const block = item as Record<string, unknown>;
+    return block.type === "text" && typeof block.text === "string" && !block.text.trim();
+  });
 }
 
 function buildPaginatedSessionHistory(params: {

@@ -1,4 +1,7 @@
-import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  stripInternalRuntimeContext,
+} from "../agents/internal-runtime-context.js";
 import {
   extractInboundSenderLabel,
   stripInboundMetadata,
@@ -7,6 +10,87 @@ import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export { stripEnvelope };
+
+const LEGACY_BACKGROUND_TASK_STATUS_RE =
+  /^System:\s*\[[^\]]+\]\s*Background task (?:blocked|cancelled|done|failed|lost|started|timed out|update):[^\n]*(?:\r?\n)+/i;
+
+function unwrapLegacyRuntimeQuoteEnvelope(text: string): string {
+  const trimmed = text.trim();
+  const quotePairs: Array<[string, string]> = [
+    ['"', '"'],
+    ["'", "'"],
+    ["“", "”"],
+    ["‘", "’"],
+  ];
+  for (const [open, close] of quotePairs) {
+    if (!trimmed.startsWith(open)) {
+      continue;
+    }
+    const inner = trimmed.endsWith(close) ? trimmed.slice(1, -1) : trimmed.slice(1);
+    if (looksLikeLegacyRuntimeText(inner)) {
+      return inner;
+    }
+  }
+  return text;
+}
+
+function looksLikeLegacyRuntimeText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return (
+    trimmed.startsWith(INTERNAL_RUNTIME_CONTEXT_BEGIN) ||
+    trimmed.startsWith("Pre-compaction memory flush.") ||
+    trimmed.startsWith("An async command the user already approved has completed.") ||
+    trimmed.startsWith("An async command did not run.") ||
+    trimmed.startsWith("A new session was started via /new or /reset.") ||
+    /^System:\s*\[[^\]]+\]\s*Background task\b/i.test(trimmed)
+  );
+}
+
+function stripLegacyInternalOnlyPrompt(text: string): string {
+  const trimmed = text.trim();
+  if (
+    trimmed.startsWith("Pre-compaction memory flush.") &&
+    trimmed.includes("Store durable memories") &&
+    trimmed.includes("NO_REPLY")
+  ) {
+    return "";
+  }
+  if (
+    (trimmed.startsWith("An async command the user already approved has completed.") ||
+      trimmed.startsWith("An async command did not run.")) &&
+    trimmed.includes("Exact completion details:")
+  ) {
+    return "";
+  }
+  if (
+    trimmed.startsWith("A new session was started via /new or /reset.") &&
+    trimmed.includes("Session Startup sequence") &&
+    trimmed.includes("Current time:")
+  ) {
+    return "";
+  }
+  return text;
+}
+
+function stripLegacyBackgroundTaskStatusPrefix(text: string): string {
+  const unwrapped = unwrapLegacyRuntimeQuoteEnvelope(text);
+  if (!/^System:\s*\[[^\]]+\]\s*Background task\b/i.test(unwrapped.trimStart())) {
+    return text;
+  }
+  return unwrapped.trimStart().replace(LEGACY_BACKGROUND_TASK_STATUS_RE, "");
+}
+
+function stripVisibleTranscriptText(text: string, stripUserEnvelope: boolean): string {
+  const backgroundStripped = stripLegacyBackgroundTaskStatusPrefix(text);
+  const quoteUnwrapped = unwrapLegacyRuntimeQuoteEnvelope(backgroundStripped);
+  const runtimeStripped = stripInternalRuntimeContext(quoteUnwrapped);
+  const internalPromptStripped = stripLegacyInternalOnlyPrompt(runtimeStripped);
+  const inboundStripped = stripInboundMetadata(internalPromptStripped);
+  const stripped = stripUserEnvelope
+    ? stripMessageIdHints(stripEnvelope(inboundStripped))
+    : inboundStripped;
+  return stripLegacyInternalOnlyPrompt(stripped);
+}
 
 function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
   if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
@@ -41,28 +125,36 @@ function stripEnvelopeFromContentWithRole(
   stripUserEnvelope: boolean,
 ): { content: unknown[]; changed: boolean } {
   let changed = false;
-  const next = content.map((item) => {
+  const next: unknown[] = [];
+  for (const item of content) {
     if (!item || typeof item !== "object") {
-      return item;
+      next.push(item);
+      continue;
     }
     const entry = item as Record<string, unknown>;
     if (entry.type !== "text" || typeof entry.text !== "string") {
-      return item;
+      next.push(item);
+      continue;
     }
-    const runtimeStripped = stripInternalRuntimeContext(entry.text);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+    const stripped = stripVisibleTranscriptText(entry.text, stripUserEnvelope);
+    if (!stripped.trim()) {
+      if (stripped !== entry.text) {
+        changed = true;
+        continue;
+      }
+      next.push(item);
+      continue;
+    }
     if (stripped === entry.text) {
-      return item;
+      next.push(item);
+      continue;
     }
     changed = true;
-    return {
+    next.push({
       ...entry,
       text: stripped,
-    };
-  });
+    });
+  }
   return { content: next, changed };
 }
 
@@ -83,11 +175,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   }
 
   if (typeof entry.content === "string") {
-    const runtimeStripped = stripInternalRuntimeContext(entry.content);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+    const stripped = stripVisibleTranscriptText(entry.content, stripUserEnvelope);
     if (stripped !== entry.content) {
       next.content = stripped;
       changed = true;
@@ -99,11 +187,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const runtimeStripped = stripInternalRuntimeContext(entry.text);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+    const stripped = stripVisibleTranscriptText(entry.text, stripUserEnvelope);
     if (stripped !== entry.text) {
       next.text = stripped;
       changed = true;
