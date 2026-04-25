@@ -78,8 +78,10 @@ if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
 fi
 
 PROFILE_MOUNT=()
+PROFILE_STATUS="none"
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  PROFILE_STATUS="$PROFILE_FILE"
 fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
@@ -259,6 +261,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
 
   echo "==> Run ACP bind live test in Docker"
   echo "==> Agent: $ACP_AGENT"
+  echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
   DOCKER_RUN_ARGS=(docker run --rm -t \
