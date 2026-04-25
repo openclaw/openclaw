@@ -22,7 +22,7 @@ type OpenFence = {
 const DEFAULT_MAX_CHARS = 2000;
 const DEFAULT_MAX_LINES = 17;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
-const BLOCKQUOTE_RE = /^(>{1,})\s?/;
+const BLOCKQUOTE_RE = /^(\s*(?:>\s*)+)/;
 
 function countLines(text: string) {
   if (!text) {
@@ -46,6 +46,10 @@ function parseFenceLine(line: string): OpenFence | null {
   };
 }
 
+function getBlockquotePrefix(line: string): string | null {
+  return BLOCKQUOTE_RE.exec(line)?.[1] ?? null;
+}
+
 function closeFenceLine(openFence: OpenFence) {
   return `${openFence.indent}${openFence.markerChar.repeat(openFence.markerLen)}`;
 }
@@ -64,15 +68,6 @@ function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
   return `${text}${closeLine}`;
 }
 
-/**
- * Extract the blockquote prefix from a line (e.g. "> " or ">> ").
- * Returns empty string if the line is not a blockquote continuation.
- */
-function getBlockquotePrefix(line: string): string {
-  const match = line.match(BLOCKQUOTE_RE);
-  return match ? match[0] : "";
-}
-
 function splitLongLine(
   line: string,
   maxChars: number,
@@ -88,23 +83,24 @@ function splitLongLine(
     if (opts.preserveWhitespace) {
       out.push(remaining.slice(0, limit));
       remaining = remaining.slice(limit);
-    } else {
-      const window = remaining.slice(0, limit + 1);
-      let splitAt = -1;
-      for (let i = window.length - 1; i >= 0; i--) {
-        if (window[i] === " ") {
-          splitAt = i;
-          break;
-        }
-      }
-      if (splitAt <= 0) {
-        splitAt = limit;
-      }
-      out.push(remaining.slice(0, splitAt).trimEnd());
-      remaining = remaining.slice(splitAt).trimStart();
+      continue;
     }
+    const window = remaining.slice(0, limit);
+    let breakIdx = -1;
+    for (let i = window.length - 1; i >= 0; i--) {
+      if (/\s/.test(window[i])) {
+        breakIdx = i;
+        break;
+      }
+    }
+    if (breakIdx <= 0) {
+      breakIdx = limit;
+    }
+    out.push(remaining.slice(0, breakIdx));
+    // Keep the separator for the next segment so words don't get glued together.
+    remaining = remaining.slice(breakIdx);
   }
-  if (remaining.length > 0) {
+  if (remaining.length) {
     out.push(remaining);
   }
   return out;
@@ -112,7 +108,7 @@ function splitLongLine(
 
 /**
  * Chunks outbound Discord text by both character count and (soft) line count,
- * while keeping fenced code blocks and blockquote contexts balanced across chunks.
+ * while keeping fenced code blocks balanced across chunks.
  */
 export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
   const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
@@ -134,10 +130,9 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   let current = "";
   let currentLines = 0;
   let openFence: OpenFence | null = null;
-  // Track current blockquote prefix so continuation chunks re-open it.
-  let openBlockquote = "";
+  let openBlockquote: string | null = null;
 
-  const flush = (opts?: { continueBlockquote?: boolean }) => {
+  const flush = (options?: { preserveBlockquote?: boolean }) => {
     if (!current) {
       return;
     }
@@ -150,10 +145,9 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     if (openFence) {
       current = openFence.openLine;
       currentLines = 1;
+      return;
     }
-    // Re-open blockquote context on next chunk so Discord keeps rendering
-    // continuation lines inside the quote block.
-    if (opts?.continueBlockquote && openBlockquote && !openFence) {
+    if (options?.preserveBlockquote && openBlockquote) {
       current = openBlockquote;
       currentLines = 1;
     }
@@ -162,6 +156,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   for (const originalLine of lines) {
     const fenceInfo = parseFenceLine(originalLine);
     const wasInsideFence = openFence !== null;
+    const blockquotePrefix = getBlockquotePrefix(originalLine);
     let nextOpenFence: OpenFence | null = openFence;
     if (fenceInfo) {
       if (!openFence) {
@@ -174,13 +169,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       }
     }
 
-    // Track blockquote context (only when not inside a fenced code block).
-    if (!openFence && !nextOpenFence) {
-      const bqPrefix = getBlockquotePrefix(originalLine);
-      // Update openBlockquote: set when entering/continuing a blockquote,
-      // clear when the line is not a blockquote line.
-      openBlockquote = bqPrefix || "";
-    }
+    openBlockquote = blockquotePrefix;
 
     const reserveChars = nextOpenFence ? closeFenceLine(nextOpenFence).length + 1 : 0;
     const reserveLines = nextOpenFence ? 1 : 0;
@@ -206,7 +195,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       const wouldExceedLines = nextLines > lineLimit;
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
-        flush({ continueBlockquote: isLineContinuation });
+        flush({ preserveBlockquote: isLineContinuation });
       }
 
       if (current.length > 0) {
@@ -221,6 +210,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     }
 
     openFence = nextOpenFence;
+    openBlockquote = blockquotePrefix;
   }
 
   if (current.length) {
