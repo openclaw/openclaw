@@ -61,6 +61,10 @@ Important behavior:
 - older transcript history is read with `messages_read`
 - Claude push notifications only exist while the MCP session is alive
 - when the client disconnects, the bridge exits and the live queue is gone
+- one-shot agent entry points such as `openclaw agent` and
+  `openclaw infer model run` retire any bundled MCP runtimes they open when the
+  reply completes, so repeated scripted runs do not accumulate stdio MCP child
+  processes
 - stdio MCP servers launched by OpenClaw (bundled or user-configured) are torn
   down as a process tree on shutdown, so child subprocesses started by the
   server do not survive after the parent stdio client exits
