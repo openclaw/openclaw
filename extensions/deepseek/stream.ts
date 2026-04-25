@@ -28,6 +28,24 @@ function stripDeepSeekReasoningContent(payload: Record<string, unknown>): void {
   }
 }
 
+function ensureDeepSeekToolCallReasoningContent(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) {
+    return;
+  }
+  for (const message of payload.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant" || !Array.isArray(record.tool_calls)) {
+      continue;
+    }
+    if (!("reasoning_content" in record)) {
+      record.reasoning_content = "";
+    }
+  }
+}
+
 export function createDeepSeekV4ThinkingWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
   thinkingLevel: DeepSeekThinkingLevel,
@@ -52,6 +70,7 @@ export function createDeepSeekV4ThinkingWrapper(
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveDeepSeekReasoningEffort(thinkingLevel);
+      ensureDeepSeekToolCallReasoningContent(payload);
     });
   };
 }
