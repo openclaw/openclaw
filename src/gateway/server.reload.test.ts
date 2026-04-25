@@ -20,6 +20,7 @@ import { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
 import {
   connectReq,
   connectOk,
+  embeddedRunMock,
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
@@ -295,6 +296,7 @@ describe("gateway hot reload", () => {
     hoisted.totalPendingReplies.value = 0;
     hoisted.totalQueueSize.value = 0;
     hoisted.activeTaskCount.value = 0;
+    embeddedRunMock.activeIds.clear();
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
@@ -433,6 +435,7 @@ describe("gateway hot reload", () => {
       hoisted.providerManager.stopChannel.mockClear();
       hoisted.providerManager.startChannel.mockClear();
       hoisted.activeEmbeddedRunCount.value = 1;
+      embeddedRunMock.activeIds.add("reload-active");
       const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
       const reloadPromise = onHotReload?.(
         {
@@ -458,9 +461,11 @@ describe("gateway hot reload", () => {
         expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
 
         hoisted.activeEmbeddedRunCount.value = 0;
+        embeddedRunMock.activeIds.clear();
         await reloadPromise;
       } finally {
         hoisted.activeEmbeddedRunCount.value = 0;
+        embeddedRunMock.activeIds.clear();
         await reloadPromise?.catch(() => {});
       }
 
