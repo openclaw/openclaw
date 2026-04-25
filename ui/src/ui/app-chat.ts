@@ -653,13 +653,13 @@ export async function refreshChatAvatar(host: ChatHost) {
       clearChatAvatarUrl(host);
       return;
     }
-    if (!authHeader || !isLocalControlUiAvatarUrl(avatarUrl)) {
+    if (!isLocalControlUiAvatarUrl(avatarUrl)) {
       setChatAvatarUrl(host, avatarUrl);
       return;
     }
     const avatarRes = await fetch(avatarUrl, {
       method: "GET",
-      headers: { Authorization: authHeader },
+      ...(headers ? { headers } : {}),
     });
     if (!avatarRes.ok) {
       if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
