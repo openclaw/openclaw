@@ -1754,7 +1754,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     if (!lastPartialText) {
                       draftStream.update("Thinking…");
                     }
-                  },                 
+                  },
                   onToolStart: async (payload) => {
                     if (lastPartialText) {
                       // Flush any pending streamed assistant text to the current post,
