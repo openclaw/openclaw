@@ -91,6 +91,7 @@ Docs: https://docs.openclaw.ai
 - Feishu: suppress duplicate final card delivery when idle closes a streaming card before the final payload arrives. (#68491) Thanks @MoerAI.
 - Signal: preserve sender attachment filenames and resolve missing MIME types from those filenames, so Linux `signal-cli` voice notes without `contentType` still enter audio transcription. Fixes #48614. Thanks @mindfury.
 - Telegram/agents: suppress the phantom "Agent couldn't generate a response" fallback after a reply was already committed through the messaging tool. (#70623) Thanks @chinar-amrutkar.
+- Models/CLI: show provider runtime `contextTokens` beside native `contextWindow` in `openclaw models list`, and align `openai-codex/gpt-5.5` with Codex's 272K runtime cap plus 400K native window. Fixes #71403.
 - Dashboard/security: avoid writing tokenized Control UI URLs or SSH hints to runtime logs, keeping gateway bearer fragments out of console-captured logs readable through `logs.tail`. (#70029) Thanks @Ziy1-Tan.
 - Providers/OpenRouter: treat DeepSeek refs as cache-TTL eligible without injecting Anthropic cache-control markers, aligning context pruning with OpenRouter-managed prompt caching. (#51983) Thanks @QuinnH496.
 - Control UI/browser: defer temp-dir access-mode constants until Node-only temp-dir resolution runs, preventing browser bundles from crashing when `node:fs` constants are stubbed. (#48930) Thanks @Valentinws.
