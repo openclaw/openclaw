@@ -166,6 +166,39 @@ describe("Google speech provider", () => {
     });
   });
 
+  it("prepends configured Gemini TTS profile text", async () => {
+    const fetchMock = installGoogleTtsFetchMock();
+    const provider = buildGoogleSpeechProvider();
+
+    await provider.synthesize({
+      text: "Status update starts now.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+        audioProfile: "Speak professionally with a calm executive tone.",
+        speakerName: "Alex",
+      },
+      target: "audio-file",
+      timeoutMs: 10_000,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      contents: [
+        {
+          parts: [
+            {
+              text:
+                "Speak professionally with a calm executive tone.\n\n" +
+                "Speaker name: Alex\n\n" +
+                "Status update starts now.",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("resolves provider config and directive overrides", () => {
     const provider = buildGoogleSpeechProvider();
 
@@ -178,6 +211,8 @@ describe("Google speech provider", () => {
               apiKey: "configured-key",
               model: "google/gemini-3.1-flash-tts-preview",
               voice: "Leda",
+              audioProfile: "Speak warmly.",
+              speakerName: "Narrator",
             },
           },
         },
@@ -185,8 +220,10 @@ describe("Google speech provider", () => {
       }),
     ).toEqual({
       apiKey: "configured-key",
+      audioProfile: "Speak warmly.",
       baseUrl: undefined,
       model: "gemini-3.1-flash-tts-preview",
+      speakerName: "Narrator",
       voiceName: "Leda",
     });
 

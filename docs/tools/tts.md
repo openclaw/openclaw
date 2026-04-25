@@ -379,6 +379,8 @@ Then run:
 - `providers.minimax.pitch`: integer pitch shift `-12..12` (default 0). Fractional values are truncated before calling MiniMax T2A because the API rejects non-integer pitch values.
 - `providers.google.model`: Gemini TTS model (default `gemini-3.1-flash-tts-preview`).
 - `providers.google.voiceName`: Gemini prebuilt voice name (default `Kore`; `voice` is also accepted).
+- `providers.google.audioProfile`: natural-language style prompt prepended before the spoken text.
+- `providers.google.speakerName`: optional speaker label prepended before the spoken text when your TTS prompt uses a named speaker.
 - `providers.google.baseUrl`: override the Gemini API base URL. Only `https://generativelanguage.googleapis.com` is accepted.
   - If `messages.tts.providers.google.apiKey` is omitted, TTS can reuse `models.providers.google.apiKey` before env fallback.
 - `providers.gradium.baseUrl`: override Gradium API base URL (default `https://api.gradium.ai`).

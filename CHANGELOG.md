@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google Meet: add `googlemeet doctor` and a `recover_current_tab`/`recover-tab` flow so agents can inspect an already-open Meet tab and report the blocker without opening another window. Thanks @steipete.
 - Plugins/Bonjour: move LAN Gateway discovery advertising into a default-enabled bundled plugin with its own `@homebridge/ciao` dependency, so users can disable Bonjour without cutting wide-area discovery. Thanks @vincentkoc.
 - Providers/Google: add a Gemini Live realtime voice provider for backend Voice Call and Google Meet audio bridges, with bidirectional audio and function-call support. Thanks @steipete.
+- Providers/Google: let Gemini TTS prepend configured `audioProfile` and `speakerName` prompt text for reusable speech style control. Thanks @tdack.
 - Plugins/Google Meet: let realtime Meet sessions consult the full OpenClaw agent for deeper answers while staying in the live voice loop. Thanks @steipete.
 - Gateway/VoiceClaw: add a realtime brain WebSocket endpoint backed by Gemini Live, with owner-auth gating and async OpenClaw tool handoff. (#70938) Thanks @yagudaev.
 - Providers/DeepSeek: add DeepSeek V4 Flash and V4 Pro to the bundled catalog and make V4 Flash the onboarding default. Thanks @lsdsjy.
