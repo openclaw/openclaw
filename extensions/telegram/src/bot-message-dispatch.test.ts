@@ -547,6 +547,30 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("bounds Telegram tool progress markdown preview formatting", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    const longProgress = `${"`".repeat(1000)}${"x".repeat(1000)}[label](tg://user?id=123)`;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({ progressText: longProgress });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { preview: { toolProgress: true } } },
+    });
+
+    const lastPreviewText = draftStream.update.mock.calls.at(-1)?.[0] ?? "";
+    const progressLine = lastPreviewText.split("\n").at(1) ?? "";
+
+    expect(lastPreviewText.length).toBeLessThan(340);
+    expect(progressLine).toMatch(/^• `{10}/);
+    expect(progressLine).toContain("…");
+    expect(renderTelegramHtmlText(lastPreviewText)).not.toContain("<a ");
+  });
+
   it("keeps block streaming enabled when account config enables it", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
