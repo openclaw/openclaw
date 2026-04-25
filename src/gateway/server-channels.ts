@@ -575,9 +575,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           log.warn?.(
             `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
           );
+          // Release the stale task/abort references so the next startChannel
+          // can register a fresh polling loop. Without this, startChannelInternal
+          // sees the leftover store.tasks entry and silently no-ops, leaving the
+          // channel stuck "running: true, connected: true" with no live poll
+          // (e.g. after macOS sleep/wake on Telegram polling). The timed-out
+          // task may still be blocked on its HTTP read; when the next
+          // getUpdates fires Telegram returns 409 conflict and terminates it.
+          // (#71412)
+          store.aborts.delete(id);
+          store.tasks.delete(id);
           setRuntime(channelId, id, {
             accountId: id,
-            running: true,
+            running: false,
             restartPending: false,
             lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
           });
