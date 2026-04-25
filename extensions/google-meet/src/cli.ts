@@ -1,7 +1,13 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
 import type { Command } from "commander";
+import {
+  buildGoogleMeetCalendarDayWindow,
+  findGoogleMeetCalendarEvent,
+  type GoogleMeetCalendarLookupResult,
+} from "./calendar.js";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import {
   buildGoogleMeetPreflightReport,
@@ -43,6 +49,9 @@ type OAuthLoginOptions = {
 
 type ResolveSpaceOptions = {
   meeting?: string;
+  today?: boolean;
+  event?: string;
+  calendar?: string;
   accessToken?: string;
   refreshToken?: string;
   clientId?: string;
@@ -56,7 +65,10 @@ type MeetArtifactOptions = ResolveSpaceOptions & {
   pageSize?: string;
   transcriptEntries?: boolean;
   allConferenceRecords?: boolean;
-  format?: "summary" | "markdown";
+  mergeDuplicates?: boolean;
+  lateAfterMinutes?: string;
+  earlyBeforeMinutes?: string;
+  format?: "summary" | "markdown" | "csv";
   output?: string;
 };
 
@@ -149,6 +161,19 @@ function formatBoolean(value: boolean | undefined): string {
 
 function formatOptional(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "n/a";
+}
+
+function formatDuration(value: number | undefined): string {
+  if (value === undefined) {
+    return "n/a";
+  }
+  const totalSeconds = Math.round(value / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? `${hours}h ${minutes.toString().padStart(2, "0")}m`
+    : `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
 }
 
 function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): void {
@@ -393,6 +418,25 @@ function resolveMeetingInput(config: GoogleMeetConfig, value?: string): string {
   return meeting;
 }
 
+function resolveOAuthTokenOptions(
+  config: GoogleMeetConfig,
+  options: ResolveSpaceOptions,
+): {
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+  accessToken?: string;
+  expiresAt?: number;
+} {
+  return {
+    clientId: options.clientId?.trim() || config.oauth.clientId,
+    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
+    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
+    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
+    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
+  };
+}
+
 function resolveTokenOptions(
   config: GoogleMeetConfig,
   options: ResolveSpaceOptions,
@@ -406,12 +450,51 @@ function resolveTokenOptions(
 } {
   return {
     meeting: resolveMeetingInput(config, options.meeting),
-    clientId: options.clientId?.trim() || config.oauth.clientId,
-    clientSecret: options.clientSecret?.trim() || config.oauth.clientSecret,
-    refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
-    accessToken: options.accessToken?.trim() || config.oauth.accessToken,
-    expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
+    ...resolveOAuthTokenOptions(config, options),
   };
+}
+
+function hasCalendarLookupOptions(options: ResolveSpaceOptions): boolean {
+  return Boolean(options.today || options.event?.trim());
+}
+
+async function resolveCalendarMeetingInput(params: {
+  accessToken: string;
+  options: ResolveSpaceOptions;
+}): Promise<{ meeting?: string; calendarEvent?: GoogleMeetCalendarLookupResult }> {
+  if (!hasCalendarLookupOptions(params.options)) {
+    return {};
+  }
+  const window = params.options.today ? buildGoogleMeetCalendarDayWindow() : {};
+  const calendarEvent = await findGoogleMeetCalendarEvent({
+    accessToken: params.accessToken,
+    calendarId: params.options.calendar,
+    eventQuery: params.options.event,
+    ...window,
+  });
+  return { meeting: calendarEvent.meetingUri, calendarEvent };
+}
+
+async function resolveMeetingForToken(params: {
+  config: GoogleMeetConfig;
+  options: ResolveSpaceOptions;
+  accessToken: string;
+  configuredMeeting?: string;
+}): Promise<{ meeting: string; calendarEvent?: GoogleMeetCalendarLookupResult }> {
+  const calendarMeeting = await resolveCalendarMeetingInput({
+    accessToken: params.accessToken,
+    options: params.options,
+  });
+  const meeting =
+    calendarMeeting.meeting ?? params.configuredMeeting ?? params.config.defaults.meeting;
+  if (!meeting) {
+    throw new Error(
+      "Meeting input is required. Pass --meeting, --today, --event, or configure defaults.meeting.",
+    );
+  }
+  return calendarMeeting.calendarEvent
+    ? { meeting, calendarEvent: calendarMeeting.calendarEvent }
+    : { meeting };
 }
 
 function resolveCreateTokenOptions(
@@ -447,12 +530,15 @@ function resolveArtifactTokenOptions(
   pageSize?: number;
   includeTranscriptEntries?: boolean;
   allConferenceRecords?: boolean;
+  mergeDuplicateParticipants?: boolean;
+  lateAfterMinutes?: number;
+  earlyBeforeMinutes?: number;
 } {
   const meeting = options.meeting?.trim() || config.defaults.meeting;
   const conferenceRecord = options.conferenceRecord?.trim();
-  if (!meeting && !conferenceRecord) {
+  if (!meeting && !conferenceRecord && !hasCalendarLookupOptions(options)) {
     throw new Error(
-      "Meeting input or conference record is required. Pass --meeting, --conference-record, or configure defaults.meeting.",
+      "Meeting input or conference record is required. Pass --meeting, --today, --event, --conference-record, or configure defaults.meeting.",
     );
   }
   return {
@@ -466,6 +552,9 @@ function resolveArtifactTokenOptions(
     pageSize: parseOptionalNumber(options.pageSize),
     includeTranscriptEntries: options.transcriptEntries !== false,
     allConferenceRecords: Boolean(options.allConferenceRecords),
+    mergeDuplicateParticipants: options.mergeDuplicates !== false,
+    lateAfterMinutes: parseOptionalNumber(options.lateAfterMinutes),
+    earlyBeforeMinutes: parseOptionalNumber(options.earlyBeforeMinutes),
   };
 }
 
@@ -538,8 +627,12 @@ function writeAttendanceSummary(result: GoogleMeetAttendanceResult): void {
     writeStdoutLine("participant: %s", identity);
     writeStdoutLine("record: %s", row.conferenceRecord);
     writeStdoutLine("resource: %s", row.participant);
-    writeStdoutLine("first joined: %s", formatOptional(row.earliestStartTime));
-    writeStdoutLine("last left: %s", formatOptional(row.latestEndTime));
+    writeStdoutLine("participants merged: %d", row.participants?.length ?? 1);
+    writeStdoutLine("first joined: %s", formatOptional(row.firstJoinTime ?? row.earliestStartTime));
+    writeStdoutLine("last left: %s", formatOptional(row.lastLeaveTime ?? row.latestEndTime));
+    writeStdoutLine("duration: %s", formatDuration(row.durationMs));
+    writeStdoutLine("late: %s", row.late ? formatDuration(row.lateByMs) : "no");
+    writeStdoutLine("early leave: %s", row.earlyLeave ? formatDuration(row.earlyLeaveByMs) : "no");
     writeStdoutLine("sessions: %d", row.sessions.length);
     for (const session of row.sessions) {
       writeStdoutLine(
@@ -666,8 +759,21 @@ function renderAttendanceMarkdown(result: GoogleMeetAttendanceResult): string {
     pushMarkdownLine(lines, `## ${formatMarkdownIdentity(row)}`);
     pushMarkdownLine(lines, `Record: ${row.conferenceRecord}`);
     pushMarkdownLine(lines, `Resource: ${row.participant}`);
-    pushMarkdownLine(lines, `First joined: ${formatMarkdownOptional(row.earliestStartTime)}`);
-    pushMarkdownLine(lines, `Last left: ${formatMarkdownOptional(row.latestEndTime)}`);
+    pushMarkdownLine(lines, `Participants merged: ${row.participants?.length ?? 1}`);
+    pushMarkdownLine(
+      lines,
+      `First joined: ${formatMarkdownOptional(row.firstJoinTime ?? row.earliestStartTime)}`,
+    );
+    pushMarkdownLine(
+      lines,
+      `Last left: ${formatMarkdownOptional(row.lastLeaveTime ?? row.latestEndTime)}`,
+    );
+    pushMarkdownLine(lines, `Duration: ${formatDuration(row.durationMs)}`);
+    pushMarkdownLine(lines, `Late: ${row.late ? formatDuration(row.lateByMs) : "no"}`);
+    pushMarkdownLine(
+      lines,
+      `Early leave: ${row.earlyLeave ? formatDuration(row.earlyLeaveByMs) : "no"}`,
+    );
     pushMarkdownLine(lines, `Sessions: ${row.sessions.length}`);
     for (const session of row.sessions) {
       pushMarkdownLine(
@@ -679,6 +785,108 @@ function renderAttendanceMarkdown(result: GoogleMeetAttendanceResult): string {
     }
   }
   return `${lines.join("\n")}\n`;
+}
+
+function csvCell(value: unknown): string {
+  const text =
+    value === undefined || value === null
+      ? ""
+      : typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+        ? String(value)
+        : JSON.stringify(value);
+  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function renderAttendanceCsv(result: GoogleMeetAttendanceResult): string {
+  const rows: unknown[][] = [
+    [
+      "conferenceRecord",
+      "displayName",
+      "user",
+      "participants",
+      "firstJoined",
+      "lastLeft",
+      "durationMs",
+      "sessions",
+      "late",
+      "lateByMs",
+      "earlyLeave",
+      "earlyLeaveByMs",
+    ],
+  ];
+  for (const row of result.attendance) {
+    rows.push([
+      row.conferenceRecord,
+      row.displayName ?? "",
+      row.user ?? "",
+      (row.participants ?? [row.participant]).join(";"),
+      row.firstJoinTime ?? row.earliestStartTime ?? "",
+      row.lastLeaveTime ?? row.latestEndTime ?? "",
+      row.durationMs ?? "",
+      row.sessions.length,
+      row.late ?? "",
+      row.lateByMs ?? "",
+      row.earlyLeave ?? "",
+      row.earlyLeaveByMs ?? "",
+    ]);
+  }
+  return `${rows.map((row) => row.map(csvCell).join(",")).join("\n")}\n`;
+}
+
+function renderTranscriptMarkdown(result: GoogleMeetArtifactsResult): string {
+  const lines: string[] = ["# Google Meet Transcript"];
+  if (result.input) {
+    pushMarkdownLine(lines, `Input: ${result.input}`);
+  }
+  for (const entry of result.artifacts) {
+    pushMarkdownLine(lines);
+    pushMarkdownLine(lines, `## ${entry.conferenceRecord.name}`);
+    if (entry.transcriptEntries.length === 0) {
+      pushMarkdownLine(lines, "_No transcript entries._");
+      continue;
+    }
+    for (const transcriptEntries of entry.transcriptEntries) {
+      pushMarkdownLine(lines);
+      pushMarkdownLine(lines, `### ${transcriptEntries.transcript}`);
+      if (transcriptEntries.entriesError) {
+        pushMarkdownLine(lines, `Warning: ${transcriptEntries.entriesError}`);
+        continue;
+      }
+      for (const transcriptEntry of transcriptEntries.entries) {
+        const speaker = transcriptEntry.participant ?? "unknown";
+        const time = transcriptEntry.startTime ? ` [${transcriptEntry.startTime}]` : "";
+        pushMarkdownLine(lines, `- ${speaker}${time}: ${transcriptEntry.text ?? ""}`);
+      }
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function defaultExportDirectory(): string {
+  return `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+}
+
+async function writeMeetExportBundle(params: {
+  outputDir?: string;
+  artifacts: GoogleMeetArtifactsResult;
+  attendance: GoogleMeetAttendanceResult;
+}): Promise<{ outputDir: string; files: string[] }> {
+  const outputDir = params.outputDir?.trim() || defaultExportDirectory();
+  await mkdir(outputDir, { recursive: true });
+  const files = [
+    {
+      name: "summary.md",
+      content: `${renderArtifactsMarkdown(params.artifacts)}\n${renderAttendanceMarkdown(params.attendance)}`,
+    },
+    { name: "attendance.csv", content: renderAttendanceCsv(params.attendance) },
+    { name: "transcript.md", content: renderTranscriptMarkdown(params.artifacts) },
+    { name: "artifacts.json", content: `${JSON.stringify(params.artifacts, null, 2)}\n` },
+    { name: "attendance.json", content: `${JSON.stringify(params.attendance, null, 2)}\n` },
+  ];
+  for (const file of files) {
+    await writeFile(path.join(outputDir, file.name), file.content, "utf8");
+  }
+  return { outputDir, files: files.map((file) => path.join(outputDir, file.name)) };
 }
 
 export function registerGoogleMeetCli(params: {
@@ -995,6 +1203,9 @@ export function registerGoogleMeetCli(params: {
     .command("latest")
     .description("Find the latest Meet conference record for a meeting")
     .option("--meeting <value>", "Meet URL, meeting code, or spaces/{id}")
+    .option("--today", "Find a Meet link on today's calendar")
+    .option("--event <query>", "Find a matching calendar event with a Meet link")
+    .option("--calendar <id>", "Calendar id for --today or --event", "primary")
     .option("--access-token <token>", "Access token override")
     .option("--refresh-token <token>", "Refresh token override")
     .option("--client-id <id>", "OAuth client id override")
@@ -1002,8 +1213,15 @@ export function registerGoogleMeetCli(params: {
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
     .option("--json", "Print JSON output", false)
     .action(async (options: ResolveSpaceOptions) => {
-      const resolved = resolveTokenOptions(params.config, options);
-      const token = await resolveGoogleMeetAccessToken(resolved);
+      const token = await resolveGoogleMeetAccessToken(
+        resolveOAuthTokenOptions(params.config, options),
+      );
+      const resolved = await resolveMeetingForToken({
+        config: params.config,
+        options,
+        accessToken: token.accessToken,
+        configuredMeeting: options.meeting?.trim(),
+      });
       const result = await fetchLatestGoogleMeetConferenceRecord({
         accessToken: token.accessToken,
         meeting: resolved.meeting,
@@ -1011,9 +1229,14 @@ export function registerGoogleMeetCli(params: {
       if (options.json) {
         writeStdoutJson({
           ...result,
+          ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
           tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
         });
         return;
+      }
+      if (resolved.calendarEvent) {
+        writeStdoutLine("calendar event: %s", resolved.calendarEvent.event.summary ?? "untitled");
+        writeStdoutLine("calendar meet: %s", resolved.calendarEvent.meetingUri);
       }
       writeLatestConferenceRecordSummary(result);
       writeStdoutLine(
@@ -1027,6 +1250,9 @@ export function registerGoogleMeetCli(params: {
     .description("List Meet conference records and available participant/artifact metadata")
     .option("--meeting <value>", "Meet URL, meeting code, or spaces/{id}")
     .option("--conference-record <name>", "Conference record name or id")
+    .option("--today", "Find a Meet link on today's calendar")
+    .option("--event <query>", "Find a matching calendar event with a Meet link")
+    .option("--calendar <id>", "Calendar id for --today or --event", "primary")
     .option("--access-token <token>", "Access token override")
     .option("--refresh-token <token>", "Refresh token override")
     .option("--client-id <id>", "OAuth client id override")
@@ -1041,9 +1267,19 @@ export function registerGoogleMeetCli(params: {
     .action(async (options: MeetArtifactOptions) => {
       const resolved = resolveArtifactTokenOptions(params.config, options);
       const token = await resolveGoogleMeetAccessToken(resolved);
+      const meeting = resolved.conferenceRecord
+        ? resolved.meeting
+        : (
+            await resolveMeetingForToken({
+              config: params.config,
+              options,
+              accessToken: token.accessToken,
+              configuredMeeting: resolved.meeting,
+            })
+          ).meeting;
       const result = await fetchGoogleMeetArtifacts({
         accessToken: token.accessToken,
-        meeting: resolved.meeting,
+        meeting,
         conferenceRecord: resolved.conferenceRecord,
         pageSize: resolved.pageSize,
         includeTranscriptEntries: resolved.includeTranscriptEntries,
@@ -1082,6 +1318,9 @@ export function registerGoogleMeetCli(params: {
     .description("List Meet participants and participant sessions")
     .option("--meeting <value>", "Meet URL, meeting code, or spaces/{id}")
     .option("--conference-record <name>", "Conference record name or id")
+    .option("--today", "Find a Meet link on today's calendar")
+    .option("--event <query>", "Find a matching calendar event with a Meet link")
+    .option("--calendar <id>", "Calendar id for --today or --event", "primary")
     .option("--access-token <token>", "Access token override")
     .option("--refresh-token <token>", "Refresh token override")
     .option("--client-id <id>", "OAuth client id override")
@@ -1089,18 +1328,34 @@ export function registerGoogleMeetCli(params: {
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
     .option("--page-size <n>", "Max resources per Meet API page")
     .option("--all-conference-records", "Fetch every conference record for --meeting")
-    .option("--format <format>", "Output format: summary or markdown", "summary")
+    .option("--no-merge-duplicates", "Keep duplicate participant resources as separate rows")
+    .option("--late-after-minutes <n>", "Mark participants late after this many minutes", "5")
+    .option("--early-before-minutes <n>", "Mark early leavers before this many minutes", "5")
+    .option("--format <format>", "Output format: summary, markdown, or csv", "summary")
     .option("--output <path>", "Write output to a file instead of stdout")
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
       const resolved = resolveArtifactTokenOptions(params.config, options);
       const token = await resolveGoogleMeetAccessToken(resolved);
+      const meeting = resolved.conferenceRecord
+        ? resolved.meeting
+        : (
+            await resolveMeetingForToken({
+              config: params.config,
+              options,
+              accessToken: token.accessToken,
+              configuredMeeting: resolved.meeting,
+            })
+          ).meeting;
       const result = await fetchGoogleMeetAttendance({
         accessToken: token.accessToken,
-        meeting: resolved.meeting,
+        meeting,
         conferenceRecord: resolved.conferenceRecord,
         pageSize: resolved.pageSize,
         allConferenceRecords: resolved.allConferenceRecords,
+        mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
+        lateAfterMinutes: resolved.lateAfterMinutes,
+        earlyBeforeMinutes: resolved.earlyBeforeMinutes,
       });
       if (options.json) {
         await writeCliOutput(
@@ -1120,14 +1375,89 @@ export function registerGoogleMeetCli(params: {
         await writeCliOutput(options, renderAttendanceMarkdown(result));
         return;
       }
+      if (options.format === "csv") {
+        await writeCliOutput(options, renderAttendanceCsv(result));
+        return;
+      }
       if (options.format && options.format !== "summary") {
-        throw new Error("Unsupported format. Expected summary or markdown.");
+        throw new Error("Unsupported format. Expected summary, markdown, or csv.");
       }
       writeAttendanceSummary(result);
       writeStdoutLine(
         "token source: %s",
         token.refreshed ? "refresh-token" : "cached-access-token",
       );
+    });
+
+  root
+    .command("export")
+    .description("Write Meet artifacts, attendance, transcript, and raw JSON into a folder")
+    .option("--meeting <value>", "Meet URL, meeting code, or spaces/{id}")
+    .option("--conference-record <name>", "Conference record name or id")
+    .option("--today", "Find a Meet link on today's calendar")
+    .option("--event <query>", "Find a matching calendar event with a Meet link")
+    .option("--calendar <id>", "Calendar id for --today or --event", "primary")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--page-size <n>", "Max resources per Meet API page")
+    .option("--all-conference-records", "Fetch every conference record for --meeting")
+    .option("--no-transcript-entries", "Skip structured transcript entry lookup")
+    .option("--no-merge-duplicates", "Keep duplicate participant resources as separate rows")
+    .option("--late-after-minutes <n>", "Mark participants late after this many minutes", "5")
+    .option("--early-before-minutes <n>", "Mark early leavers before this many minutes", "5")
+    .option("--output <dir>", "Output directory")
+    .option("--json", "Print JSON output", false)
+    .action(async (options: MeetArtifactOptions) => {
+      const resolved = resolveArtifactTokenOptions(params.config, options);
+      const token = await resolveGoogleMeetAccessToken(resolved);
+      const meetingResult: { meeting?: string; calendarEvent?: GoogleMeetCalendarLookupResult } =
+        resolved.conferenceRecord
+          ? { meeting: resolved.meeting }
+          : await resolveMeetingForToken({
+              config: params.config,
+              options,
+              accessToken: token.accessToken,
+              configuredMeeting: resolved.meeting,
+            });
+      const artifacts = await fetchGoogleMeetArtifacts({
+        accessToken: token.accessToken,
+        meeting: meetingResult.meeting,
+        conferenceRecord: resolved.conferenceRecord,
+        pageSize: resolved.pageSize,
+        includeTranscriptEntries: resolved.includeTranscriptEntries,
+        allConferenceRecords: resolved.allConferenceRecords,
+      });
+      const attendance = await fetchGoogleMeetAttendance({
+        accessToken: token.accessToken,
+        meeting: meetingResult.meeting,
+        conferenceRecord: resolved.conferenceRecord,
+        pageSize: resolved.pageSize,
+        allConferenceRecords: resolved.allConferenceRecords,
+        mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
+        lateAfterMinutes: resolved.lateAfterMinutes,
+        earlyBeforeMinutes: resolved.earlyBeforeMinutes,
+      });
+      const bundle = await writeMeetExportBundle({
+        outputDir: options.output,
+        artifacts,
+        attendance,
+      });
+      const payload = {
+        ...bundle,
+        ...(meetingResult.calendarEvent ? { calendarEvent: meetingResult.calendarEvent } : {}),
+        tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+      };
+      if (options.json) {
+        writeStdoutJson(payload);
+        return;
+      }
+      writeStdoutLine("export: %s", bundle.outputDir);
+      for (const file of bundle.files) {
+        writeStdoutLine("- %s", file);
+      }
     });
 
   root
