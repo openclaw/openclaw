@@ -645,6 +645,7 @@ Meet artifacts:
 
 ```bash
 openclaw googlemeet latest --today
+openclaw googlemeet calendar-events --today --json
 openclaw googlemeet artifacts --event "Weekly sync"
 openclaw googlemeet attendance --today --format csv --output attendance.csv
 ```
@@ -653,6 +654,8 @@ openclaw googlemeet attendance --today --format csv --output attendance.csv
 Google Meet link. Use `--event <query>` to search matching event text, and
 `--calendar <id>` for a non-primary calendar. Calendar lookup requires a fresh
 OAuth login that includes the Calendar events readonly scope.
+`calendar-events` previews the matching Meet events and marks the event that
+`latest`, `artifacts`, `attendance`, or `export` will choose.
 
 If you already know the conference record id, address it directly:
 
@@ -671,6 +674,10 @@ openclaw googlemeet attendance --conference-record conferenceRecords/abc123 \
   --format markdown --output meet-attendance.md
 openclaw googlemeet attendance --conference-record conferenceRecords/abc123 \
   --format csv --output meet-attendance.csv
+openclaw googlemeet export --conference-record conferenceRecords/abc123 \
+  --include-doc-bodies --zip --output meet-export
+openclaw googlemeet export --conference-record conferenceRecords/abc123 \
+  --include-doc-bodies --dry-run
 ```
 
 `artifacts` returns conference record metadata plus participant, recording,
@@ -684,10 +691,64 @@ resources separate, `--late-after-minutes` to tune late detection, and
 `--early-before-minutes` to tune early-leave detection.
 
 `export` writes a folder containing `summary.md`, `attendance.csv`,
-`transcript.md`, `artifacts.json`, and `attendance.json`. These commands use the
-Meet REST API only for Meet resources; Google Docs/Drive document body download
-is intentionally out of scope because that requires separate Google Docs/Drive
-access.
+`transcript.md`, `artifacts.json`, `attendance.json`, and `manifest.json`.
+`manifest.json` records the chosen input, export options, conference records,
+output files, counts, token source, Calendar event when one was used, and any
+partial retrieval warnings. Pass `--zip` to also write a portable archive next
+to the folder. Pass `--include-doc-bodies` to export linked transcript and
+smart-note Google Docs text through Google Drive `files.export`; this requires a
+fresh OAuth login that includes the Drive Meet readonly scope. Without
+`--include-doc-bodies`, exports include Meet metadata and structured transcript
+entries only. If Google returns a partial artifact failure, such as a smart-note
+listing, transcript-entry, or Drive document-body error, the summary and
+manifest keep the warning instead of failing the whole export.
+Use `--dry-run` to fetch the same artifact/attendance data and print the
+manifest JSON without creating the folder or ZIP. That is useful before writing
+a large export or when an agent only needs counts, selected records, and
+warnings.
+
+Agents can also create the same bundle through the `google_meet` tool:
+
+```json
+{
+  "action": "export",
+  "conferenceRecord": "conferenceRecords/abc123",
+  "includeDocumentBodies": true,
+  "outputDir": "meet-export",
+  "zip": true
+}
+```
+
+Set `"dryRun": true` to return only the export manifest and skip file writes.
+
+Run the guarded live smoke against a real retained meeting:
+
+```bash
+OPENCLAW_LIVE_TEST=1 \
+OPENCLAW_GOOGLE_MEET_LIVE_MEETING=https://meet.google.com/abc-defg-hij \
+pnpm test:live -- extensions/google-meet/google-meet.live.test.ts
+```
+
+Live smoke environment:
+
+- `OPENCLAW_LIVE_TEST=1` enables guarded live tests.
+- `OPENCLAW_GOOGLE_MEET_LIVE_MEETING` points at a retained Meet URL, code, or
+  `spaces/{id}`.
+- `OPENCLAW_GOOGLE_MEET_CLIENT_ID` or `GOOGLE_MEET_CLIENT_ID` provides the OAuth
+  client id.
+- `OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN` or `GOOGLE_MEET_REFRESH_TOKEN` provides
+  the refresh token.
+- Optional: `OPENCLAW_GOOGLE_MEET_CLIENT_SECRET`,
+  `OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN`, and
+  `OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT` use the same fallback names
+  without the `OPENCLAW_` prefix.
+
+The base artifact/attendance live smoke needs
+`https://www.googleapis.com/auth/meetings.space.readonly` and
+`https://www.googleapis.com/auth/meetings.conference.media.readonly`. Calendar
+lookup needs `https://www.googleapis.com/auth/calendar.events.readonly`. Drive
+document-body export needs
+`https://www.googleapis.com/auth/drive.meet.readonly`.
 
 Create a fresh Meet space:
 

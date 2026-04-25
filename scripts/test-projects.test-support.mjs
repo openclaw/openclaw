@@ -232,6 +232,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/run-vitest.mjs",
     ["test/scripts/test-projects.test.ts", "test/scripts/vitest-local-scheduling.test.ts"],
   ],
+  ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
@@ -253,7 +254,21 @@ const SOURCE_TEST_TARGETS = new Map([
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
+  ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+  [
+    "src/plugins/provider-auth-choice.ts",
+    ["src/commands/auth-choice.apply.plugin-provider.test.ts", "src/commands/auth-choice.test.ts"],
+  ],
+  [
+    "src/secrets/provider-env-vars.ts",
+    ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
+  ],
+  [
+    "src/memory-host-sdk/host/embedding-defaults.ts",
+    ["src/memory-host-sdk/host/embeddings.test.ts"],
+  ],
+  ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
     "src/auto-reply/reply/dispatch-from-config.ts",
     ["src/auto-reply/reply/dispatch-from-config.test.ts"],

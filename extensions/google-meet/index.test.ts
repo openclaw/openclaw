@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +9,7 @@ import plugin from "./index.js";
 import {
   extractGoogleMeetUriFromCalendarEvent,
   findGoogleMeetCalendarEvent,
+  listGoogleMeetCalendarEvents,
 } from "./src/calendar.js";
 import { resolveGoogleMeetConfig, resolveGoogleMeetConfigWithEnv } from "./src/config.js";
 import {
@@ -186,6 +190,18 @@ function stubMeetArtifactsApi() {
         ],
       });
     }
+    if (url.pathname === "/drive/v3/files/doc-1/export") {
+      return new Response("Transcript document body.", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
+    if (url.pathname === "/drive/v3/files/doc-2/export") {
+      return new Response("Smart note document body.", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
     return new Response(`unexpected ${url.pathname}`, { status: 404 });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -347,8 +363,10 @@ describe("google-meet plugin", () => {
             "resolve_space",
             "preflight",
             "latest",
+            "calendar_events",
             "artifacts",
             "attendance",
+            "export",
             "recover_current_tab",
             "leave",
             "speak",
@@ -400,6 +418,21 @@ describe("google-meet plugin", () => {
       meetingUri: "https://meet.google.com/abc-defg-hij",
       event: { summary: "Project sync" },
     });
+    await expect(
+      listGoogleMeetCalendarEvents({
+        accessToken: "token",
+        now: new Date("2026-04-25T09:50:00Z"),
+        timeMin: "2026-04-25T00:00:00Z",
+        timeMax: "2026-04-26T00:00:00Z",
+      }),
+    ).resolves.toMatchObject({
+      events: [
+        {
+          meetingUri: "https://meet.google.com/abc-defg-hij",
+          selected: true,
+        },
+      ],
+    });
     const calendarCall = fetchMock.mock.calls.find(([input]) => {
       const url = requestUrl(input);
       return url.pathname === "/calendar/v3/calendars/primary/events";
@@ -416,6 +449,28 @@ describe("google-meet plugin", () => {
         auditContext: "google-meet.calendar.events.list",
       }),
     );
+  });
+
+  it("adds a reauth hint for missing Calendar scopes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("insufficientPermissions", { status: 403 })),
+    );
+
+    await expect(
+      findGoogleMeetCalendarEvent({
+        accessToken: "token",
+        timeMin: "2026-04-25T00:00:00Z",
+        timeMax: "2026-04-26T00:00:00Z",
+      }),
+    ).rejects.toThrow("calendar.events.readonly");
+    await expect(
+      findGoogleMeetCalendarEvent({
+        accessToken: "token",
+        timeMin: "2026-04-25T00:00:00Z",
+        timeMax: "2026-04-26T00:00:00Z",
+      }),
+    ).rejects.toThrow("googlemeet auth login");
   });
 
   it("fetches Meet spaces without percent-encoding the spaces path separator", async () => {
@@ -565,6 +620,33 @@ describe("google-meet plugin", () => {
     const listUrl = requestUrl(listCall[0]);
     expect(listUrl.searchParams.get("pageSize")).toBe("2");
     expect(listUrl.searchParams.get("filter")).toBe('space.name = "spaces/abc-defg-hij"');
+  });
+
+  it("exports linked Google Docs bodies when requested", async () => {
+    const fetchMock = stubMeetArtifactsApi();
+
+    await expect(
+      fetchGoogleMeetArtifacts({
+        accessToken: "token",
+        conferenceRecord: "rec-1",
+        includeDocumentBodies: true,
+      }),
+    ).resolves.toMatchObject({
+      artifacts: [
+        {
+          transcripts: [{ documentText: "Transcript document body." }],
+          smartNotes: [{ documentText: "Smart note document body." }],
+        },
+      ],
+    });
+    const driveCalls = fetchMock.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.pathname.startsWith("/drive/v3/files/"));
+    expect(driveCalls.map((url) => url.pathname)).toEqual([
+      "/drive/v3/files/doc-1/export",
+      "/drive/v3/files/doc-2/export",
+    ]);
+    expect(driveCalls.every((url) => url.searchParams.get("mimeType") === "text/plain")).toBe(true);
   });
 
   it("fetches only the latest Meet conference record for a meeting", async () => {
@@ -812,6 +894,84 @@ describe("google-meet plugin", () => {
     expect(result.details.attendance).toEqual([expect.objectContaining({ displayName: "Alice" })]);
   });
 
+  it("writes export bundles through the tool", async () => {
+    stubMeetArtifactsApi();
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-tool-export-"));
+    const { tools } = setup();
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { files?: string[]; zipFile?: string } }>;
+    };
+
+    try {
+      const result = await tool.execute("id", {
+        action: "export",
+        accessToken: "token",
+        expiresAt: Date.now() + 120_000,
+        conferenceRecord: "rec-1",
+        includeDocumentBodies: true,
+        outputDir: tempDir,
+        zip: true,
+      });
+
+      expect(result.details.files).toEqual(
+        expect.arrayContaining([path.join(tempDir, "manifest.json")]),
+      );
+      expect(result.details.zipFile).toBe(`${tempDir}.zip`);
+      const manifest = JSON.parse(readFileSync(path.join(tempDir, "manifest.json"), "utf8"));
+      expect(manifest).toMatchObject({
+        request: {
+          conferenceRecord: "rec-1",
+          includeDocumentBodies: true,
+        },
+        counts: {
+          attendanceRows: 1,
+          warnings: 0,
+        },
+        files: expect.arrayContaining(["summary.md", "manifest.json"]),
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(`${tempDir}.zip`, { force: true });
+    }
+  });
+
+  it("dry-runs export bundles through the tool", async () => {
+    stubMeetArtifactsApi();
+    const parentDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-tool-dry-run-"));
+    const outputDir = path.join(parentDir, "bundle");
+    const { tools } = setup();
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { dryRun?: boolean; manifest?: { files?: string[] } } }>;
+    };
+
+    try {
+      const result = await tool.execute("id", {
+        action: "export",
+        accessToken: "token",
+        expiresAt: Date.now() + 120_000,
+        conferenceRecord: "rec-1",
+        outputDir,
+        dryRun: true,
+      });
+
+      expect(result.details).toMatchObject({
+        dryRun: true,
+        manifest: {
+          files: expect.arrayContaining(["summary.md", "manifest.json"]),
+        },
+      });
+      expect(existsSync(outputDir)).toBe(false);
+    } finally {
+      rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports the latest conference record through the tool", async () => {
     stubMeetArtifactsApi();
     const { tools } = setup();
@@ -852,6 +1012,31 @@ describe("google-meet plugin", () => {
     expect(result.details.calendarEvent).toMatchObject({
       meetingUri: "https://meet.google.com/abc-defg-hij",
     });
+  });
+
+  it("reports calendar event previews through the tool", async () => {
+    stubMeetArtifactsApi();
+    const { tools } = setup();
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { events?: Array<{ selected?: boolean; meetingUri?: string }> } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "calendar_events",
+      accessToken: "token",
+      expiresAt: Date.now() + 120_000,
+      today: true,
+    });
+
+    expect(result.details.events).toEqual([
+      expect.objectContaining({
+        selected: true,
+        meetingUri: "https://meet.google.com/abc-defg-hij",
+      }),
+    ]);
   });
 
   it("fails setup status when the configured Chrome node is not connected", async () => {

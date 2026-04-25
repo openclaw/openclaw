@@ -137,6 +137,27 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(initialLoads);
   });
 
+  it("reuses the lazy default lookup cache for repeated provider env var reads", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    const initialLoads = loadPluginManifestRegistry.mock.calls.length;
+    expect(initialLoads).toBeGreaterThan(0);
+    expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(initialLoads);
+  });
+
   it("keeps workspace plugin env vars in default lookups", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [

@@ -13,7 +13,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- OpenAI/Codex image generation: canonicalize legacy `openai-codex.baseUrl` values such as `https://chatgpt.com/backend-api` to the Codex Responses backend before calling `gpt-image-2`, matching the chat transport. Fixes #71460.
+- Telegram/webhook: acknowledge validated webhook updates before running bot middleware, keeping slow agent turns from tripping Telegram delivery retries while preserving per-chat processing lanes. Fixes #71392.
 - MCP: retire one-shot embedded bundled MCP runtimes at run end, skip bundle-MCP startup when a runtime tool allowlist cannot reach bundle-MCP tools, and add `mcp.sessionIdleTtlMs` idle eviction for leaked session runtimes. Fixes #71106, #71110, #70389, and #70808.
+- MCP/config reload: hot-apply `mcp.*` changes by disposing cached session MCP runtimes, and dispose bundled MCP runtimes during gateway shutdown so removed `mcp.servers` entries reap child processes promptly. Fixes #60656.
+- Infer/MCP: treat `openclaw infer model run` as a one-shot agent turn for bundled MCP lifecycle cleanup, so local and gateway infer runs do not keep MCP stdio children alive after the result is returned. Fixes #71457.
 - Gateway/restart continuation: durably hand restart continuations to a session-delivery queue before deleting the restart sentinel, recover queued continuation work after crashy restarts, and fall back to a session-only wake when no channel route survives reboot. (#70780) Thanks @fuller-stack-dev.
 - Agents/tool-result pruning: harden the tool-result character estimator and context-pruning loops against malformed `{ type: "text" }` blocks created by void or undefined tool handler results, serializing non-string text payloads for size accounting so they cannot bypass trimming as zero-sized. Fixes #34979. (#51267) Thanks @cgdusek.
 - Daemon/service-env: add Nix Home Manager profile bin directories to generated gateway service PATHs on macOS and Linux, honoring `NIX_PROFILES` right-to-left precedence and falling back to `~/.nix-profile/bin` when unset. Fixes #44402. (#59935) Thanks @jerome-benoit.
@@ -29,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/nodes: add disabled-by-default `gateway.nodes.pairing.autoApproveCidrs` for first-time node pairing from explicit trusted CIDRs, while keeping operator/browser pairing and all upgrade flows manual. Fixes #60800. Thanks @sahilsatralkar.
 - Browser: add viewport coordinate clicks for managed and existing-session automation, plus `openclaw browser click-coords` for CLI use. (#54452) Thanks @dluttz.
 - Browser: add `browser.actionTimeoutMs` and use a 60s default action budget so healthy long browser waits do not fail at the client transport boundary. (#62589) Thanks @andyylin.
+- Browser: include policy-safe current page URLs in agent-facing browser action and debug responses, omitting blocked URLs instead of leaking private targets. Thanks @zeroaltitude.
 - Browser/config: support per-profile `browser.profiles.<name>.headless` overrides for locally launched browser profiles, so one profile can run headless without forcing all browser profiles headless. Thanks @nakamotoliu.
 - Plugins/PDF: move local PDF extraction into a bundled `document-extract` plugin so core no longer owns `pdfjs-dist` or PDF image-rendering dependencies. Thanks @vincentkoc.
 - Dependencies/memory: stop installing `node-llama-cpp` by default; local embeddings now load it only when operators install the optional runtime package. Thanks @vincentkoc.
@@ -82,6 +87,9 @@ Docs: https://docs.openclaw.ai
 - Plugins/Google Meet: add `googlemeet latest` plus matching tool/gateway actions to find the newest conference record for a meeting. Thanks @steipete.
 - Plugins/Google Meet: make meeting-based artifact and attendance lookups use the latest conference record by default, with `--all-conference-records` for full history. Thanks @steipete.
 - Plugins/Google Meet: add Calendar-aware Meet lookup, CSV attendance with timing flags, and `googlemeet export` bundles for artifacts, attendance, transcripts, and raw JSON. Thanks @steipete.
+- Plugins/Google Meet: add `googlemeet calendar-events`, Drive-backed document body export, ZIP bundles, transcript speaker names, reauth hints, and a guarded live smoke. Thanks @steipete.
+- Plugins/Google Meet: add `manifest.json` export metadata, warning summaries for partial artifact/body failures, and matching `google_meet` tool/gateway export support. Thanks @steipete.
+- Plugins/Google Meet: add dry-run export manifests so CLI, tool, and gateway callers can validate selected records, counts, and warnings without writing bundle files. Thanks @steipete.
 - Plugins/Google Meet: add `googlemeet doctor --oauth` so operators can verify OAuth token refresh, Meet space reads, and side-effecting space creation without printing secrets. Thanks @steipete.
 - Plugins/Voice Call: expose the shared `openclaw_agent_consult` realtime tool so live phone calls can ask the full OpenClaw agent for deeper/tool-backed answers. Thanks @steipete.
 - Plugins/Voice Call: add `voicecall setup` and a dry-run-by-default `voicecall smoke` command so Twilio/provider readiness can be checked before placing a live test call. Thanks @steipete.

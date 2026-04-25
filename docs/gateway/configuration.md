@@ -545,7 +545,7 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 | Agent & models      | `agent`, `agents`, `models`, `routing`                            | No              |
 | Automation          | `hooks`, `cron`, `agent.heartbeat`                                | No              |
 | Sessions & messages | `session`, `messages`                                             | No              |
-| Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                     | No              |
+| Tools & media       | `tools`, `browser`, `skills`, `mcp`, `audio`, `talk`              | No              |
 | UI & misc           | `ui`, `logging`, `identity`, `bindings`                           | No              |
 | Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)              | **Yes**         |
 | Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |
