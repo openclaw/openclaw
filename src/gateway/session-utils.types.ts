@@ -23,6 +23,8 @@ export type GatewayThinkingLevelOption = {
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
+export type SubagentRunState = "active" | "interrupted" | "historical";
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
@@ -62,6 +64,8 @@ export type GatewaySessionRow = {
   totalTokensFresh?: boolean;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  subagentRunState?: SubagentRunState;
+  hasActiveSubagentRun?: boolean;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;

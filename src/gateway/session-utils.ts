@@ -23,6 +23,7 @@ import {
   getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
+  isSubagentRunLive,
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
@@ -1256,10 +1257,51 @@ export function buildGatewaySessionRow(params: {
   const subagentOwner =
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
-  const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
-  const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
-  const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
-  const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const liveSubagentRunActive = isSubagentRunLive(subagentRun);
+  const persistedSessionStatus = entry?.status;
+  const persistedSessionEndedAt = entry?.endedAt;
+  const persistedSessionStartedAt = entry?.startedAt;
+  const persistedSessionRuntimeMs = entry?.runtimeMs;
+  const subagentRunState = subagentRun
+    ? liveSubagentRunActive
+      ? "active"
+      : typeof subagentRun.endedAt === "number" ||
+          persistedSessionStatus === "done" ||
+          persistedSessionStatus === "failed" ||
+          persistedSessionStatus === "killed" ||
+          persistedSessionStatus === "timeout" ||
+          typeof persistedSessionEndedAt === "number"
+        ? "historical"
+        : "interrupted"
+    : undefined;
+  const subagentStatus = subagentRun
+    ? liveSubagentRunActive
+      ? resolveSubagentSessionStatus(subagentRun)
+      : persistedSessionStatus === "running"
+        ? undefined
+        : (persistedSessionStatus ??
+          (typeof subagentRun.endedAt === "number"
+            ? resolveSubagentSessionStatus(subagentRun)
+            : undefined))
+    : undefined;
+  const subagentStartedAt = subagentRun
+    ? liveSubagentRunActive
+      ? getSubagentSessionStartedAt(subagentRun)
+      : (persistedSessionStartedAt ?? getSubagentSessionStartedAt(subagentRun))
+    : undefined;
+  const subagentEndedAt = subagentRun
+    ? liveSubagentRunActive
+      ? subagentRun.endedAt
+      : (persistedSessionEndedAt ?? subagentRun.endedAt)
+    : undefined;
+  const subagentRuntimeMs = subagentRun
+    ? liveSubagentRunActive
+      ? resolveSessionRuntimeMs(subagentRun, now)
+      : (persistedSessionRuntimeMs ??
+        (typeof subagentRun.endedAt === "number"
+          ? resolveSessionRuntimeMs(subagentRun, now)
+          : undefined))
+    : undefined;
   const selectedModel = entry?.modelOverride?.trim()
     ? resolveSessionModelRef(cfg, entry, sessionAgentId)
     : null;
@@ -1403,6 +1445,8 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
+    subagentRunState,
+    hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,

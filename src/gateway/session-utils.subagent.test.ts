@@ -8,6 +8,7 @@ import {
 } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
@@ -19,9 +20,11 @@ import {
 describe("listSessionsFromStore subagent metadata", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    resetAgentRunContextForTest();
   });
   beforeEach(() => {
     resetSubagentRegistryForTests({ persist: false });
+    resetAgentRunContextForTest();
   });
 
   const cfg = {
@@ -69,6 +72,9 @@ describe("listSessionsFromStore subagent metadata", () => {
       createdAt: now - 10_000,
       startedAt: now - 9_000,
       model: "openai/gpt-5.4",
+    });
+    registerAgentRunContext("run-parent", {
+      sessionKey: "agent:main:subagent:parent",
     });
     addSubagentRunForTests({
       runId: "run-child",
@@ -135,6 +141,49 @@ describe("listSessionsFromStore subagent metadata", () => {
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
     expect(failed?.status).toBe("failed");
     expect(failed?.runtimeMs).toBe(5_000);
+  });
+
+  test("does not show stale registry-only subagent runs as actively running", () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:stale-display";
+    const store: Record<string, SessionEntry> = {
+      [childSessionKey]: {
+        sessionId: "sess-stale-display",
+        updatedAt: now - 250,
+        spawnedBy: "agent:main:main",
+        status: "done",
+        startedAt: now - 4_000,
+        endedAt: now - 500,
+        runtimeMs: 3_500,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-stale-display",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale display task",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+      model: "openai/gpt-5.4",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const row = result.sessions.find((session) => session.key === childSessionKey);
+    expect(row?.status).toBe("done");
+    expect(row?.subagentRunState).toBe("historical");
+    expect(row?.hasActiveSubagentRun).toBe(false);
+    expect(row?.endedAt).toBe(now - 500);
+    expect(row?.runtimeMs).toBe(3_500);
   });
 
   test("does not keep childSessions attached to a stale older controller row", () => {
@@ -522,6 +571,9 @@ describe("listSessionsFromStore subagent metadata", () => {
       accumulatedRuntimeMs: 120_000,
       model: "openai/gpt-5.4",
     });
+    registerAgentRunContext("run-followup-new", {
+      sessionKey: "agent:main:subagent:followup",
+    });
 
     const result = listSessionsFromStore({
       cfg,
@@ -592,7 +644,7 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
   });
 
-  test("uses persisted active subagent runs when the local worker only has terminal snapshots", async () => {
+  test("prefers persisted terminal session state when only stale active subagent snapshots remain", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
     const stateDir = path.join(tempRoot, "state");
     fs.mkdirSync(stateDir, { recursive: true });
@@ -662,10 +714,12 @@ describe("listSessionsFromStore subagent metadata", () => {
         },
       );
 
-      expect(row?.status).toBe("running");
+      expect(row?.status).toBe("done");
+      expect(row?.subagentRunState).toBe("historical");
+      expect(row?.hasActiveSubagentRun).toBe(false);
       expect(row?.startedAt).toBe(now - 9_000);
-      expect(row?.endedAt).toBeUndefined();
-      expect(row?.runtimeMs).toBeGreaterThanOrEqual(9_000);
+      expect(row?.endedAt).toBe(now - 1_800);
+      expect(row?.runtimeMs).toBe(100);
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
