@@ -97,6 +97,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/PDF: move local PDF extraction into a bundled `document-extract` plugin so core no longer owns `pdfjs-dist` or PDF image-rendering dependencies. Thanks @vincentkoc.
 - Dependencies/memory: stop installing `node-llama-cpp` by default; local embeddings now load it only when operators install the optional runtime package. Thanks @vincentkoc.
 - Dependencies/media: replace the tiny core media host's Express server with `node:http`, so Express is no longer a root runtime dependency. Thanks @vincentkoc.
+- Dependencies/media: move Sharp-backed image attachment processing into the bundled media understanding runtime so core no longer owns the native image parser dependency. Thanks @vincentkoc.
 - Matrix: require full cross-signing identity trust for self-device verification and add `openclaw matrix verify self` so operators can establish that trust from the CLI. (#70401) Thanks @gumadeiras.
 - WebChat/sessions: keep runtime-only prompt context out of visible transcript history and scrub legacy wrappers from session history surfaces. Thanks @91wan.
 - Gradium: add a bundled text-to-speech provider with voice-note and telephony output support. (#64958) Thanks @LaurentMazare.
