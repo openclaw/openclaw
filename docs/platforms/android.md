@@ -182,8 +182,9 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 
 ### 8) Voice + expanded Android command surface
 
-- Voice: Android uses a single mic on/off flow in the Voice tab with transcript capture and `talk.speak` playback. Local system TTS is used only when `talk.speak` is unavailable. Voice stops when the app leaves the foreground.
-- Voice wake/talk-mode toggles are currently removed from Android UX/runtime.
+- Voice: Android provides two voice capture modes in the Voice tab, mutually exclusive:
+  - **Mic** (push-to-talk): single mic on/off with transcript capture and `talk.speak` playback. Local system TTS is used only when `talk.speak` is unavailable.
+  - **Talk Mode** (continuous hands-free): always-listening voice loop with automatic silence detection, interrupt-on-speech, and TTS playback. Works in the background via `FOREGROUND_SERVICE_MICROPHONE` — designed for phone-in-pocket use with wireless headphones.
 - Additional Android command families (availability depends on device + permissions):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
   - `notifications.list`, `notifications.actions` (see [Notification forwarding](#notification-forwarding) below)

@@ -429,8 +429,12 @@ class NodeRuntime(
   /**
    * Enable or disable Talk Mode. When enabled, the foreground service is
    * upgraded to include microphone type so mic access survives backgrounding.
+   * Mutually exclusive with manual mic — enabling one disables the other.
    */
   fun setTalkModeEnabled(enabled: Boolean) {
+    if (enabled && micCapture.micEnabled.value) {
+      setMicEnabled(false)
+    }
     talkMode.setEnabled(enabled)
     NodeForegroundService.setTalkModeActive(appContext, enabled)
   }
@@ -782,6 +786,9 @@ class NodeRuntime(
   }
 
   fun setMicEnabled(value: Boolean) {
+    if (value && talkMode.isEnabled.value) {
+      setTalkModeEnabled(false)
+    }
     prefs.setTalkEnabled(value)
     if (value) {
       // Tapping mic on interrupts any active TTS (barge-in)

@@ -96,6 +96,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
 
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
   var pendingMicEnable by remember { mutableStateOf(false) }
+  var pendingTalkEnable by remember { mutableStateOf(false) }
 
   DisposableEffect(lifecycleOwner, context) {
     val observer =
@@ -115,10 +116,14 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   val requestMicPermission =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       hasMicPermission = granted
-      if (granted && pendingMicEnable) {
-        viewModel.setMicEnabled(true)
+      if (granted) {
+        when {
+          pendingTalkEnable -> viewModel.setTalkModeEnabled(true)
+          pendingMicEnable -> viewModel.setMicEnabled(true)
+        }
       }
       pendingMicEnable = false
+      pendingTalkEnable = false
     }
 
   LaunchedEffect(micConversation.size, showThinkingBubble) {
@@ -299,7 +304,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
                 if (hasMicPermission) {
                   viewModel.setTalkModeEnabled(true)
                 } else {
-                  pendingMicEnable = false
+                  pendingTalkEnable = true
                   requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
               }
