@@ -22,6 +22,7 @@ import {
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 import { createOpenRouterSystemCacheWrapper } from "./proxy-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
@@ -371,6 +372,27 @@ function resolveAliasedParamValue(
   return seen ? resolved : undefined;
 }
 
+function createUserFieldWrapper(
+  baseStreamFn: StreamFn | undefined,
+  user: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    log.debug(
+      `applying user field for ${model.provider ?? "unknown"}/${model.id ?? "unknown"}`,
+    );
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      options,
+      (payloadObj) => {
+        payloadObj.user = user;
+      },
+    );
+  };
+}
+
 function createParallelToolCallsWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
@@ -454,6 +476,13 @@ function applyPostPluginStreamWrappers(
   // visible reply path because it does not emit native Anthropic thinking
   // blocks. Disable thinking unless an earlier wrapper already set it.
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
+
+  // Inject user field into API payloads for per-request attribution
+  // (e.g., OpenRouter cost tracking, abuse detection).
+  const user = normalizeOptionalString(ctx.effectiveExtraParams.user);
+  if (user) {
+    ctx.agent.streamFn = createUserFieldWrapper(ctx.agent.streamFn, user);
+  }
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
