@@ -2,7 +2,11 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
-import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import {
+  assertBrowserNavigationAllowed,
+  type BrowserNavigationPolicyOptions,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -241,6 +245,7 @@ export async function navigateViaPlaywright(opts: {
   url: string;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
 }): Promise<{ url: string }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
@@ -261,7 +266,9 @@ export async function navigateViaPlaywright(opts: {
   }
   await assertBrowserNavigationAllowed({
     url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
+      browserProxyMode: opts.browserProxyMode,
+    }),
   });
   const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
   let page = await getPageForTargetId(opts);
@@ -273,6 +280,7 @@ export async function navigateViaPlaywright(opts: {
       url,
       timeoutMs: timeout,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   let response;
@@ -298,6 +306,7 @@ export async function navigateViaPlaywright(opts: {
     page,
     response,
     ssrfPolicy: opts.ssrfPolicy,
+    browserProxyMode: opts.browserProxyMode,
     targetId: opts.targetId,
   });
   const finalUrl = page.url();

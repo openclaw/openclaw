@@ -27,6 +27,7 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -747,14 +748,17 @@ async function closeBlockedNavigationTarget(opts: {
   await opts.page.close().catch(() => {});
 }
 
-export async function assertPageNavigationCompletedSafely(opts: {
-  cdpUrl: string;
-  page: Page;
-  response: Response | null;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<void> {
-  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+export async function assertPageNavigationCompletedSafely(
+  opts: {
+    cdpUrl: string;
+    page: Page;
+    response: Response | null;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   try {
     await assertBrowserNavigationRedirectChainAllowed({
       request: opts.response?.request(),
@@ -776,15 +780,18 @@ export async function assertPageNavigationCompletedSafely(opts: {
   }
 }
 
-export async function gotoPageWithNavigationGuard(opts: {
-  cdpUrl: string;
-  page: Page;
-  url: string;
-  timeoutMs: number;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<Response | null> {
-  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+export async function gotoPageWithNavigationGuard(
+  opts: {
+    cdpUrl: string;
+    page: Page;
+    url: string;
+    timeoutMs: number;
+    targetId?: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<Response | null> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
   let blockedError: unknown = null;
 
   const handler = async (route: Route, request: Request) => {
@@ -1102,11 +1109,12 @@ export async function listPagesViaPlaywright(opts: {
  * Used for remote profiles where HTTP-based /json/new is ephemeral.
  * Returns the new page's targetId and metadata.
  */
-export async function createPageViaPlaywright(opts: {
-  cdpUrl: string;
-  url: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<{
+export async function createPageViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    url: string;
+  } & BrowserNavigationPolicyOptions,
+): Promise<{
   targetId: string;
   title: string;
   url: string;
@@ -1125,7 +1133,9 @@ export async function createPageViaPlaywright(opts: {
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
-    const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
+    const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+      browserProxyMode: opts.browserProxyMode,
+    });
     await assertBrowserNavigationAllowed({
       url: targetUrl,
       ...navigationPolicy,
@@ -1138,6 +1148,7 @@ export async function createPageViaPlaywright(opts: {
         url: targetUrl,
         timeoutMs: 30_000,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: createdTargetId ?? undefined,
       });
     } catch (err) {
@@ -1150,6 +1161,7 @@ export async function createPageViaPlaywright(opts: {
       page,
       response,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: createdTargetId ?? undefined,
     });
   }

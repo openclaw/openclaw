@@ -1,3 +1,4 @@
+import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -30,6 +31,15 @@ function resolveTabsProfileContext(
     return null;
   }
   return profileCtx;
+}
+
+function browserNavigationPolicyForProfile(ctx: BrowserRouteContext, profileCtx: ProfileContext) {
+  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
+    browserProxyMode: resolveBrowserNavigationProxyMode({
+      resolved: ctx.state().resolved,
+      profile: profileCtx.profile,
+    }),
+  });
 }
 
 function handleTabsRouteError(
@@ -188,7 +198,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         run: async (profileCtx) => {
           await assertBrowserNavigationAllowed({
             url,
-            ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
+            ...browserNavigationPolicyForProfile(ctx, profileCtx),
           });
           await profileCtx.ensureBrowserAvailable();
           const tab = await profileCtx.openTab(url, { label });
@@ -223,7 +233,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           if (!tab) {
             throw new BrowserTabNotFoundError({ input: id });
           }
-          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
           if (ssrfPolicyOpts.ssrfPolicy) {
             await assertBrowserNavigationResultAllowed({
               url: tab.url,
@@ -331,7 +341,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             if (!target) {
               throw new BrowserTabNotFoundError();
             }
-            const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+            const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
             if (ssrfPolicyOpts.ssrfPolicy) {
               await assertBrowserNavigationResultAllowed({
                 url: target.url,

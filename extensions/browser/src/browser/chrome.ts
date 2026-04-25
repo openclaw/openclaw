@@ -8,6 +8,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
+import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
 import {
   CHROME_BOOTSTRAP_EXIT_POLL_MS,
   CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS,
@@ -131,6 +132,9 @@ export function buildOpenClawChromeLaunchArgs(params: {
   }
   if (process.platform === "linux") {
     args.push("--disable-dev-shm-usage");
+  }
+  if (!hasChromeProxyControlArg(resolved.extraArgs)) {
+    args.push("--no-proxy-server");
   }
   if (resolved.extraArgs.length > 0) {
     args.push(...resolved.extraArgs);
@@ -293,7 +297,7 @@ export async function launchOpenClawChrome(
     // the tuple overload resolution varies across @types/node versions.
     const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
       env: {
-        ...process.env,
+        ...omitChromeProxyEnv(process.env),
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
       },
