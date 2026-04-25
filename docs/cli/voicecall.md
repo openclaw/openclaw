@@ -33,6 +33,10 @@ scripts:
 openclaw voicecall setup --json
 ```
 
+For external providers (`twilio`, `telnyx`, `plivo`), setup must resolve a public
+webhook URL from `publicUrl`, a tunnel, or Tailscale exposure. A loopback/private
+serve fallback is rejected because carriers cannot reach it.
+
 `smoke` runs the same readiness checks. It will not place a real phone call
 unless both `--to` and `--yes` are present:
 
