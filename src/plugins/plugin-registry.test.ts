@@ -207,7 +207,7 @@ describe("plugin registry facade", () => {
 
   it("normalizes plugin config ids through registry contribution aliases", () => {
     const baseIndex = createIndex("openai");
-    const plugin = baseIndex.plugins[0]!;
+    const plugin = baseIndex.plugins[0];
     const index = createIndex("openai", {
       plugins: [
         {
