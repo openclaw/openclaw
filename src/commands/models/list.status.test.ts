@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => {
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
     listAgentIds: vi.fn().mockReturnValue(["main", "jeremiah"]),
     ensureAuthProfileStore: vi.fn().mockReturnValue(store),
+    ensureAuthProfileStoreWithoutExternalProfiles: vi.fn().mockReturnValue(store),
     listProfilesForProvider: vi.fn((s: typeof store, provider: string) => {
       return Object.entries(s.profiles)
         .filter(([, cred]) => cred.provider === provider)
@@ -146,7 +147,8 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 }));
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles:
+    mocks.ensureAuthProfileStoreWithoutExternalProfiles,
 }));
 vi.mock("../../agents/auth-profiles/usage.js", () => ({
   resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
@@ -284,6 +286,8 @@ describe("modelsStatusCommand auth overview", () => {
     const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
 
     expect(mocks.resolveOpenClawAgentDir).toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
     expect(payload.auth.storePath).toBe("/tmp/openclaw-agent/auth-profiles.json");

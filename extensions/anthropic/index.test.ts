@@ -332,6 +332,33 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
+  it("exposes Claude CLI auth as a runtime-only external profile", async () => {
+    readClaudeCliCredentialsForRuntimeMock.mockReset();
+    readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: 123,
+    });
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(provider.resolveExternalAuthProfiles?.({} as never)).toEqual([
+      {
+        profileId: "anthropic:claude-cli",
+        credential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "fresh-cli-access",
+          refresh: "fresh-cli-refresh",
+          expires: 123,
+        },
+        persistence: "runtime-only",
+      },
+    ]);
+  });
+
   it("stores a claude-cli auth profile during anthropic cli migration", async () => {
     readClaudeCliCredentialsForSetupMock.mockReset();
     readClaudeCliCredentialsForSetupMock.mockReturnValue({
