@@ -42,10 +42,12 @@ function isMinimaxCnHost(value: string | undefined): boolean {
   if (!trimmed) {
     return false;
   }
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
-    return new URL(trimmed).hostname.endsWith("minimaxi.com");
+    const hostname = new URL(candidate).hostname.toLowerCase();
+    return hostname === "minimaxi.com" || hostname.endsWith(".minimaxi.com");
   } catch {
-    return trimmed.includes("minimaxi.com");
+    return false;
   }
 }
 
