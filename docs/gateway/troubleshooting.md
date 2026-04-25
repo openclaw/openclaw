@@ -200,6 +200,12 @@ Use `error.details.code` from the failed `connect` response to pick the next act
 | `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.                                                                                                                                                 | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                                                                                                                                        |
 | `PAIRING_REQUIRED`           | Device identity needs approval. Check `error.details.reason` for `not-paired`, `scope-upgrade`, `role-upgrade`, or `metadata-upgrade`, and use `requestId` / `remediationHint` when present. | Approve pending request: `openclaw devices list` then `openclaw devices approve <requestId>`. Scope/role upgrades use the same flow after you review the requested access.                                                                                                               |
 
+Direct loopback backend RPCs authenticated with the shared gateway
+token/password should not depend on the CLI's paired-device scope baseline. If
+subagents or other internal calls still fail with `scope-upgrade`, verify the
+caller is using `client.id: "gateway-client"` and `client.mode: "backend"` and
+is not forcing an explicit `deviceIdentity` or device token.
+
 Device auth v2 migration check:
 
 ```bash

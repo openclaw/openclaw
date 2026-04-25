@@ -61,6 +61,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/subagents: keep direct-loopback backend RPCs authenticated with the
+  shared gateway token/password off stale CLI paired-device scope baselines, so
+  internal calls no longer hit `scope-upgrade` pairing prompts while remote,
+  browser, node, device-token, and explicit-device paths still require normal
+  pairing approval. Fixes #63548.
 - CLI/gateway: keep diagnostic probes from creating first-time read-only device
   pairings, while still reusing cached device tokens for detailed read probes.
   Fixes #71766. Thanks @SunboZ.
