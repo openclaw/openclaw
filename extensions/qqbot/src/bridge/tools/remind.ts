@@ -5,10 +5,10 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/core";
 import { RemindSchema, executeScheduledRemind } from "../../engine/tools/remind-logic.js";
-import type { RemindCronParams, RemindParams } from "../../engine/tools/remind-logic.js";
+import type { RemindCronAction, RemindParams } from "../../engine/tools/remind-logic.js";
 import { getRequestContext } from "../../engine/utils/request-context.js";
 
-type CronGatewayCaller = (params: RemindCronParams) => Promise<unknown>;
+type CronGatewayCaller = (params: RemindCronAction) => Promise<unknown>;
 
 type RemindToolDeps = {
   callCron: CronGatewayCaller;
@@ -17,7 +17,7 @@ type RemindToolDeps = {
 const DEFAULT_GATEWAY_TIMEOUT_MS = 60_000;
 
 function unexpectedCronParams(params: never): never {
-  throw new Error(`Unsupported reminder cron params: ${JSON.stringify(params)}`);
+  throw new Error(`Unsupported reminder cron action: ${JSON.stringify(params)}`);
 }
 
 const defaultDeps: RemindToolDeps = {

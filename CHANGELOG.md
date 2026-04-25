@@ -62,6 +62,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- QQ Bot: make `qqbot_remind` schedule, list, and remove Gateway cron jobs
+  directly for owner-authorized senders instead of returning `cronParams` and
+  relying on a follow-up generic `cron` tool call. Fixes #70865. (#70937)
+  Thanks @GaosCode.
 - Agents/subagents: keep queued subagent announces session-only when the
   requester has no external channel target, avoiding ambiguous multi-channel
   delivery failures. Fixes #59201. Thanks @larrylhollan.

@@ -7,6 +7,7 @@ import {
   buildReminderPrompt,
   executeRemind,
   executeScheduledRemind,
+  prepareRemindCronAction,
 } from "./remind-logic.js";
 
 describe("engine/tools/remind-logic", () => {
@@ -101,56 +102,57 @@ describe("engine/tools/remind-logic", () => {
   });
 
   describe("executeRemind", () => {
-    it("returns list instruction", () => {
+    it("renders internal scheduling output without exposing cronParams", () => {
       const result = executeRemind({ action: "list" });
       expect(result.details).toEqual({
-        _instruction: "Gateway cron parameters prepared for internal QQ reminder scheduling.",
-        cronParams: { action: "list" },
+        _instruction: "Gateway cron action prepared for internal QQ reminder scheduling.",
+        action: "list",
+        summary: undefined,
       });
       expect((result.details as { _instruction: string })._instruction).not.toContain(
         "Use the cron tool",
       );
+      expect(result.details).not.toHaveProperty("cronParams");
     });
+  });
 
+  describe("prepareRemindCronAction", () => {
     it("returns error when removing without jobId", () => {
-      const result = executeRemind({ action: "remove" });
-      expect((result.details as { error: string }).error).toContain("jobId");
+      const result = prepareRemindCronAction({ action: "remove" });
+      expect(result).toEqual({
+        ok: false,
+        error: "jobId is required when action=remove. Use action=list first.",
+      });
     });
 
     it("returns error when content is missing for add", () => {
-      const result = executeRemind({ action: "add", to: "qqbot:c2c:123", time: "5m" });
-      expect((result.details as { error: string }).error).toContain("content");
+      const result = prepareRemindCronAction({ action: "add", to: "qqbot:c2c:123", time: "5m" });
+      expect(result).toEqual({ ok: false, error: "content is required when action=add" });
     });
 
     it("returns error when delay is too short", () => {
-      const result = executeRemind({
+      const result = prepareRemindCronAction({
         action: "add",
         content: "test",
         to: "qqbot:c2c:123",
         time: "10s",
       });
-      expect((result.details as { error: string }).error).toContain("30 seconds");
+      expect(result).toEqual({ ok: false, error: "Reminder delay must be at least 30 seconds" });
     });
 
     it("builds once job with delivery envelope for relative time", () => {
-      const result = executeRemind({
+      const result = prepareRemindCronAction({
         action: "add",
         content: "test reminder",
         to: "qqbot:c2c:123",
         time: "5m",
       });
-      const details = result.details as {
-        cronParams: {
-          job: {
-            schedule: { kind: string };
-            payload: { kind: string; message: string };
-            delivery: { mode: string; channel: string; to: string; accountId: string };
-          };
-        };
-      };
-      expect(details.cronParams.job.schedule.kind).toBe("at");
-      expect(details.cronParams.job.payload.kind).toBe("agentTurn");
-      expect(details.cronParams.job.delivery).toEqual({
+      expect(result.ok).toBe(true);
+      expect(result.ok ? result.cronAction.action : undefined).toBe("add");
+      const job = result.ok && result.cronAction.action === "add" ? result.cronAction.job : null;
+      expect(job?.schedule.kind).toBe("at");
+      expect(job?.payload.kind).toBe("agentTurn");
+      expect(job?.delivery).toEqual({
         mode: "announce",
         channel: "qqbot",
         to: "qqbot:c2c:123",
@@ -159,51 +161,48 @@ describe("engine/tools/remind-logic", () => {
     });
 
     it("builds cron job with delivery envelope for cron expression", () => {
-      const result = executeRemind({
+      const result = prepareRemindCronAction({
         action: "add",
         content: "test reminder",
         to: "qqbot:c2c:123",
         time: "0 8 * * *",
       });
-      const details = result.details as {
-        cronParams: {
-          job: {
-            schedule: { kind: string };
-            delivery: { channel: string; to: string; accountId: string };
-          };
-        };
-      };
-      expect(details.cronParams.job.schedule.kind).toBe("cron");
-      expect(details.cronParams.job.delivery.to).toBe("qqbot:c2c:123");
+      expect(result.ok).toBe(true);
+      const job = result.ok && result.cronAction.action === "add" ? result.cronAction.job : null;
+      expect(job?.schedule.kind).toBe("cron");
+      expect(job?.delivery.to).toBe("qqbot:c2c:123");
     });
 
     it("falls back to ctx.fallbackTo when to is omitted", () => {
-      const result = executeRemind(
+      const result = prepareRemindCronAction(
         { action: "add", content: "test", time: "5m" },
         { fallbackTo: "qqbot:c2c:ctx-target", fallbackAccountId: "alt" },
       );
-      const details = result.details as {
-        cronParams: { job: { delivery: { to: string; accountId: string } } };
-      };
-      expect(details.cronParams.job.delivery.to).toBe("qqbot:c2c:ctx-target");
-      expect(details.cronParams.job.delivery.accountId).toBe("alt");
+      expect(result.ok).toBe(true);
+      const job = result.ok && result.cronAction.action === "add" ? result.cronAction.job : null;
+      expect(job?.delivery.to).toBe("qqbot:c2c:ctx-target");
+      expect(job?.delivery.accountId).toBe("alt");
     });
 
     it("prefers AI-supplied to over ctx fallback", () => {
-      const result = executeRemind(
+      const result = prepareRemindCronAction(
         { action: "add", content: "test", time: "5m", to: "qqbot:group:ai-chosen" },
         { fallbackTo: "qqbot:c2c:ctx-target", fallbackAccountId: "alt" },
       );
-      const details = result.details as {
-        cronParams: { job: { delivery: { to: string; accountId: string } } };
-      };
-      expect(details.cronParams.job.delivery.to).toBe("qqbot:group:ai-chosen");
-      expect(details.cronParams.job.delivery.accountId).toBe("alt");
+      expect(result.ok).toBe(true);
+      const job = result.ok && result.cronAction.action === "add" ? result.cronAction.job : null;
+      expect(job?.delivery.to).toBe("qqbot:group:ai-chosen");
+      expect(job?.delivery.accountId).toBe("alt");
     });
 
     it("returns error when neither AI nor ctx provides a target", () => {
-      const result = executeRemind({ action: "add", content: "test", time: "5m" });
-      expect((result.details as { error: string }).error).toMatch(/delivery target/i);
+      const result = prepareRemindCronAction({ action: "add", content: "test", time: "5m" });
+      expect(result).toEqual({
+        ok: false,
+        error:
+          "Unable to determine delivery target for action=add. " +
+          "The reminder can only be scheduled from within an active conversation.",
+      });
     });
   });
 
