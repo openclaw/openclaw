@@ -531,7 +531,12 @@ export function renderChatMobileToggle(state: AppViewState) {
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   resetChatStateForSessionSwitch(state, nextSessionKey);
   void state.loadAssistantIdentity();
-  void refreshChatAvatar(state);
+  void refreshChatAvatar(state).then((avatarUrl) => {
+    if (avatarUrl !== null) {
+      (state as unknown as { chatAvatarUrl: string | null }).chatAvatarUrl =
+        avatarUrl;
+    }
+  });
   void refreshSlashCommands({
     client: state.client,
     agentId: parseAgentSessionKey(nextSessionKey)?.agentId,

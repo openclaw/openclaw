@@ -336,7 +336,13 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
-      void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
+      const chatHost = host as unknown as Parameters<typeof refreshChatAvatar>[0];
+      void refreshChatAvatar(chatHost).then((avatarUrl) => {
+        if (avatarUrl !== null) {
+          (chatHost as unknown as { chatAvatarUrl: string | null }).chatAvatarUrl =
+            avatarUrl;
+        }
+      });
       void loadAgents(host as unknown as AgentsState);
       void loadHealthState(host as unknown as HealthState);
       void loadNodes(host as unknown as NodesState, { quiet: true });
