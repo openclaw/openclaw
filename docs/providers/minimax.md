@@ -244,6 +244,18 @@ exposed separately through the plugin-owned `MiniMax-VL-01` media provider.
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
 
+### Text-to-speech
+
+The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
+`messages.tts`.
+
+- Default TTS model: `speech-2.8-hd`
+- Default voice: `English_expressive_narrator`
+- Normal audio attachments stay MP3.
+- Voice-note targets such as Feishu and Telegram are transcoded from MiniMax
+  MP3 to 48kHz Opus with `ffmpeg`, because the Feishu/Lark file API only
+  accepts `file_type: "opus"` for native audio messages.
+
 ### Music generation
 
 The bundled `minimax` plugin also registers music generation through the shared
