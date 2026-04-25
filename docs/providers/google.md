@@ -267,6 +267,7 @@ To use Google as the default TTS provider:
         google: {
           model: "gemini-3.1-flash-tts-preview",
           voiceName: "Kore",
+          audioProfile: "Speak professionally with a calm tone.",
         },
       },
     },
@@ -274,9 +275,14 @@ To use Google as the default TTS provider:
 }
 ```
 
-Gemini API TTS accepts expressive square-bracket audio tags in the text, such as
-`[whispers]` or `[laughs]`. To keep tags out of the visible chat reply while
-sending them to TTS, put them inside a `[[tts:text]]...[[/tts:text]]` block:
+Gemini API TTS uses natural-language prompting for style control. Set
+`audioProfile` to prepend a reusable style prompt before the spoken text. Set
+`speakerName` when your prompt text refers to a named speaker.
+
+Gemini API TTS also accepts expressive square-bracket audio tags in the text,
+such as `[whispers]` or `[laughs]`. To keep tags out of the visible chat reply
+while sending them to TTS, put them inside a `[[tts:text]]...[[/tts:text]]`
+block:
 
 ```text
 Here is the clean reply text.
