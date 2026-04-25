@@ -1,10 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS = 30_000;
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV = "OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS";
@@ -68,19 +65,11 @@ export async function fetchBotIdentityForMonitor(
     timeoutMs,
     abortSignal: options.abortSignal,
   });
-  // Keep this local typing strict (ok is required) even if extension build typings
-  // temporarily lose the BaseProbeResult fields.
-  const typed = result as unknown as {
-    ok: boolean;
-    error?: string | null;
-    botOpenId?: string;
-    botName?: string;
-  };
-  if (typed.ok) {
-    return { botOpenId: typed.botOpenId, botName: typed.botName };
+  if (result.ok) {
+    return { botOpenId: result.botOpenId, botName: result.botName };
   }
 
-  const probeError = typed.error ?? undefined;
+  const probeError = result.error ?? undefined;
   if (options.abortSignal?.aborted || isAbortErrorMessage(probeError)) {
     return {};
   }

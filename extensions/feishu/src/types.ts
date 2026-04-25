@@ -81,8 +81,6 @@ export type FeishuMessageInfo = {
 };
 
 export interface FeishuProbeResult extends BaseProbeResult {
-  ok: boolean;
-  error?: string | null;
   appId?: string;
   botName?: string;
   botOpenId?: string;
