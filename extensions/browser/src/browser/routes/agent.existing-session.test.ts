@@ -150,7 +150,7 @@ describe("existing-session browser routes", () => {
       {
         params: {},
         query: {},
-        body: { ref: "btn-1", type: "jpeg" },
+        body: { ref: "btn-1", type: "jpeg", timeoutMs: 4321 },
       },
       response.res,
     );
@@ -167,6 +167,7 @@ describe("existing-session browser routes", () => {
       uid: "btn-1",
       fullPage: false,
       format: "jpeg",
+      timeoutMs: 4321,
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
