@@ -260,10 +260,10 @@ function commandApprovalDecision(
   outcome: AppServerApprovalOutcome,
 ): JsonValue {
   if (outcome === "cancelled") {
-    return "cancel";
+    return commandRejectionDecision(requestParams, "cancel");
   }
   if (outcome === "denied" || outcome === "unavailable") {
-    return "decline";
+    return commandRejectionDecision(requestParams, "decline");
   }
   if (outcome === "approved-session") {
     if (hasAvailableDecision(requestParams, "acceptForSession")) {
@@ -274,7 +274,9 @@ function commandApprovalDecision(
       return amendmentDecision;
     }
   }
-  return hasAvailableDecision(requestParams, "accept") ? "accept" : "decline";
+  return hasAvailableDecision(requestParams, "accept")
+    ? "accept"
+    : commandRejectionDecision(requestParams, "decline");
 }
 
 function fileChangeApprovalDecision(outcome: AppServerApprovalOutcome): JsonValue {
@@ -515,6 +517,24 @@ function findAvailableCommandAmendmentDecision(
       (isJsonObject(entry.acceptWithExecpolicyAmendment) ||
         isJsonObject(entry.applyNetworkPolicyAmendment)),
   );
+}
+
+function commandRejectionDecision(
+  requestParams: JsonObject | undefined,
+  preferred: "decline" | "cancel",
+): JsonValue {
+  const available = requestParams?.availableDecisions;
+  if (!Array.isArray(available)) {
+    return preferred;
+  }
+  if (available.includes(preferred)) {
+    return preferred;
+  }
+  const alternate = preferred === "decline" ? "cancel" : "decline";
+  if (available.includes(alternate)) {
+    return alternate;
+  }
+  return preferred;
 }
 
 function approvalResolutionMessage(outcome: AppServerApprovalOutcome): string {
