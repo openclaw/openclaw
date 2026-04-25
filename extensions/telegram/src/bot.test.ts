@@ -926,7 +926,7 @@ describe("createTelegramBot", () => {
         inline_keyboard: [
           [
             { text: "◀ Prev", callback_data: "commands_page_1:main" },
-            { text: "2/5", callback_data: "commands_page_noop:main" },
+            { text: "2/6", callback_data: "commands_page_noop:main" },
             { text: "Next ▶", callback_data: "commands_page_3:main" },
           ],
         ],
