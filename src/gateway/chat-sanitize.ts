@@ -1,4 +1,7 @@
-import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  stripInternalRuntimeContext,
+} from "../agents/internal-runtime-context.js";
 import {
   extractInboundSenderLabel,
   stripInboundMetadata,
@@ -7,6 +10,12 @@ import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export { stripEnvelope };
+
+const LEGACY_BACKGROUND_TASK_STATUS_RE =
+  /^System:\s*\[[^\]]+\]\s*Background task (?:blocked|cancelled|canceled|done|failed|lost|started|timed out|update|updated):[^\r\n]*(?:\r?\n+|$)/i;
+const LEGACY_DAY_TIMESTAMP_ENVELOPE_RE =
+  /^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+(?:GMT|UTC)[+-]\d{1,2}\]\s*/i;
+const LEGACY_RUNTIME_QUOTE_CHARS = new Set(['"', "'", "\u201c", "\u201d", "\u2018", "\u2019"]);
 
 function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
   if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {
@@ -36,33 +45,115 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
   return null;
 }
 
+function looksLikeLegacyRuntimeText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return (
+    trimmed.startsWith(INTERNAL_RUNTIME_CONTEXT_BEGIN) ||
+    trimmed.startsWith("Pre-compaction memory flush.") ||
+    trimmed.startsWith("An async command the user already approved has completed.") ||
+    trimmed.startsWith("An async command did not run.") ||
+    trimmed.startsWith("A new session was started via /new or /reset.") ||
+    LEGACY_BACKGROUND_TASK_STATUS_RE.test(trimmed)
+  );
+}
+
+function unwrapLegacyRuntimeQuoteEnvelope(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length < 2) {
+    return text;
+  }
+  const first = trimmed.at(0);
+  const last = trimmed.at(-1);
+  if (
+    !first ||
+    !last ||
+    !LEGACY_RUNTIME_QUOTE_CHARS.has(first) ||
+    !LEGACY_RUNTIME_QUOTE_CHARS.has(last)
+  ) {
+    return text;
+  }
+  const inner = trimmed.slice(1, -1).trim();
+  return looksLikeLegacyRuntimeText(inner) ? inner : text;
+}
+
+function stripLegacyInternalOnlyPrompt(text: string): string {
+  const trimmed = text.trimStart();
+  if (
+    trimmed.startsWith("Pre-compaction memory flush.") ||
+    trimmed.startsWith("An async command the user already approved has completed.") ||
+    trimmed.startsWith("An async command did not run.") ||
+    trimmed.startsWith("A new session was started via /new or /reset.")
+  ) {
+    return "";
+  }
+  return text;
+}
+
+function stripLegacyBackgroundTaskStatusPrefix(text: string): string {
+  if (!LEGACY_BACKGROUND_TASK_STATUS_RE.test(text)) {
+    return text;
+  }
+  return text.replace(LEGACY_BACKGROUND_TASK_STATUS_RE, "").trimStart();
+}
+
+function stripLegacyDayTimestampEnvelope(text: string): string {
+  if (!LEGACY_DAY_TIMESTAMP_ENVELOPE_RE.test(text)) {
+    return text;
+  }
+  return text.replace(LEGACY_DAY_TIMESTAMP_ENVELOPE_RE, "");
+}
+
+function stripVisibleTranscriptText(
+  text: string,
+  stripUserEnvelope: boolean,
+): {
+  text: string;
+  changed: boolean;
+} {
+  const unwrapped = unwrapLegacyRuntimeQuoteEnvelope(text);
+  const withoutBackgroundStatus = stripLegacyBackgroundTaskStatusPrefix(unwrapped);
+  const withoutLegacyPrompt = stripLegacyInternalOnlyPrompt(withoutBackgroundStatus);
+  const runtimeStripped = stripInternalRuntimeContext(withoutLegacyPrompt);
+  const inboundStripped = stripInboundMetadata(runtimeStripped);
+  const stripped = stripUserEnvelope
+    ? stripMessageIdHints(stripLegacyDayTimestampEnvelope(stripEnvelope(inboundStripped)))
+    : inboundStripped;
+  return {
+    text: stripped,
+    changed: stripped !== text,
+  };
+}
+
 function stripEnvelopeFromContentWithRole(
   content: unknown[],
   stripUserEnvelope: boolean,
 ): { content: unknown[]; changed: boolean } {
   let changed = false;
-  const next = content.map((item) => {
+  const next: unknown[] = [];
+  for (const item of content) {
     if (!item || typeof item !== "object") {
-      return item;
+      next.push(item);
+      continue;
     }
     const entry = item as Record<string, unknown>;
     if (entry.type !== "text" || typeof entry.text !== "string") {
-      return item;
+      next.push(item);
+      continue;
     }
-    const runtimeStripped = stripInternalRuntimeContext(entry.text);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
-    if (stripped === entry.text) {
-      return item;
+    const stripped = stripVisibleTranscriptText(entry.text, stripUserEnvelope);
+    if (!stripped.changed) {
+      next.push(item);
+      continue;
     }
     changed = true;
-    return {
+    if (stripped.text.trim() === "") {
+      continue;
+    }
+    next.push({
       ...entry,
-      text: stripped,
-    };
-  });
+      text: stripped.text,
+    });
+  }
   return { content: next, changed };
 }
 
@@ -83,13 +174,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   }
 
   if (typeof entry.content === "string") {
-    const runtimeStripped = stripInternalRuntimeContext(entry.content);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
-    if (stripped !== entry.content) {
-      next.content = stripped;
+    const stripped = stripVisibleTranscriptText(entry.content, stripUserEnvelope);
+    if (stripped.changed) {
+      next.content = stripped.text;
       changed = true;
     }
   } else if (Array.isArray(entry.content)) {
@@ -99,13 +186,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const runtimeStripped = stripInternalRuntimeContext(entry.text);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
-    const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
-    if (stripped !== entry.text) {
-      next.text = stripped;
+    const stripped = stripVisibleTranscriptText(entry.text, stripUserEnvelope);
+    if (stripped.changed) {
+      next.text = stripped.text;
       changed = true;
     }
   }
