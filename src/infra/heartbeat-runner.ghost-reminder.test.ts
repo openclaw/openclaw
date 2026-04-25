@@ -614,6 +614,280 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   });
 
+  it("keeps plain heartbeat runs on configured heartbeat.session despite a forced topic session", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const directSessionKey = "agent:main:telegram:default:direct:312058326";
+      const topicSessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              session: directSessionKey,
+              target: "telegram",
+              to: "312058326",
+              directPolicy: "allow",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [directSessionKey]: {
+            sessionId: "direct-sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:312058326",
+            lastAccountId: "default",
+          },
+          [topicSessionKey]: {
+            sessionId: "topic-sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:-1003774691294",
+            lastAccountId: "default",
+            lastThreadId: 47,
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "312058326",
+      });
+      const getReplySpy = vi.fn().mockResolvedValue({ text: "Plain heartbeat" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey: topicSessionKey,
+        reason: "interval",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ SessionKey: directSessionKey }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "312058326",
+        "Plain heartbeat",
+        expect.objectContaining({ accountId: "default" }),
+      );
+    });
+  });
+
+  it("keeps non-event target-last runs on configured heartbeat.session despite a forced topic session", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const directSessionKey = "agent:main:telegram:default:direct:312058326";
+      const topicSessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              session: directSessionKey,
+              target: "telegram",
+              to: "312058326",
+              directPolicy: "allow",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [directSessionKey]: {
+            sessionId: "direct-sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:312058326",
+            lastAccountId: "default",
+          },
+          [topicSessionKey]: {
+            sessionId: "topic-sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:-1003774691294:topic:47",
+            lastAccountId: "default",
+            lastThreadId: 47,
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "312058326",
+      });
+      const getReplySpy = vi.fn().mockResolvedValue({ text: "Plain last heartbeat" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey: topicSessionKey,
+        heartbeat: { target: "last" },
+        reason: "interval",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ SessionKey: directSessionKey }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+  });
+
+  it("keeps wake-triggered event inspection on the forced session even when heartbeat target is pinned", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const directSessionKey = "agent:main:telegram:default:direct:312058326";
+      const topicSessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              session: directSessionKey,
+              target: "telegram",
+              to: "312058326",
+              directPolicy: "allow",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [directSessionKey]: {
+            sessionId: "direct-sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:312058326",
+            lastAccountId: "default",
+          },
+          [topicSessionKey]: {
+            sessionId: "topic-sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:-1003774691294:topic:47",
+            lastAccountId: "default",
+            lastThreadId: 47,
+          },
+        }),
+      );
+
+      enqueueSystemEvent("Restart continuation", {
+        sessionKey: topicSessionKey,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1003774691294:topic:47",
+          threadId: 47,
+        },
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "-1003774691294",
+      });
+      const getReplySpy = vi.fn().mockResolvedValue({ text: "Restart ok" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey: topicSessionKey,
+        reason: "wake",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ SessionKey: topicSessionKey }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "312058326",
+        "Restart ok",
+        expect.objectContaining({ accountId: "default" }),
+      );
+    });
+  });
+
+  it("keeps wake-triggered event inspection on raw forced synthetic sessions with queued events", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "none",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "312058326",
+      });
+      enqueueSystemEvent("Exec finished (node=node-2 id=run-2, code 0)\ndone", {
+        sessionKey: "node-node-2",
+        contextKey: "exec:run-2",
+        trusted: false,
+      });
+      const sendTelegram = vi.fn();
+      const getReplySpy = vi.fn().mockResolvedValue({ text: "Synthetic event handled" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey: "node-node-2",
+        reason: "wake",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getReplySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: "node-node-2",
+          Provider: "exec-event",
+          Body: expect.stringContaining("command completion event was triggered"),
+          ForceSenderIsOwnerFalse: true,
+        }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("lets exec-event heartbeat overrides bypass a globally pinned heartbeat.to", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg: OpenClawConfig = {
@@ -760,7 +1034,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   });
 
-  it("does not inherit pinned routing for bare target-last heartbeat overrides", async () => {
+  it("does not inherit pinned routing when target-last heartbeat overrides explicitly clear route fields", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -816,7 +1090,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         cfg,
         agentId: "main",
         sessionKey,
-        heartbeat: { target: "last" },
+        heartbeat: { target: "last", to: undefined, accountId: undefined, isolatedSession: false },
         reason: "cron:test",
         deps: {
           getReplyFromConfig: getReplySpy,

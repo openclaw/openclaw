@@ -240,13 +240,6 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
-function hasHeartbeatOverrideKey<K extends keyof NonNullable<HeartbeatConfig>>(
-  override: HeartbeatConfig,
-  key: K,
-): boolean {
-  return Object.prototype.hasOwnProperty.call(override, key);
-}
-
 function resolveHeartbeatRunConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -256,19 +249,7 @@ function resolveHeartbeatRunConfig(
   if (!override) {
     return resolved;
   }
-  const merged = { ...resolved, ...override };
-  if (override.target === "last") {
-    if (!hasHeartbeatOverrideKey(override, "to")) {
-      merged.to = undefined;
-    }
-    if (!hasHeartbeatOverrideKey(override, "accountId")) {
-      merged.accountId = undefined;
-    }
-    if (!hasHeartbeatOverrideKey(override, "isolatedSession")) {
-      merged.isolatedSession = undefined;
-    }
-  }
-  return merged;
+  return { ...resolved, ...override };
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
@@ -627,13 +608,42 @@ async function resolveHeartbeatPreflight(params: {
   reason?: string;
 }): Promise<HeartbeatPreflight> {
   const reasonFlags = resolveHeartbeatReasonFlags(params.reason);
-  const session = resolveHeartbeatSession(
-    params.cfg,
-    params.agentId,
-    params.heartbeat,
-    params.forcedSessionKey,
+  const forcedRawKey = params.forcedSessionKey?.trim() || undefined;
+  const forcedSession = forcedRawKey
+    ? resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat, forcedRawKey)
+    : undefined;
+  const forcedRawEventEntries =
+    forcedRawKey && !isSubagentSessionKey(forcedRawKey) ? peekSystemEventEntries(forcedRawKey) : [];
+  const shouldHonorForcedSessionKey = Boolean(
+    forcedSession &&
+    (reasonFlags.isExecEventReason || reasonFlags.isCronEventReason || reasonFlags.isWakeReason),
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const forcedRawNormalized = normalizeLowercaseStringOrEmpty(forcedRawKey);
+  const shouldUseRawForcedSession = Boolean(
+    shouldHonorForcedSessionKey &&
+    forcedRawKey &&
+    !isSubagentSessionKey(forcedRawKey) &&
+    forcedSession?.sessionKey !== forcedRawKey &&
+    (forcedRawEventEntries.length > 0 ||
+      (reasonFlags.isWakeReason &&
+        !parseAgentSessionKey(forcedRawKey) &&
+        forcedRawNormalized !== "main" &&
+        forcedRawNormalized !== "global")),
+  );
+  const session =
+    shouldHonorForcedSessionKey && forcedSession
+      ? shouldUseRawForcedSession && forcedRawKey
+        ? {
+            ...forcedSession,
+            sessionKey: forcedRawKey,
+            entry: forcedSession.store[forcedRawKey],
+          }
+        : forcedSession
+      : resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
+  const pendingEventEntries =
+    session.sessionKey === forcedRawKey && forcedRawEventEntries.length
+      ? forcedRawEventEntries
+      : peekSystemEventEntries(session.sessionKey);
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
@@ -1586,7 +1596,9 @@ export function startHeartbeatRunner(opts: {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
-            heartbeat: requestedHeartbeat ?? targetAgent.heartbeat,
+            heartbeat: requestedHeartbeat
+              ? resolveHeartbeatRunConfig(state.cfg, targetAgent.agentId, requestedHeartbeat)
+              : targetAgent.heartbeat,
             reason,
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },

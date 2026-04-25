@@ -332,7 +332,7 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("passes targeted wake heartbeat overrides raw so runOnce can apply target-last semantics", async () => {
+  it("merges targeted wake heartbeat overrides over the target agent heartbeat config", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = await expectWakeDispatch({
@@ -345,6 +345,9 @@ describe("startHeartbeatRunner", () => {
               prompt: "Ops prompt",
               directPolicy: "block",
               target: "discord:channel:ops",
+              to: "configured-ops-destination",
+              accountId: "configured-account",
+              isolatedSession: true,
             },
           },
         ]),
@@ -361,7 +364,15 @@ describe("startHeartbeatRunner", () => {
         agentId: "ops",
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
-        heartbeat: { target: "last" },
+        heartbeat: {
+          every: "15m",
+          prompt: "Ops prompt",
+          directPolicy: "block",
+          target: "last",
+          to: "configured-ops-destination",
+          accountId: "configured-account",
+          isolatedSession: true,
+        },
       },
     });
 

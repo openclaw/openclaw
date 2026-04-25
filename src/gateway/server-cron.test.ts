@@ -316,6 +316,50 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("passes raw forced session keys to immediate heartbeat runs", async () => {
+    const cfg = createCronConfig("server-cron-raw-immediate-heartbeat");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              runHeartbeatOnce?: (opts?: {
+                agentId?: string;
+                sessionKey?: string | null;
+                reason?: string;
+                heartbeat?: { target?: string };
+              }) => Promise<unknown>;
+            };
+          };
+        }
+      ).state?.deps;
+
+      await cronDeps?.runHeartbeatOnce?.({
+        reason: "cron:test",
+        sessionKey: "discord:channel:ops",
+        heartbeat: { target: "last" },
+      });
+
+      expect(runHeartbeatOnceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "cron:test",
+          agentId: "main",
+          sessionKey: "discord:channel:ops",
+          heartbeat: { target: "last" },
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("preserves trust downgrades when cron enqueues system events", () => {
     const cfg = createCronConfig("server-cron-untrusted");
     loadConfigMock.mockReturnValue(cfg);

@@ -111,6 +111,31 @@ function getWakeTargetKey(params: { agentId?: string; sessionKey?: string }) {
   return `${agentId ?? ""}::${sessionKey ?? ""}`;
 }
 
+function hasOwnHeartbeatOverrideKey(
+  heartbeat: HeartbeatWakeOverride | undefined,
+  key: keyof HeartbeatWakeOverride,
+): boolean {
+  return Boolean(heartbeat && Object.prototype.hasOwnProperty.call(heartbeat, key));
+}
+
+function mergeHeartbeatWakeOverrides(
+  previous?: HeartbeatWakeOverride,
+  next?: HeartbeatWakeOverride,
+): HeartbeatWakeOverride | undefined {
+  if (!previous && !next) {
+    return undefined;
+  }
+  const merged: HeartbeatWakeOverride = {};
+  for (const key of ["target", "to", "accountId", "isolatedSession"] as const) {
+    if (hasOwnHeartbeatOverrideKey(next, key)) {
+      merged[key] = next?.[key] as never;
+    } else if (hasOwnHeartbeatOverrideKey(previous, key)) {
+      merged[key] = previous?.[key] as never;
+    }
+  }
+  return merged;
+}
+
 function queuePendingWakeReason(params?: {
   reason?: string;
   requestedAt?: number;
@@ -139,17 +164,22 @@ function queuePendingWakeReason(params?: {
     pendingWakes.set(wakeTargetKey, next);
     return;
   }
-  const merged =
-    (next.heartbeat ?? previous.heartbeat)
-      ? { ...next, heartbeat: next.heartbeat ?? previous.heartbeat }
-      : next;
   if (next.priority > previous.priority) {
-    pendingWakes.set(wakeTargetKey, merged);
+    const heartbeat = mergeHeartbeatWakeOverrides(previous.heartbeat, next.heartbeat);
+    pendingWakes.set(wakeTargetKey, heartbeat ? { ...next, heartbeat } : next);
     return;
   }
   if (next.priority === previous.priority && next.requestedAt >= previous.requestedAt) {
-    pendingWakes.set(wakeTargetKey, merged);
+    const heartbeat = mergeHeartbeatWakeOverrides(previous.heartbeat, next.heartbeat);
+    pendingWakes.set(wakeTargetKey, heartbeat ? { ...next, heartbeat } : next);
+    return;
   }
+  // Lower-priority wakes must not mutate the already queued winner. In particular,
+  // exec-event wakes carry explicit route-clearing overrides that keep completion
+  // notifications pinned to the triggering session instead of configured heartbeat routes.
+  // A later cron/manual/interval wake for the same session is not allowed to reintroduce
+  // those cleared fields before dispatch.
+  pendingWakes.set(wakeTargetKey, previous);
 }
 
 function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {

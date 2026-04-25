@@ -173,15 +173,19 @@ export function buildGatewayCronService(params: {
     return canonical;
   };
 
-  const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
+  const resolveCronWakeTarget = (
+    opts?: { agentId?: string; sessionKey?: string | null },
+    resolveOpts?: { preserveRawSessionKey?: boolean },
+  ) => {
+    const requestedSessionKey = opts?.sessionKey?.trim() || undefined;
     const requestedAgentId =
       typeof opts?.agentId === "string" && opts.agentId.trim()
         ? normalizeAgentId(opts.agentId)
         : undefined;
     const derivedAgentId =
       requestedAgentId ??
-      (opts?.sessionKey
-        ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
+      (requestedSessionKey
+        ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSessionKey))
         : undefined);
     const runtimeConfigBase = getRuntimeConfig();
     const runtimeConfig =
@@ -190,12 +194,14 @@ export function buildGatewayCronService(params: {
         : runtimeConfigBase;
     const agentId = derivedAgentId || undefined;
     const sessionKey =
-      opts?.sessionKey && agentId
-        ? resolveCronSessionKey({
-            runtimeConfig,
-            agentId,
-            requestedSessionKey: opts.sessionKey,
-          })
+      requestedSessionKey && agentId
+        ? resolveOpts?.preserveRawSessionKey
+          ? requestedSessionKey
+          : resolveCronSessionKey({
+              runtimeConfig,
+              agentId,
+              requestedSessionKey,
+            })
         : undefined;
     return { runtimeConfig, agentId, sessionKey };
   };
@@ -256,7 +262,9 @@ export function buildGatewayCronService(params: {
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
+      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts, {
+        preserveRawSessionKey: true,
+      });
       // Pass cron-supplied heartbeat overrides raw. runHeartbeatOnce centralizes
       // merging with defaults/agent config and target:last routing semantics.
       return await runHeartbeatOnce({
