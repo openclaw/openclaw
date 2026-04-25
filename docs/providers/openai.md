@@ -23,17 +23,17 @@ changing config.
 
 | Goal                                          | Use                                                      | Notes                                                                        |
 | --------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Direct API-key billing                        | `openai/gpt-5.4`                                         | Set `OPENAI_API_KEY` or run OpenAI API-key onboarding.                       |
+| Direct API-key billing                        | `openai/gpt-5.5`                                         | Set `OPENAI_API_KEY` or run OpenAI API-key onboarding.                       |
 | GPT-5.5 with ChatGPT/Codex subscription auth  | `openai-codex/gpt-5.5`                                   | Default PI route for Codex OAuth. Best first choice for subscription setups. |
-| GPT-5.5 with native Codex app-server behavior | `openai/gpt-5.5` plus `embeddedHarness.runtime: "codex"` | Uses the Codex app-server harness, not the public OpenAI API route.          |
+| GPT-5.5 with native Codex app-server behavior | `openai/gpt-5.5` plus `embeddedHarness.runtime: "codex"` | Forces the Codex app-server harness for that model ref.                      |
 | Image generation or editing                   | `openai/gpt-image-2`                                     | Works with either `OPENAI_API_KEY` or OpenAI Codex OAuth.                    |
 
 <Note>
-GPT-5.5 is currently available in OpenClaw through subscription/OAuth routes:
-`openai-codex/gpt-5.5` with the PI runner, or `openai/gpt-5.5` with the
-Codex app-server harness. Direct API-key access for `openai/gpt-5.5` is
-supported once OpenAI enables GPT-5.5 on the public API; until then use an
-API-enabled model such as `openai/gpt-5.4` for `OPENAI_API_KEY` setups.
+GPT-5.5 is available through both direct OpenAI Platform API-key access and
+subscription/OAuth routes. Use `openai/gpt-5.5` for direct `OPENAI_API_KEY`
+traffic, `openai-codex/gpt-5.5` for Codex OAuth through PI, or
+`openai/gpt-5.5` with `embeddedHarness.runtime: "codex"` for the native Codex
+app-server harness.
 </Note>
 
 <Note>
@@ -93,16 +93,14 @@ Choose your preferred auth method and follow the setup steps.
 
     | Model ref | Route | Auth |
     |-----------|-------|------|
-    | `openai/gpt-5.4` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
+    | `openai/gpt-5.5` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
     | `openai/gpt-5.4-mini` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
-    | `openai/gpt-5.5` | Future direct API route once OpenAI enables GPT-5.5 on the API | `OPENAI_API_KEY` |
 
     <Note>
     `openai/*` is the direct OpenAI API-key route unless you explicitly force
-    the Codex app-server harness. GPT-5.5 itself is currently subscription/OAuth
-    only; use `openai-codex/*` for Codex OAuth through the default PI runner, or
-    use `openai/gpt-5.5` with `embeddedHarness.runtime: "codex"` for native
-    Codex app-server execution.
+    the Codex app-server harness. Use `openai-codex/*` for Codex OAuth through
+    the default PI runner, or use `openai/gpt-5.5` with
+    `embeddedHarness.runtime: "codex"` for native Codex app-server execution.
     </Note>
 
     ### Config example
@@ -110,7 +108,7 @@ Choose your preferred auth method and follow the setup steps.
     ```json5
     {
       env: { OPENAI_API_KEY: "sk-..." },
-      agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     }
     ```
 
@@ -311,7 +309,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai-codex/gpt-5.5`, `openai/gpt-5.4`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai-codex/gpt-5.5`, `openai/gpt-5.5`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
 The bundled native Codex harness uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `openai/gpt-5.x` sessions forced through `embeddedHarness.runtime: "codex"` keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
 
@@ -603,7 +601,7 @@ the Server-side compaction accordion below.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": {
+            "openai/gpt-5.5": {
               params: { transport: "auto" },
             },
             "openai-codex/gpt-5.5": {
@@ -630,7 +628,7 @@ the Server-side compaction accordion below.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": {
+            "openai/gpt-5.5": {
               params: { openaiWsWarmup: false },
             },
           },
@@ -654,7 +652,7 @@ the Server-side compaction accordion below.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": { params: { fastMode: true } },
+            "openai/gpt-5.5": { params: { fastMode: true } },
           },
         },
       },
@@ -675,7 +673,7 @@ the Server-side compaction accordion below.
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": { params: { serviceTier: "priority" } },
+            "openai/gpt-5.5": { params: { serviceTier: "priority" } },
           },
         },
       },
@@ -723,7 +721,7 @@ the Server-side compaction accordion below.
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.4": {
+                "openai/gpt-5.5": {
                   params: {
                     responsesServerCompaction: true,
                     responsesCompactThreshold: 120000,
@@ -741,7 +739,7 @@ the Server-side compaction accordion below.
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.4": {
+                "openai/gpt-5.5": {
                   params: { responsesServerCompaction: false },
                 },
               },

@@ -30,9 +30,9 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
   `google-gemini-cli`, or `codex-cli` when you want a local CLI backend.
   Legacy `claude-cli/*`, `google-gemini-cli/*`, and `codex-cli/*` refs migrate
   back to canonical provider refs with the runtime recorded separately.
-- GPT-5.5 is available through `openai-codex/gpt-5.5` in PI, the native
-  Codex app-server harness, and the public OpenAI API when the bundled PI
-  catalog exposes `openai/gpt-5.5` for your install.
+- GPT-5.5 is available through `openai/gpt-5.5` for direct API-key traffic,
+  `openai-codex/gpt-5.5` in PI for Codex OAuth, and the native Codex
+  app-server harness when `embeddedHarness.runtime: "codex"` is set.
 
 ## Plugin-owned provider behavior
 
@@ -71,10 +71,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
 - Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
-- Example models: `openai/gpt-5.5`, `openai/gpt-5.4`, `openai/gpt-5.4-mini`
-- GPT-5.5 direct API support depends on the bundled PI catalog version for
-  your install; verify with `openclaw models list --provider openai` before
-  using `openai/gpt-5.5` without the Codex app-server runtime.
+- Example models: `openai/gpt-5.5`, `openai/gpt-5.4-mini`
+- Verify account/model availability with `openclaw models list --provider openai`
+  if a specific install or API key behaves differently.
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
@@ -91,7 +90,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
 }
 ```
 

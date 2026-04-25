@@ -10,7 +10,7 @@ The CI runs on every push to `main` and every pull request. It uses smart scopin
 
 QA Lab has dedicated CI lanes outside the main smart-scoped workflow. The
 `Parity gate` workflow runs on matching PR changes and manual dispatch; it
-builds the private QA runtime and compares the mock GPT-5.4 and Opus 4.6
+builds the private QA runtime and compares the mock GPT-5.5 and Opus 4.6
 agentic packs. The `QA-Lab - All Lanes` workflow runs nightly on `main` and on
 manual dispatch; it fans out the mock parity gate, live Matrix lane, and live
 Telegram lane as parallel jobs. The live jobs use the `qa-live-shared`
