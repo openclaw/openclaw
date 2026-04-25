@@ -395,7 +395,32 @@ export async function refreshChatAvatar(host: ChatHost) {
     }
     const data = (await res.json()) as { avatarUrl?: unknown };
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
-    host.chatAvatarUrl = avatarUrl || null;
+    if (!avatarUrl) {
+      host.chatAvatarUrl = null;
+      return;
+    }
+    if (/^https?:\/\//i.test(avatarUrl) || /^data:image\//i.test(avatarUrl)) {
+      host.chatAvatarUrl = avatarUrl;
+      return;
+    }
+    // Relative avatar paths require auth since the avatar route is protected.
+    // Fetch with the session device token and expose a blob URL so the browser
+    // can render it without sending auth headers in the img src attribute.
+    const deviceToken = host.hello?.auth?.deviceToken?.trim();
+    if (!deviceToken) {
+      host.chatAvatarUrl = avatarUrl;
+      return;
+    }
+    const imgRes = await fetch(avatarUrl, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${deviceToken}` },
+    });
+    if (!imgRes.ok) {
+      host.chatAvatarUrl = null;
+      return;
+    }
+    const blob = await imgRes.blob();
+    host.chatAvatarUrl = URL.createObjectURL(blob);
   } catch {
     host.chatAvatarUrl = null;
   }

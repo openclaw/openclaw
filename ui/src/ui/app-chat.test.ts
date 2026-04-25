@@ -62,4 +62,33 @@ describe("refreshChatAvatar", () => {
     );
     expect(host.chatAvatarUrl).toBeNull();
   });
+
+  it("fetches relative avatar path with device token and stores blob URL", async () => {
+    const imageBlob = new Blob(["fake-image"], { type: "image/jpeg" });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ avatarUrl: "/avatar/main" }),
+      })
+      .mockResolvedValueOnce({ ok: true, blob: async () => imageBlob });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn().mockReturnValue("blob:mock-url"),
+    });
+
+    const host = makeHost({
+      basePath: "",
+      sessionKey: "agent:main",
+      hello: { auth: { deviceToken: "test-token" } } as ChatHost["hello"],
+    });
+    await refreshChatAvatar(host);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/avatar/main",
+      expect.objectContaining({ headers: { Authorization: "Bearer test-token" } }),
+    );
+    expect(host.chatAvatarUrl).toBe("blob:mock-url");
+  });
 });
