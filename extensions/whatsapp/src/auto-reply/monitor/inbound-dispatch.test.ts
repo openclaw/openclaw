@@ -2,6 +2,14 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 let capturedDispatchParams: unknown;
 
+type CapturedReplyPayload = {
+  text?: string;
+  isReasoning?: boolean;
+  isCompactionNotice?: boolean;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+};
+
 const { dispatchReplyWithBufferedBlockDispatcherMock } = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: { ctx: unknown }) => {
     capturedDispatchParams = params;
@@ -101,7 +109,7 @@ function getCapturedDeliver() {
     capturedDispatchParams as {
       dispatcherOptions?: {
         deliver?: (
-          payload: { text?: string; isReasoning?: boolean; isCompactionNotice?: boolean },
+          payload: CapturedReplyPayload,
           info: { kind: "tool" | "block" | "final" },
         ) => Promise<void>;
       };
@@ -386,11 +394,22 @@ describe("whatsapp inbound dispatch", () => {
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
 
-    await deliver?.({ text: "tool image", mediaUrls: ["/tmp/generated.jpg"] } as never, {
-      kind: "tool",
-    });
+    await deliver?.(
+      { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
+      {
+        kind: "tool",
+      },
+    );
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+    expect(deliverReply).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrls: ["/tmp/generated.jpg"],
+          text: undefined,
+        }),
+      }),
+    );
 
     await deliver?.({ text: "block payload" }, { kind: "block" });
     await deliver?.({ text: "final payload" }, { kind: "final" });
@@ -487,6 +506,65 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns true for tool-only media turns after delivering media", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: {
+        ctx: unknown;
+        dispatcherOptions?: {
+          deliver?: (
+            payload: CapturedReplyPayload,
+            info: { kind: "tool" | "block" | "final" },
+          ) => Promise<void>;
+        };
+      }) => {
+        capturedDispatchParams = params;
+        await params.dispatcherOptions?.deliver?.(
+          { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
+          { kind: "tool" },
+        );
+        return { queuedFinal: false, counts: { tool: 1, block: 0, final: 0 } };
+      },
+    );
+
+    await expect(
+      dispatchWhatsAppBufferedReply({
+        cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+        connectionId: "conn",
+        context: { Body: "hi" },
+        conversationId: "+1000",
+        deliverReply,
+        groupHistories: new Map(),
+        groupHistoryKey: "+1000",
+        maxMediaBytes: 1,
+        msg: makeMsg(),
+        rememberSentText,
+        replyLogger: {
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+          debug: () => {},
+        } as never,
+        replyPipeline: {},
+        replyResolver: (async () => undefined) as never,
+        route: makeRoute(),
+        shouldClearGroupHistory: false,
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrls: ["/tmp/generated.jpg"],
+          text: undefined,
+        }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(undefined, expect.any(Object));
   });
 
   it("passes sendComposing through as the reply typing callback", async () => {
