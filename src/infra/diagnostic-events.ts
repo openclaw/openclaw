@@ -84,6 +84,30 @@ export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   error?: string;
 };
 
+export type DiagnosticMessageDeliveryKind = "text" | "media" | "edit" | "reaction" | "other";
+
+type DiagnosticMessageDeliveryBaseEvent = DiagnosticBaseEvent & {
+  channel: string;
+  sessionKey?: string;
+  deliveryKind: DiagnosticMessageDeliveryKind;
+};
+
+export type DiagnosticMessageDeliveryStartedEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.started";
+};
+
+export type DiagnosticMessageDeliveryCompletedEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.completed";
+  durationMs: number;
+  resultCount: number;
+};
+
+export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseEvent & {
+  type: "message.delivery.error";
+  durationMs: number;
+  errorCategory: string;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -310,6 +334,9 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
   | DiagnosticMessageProcessedEvent
+  | DiagnosticMessageDeliveryStartedEvent
+  | DiagnosticMessageDeliveryCompletedEvent
+  | DiagnosticMessageDeliveryErrorEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent
   | DiagnosticLaneEnqueueEvent
@@ -352,6 +379,9 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.completed",
   "tool.execution.error",
   "exec.process.completed",
+  "message.delivery.started",
+  "message.delivery.completed",
+  "message.delivery.error",
   "model.call.started",
   "model.call.completed",
   "model.call.error",
