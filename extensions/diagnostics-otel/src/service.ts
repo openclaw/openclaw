@@ -50,6 +50,10 @@ const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
 const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
+const OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT";
+const OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
+const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
 const OTEL_SEMCONV_STABILITY_OPT_IN_ENV = "OTEL_SEMCONV_STABILITY_OPT_IN";
 const GEN_AI_LATEST_EXPERIMENTAL_OPT_IN = "gen_ai_latest_experimental";
 const GEN_AI_TOKEN_USAGE_BUCKETS = [
@@ -100,6 +104,18 @@ function resolveOtelUrl(endpoint: string | undefined, path: string): string | un
     return endpoint;
   }
   return `${endpoint}/${path}`;
+}
+
+function resolveSignalOtelUrl(params: {
+  signalEndpoint?: string;
+  signalEnvEndpoint?: string;
+  endpoint?: string;
+  path: string;
+}): string | undefined {
+  return resolveOtelUrl(
+    normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint) ?? params.endpoint,
+    params.path,
+  );
 }
 
 function resolveSampleRate(value: number | undefined): number | undefined {
@@ -519,7 +535,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      const endpoint = normalizeEndpoint(otel.endpoint ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT);
+      const endpoint = normalizeEndpoint(
+        otel.endpoint ?? process.env[OTEL_EXPORTER_OTLP_ENDPOINT_ENV],
+      );
       const headers = otel.headers ?? undefined;
       const serviceName =
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
@@ -538,10 +556,25 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         [ATTR_SERVICE_NAME]: serviceName,
       });
 
-      const logUrl = resolveOtelUrl(endpoint, "v1/logs");
+      const logUrl = resolveSignalOtelUrl({
+        signalEndpoint: otel.logsEndpoint,
+        signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_LOGS_ENDPOINT_ENV],
+        endpoint,
+        path: "v1/logs",
+      });
       if (!sdkPreloaded && (tracesEnabled || metricsEnabled)) {
-        const traceUrl = resolveOtelUrl(endpoint, "v1/traces");
-        const metricUrl = resolveOtelUrl(endpoint, "v1/metrics");
+        const traceUrl = resolveSignalOtelUrl({
+          signalEndpoint: otel.tracesEndpoint,
+          signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV],
+          endpoint,
+          path: "v1/traces",
+        });
+        const metricUrl = resolveSignalOtelUrl({
+          signalEndpoint: otel.metricsEndpoint,
+          signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV],
+          endpoint,
+          path: "v1/metrics",
+        });
         const traceExporter = tracesEnabled
           ? new OTLPTraceExporter({
               ...(traceUrl ? { url: traceUrl } : {}),
