@@ -238,6 +238,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     lane: DraftLaneState;
     finalTextAlreadyLanded: boolean;
     retainAlternatePreviewOnMissingTarget: boolean;
+    targetPreviewText: string;
   }): Promise<PreviewEditResult> => {
     try {
       await params.editPreview({
@@ -300,7 +301,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           );
           return "fallback";
         }
-        if (isIncompleteFinalPreviewPrefix(args.lane.lastPartialText, args.text)) {
+        if (isIncompleteFinalPreviewPrefix(args.targetPreviewText, args.text)) {
           params.log(
             `telegram: ${args.laneName} preview final edit failed and existing preview is an incomplete prefix; falling back to standard send (${String(err)})`,
           );
@@ -337,6 +338,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       messageId: number,
       finalTextAlreadyLanded: boolean,
       retainAlternatePreviewOnMissingTarget: boolean,
+      targetPreviewText: string,
     ) =>
       tryEditPreviewMessage({
         laneName,
@@ -348,6 +350,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         lane,
         finalTextAlreadyLanded,
         retainAlternatePreviewOnMissingTarget,
+        targetPreviewText,
       });
     const finalizePreview = (
       previewMessageId: number,
@@ -370,6 +373,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         previewMessageId,
         finalTextAlreadyLanded,
         retainAlternatePreviewOnMissingTarget,
+        currentPreviewText,
       );
     };
     if (!lane.stream) {

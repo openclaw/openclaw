@@ -493,6 +493,29 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
   });
 
+  it("falls back when an archived preview ambiguous final edit would leave an incomplete prefix", async () => {
+    const harness = createHarness();
+    harness.archivedAnswerPreviews.push({
+      messageId: 5555,
+      textSnapshot: "Hello fi",
+      deleteIfUnused: true,
+    });
+    harness.editPreview.mockRejectedValue(new Error("500: preview edit failed"));
+
+    await expectFinalEditFallbackToSend({
+      harness,
+      text: HELLO_FINAL,
+      expectedLogSnippet: "preview is an incomplete prefix; falling back",
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 5555,
+        text: HELLO_FINAL,
+      }),
+    );
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
+  });
+
   it("keeps the active preview when an archived final edit target is missing", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     seedArchivedAnswerPreview(harness);
