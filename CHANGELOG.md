@@ -80,6 +80,7 @@ Docs: https://docs.openclaw.ai
 - Agents/heartbeat: stop injecting the heartbeat system prompt into non-heartbeat runs, preventing ordinary user replies from being suppressed as `HEARTBEAT_OK` acknowledgments. Fixes #69079. (#69278) Thanks @stainlu.
 - Active Memory: keep silent recall sub-agent billing/auth failures out of shared auth-profile cooldown state, so a Claude CLI extra-usage rejection cannot disable normal Claude-backed turns. Fixes #71284. (#71539) Thanks @vishutdhar and @obviyus.
 - Auth/Claude CLI: sync refreshed Claude CLI OAuth credentials into the managed auth profile so long-running Claude CLI runs stop falling back to stale OpenClaw snapshots. (#70902) Thanks @starvex.
+- Sessions: make `sessions_spawn(mode="session")` errors name usable alternatives when the current channel cannot bind subagent threads. Fixes #67400. (#67790) Thanks @stainlu.
 
 ## 2026.4.25 (Unreleased)
 
