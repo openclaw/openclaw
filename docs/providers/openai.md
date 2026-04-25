@@ -15,6 +15,10 @@ OpenAI provides developer APIs for GPT models. OpenClaw supports three OpenAI-fa
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
+Provider, model, runtime, and channel are separate layers. If those labels are
+getting mixed together, read [Agent runtimes](/concepts/agent-runtimes) before
+changing config.
+
 ## Quick choice
 
 | Goal                                          | Use                                                      | Notes                                                                        |
@@ -96,7 +100,9 @@ Choose your preferred auth method and follow the setup steps.
     <Note>
     `openai/*` is the direct OpenAI API-key route unless you explicitly force
     the Codex app-server harness. GPT-5.5 itself is currently subscription/OAuth
-    only; use `openai-codex/*` for Codex OAuth through the default PI runner.
+    only; use `openai-codex/*` for Codex OAuth through the default PI runner, or
+    use `openai/gpt-5.5` with `embeddedHarness.runtime: "codex"` for native
+    Codex app-server execution.
     </Note>
 
     ### Config example
