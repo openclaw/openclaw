@@ -115,6 +115,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: keep optimistic user and assistant tail messages visible when a final history refresh briefly returns an older snapshot, preventing message cards from flash-disappearing until the next refresh. Fixes #71371. Thanks @WolvenRA.
 - Talk/TTS: resolve configured extension speech providers from the active runtime registry before provider-list discovery, so Talk mode no longer rejects valid plugin speech providers as unsupported.
 - Sessions/subagents: stop stale ended runs and old store-only child reverse links from reappearing in `childSessions`, while keeping live descendants and recently-ended children visible. Fixes #57920.
+- Subagents: recover child sessions after recoverable wait transport failures without exposing an extra wait state, and keep terminal lifecycle timer ordering deterministic. (#71423) Thanks @ZiPengWei.
 - Subagents: stop stale unended runs from counting as active or pending forever, while preserving restart-aborted recovery for recoverable child sessions. Fixes #71252. Thanks @hclsys.
 - Gateway/tools: allow `POST /tools/invoke` to reach plugin-backed catalog tools such as `browser` when no core implementation exists, while still preferring built-in tools for real core names. Thanks @chat2way.
 - Browser/security: require `operator.admin` for the `browser.request` gateway method, matching the host/browser-node control authority exposed by that route. Thanks @RichardCao.
