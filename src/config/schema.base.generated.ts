@@ -4272,6 +4272,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
                       },
+                      concurrency: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Remote Embedding Concurrency",
+                        description:
+                          "Limits how many normal non-batch remote embedding requests run at the same time during indexing (default: 4). Lower this for proxies or providers that reject parallel embedding requests; batch jobs use remote.batch.concurrency instead.",
+                      },
                       batch: {
                         type: "object",
                         properties: {
@@ -6210,6 +6218,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           additionalProperties: {
                             type: "string",
                           },
+                        },
+                        concurrency: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
                         },
                         batch: {
                           type: "object",
@@ -25425,6 +25438,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Remote Embedding Headers",
       help: "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
       tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.remote.concurrency": {
+      label: "Remote Embedding Concurrency",
+      help: "Limits how many normal non-batch remote embedding requests run at the same time during indexing (default: 4). Lower this for proxies or providers that reject parallel embedding requests; batch jobs use remote.batch.concurrency instead.",
+      tags: ["performance"],
     },
     "agents.defaults.memorySearch.remote.batch.enabled": {
       label: "Remote Batch Embedding Enabled",

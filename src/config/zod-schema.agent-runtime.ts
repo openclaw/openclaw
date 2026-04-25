@@ -16,6 +16,18 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+const MemoryRemoteBaseUrlSchema = z
+  .string()
+  .refine((value) => {
+    try {
+      const parsed = new URL(value.trim());
+      return !parsed.search && !parsed.hash;
+    } catch {
+      return true;
+    }
+  }, "memorySearch.remote.baseUrl must not include a query string or fragment")
+  .optional();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -360,7 +372,7 @@ export const ToolsWebFetchSchema = z
       .object({
         enabled: z.boolean().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
+        baseUrl: MemoryRemoteBaseUrlSchema,
         onlyMainContent: z.boolean().optional(),
         maxAgeMs: z.number().int().nonnegative().optional(),
         timeoutSeconds: z.number().int().positive().optional(),
@@ -661,9 +673,10 @@ export const MemorySearchSchema = z
     provider: z.string().optional(),
     remote: z
       .object({
-        baseUrl: z.string().optional(),
+        baseUrl: MemoryRemoteBaseUrlSchema,
         apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
+        concurrency: z.number().int().positive().optional(),
         batch: z
           .object({
             enabled: z.boolean().optional(),

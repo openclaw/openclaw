@@ -83,6 +83,7 @@ describe("memory search config", () => {
   }
 
   function expectDefaultRemoteBatch(resolved: ReturnType<typeof resolveMemorySearchConfig>): void {
+    expect(resolved?.remote?.concurrency).toBe(4);
     expect(resolved?.remote?.batch).toEqual({
       enabled: false,
       wait: true,
@@ -132,6 +133,7 @@ describe("memory search config", () => {
       baseUrl: "https://agent.example/v1",
       apiKey,
       headers: { "X-Default": "on" },
+      concurrency: 4,
       batch: {
         enabled: false,
         wait: true,
@@ -488,6 +490,68 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expectMergedRemoteConfig(resolved, "default-key"); // pragma: allowlist secret
+  });
+
+  it("uses remote embedding concurrency from defaults", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: { concurrency: 2 },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote?.concurrency).toBe(2);
+    expect(resolved?.remote?.batch?.concurrency).toBe(2);
+  });
+
+  it("lets agent remote embedding concurrency override defaults", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: { concurrency: 3 },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              remote: { concurrency: 1 },
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote?.concurrency).toBe(1);
+    expect(resolved?.remote?.batch?.concurrency).toBe(2);
+  });
+
+  it("clamps remote embedding concurrency to at least one", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: { concurrency: 0 },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote?.concurrency).toBe(1);
   });
 
   it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {

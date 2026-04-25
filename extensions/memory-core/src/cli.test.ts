@@ -351,6 +351,89 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("prints configured-off batch status without implying failures", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () =>
+        makeMemoryStatus({
+          batch: {
+            enabled: false,
+            disabledReason: "configured_off",
+            failures: 0,
+            limit: 2,
+            wait: true,
+            concurrency: 2,
+            pollIntervalMs: 2000,
+            timeoutMs: 60 * 60 * 1000,
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Batch: disabled (configured off)"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Batch: disabled (failures 0/2)"));
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints failure-limit batch status with failure count", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () =>
+        makeMemoryStatus({
+          batch: {
+            enabled: false,
+            disabledReason: "failure_limit",
+            failures: 2,
+            limit: 2,
+            wait: true,
+            concurrency: 2,
+            pollIntervalMs: 2000,
+            timeoutMs: 60 * 60 * 1000,
+            lastError: "batch failed",
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Batch: disabled (failures 2/2)"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Batch error: batch failed"));
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints enabled batch status with failure count", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () =>
+        makeMemoryStatus({
+          batch: {
+            enabled: true,
+            failures: 0,
+            limit: 2,
+            wait: true,
+            concurrency: 2,
+            pollIntervalMs: 2000,
+            timeoutMs: 60 * 60 * 1000,
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Batch: enabled (failures 0/2)"));
+    expect(close).toHaveBeenCalled();
+  });
+
   it("prints recall-store audit details during status", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({

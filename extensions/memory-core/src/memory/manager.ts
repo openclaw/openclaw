@@ -12,6 +12,7 @@ import {
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   readMemoryFile,
+  type MemoryBatchDisabledReason,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
@@ -338,7 +339,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       opts?.sources && opts.sources.length > 0
         ? [...new Set(opts.sources)].filter((s) => this.sources.has(s))
         : undefined;
-    if (opts?.sources && opts.sources.length > 0 && (!searchSources || searchSources.length === 0)) {
+    if (
+      opts?.sources &&
+      opts.sources.length > 0 &&
+      (!searchSources || searchSources.length === 0)
+    ) {
       return [];
     }
     const sourceFilterList = searchSources ?? [...this.sources];
@@ -375,9 +380,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                 });
                 const searchTerms = keywords.length > 0 ? keywords : [cleaned];
                 return searchTerms.map((term) =>
-                  this.searchKeyword(term, candidates, { boostFallbackRanking: true }, sourceFilterList).catch(
-                    () => [],
-                  ),
+                  this.searchKeyword(
+                    term,
+                    candidates,
+                    { boostFallbackRanking: true },
+                    sourceFilterList,
+                  ).catch(() => []),
                 );
               })(),
             );
@@ -706,6 +714,25 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
   }
 
+  private resolveBatchDisabledReason(): MemoryBatchDisabledReason | undefined {
+    if (this.batch.enabled) {
+      return undefined;
+    }
+    if (this.batchFailureCount >= MEMORY_BATCH_FAILURE_LIMIT) {
+      return "failure_limit";
+    }
+    if (!this.settings.remote?.batch?.enabled) {
+      return "configured_off";
+    }
+    if (!this.provider) {
+      return "provider_unavailable";
+    }
+    if (!this.providerRuntime?.batchEmbed) {
+      return "provider_unsupported";
+    }
+    return undefined;
+  }
+
   status(): MemoryProviderStatus {
     const sourceFilter = this.buildSourceFilter();
     const aggregateState = collectMemoryStatusAggregate({
@@ -773,6 +800,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       batch: {
         enabled: this.batch.enabled,
+        disabledReason: this.resolveBatchDisabledReason(),
         failures: this.batchFailureCount,
         limit: MEMORY_BATCH_FAILURE_LIMIT,
         wait: this.batch.wait,
