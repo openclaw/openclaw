@@ -159,7 +159,11 @@ export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boo
   );
 }
 
-export type SlackBoltLogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
+// Matches the runtime string values of @slack/logger's LogLevel enum
+// ("debug" | "info" | "warn" | "error"). Kept as a string union so the zod
+// schema in src/config can validate user input without dragging the enum
+// through into the config layer. (#71531)
+export type SlackBoltLogLevel = "debug" | "info" | "warn" | "error";
 
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
@@ -187,6 +191,9 @@ export function createSlackBoltApp(params: {
           signingSecret: params.signingSecret ?? "",
           endpoints: params.slackWebhookPath,
         });
+  // bolt expects the LogLevel enum, but the enum's string values match our
+  // runtime type, so the cast is sound. Casting via `as never` to bypass the
+  // structural mismatch between our string union and bolt's enum reference.
   const app = new params.interop.App({
     token: params.botToken,
     receiver,
@@ -196,7 +203,7 @@ export function createSlackBoltApp(params: {
     // verification is enabled. Invalid tokens can reject before any listener
     // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
     tokenVerificationEnabled: false,
-    ...(params.logLevel ? { logLevel: params.logLevel } : {}),
+    ...(params.logLevel ? { logLevel: params.logLevel as never } : {}),
   });
   app.use(async (args) => {
     if (shouldSkipOpenClawSlackSelfEvent(args)) {

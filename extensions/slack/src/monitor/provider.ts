@@ -184,6 +184,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const clientOptions = resolveSlackWebClientOptions();
+  // logLevel lives on the top-level provider config (channels.slack.logLevel),
+  // not per-account, so a single setting suppresses sub-library noise across
+  // all bot accounts sharing this provider. (#71531)
+  const slackProviderLogLevel = cfg.channels?.slack?.logLevel;
   const { app, receiver } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
@@ -192,7 +196,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     signingSecret: signingSecret ?? undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
-    logLevel: slackCfg.logLevel,
+    logLevel: slackProviderLogLevel,
   });
 
   // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent

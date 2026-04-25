@@ -244,9 +244,9 @@ describe("createSlackBoltApp", () => {
       appToken: "xapp-test",
       slackWebhookPath: "/slack/events",
       clientOptions,
-      logLevel: "ERROR",
+      logLevel: "error",
     });
-    expect((app as unknown as FakeApp).args).toMatchObject({ logLevel: "ERROR" });
+    expect((app as unknown as FakeApp).args).toMatchObject({ logLevel: "error" });
   });
 
   it("omits logLevel when not provided so bolt's default INFO behavior is preserved", () => {
