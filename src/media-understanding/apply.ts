@@ -495,6 +495,7 @@ export async function applyMediaUnderstanding(params: {
   const providerRegistry = buildProviderRegistry(params.providers, cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
+    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
   });
 
   try {
