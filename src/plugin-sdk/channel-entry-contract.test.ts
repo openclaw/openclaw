@@ -170,14 +170,14 @@ async function expectBuiltArtifactNodeRequireFastPath(
     fs.mkdirSync(pluginRoot, { recursive: true });
 
     const importerPath = path.join(pluginRoot, "index.js");
-    const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.js");
+    const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.cjs");
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
     // CommonJS so `nodeRequire` succeeds without falling back to jiti.
     fs.writeFileSync(sidecarPath, "module.exports = { sentinel: 7 };\n", "utf8");
 
     expect(
       channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
-        specifier: "./fast-path-sidecar.js",
+        specifier: "./fast-path-sidecar.cjs",
         exportName: "sentinel",
       }),
     ).toBe(7);
