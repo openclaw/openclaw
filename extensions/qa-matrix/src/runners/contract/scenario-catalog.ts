@@ -269,7 +269,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       groupsByKey: {
         [MATRIX_QA_MAIN_ROOM_KEY]: {
           tools: {
-            allow: ["sessions_spawn"],
+            allow: ["sessions_spawn", "sessions_yield"],
           },
         },
       },
@@ -691,19 +691,9 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
   {
-    id: "matrix-e2ee-wrong-account-recovery-key",
-    timeoutMs: 180_000,
-    title: "Matrix E2EE rejects a recovery key from a different account",
-    topology: buildMatrixQaE2eeScenarioTopology({
-      scenarioId: "matrix-e2ee-wrong-account-recovery-key",
-      name: "Matrix QA E2EE Wrong Account Key Room",
-    }),
-    configOverrides: MATRIX_QA_E2EE_CONFIG,
-  },
-  {
     id: "matrix-e2ee-history-exists-backup-empty",
     timeoutMs: 180_000,
-    title: "Matrix E2EE encrypted history with an empty backup imports zero keys",
+    title: "Matrix E2EE backup reset preserves encrypted history via local key re-upload",
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-history-exists-backup-empty",
       name: "Matrix QA E2EE Empty Backup Room",
@@ -794,6 +784,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-key-bootstrap-failure",
       name: "Matrix QA E2EE Key Bootstrap Failure Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-wrong-account-recovery-key",
+    timeoutMs: 180_000,
+    title: "Matrix E2EE rejects a recovery key from a different account",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-wrong-account-recovery-key",
+      name: "Matrix QA E2EE Wrong Account Key Room",
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },

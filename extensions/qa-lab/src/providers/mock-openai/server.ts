@@ -338,23 +338,22 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
   return texts.join("\n");
 }
 
-function countImageInputs(input: ResponsesInputItem[]) {
-  let count = 0;
-  for (const item of input) {
-    if (!Array.isArray(item.content)) {
-      continue;
-    }
-    for (const entry of item.content) {
-      if (
-        entry &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "input_image"
-      ) {
-        count += 1;
-      }
-    }
+function countImageInputs(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.reduce((sum, entry) => sum + countImageInputs(entry), 0);
   }
-  return count;
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+  const record = value as Record<string, unknown>;
+  const type = typeof record.type === "string" ? record.type : "";
+  const imageLikeType =
+    type === "input_image" || type === "image" || type === "image_url" || type === "media";
+  const nested =
+    countImageInputs(record.content) +
+    countImageInputs(record.image_url) +
+    countImageInputs(record.source);
+  return (imageLikeType ? 1 : 0) + nested;
 }
 
 function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
@@ -522,6 +521,14 @@ function extractExactReplyDirective(text: string) {
   return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
 }
 
+function extractFinishExactlyDirective(text: string) {
+  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
+}
+
 function extractExactMarkerDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
   if (backtickedMatch) {
@@ -648,6 +655,8 @@ function buildAssistantText(
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const finishExactlyDirective =
+    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
@@ -810,6 +819,9 @@ function buildAssistantText(
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
+  }
+  if (finishExactlyDirective) {
+    return finishExactlyDirective;
   }
   if (prompt) {
     return `Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.`;

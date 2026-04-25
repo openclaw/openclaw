@@ -1275,9 +1275,13 @@ export class MatrixClient {
         !stagedRecoveryKeyConfirmedBySecretStorage &&
         !backupUsableBeforeStagedRecovery &&
         backupUsable;
+      const storedRecoveryKeyMatches =
+        this.recoveryKeyStore.getRecoveryKeySummary()?.encodedPrivateKey?.trim() ===
+        trimmedRecoveryKey;
       const stagedRecoveryKeyValidated =
-        stagedRecoveryKeyUsed &&
-        (stagedRecoveryKeyConfirmedBySecretStorage || stagedRecoveryKeyUnlockedBackup);
+        (stagedRecoveryKeyUsed &&
+          (stagedRecoveryKeyConfirmedBySecretStorage || stagedRecoveryKeyUnlockedBackup)) ||
+        (storedRecoveryKeyMatches && backupUsable);
       const recoveryKeyAccepted = stagedRecoveryKeyValidated && (status.verified || backupUsable);
       if (!status.verified) {
         if (backupUsable && stagedRecoveryKeyValidated) {

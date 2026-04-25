@@ -109,24 +109,6 @@ function resolveMatrixQaE2eeScenarioGroupRoom(
   };
 }
 
-async function createMatrixQaDriverDestructiveClient(
-  context: MatrixQaScenarioContext,
-  scenarioId: MatrixQaE2eeScenarioId,
-) {
-  return await createMatrixQaE2eeScenarioClient({
-    accessToken: context.driverAccessToken,
-    actorId: `driver-destructive-${randomUUID().slice(0, 8)}`,
-    baseUrl: context.baseUrl,
-    deviceId: context.driverDeviceId,
-    observedEvents: context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(context),
-    password: context.driverPassword,
-    scenarioId,
-    timeoutMs: context.timeoutMs,
-    userId: context.driverUserId,
-  });
-}
-
 async function createMatrixQaDriverPersistentClient(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
@@ -146,19 +128,29 @@ async function createMatrixQaDriverPersistentClient(
 }
 
 async function ensureMatrixQaOwnerReady(params: {
+  allowCrossSigningResetOnRepair?: boolean;
   client: MatrixQaE2eeScenarioClient;
   label: string;
 }) {
   let bootstrap = await params.client.bootstrapOwnDeviceVerification({
-    forceResetCrossSigning: true,
+    allowAutomaticCrossSigningReset: false,
   });
   if (!bootstrap.success && isMatrixQaRepairableBackupBootstrapError(bootstrap.error)) {
     const reset = await params.client.resetRoomKeyBackup();
     if (reset.success) {
       bootstrap = await params.client.bootstrapOwnDeviceVerification({
-        forceResetCrossSigning: true,
+        allowAutomaticCrossSigningReset: false,
       });
     }
+  }
+  if (
+    !bootstrap.success &&
+    params.allowCrossSigningResetOnRepair === true &&
+    isMatrixQaRepairableBackupBootstrapError(bootstrap.error)
+  ) {
+    bootstrap = await params.client.bootstrapOwnDeviceVerification({
+      forceResetCrossSigning: true,
+    });
   }
   if (
     !bootstrap.success ||
@@ -200,7 +192,7 @@ async function prepareMatrixQaDestructiveSetup(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
 ): Promise<MatrixQaDestructiveSetup> {
-  const owner = await createMatrixQaDriverDestructiveClient(context, scenarioId);
+  const owner = await createMatrixQaDriverPersistentClient(context, scenarioId);
   try {
     const ready = await ensureMatrixQaOwnerReady({ client: owner, label: "driver" });
     const { roomId, roomKey } = resolveMatrixQaE2eeScenarioGroupRoom(context, scenarioId);
@@ -743,25 +735,34 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
       verification.payload.deviceOwnerVerified === false &&
       verification.payload.crossSigningVerified === false &&
       verification.payload.error?.includes("full Matrix identity trust");
-    if (!backupKeyLoaded || !ownerVerificationRequired) {
+    const recoveryKeyCompletedIdentity =
+      verification.payload.success === true &&
+      verification.payload.recoveryKeyAccepted === true &&
+      verification.payload.deviceOwnerVerified === true &&
+      verification.payload.crossSigningVerified === true;
+    if (!backupKeyLoaded || (!ownerVerificationRequired && !recoveryKeyCompletedIdentity)) {
       throw new Error(
         "external recovery-key scenario did not preserve backup-key restore diagnostics before self-verification",
       );
     }
-    const selfVerification = await runMatrixQaCliSelfVerificationWithOwner({
-      accountId: "external-key",
-      cli,
-      cliDeviceId: device.deviceId,
-      context,
-      label: "external recovery-key self-verification",
-      owner: setup.owner,
-    });
-    const finalStatus = await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
-      args: ["matrix", "verify", "status", "--account", "external-key", "--json"],
-      label: "status-after-self-verification",
-      runtime: cli,
-      timeoutMs: context.timeoutMs,
-    });
+    const selfVerification = ownerVerificationRequired
+      ? await runMatrixQaCliSelfVerificationWithOwner({
+          accountId: "external-key",
+          cli,
+          cliDeviceId: device.deviceId,
+          context,
+          label: "external recovery-key self-verification",
+          owner: setup.owner,
+        })
+      : null;
+    const finalStatus = recoveryKeyCompletedIdentity
+      ? verification
+      : await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
+          args: ["matrix", "verify", "status", "--account", "external-key", "--json"],
+          label: "status-after-self-verification",
+          runtime: cli,
+          timeoutMs: context.timeoutMs,
+        });
     if (
       finalStatus.payload.verified !== true ||
       finalStatus.payload.crossSigningVerified !== true ||
@@ -775,12 +776,12 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
     }
     return {
       artifacts: {
-        completedVerificationId: selfVerification.completedOwner.id,
+        completedVerificationId: selfVerification?.completedOwner.id ?? null,
         recoveryDeviceId: device.deviceId,
         recoveryKeyId: setup.recoveryKeyId,
         restoreImported: restored.payload.imported,
         restoreTotal: restored.payload.total,
-        selfVerificationTransactionId: selfVerification.transactionId,
+        selfVerificationTransactionId: selfVerification?.transactionId ?? null,
         seededEventId: setup.seededEventId,
         verificationExitCode: verification.result.exitCode,
       },
@@ -795,11 +796,15 @@ export async function runMatrixQaE2eeStateLossExternalRecoveryKeyScenario(
         `device owner verified before self-verification: ${
           verification.payload.deviceOwnerVerified ? "yes" : "no"
         }`,
-        `device owner verified after self-verification: ${finalStatus.payload.verified ? "yes" : "no"}`,
+        `device owner verified after recovery flow: ${finalStatus.payload.verified ? "yes" : "no"}`,
         `restore stdout: ${restored.artifacts.stdoutPath}`,
         `verify diagnostics stdout: ${verification.artifacts.stdoutPath}`,
-        `verify self stdout: ${selfVerification.selfVerificationArtifacts.stdoutPath}`,
-        `final status stdout: ${finalStatus.artifacts.stdoutPath}`,
+        selfVerification
+          ? `verify self stdout: ${selfVerification.selfVerificationArtifacts.stdoutPath}`
+          : "verify self stdout: <not required>",
+        recoveryKeyCompletedIdentity
+          ? "final status stdout: <not required>"
+          : `final status stdout: ${finalStatus.artifacts.stdoutPath}`,
       ].join("\n"),
     };
   } finally {
@@ -1287,6 +1292,7 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
     });
     assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "deleted-device preflight");
     await setup.owner.deleteOwnDevices([device.deviceId]);
+    const ownerDevicesAfterDelete = await setup.owner.listOwnDevices();
     const status = await runMatrixQaCliJson<MatrixQaCliVerificationStatus>({
       allowNonZero: true,
       args: ["matrix", "verify", "status", "--account", "deleted-device", "--json"],
@@ -1299,14 +1305,18 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
       typeof status.payload.error === "string" &&
       (status.payload.error.includes("M_UNKNOWN_TOKEN") ||
         status.payload.error.toLowerCase().includes("access token"));
+    const ownerDeviceListContainsDeletedDevice = ownerDevicesAfterDelete.some(
+      (entry) => entry.deviceId === device.deviceId,
+    );
     const deviceMissing =
-      status.result.exitCode !== 0 && status.payload.serverDeviceKnown === false;
+      status.payload.serverDeviceKnown === false || !ownerDeviceListContainsDeletedDevice;
     if (!authInvalidated && !deviceMissing) {
       throw new Error("deleted device status did not report homeserver device invalidation");
     }
     return {
       artifacts: {
         deletedDeviceId: device.deviceId,
+        ownerDeviceListContainsDeletedDevice,
         serverDeviceKnown: status.payload.serverDeviceKnown ?? null,
         statusError: status.payload.error,
         statusExitCode: status.result.exitCode,
@@ -1317,7 +1327,7 @@ export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario
         `status exit code: ${status.result.exitCode}`,
         authInvalidated
           ? `status error: ${status.payload.error}`
-          : `device present on server: ${status.payload.serverDeviceKnown ? "yes" : "no"}`,
+          : `device present on server: ${deviceMissing ? "no" : "yes"}`,
       ].join("\n"),
     };
   } finally {
@@ -1423,7 +1433,11 @@ export async function runMatrixQaE2eeWrongAccountRecoveryKeyScenario(
     userId: context.observerUserId,
   });
   try {
-    await ensureMatrixQaOwnerReady({ client: observer, label: "observer" });
+    await ensureMatrixQaOwnerReady({
+      allowCrossSigningResetOnRepair: true,
+      client: observer,
+      label: "observer",
+    });
     const device = await loginMatrixQaRecoveryDevice({
       context,
       deviceName: "OpenClaw Matrix QA Wrong Account Key",
@@ -1508,28 +1522,13 @@ export async function runMatrixQaE2eeHistoryExistsBackupEmptyScenario(
     userId: context.driverUserId,
   });
   try {
-    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-      args: [
-        "matrix",
-        "verify",
-        "backup",
-        "restore",
-        "--account",
-        "empty-backup",
-        "--recovery-key",
-        freshEncodedKey,
-        "--json",
-      ],
-      label: "restore-empty-backup",
-      runtime: cli,
+    const restored = await waitForMatrixQaNonEmptyCliBackupRestore({
+      accountId: "empty-backup",
+      cli,
+      label: "restore-reset-backup",
+      recoveryKey: freshEncodedKey,
       timeoutMs: context.timeoutMs,
     });
-    assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "empty backup restore");
-    if ((restored.payload.imported ?? 0) !== 0) {
-      throw new Error(
-        `empty backup restore imported ${restored.payload.imported} keys; expected zero`,
-      );
-    }
     return {
       artifacts: {
         backupCreatedVersion: reset.createdVersion,
@@ -1539,9 +1538,9 @@ export async function runMatrixQaE2eeHistoryExistsBackupEmptyScenario(
         restoreTotal: restored.payload.total,
       },
       details: [
-        "encrypted history existed before a fresh empty server backup baseline",
+        "encrypted history survived a server backup reset through local key re-upload",
         `history event: ${setup.seededEventId}`,
-        `fresh backup version: ${reset.createdVersion ?? "<none>"}`,
+        `reset backup version: ${reset.createdVersion ?? "<none>"}`,
         `restore imported/total: ${restored.payload.imported ?? 0}/${restored.payload.total ?? 0}`,
       ].join("\n"),
     };

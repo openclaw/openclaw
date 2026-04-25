@@ -140,6 +140,10 @@ function isMatrixQaRepairableBackupBootstrapError(error: string | undefined) {
   );
 }
 
+const MATRIX_QA_PRESERVE_IDENTITY_BOOTSTRAP_OPTIONS = {
+  allowAutomaticCrossSigningReset: false,
+} as const;
+
 async function assertMatrixQaPeerDeviceTrusted(params: {
   client: MatrixQaE2eeScenarioClient;
   deviceId: string;
@@ -159,15 +163,15 @@ async function ensureMatrixQaE2eeOwnDeviceVerified(params: {
   client: MatrixQaE2eeScenarioClient;
   label: string;
 }) {
-  let bootstrap = await params.client.bootstrapOwnDeviceVerification({
-    forceResetCrossSigning: true,
-  });
+  let bootstrap = await params.client.bootstrapOwnDeviceVerification(
+    MATRIX_QA_PRESERVE_IDENTITY_BOOTSTRAP_OPTIONS,
+  );
   if (!bootstrap.success && isMatrixQaRepairableBackupBootstrapError(bootstrap.error)) {
     const reset = await params.client.resetRoomKeyBackup();
     if (reset.success) {
-      bootstrap = await params.client.bootstrapOwnDeviceVerification({
-        forceResetCrossSigning: true,
-      });
+      bootstrap = await params.client.bootstrapOwnDeviceVerification(
+        MATRIX_QA_PRESERVE_IDENTITY_BOOTSTRAP_OPTIONS,
+      );
     }
   }
   assertMatrixQaBootstrapSucceeded(params.label, bootstrap);
@@ -428,7 +432,7 @@ async function createMatrixQaCliSelfVerificationRuntime(params: {
                 deviceId: params.deviceId,
                 encryption: true,
                 homeserver: params.context.baseUrl,
-                initialSyncLimit: 1,
+                initialSyncLimit: 0,
                 name: "Matrix QA CLI self-verification",
                 network: {
                   dangerouslyAllowPrivateNetwork: true,
@@ -1052,6 +1056,18 @@ export async function runMatrixQaE2eeRecoveryKeyLifecycleScenario(
           throw new Error(
             `Matrix E2EE room-key backup reset failed: ${reset.error ?? "unknown error"}`,
           );
+        }
+        const resetRecoveryKey = await recoveryClient.getRecoveryKey();
+        const resetEncodedRecoveryKey = resetRecoveryKey?.encodedPrivateKey?.trim();
+        if (resetEncodedRecoveryKey && resetEncodedRecoveryKey !== encodedRecoveryKey) {
+          const ownerRecovery = await client.verifyWithRecoveryKey(resetEncodedRecoveryKey);
+          if (!ownerRecovery.success) {
+            throw new Error(
+              `Matrix E2EE owner could not refresh recovery key after backup reset: ${
+                ownerRecovery.error ?? "unknown error"
+              }`,
+            );
+          }
         }
         await recoveryClient.stop();
         await client.deleteOwnDevices([recoveryDevice.deviceId]).catch(() => undefined);

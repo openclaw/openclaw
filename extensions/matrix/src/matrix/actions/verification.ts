@@ -521,7 +521,7 @@ export async function restoreMatrixRoomKeyBackup(
     recoveryKey?: string;
   } = {},
 ) {
-  return await withStartedActionClient(
+  return await withResolvedActionClient(
     opts,
     async (client) =>
       await client.restoreRoomKeyBackup({

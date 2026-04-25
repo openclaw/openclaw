@@ -284,7 +284,7 @@ export async function createMatrixQaOpenClawCliRuntime(params: {
                 deviceId: params.deviceId,
                 encryption: true,
                 homeserver: params.baseUrl,
-                initialSyncLimit: 1,
+                initialSyncLimit: 0,
                 name: params.displayName,
                 network: {
                   dangerouslyAllowPrivateNetwork: true,
