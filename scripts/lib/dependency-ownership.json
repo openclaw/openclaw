@@ -137,11 +137,6 @@
       "class": "core-runtime",
       "risk": ["parser", "markdown"]
     },
-    "node-llama-cpp": {
-      "owner": "capability:memory-local-embeddings",
-      "class": "optional-peer-runtime",
-      "risk": ["native", "local-model-runtime", "large-transitive-cone"]
-    },
     "openai": {
       "owner": "provider:openai",
       "class": "default-runtime-initially",
