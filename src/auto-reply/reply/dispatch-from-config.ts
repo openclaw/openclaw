@@ -645,6 +645,21 @@ export async function dispatchReplyFromConfig(
     }
   }
 
+  // Broadcast inbound_claim to global plugin listeners (fixes #48434).
+  // Allows plugins like listen-only to observe all unbound inbound messages
+  // without requiring a conversation binding.
+  if (hookRunner?.hasHooks("inbound_claim")) {
+    const broadcastResult = await hookRunner.runInboundClaim(
+      inboundClaimEvent,
+      inboundClaimContext,
+    );
+    if (broadcastResult?.handled) {
+      markIdle("plugin_broadcast_claim");
+      recordProcessed("completed", { reason: "plugin-broadcast-handled" });
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+  }
+
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
     fireAndForgetHook(
