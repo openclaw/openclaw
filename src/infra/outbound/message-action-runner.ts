@@ -31,12 +31,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-channel.js";
+import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -45,6 +40,10 @@ import {
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import {
+  callGatewayMessageAction,
+  resolveGatewayActionIdempotencyKey,
+} from "./message-action-gateway.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   collectActionMediaSourceHints,
@@ -83,15 +82,6 @@ export type MessageActionRunnerGateway = {
   clientDisplayName?: string;
   mode: GatewayClientMode;
 };
-
-let messageActionGatewayRuntimePromise: Promise<
-  typeof import("./message.gateway.runtime.js")
-> | null = null;
-
-function loadMessageActionGatewayRuntime() {
-  messageActionGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
-  return messageActionGatewayRuntimePromise;
-}
 
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
@@ -170,45 +160,6 @@ export function getToolResult(
   return "toolResult" in result ? result.toolResult : undefined;
 }
 
-function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
-  return {
-    url: gateway?.url,
-    token: gateway?.token,
-    timeoutMs:
-      typeof gateway?.timeoutMs === "number" && Number.isFinite(gateway.timeoutMs)
-        ? Math.max(1, Math.floor(gateway.timeoutMs))
-        : 10_000,
-    clientName: gateway?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-    clientDisplayName: gateway?.clientDisplayName,
-    mode: gateway?.mode ?? GATEWAY_CLIENT_MODES.CLI,
-  };
-}
-
-async function callGatewayMessageAction<T>(params: {
-  gateway?: MessageActionRunnerGateway;
-  actionParams: Record<string, unknown>;
-}): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
-  const gateway = resolveGatewayActionOptions(params.gateway);
-  return await callGatewayLeastPrivilege<T>({
-    url: gateway.url,
-    token: gateway.token,
-    method: "message.action",
-    params: params.actionParams,
-    timeoutMs: gateway.timeoutMs,
-    clientName: gateway.clientName,
-    clientDisplayName: gateway.clientDisplayName,
-    mode: gateway.mode,
-  });
-}
-
-async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
-  if (idempotencyKey) {
-    return idempotencyKey;
-  }
-  const { randomIdempotencyKey } = await loadMessageActionGatewayRuntime();
-  return randomIdempotencyKey();
-}
 function applyCrossContextMessageDecoration({
   params,
   message,

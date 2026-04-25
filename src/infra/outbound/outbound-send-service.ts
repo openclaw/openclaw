@@ -8,9 +8,16 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import {
+  callGatewayMessageAction,
+  resolveGatewayActionIdempotencyKey,
+} from "./message-action-gateway.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
@@ -54,8 +61,18 @@ export type OutboundSendContext = {
 type PluginHandledResult = {
   handledBy: "plugin";
   payload: unknown;
-  toolResult: AgentToolResult<unknown>;
+  toolResult?: AgentToolResult<unknown>;
 };
+
+function warnGatewayActionFallback(params: {
+  channel: ChannelId;
+  action: "send" | "poll";
+  err: unknown;
+}) {
+  console.warn(
+    `[outbound-send-service] gateway message.action ${params.channel}.${params.action} failed; falling back to local dispatch: ${formatErrorMessage(params.err)}`,
+  );
+}
 
 function collectActionMediaSources(params: Record<string, unknown>): string[] {
   const sources: string[] = [];
@@ -75,6 +92,45 @@ async function tryHandleWithPluginAction(params: {
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
     return null;
+  }
+  const plugin = resolveOutboundChannelPlugin({
+    channel: params.ctx.channel,
+    cfg: params.ctx.cfg,
+  });
+  const executionMode =
+    plugin?.actions?.resolveExecutionMode?.({ action: params.action }) ?? "local";
+  if (executionMode === "gateway" && params.ctx.gateway) {
+    try {
+      const payload = await callGatewayMessageAction<unknown>({
+        gateway: params.ctx.gateway,
+        actionParams: {
+          channel: params.ctx.channel,
+          action: params.action,
+          params: params.ctx.params,
+          accountId: params.ctx.accountId ?? undefined,
+          requesterSenderId: params.ctx.requesterSenderId,
+          senderIsOwner: params.ctx.senderIsOwner,
+          sessionKey: params.ctx.sessionKey,
+          sessionId: params.ctx.sessionId,
+          agentId: params.ctx.agentId,
+          toolContext: params.ctx.toolContext,
+          idempotencyKey: await resolveGatewayActionIdempotencyKey(
+            normalizeOptionalString(params.ctx.params.idempotencyKey),
+          ),
+        },
+      });
+      await params.onHandled?.();
+      return {
+        handledBy: "plugin",
+        payload,
+      };
+    } catch (err) {
+      warnGatewayActionFallback({
+        channel: params.ctx.channel,
+        action: params.action,
+        err,
+      });
+    }
   }
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,

@@ -20,6 +20,11 @@ describe("telegramMessageActions", () => {
     telegramMessageActionRuntime.handleTelegramAction = originalHandleTelegramAction;
   });
 
+  it("executes send through the gateway and leaves other actions local", () => {
+    expect(telegramMessageActions.resolveExecutionMode?.({ action: "send" })).toBe("gateway");
+    expect(telegramMessageActions.resolveExecutionMode?.({ action: "react" })).toBe("local");
+  });
+
   it("allows interactive-only sends", async () => {
     await telegramMessageActions.handleAction!({
       action: "send",

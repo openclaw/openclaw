@@ -3,6 +3,11 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-
 
 const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
 const dispatchChannelMessageActionMock = vi.hoisted(() => vi.fn());
+const resolveOutboundChannelPluginMock = vi.hoisted(() => vi.fn());
+const callGatewayMessageActionMock = vi.hoisted(() => vi.fn());
+const resolveGatewayActionIdempotencyKeyMock = vi.hoisted(() =>
+  vi.fn(async () => "idem-gateway-send"),
+);
 const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendPollMock = vi.hoisted(() => vi.fn());
 const getAgentScopedMediaLocalRootsForSourcesMock = vi.hoisted(() =>
@@ -49,6 +54,9 @@ const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
 const mocks = {
   getDefaultMediaLocalRoots: getDefaultMediaLocalRootsMock,
   dispatchChannelMessageAction: dispatchChannelMessageActionMock,
+  resolveOutboundChannelPlugin: resolveOutboundChannelPluginMock,
+  callGatewayMessageAction: callGatewayMessageActionMock,
+  resolveGatewayActionIdempotencyKey: resolveGatewayActionIdempotencyKeyMock,
   sendMessage: sendMessageMock,
   sendPoll: sendPollMock,
   getAgentScopedMediaLocalRootsForSources: getAgentScopedMediaLocalRootsForSourcesMock,
@@ -59,6 +67,15 @@ const mocks = {
 
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
+}));
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
+
+vi.mock("./message-action-gateway.js", () => ({
+  callGatewayMessageAction: mocks.callGatewayMessageAction,
+  resolveGatewayActionIdempotencyKey: mocks.resolveGatewayActionIdempotencyKey,
 }));
 
 vi.mock("./message.js", () => ({
@@ -176,6 +193,10 @@ describe("executeSendAction", () => {
 
   beforeEach(() => {
     mocks.dispatchChannelMessageAction.mockClear();
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.callGatewayMessageAction.mockReset();
+    mocks.resolveGatewayActionIdempotencyKey.mockClear();
+    mocks.resolveGatewayActionIdempotencyKey.mockResolvedValue("idem-gateway-send");
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
@@ -459,6 +480,134 @@ describe("executeSendAction", () => {
     expect(result.handledBy).toBe("plugin");
     expect(resolveCorePoll).not.toHaveBeenCalled();
     expect(mocks.sendPoll).not.toHaveBeenCalled();
+  });
+
+  it("routes plugin sends through the gateway when the channel requests gateway execution", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      actions: {
+        resolveExecutionMode: ({ action }: { action: string }) =>
+          action === "send" ? "gateway" : "local",
+      },
+    });
+    mocks.callGatewayMessageAction.mockResolvedValue({
+      ok: true,
+      messageId: "msg-gateway",
+    });
+
+    const result = await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "telegram",
+        params: {
+          to: "-1003863755361",
+          message: "hello",
+        },
+        sessionKey: "agent:main:demo-outbound:channel:123",
+        sessionId: "session-123",
+        agentId: "agent-9",
+        requesterSenderId: "trusted-user",
+        gateway: {
+          url: "http://127.0.0.1:18789",
+          token: "tok",
+          timeoutMs: 5000,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        mirror: {
+          sessionKey: "agent:main:demo-outbound:channel:123",
+          agentId: "agent-9",
+        },
+        dryRun: false,
+      },
+      to: "-1003863755361",
+      message: "hello",
+    });
+
+    expect(mocks.callGatewayMessageAction).toHaveBeenCalledWith({
+      gateway: expect.objectContaining({
+        url: "http://127.0.0.1:18789",
+        token: "tok",
+      }),
+      actionParams: expect.objectContaining({
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "-1003863755361",
+          message: "hello",
+        },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:main:demo-outbound:channel:123",
+        sessionId: "session-123",
+        agentId: "agent-9",
+        idempotencyKey: "idem-gateway-send",
+      }),
+    });
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      handledBy: "plugin",
+      payload: {
+        ok: true,
+        messageId: "msg-gateway",
+      },
+    });
+    expectMirrorWrite({
+      agentId: "agent-9",
+      sessionKey: "agent:main:demo-outbound:channel:123",
+      text: "hello",
+    });
+  });
+
+  it("logs and falls back to local plugin dispatch when gateway execution fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      mocks.resolveOutboundChannelPlugin.mockReturnValue({
+        actions: {
+          resolveExecutionMode: ({ action }: { action: string }) =>
+            action === "send" ? "gateway" : "local",
+        },
+      });
+      mocks.callGatewayMessageAction.mockRejectedValue(new Error("gateway down"));
+      mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+      const result = await executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "telegram",
+          params: {
+            to: "-1003863755361",
+            message: "hello",
+          },
+          gateway: {
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          },
+          dryRun: false,
+        },
+        to: "-1003863755361",
+        message: "hello",
+      });
+
+      expect(mocks.callGatewayMessageAction).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "gateway message.action telegram.send failed; falling back to local dispatch: gateway down",
+        ),
+      );
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          action: "send",
+        }),
+      );
+      expect(result.handledBy).toBe("plugin");
+      expect(result.toolResult).toMatchObject({
+        ok: true,
+        value: { messageId: "msg-plugin" },
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("passes agent-scoped media local roots to plugin dispatch", async () => {

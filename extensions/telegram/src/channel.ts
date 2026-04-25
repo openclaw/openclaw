@@ -213,6 +213,10 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.describeMessageTool?.(ctx) ??
     telegramMessageActionsImpl.describeMessageTool?.(ctx) ??
     null,
+  resolveExecutionMode: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveExecutionMode?.(ctx) ??
+    telegramMessageActionsImpl.resolveExecutionMode?.(ctx) ??
+    "local",
   extractToolSend: (ctx) =>
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.extractToolSend?.(ctx) ??
     telegramMessageActionsImpl.extractToolSend?.(ctx) ??

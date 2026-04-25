@@ -160,6 +160,7 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  resolveExecutionMode: ({ action }) => (action === "send" ? "gateway" : "local"),
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };
