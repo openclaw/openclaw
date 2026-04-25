@@ -756,6 +756,8 @@ export const MemorySearchSchema = z
               .object({
                 enabled: z.boolean().optional(),
                 halfLifeDays: z.number().int().positive().optional(),
+                model: z.enum(["exponential", "weibull"]).optional(),
+                weibullShape: z.number().min(0.1).max(5).optional(),
               })
               .strict()
               .optional(),

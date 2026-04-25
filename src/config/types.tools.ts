@@ -471,8 +471,16 @@ export type MemorySearchConfig = {
       temporalDecay?: {
         /** Enable temporal decay (default: false). */
         enabled?: boolean;
-        /** Half-life in days for exponential decay (default: 30). */
+        /** Half-life in days for decay (default: 30). */
         halfLifeDays?: number;
+        /** Decay model. "exponential" (default) preserves legacy behavior;
+         *  "weibull" uses a stretched-exponential curve that drops faster
+         *  initially and plateaus in the long tail. */
+        model?: "exponential" | "weibull";
+        /** Weibull shape parameter β (default: 1.5). Only used when
+         *  model === "weibull". β = 1 → identical to exponential;
+         *  β > 1 → faster early decay, slower long tail. */
+        weibullShape?: number;
       };
     };
   };

@@ -2,13 +2,14 @@ import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./m
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
+  type TemporalDecayModel,
   DEFAULT_TEMPORAL_DECAY_CONFIG,
 } from "./temporal-decay.js";
 
 export type HybridSource = string;
 
 export { type MMRConfig, DEFAULT_MMR_CONFIG };
-export { type TemporalDecayConfig, DEFAULT_TEMPORAL_DECAY_CONFIG };
+export { type TemporalDecayConfig, type TemporalDecayModel, DEFAULT_TEMPORAL_DECAY_CONFIG };
 
 export type HybridVectorResult = {
   id: string;

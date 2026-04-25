@@ -22,6 +22,28 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "temporalDecay": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "halfLifeDays": {
+            "type": "number",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string",
+            "enum": ["exponential", "weibull"]
+          },
+          "weibullShape": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 5
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,
