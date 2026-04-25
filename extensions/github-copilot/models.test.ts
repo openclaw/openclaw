@@ -202,13 +202,11 @@ describe("resolveCopilotForwardCompatModel", () => {
     }
   });
 
-  it("infers reasoning=true for any model ID containing codex", () => {
+  it("infers reasoning=true for Codex model IDs", () => {
     for (const id of ["gpt-5.4-codex", "gpt-5.5-codex", "gpt-5.4-codex-mini", "gpt-5.3-codex"]) {
       const ctx = createMockCtx(id);
       const result = requireResolvedModel(ctx);
-      expect((result as unknown as Record<string, unknown>).reasoning).toBe(
-        true,
-      );
+      expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
     }
   });
 
@@ -217,6 +215,7 @@ describe("resolveCopilotForwardCompatModel", () => {
       "gpt-5.4-mini",
       "claude-sonnet-4.6",
       "gpt-4o",
+      "mycodexmodel",
       "audio-o1-hd",
       "turbo-o3-voice",
     ]) {
