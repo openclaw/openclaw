@@ -24,6 +24,9 @@ backwards-compatible, and covered by fixture-plugin tests.
 Read [the full RFC packet](/plan/plan-mode-plugin-host-hooks-rfc) for:
 
 - current plugin surface gap analysis
+- current SDK research against existing hooks, using
+  [#71427](https://github.com/openclaw/openclaw/issues/71427) as the comparison
+  bar
 - PR #71676 evidence by host entry point
 - per-hook TypeScript-shaped contract proposals
 - expected host files for each hook family

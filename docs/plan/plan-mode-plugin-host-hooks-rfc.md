@@ -36,6 +36,56 @@ and preventing a plugin port from silently dropping parity.
 | E   | [#71736](https://github.com/openclaw/openclaw/issues/71736) | Control UI plugin contribution slots                                        |
 | F   | [#71737](https://github.com/openclaw/openclaw/issues/71737) | Agent events, run context, scheduler lifecycle, and heartbeat contributions |
 
+## Current SDK Research Baseline
+
+This RFC packet is intentionally using
+[#71427](https://github.com/openclaw/openclaw/issues/71427) as the review bar.
+That issue was closed because current `main` already exposed hooks that owned
+the requested tool-call and tool-result persistence lifecycle. For the six Plan
+Mode RFCs, the test is therefore not "is there any nearby hook?" The test is:
+
+- Does the existing SDK surface own the same lifecycle boundary?
+- Does it expose the payload shape a plugin needs without patching host files?
+- Does it provide host-owned ordering, authorization, disablement, and cleanup?
+- Can a fixture plugin prove the behavior without Plan Mode-specific core code?
+
+The current answer is mixed. OpenClaw has useful adjacent hooks, but none of
+the six RFCs is fully resolved by the current plugin SDK.
+
+| RFC                                                              | Existing current surface                                                                                                                                                                             | What it already covers                                                                                             | Why it does not resolve the RFC                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A. Plugin session extensions and patch actions                   | Fixed `SessionEntry`, fixed `sessions.patch`, hardcoded `GatewaySessionRow`, internal post-write `session:patch`, scoped plugin gateway RPCs.                                                        | Core can persist and patch known session fields; plugins can expose separate gateway methods with declared scopes. | There is no `api.registerSessionExtension(...)`, no namespaced persisted plugin session state, no gateway-routed plugin patch action, no public extension projection in session rows, and no host-owned reset/delete/compaction cleanup for plugin state.                  |
+| B. Durable next-turn injections and turn preparation             | `before_prompt_build`, legacy `before_agent_start`, and in-memory system events can prepend context to a prompt.                                                                                     | Plugins can add current-turn prompt context.                                                                       | There is no durable `enqueueNextTurnInjection(...)`, no `agent_turn_prepare` boundary before retry/provider transforms, no exactly-once dequeue semantics, no persisted expiry/dedupe, and no disabled-plugin suppression for queued injections.                           |
+| C. Trusted tool policy and tool metadata                         | `before_tool_call` can block, rewrite params, or require approval; core config filters tools before wrapping; plugin tools have basic catalog fields.                                                | Normal plugins can observe or block ordinary tool calls; plugin tools can appear in the catalog.                   | There is no trusted pre-plugin policy stage, no bundled-only policy registration, no guarantee a normal plugin cannot reorder around the gate, no plugin tool metadata/display registry, and no safe decoration path for core-owned tools such as `update_plan`.           |
+| D. Scoped commands, ownership, and continuation                  | `api.registerCommand(...)` exists; command context includes `gatewayClientScopes`; plugin gateway methods can declare `opts.scope`; duplicate plugin command registrations are blocked.              | Plugins can register slash commands and self-inspect available scopes.                                             | Commands cannot declare `requiredScopes` for host enforcement, untrusted plugins cannot have a reviewed reserved-root ownership model, and plugin command handling always stops instead of returning `continueAgent` to resume an agent turn.                              |
+| E. Control UI contribution slots                                 | Remote slash command discovery exists; generic plugin approval request/broadcast/card rendering exists; chat rendering and tool-card classification are host-coded.                                  | The UI can list plugin slash commands and can render a generic plugin approval card.                               | There is no `api.registerControlUiContribution(...)`, no chat mode descriptor projection, no input guard descriptor, no plugin event/status classifier registry, and no first-class data-driven UI slot for plugin-owned cards beyond the generic approval surface.        |
+| F. Agent events, run context, scheduler, and heartbeat lifecycle | `runtime.events.onAgentEvent` exposes raw agent events; internal `AgentRunContext` exists; `gateway_start` can expose `getCron`; prompt hooks can affect normal prompts; heartbeat can be requested. | Plugins can observe broad runtime events, manually use low-level cron access, and add generic prompt context.      | There is no typed `api.onAgentEvent(...)` with filters and cleanup, no namespaced plugin run-context bag, no session-owned scheduler helper with plugin cleanup on reset/delete/disable, and no heartbeat-specific contribution hook or heartbeat-scoped turn preparation. |
+
+Concrete existing-code anchors for the audit:
+
+- Current hook names live in `src/plugins/hook-types.ts`; they include
+  `before_prompt_build`, `before_tool_call`, `tool_result_persist`,
+  `before_message_write`, `gateway_start`, and agent/subagent lifecycle hooks,
+  but not `agent_turn_prepare` or `heartbeat_prompt_contribution`.
+- Session patch validation is fixed in
+  `src/gateway/protocol/schema/sessions.ts` and
+  `src/gateway/server-methods/sessions.ts`; plugin-specific session patch
+  fields are not accepted.
+- Plugin command definitions in `src/plugins/types.ts` and execution in
+  `src/plugins/commands.ts` support auth and handler context, but not
+  declarative command scopes, reserved-root ownership, or agent continuation.
+- Tool hooks in `src/plugins/hooks.ts` and
+  `src/agents/pi-tools.before-tool-call.ts` provide normal plugin ordering, not
+  a host-trusted pre-plugin policy tier.
+- Control UI rendering in `ui/src/ui/views/chat.ts`,
+  `ui/src/ui/app-tool-stream.ts`, and `ui/src/ui/chat/tool-cards.ts` is still
+  hardcoded around known chat/tool/event shapes rather than projected plugin UI
+  contribution descriptors.
+- Agent events, run context, cron, and heartbeat behavior exist in
+  `src/infra/agent-events.ts`, `src/cron/*`, and
+  `src/infra/heartbeat-runner.ts`, but the current plugin SDK does not expose
+  the requested typed lifecycle-owned helper surfaces.
+
 ## Maintainer Decision To Make
 
 The decision is not "merge PR #71676 or reject Plan Mode." The useful decision
