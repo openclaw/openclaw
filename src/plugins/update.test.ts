@@ -273,6 +273,7 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -407,6 +408,47 @@ describe("updateNpmInstalledPlugins", () => {
         nextVersion: "0.9.0",
         message: "lossless-claw is up to date (0.9.0).",
       },
+    ]);
+  });
+
+  it("expands home-relative install paths before checking installed npm versions", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-home-"));
+    tempDirs.push(home);
+    const installPath = path.join(home, ".openclaw", "extensions", "lossless-claw");
+    fs.mkdirSync(installPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(installPath, "package.json"),
+      JSON.stringify({ name: "@martian-engineering/lossless-claw", version: "0.9.0" }),
+    );
+    vi.stubEnv("HOME", home);
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw",
+        installPath: "~/.openclaw/extensions/lossless-claw",
+        resolvedName: "@martian-engineering/lossless-claw",
+        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        integrity: "sha512-same",
+      }),
+      pluginIds: ["lossless-claw"],
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({
+        pluginId: "lossless-claw",
+        status: "unchanged",
+        currentVersion: "0.9.0",
+      }),
     ]);
   });
 
