@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Google media generation: strip a configured trailing `/v1beta` from Google music/video provider base URLs before calling the Google GenAI SDK, preventing doubled `/v1beta/v1beta` paths. Fixes #63240. (#63258) Thanks @Hybirdss.
 - Google Chat: preserve reply text when a typing indicator message is deleted or can no longer be updated, so media captions and first text chunks are resent instead of silently disappearing. (#71498) Thanks @colin-lgtm.
 - Cron: tolerate malformed legacy job rows in startup, main-session system-event payloads, and human-readable `cron list` output so missing `state`, `payload.text`, or display fields no longer crash the scheduler or CLI. Fixes #66016, #65916, #64137, #57872, #59968, #63813, #52804, and #43163.
 - Heartbeat: clamp oversized scheduler delays through the shared safe timer helper, preventing `every` values over Node's timeout cap from becoming a 1 ms crash loop. Fixes #71414. (#71478) Thanks @hclsys.
