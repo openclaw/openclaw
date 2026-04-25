@@ -9,10 +9,12 @@ import {
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
   parseCommandArgs,
   resolveCommandArgMenu,
+  resolveStoredModelOverride,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import {
@@ -154,14 +156,26 @@ function resolveTelegramCommandMenuModelContext(params: {
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+    const store = loadSessionStore(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      const defaultModel = resolveDefaultModelForAgent({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      });
       return { provider: defaultModel.provider, model: defaultModel.model };
+    }
+    const override = resolveStoredModelOverride({
+      sessionEntry: entry,
+      sessionStore: store,
+      sessionKey: params.sessionKey,
+      defaultProvider: defaultModel.provider,
+    });
+    if (override?.model) {
+      return {
+        provider: override.provider || defaultModel.provider,
+        model: override.model,
+      };
     }
     const provider =
       normalizeOptionalString(entry?.providerOverride) ??
@@ -840,6 +854,7 @@ export const registerTelegramNativeCommands = ({
             isGroup,
             senderId,
           });
+          // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
           const threadKeys =
             dmThreadId != null
@@ -873,9 +888,7 @@ export const registerTelegramNativeCommands = ({
             })
           : null;
         if (menu && commandDefinition) {
-          const title =
-            menu.title ??
-            `Choose ${menu.arg.description || menu.arg.name} for /${commandDefinition.nativeName ?? commandDefinition.key}.`;
+          const title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
           const rows: Array<Array<{ text: string; callback_data: string }>> = [];
           for (let i = 0; i < menu.choices.length; i += 2) {
             const slice = menu.choices.slice(i, i + 2);

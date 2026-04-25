@@ -23,6 +23,7 @@ export {
   buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   getCommandDetection,
   isCommandEnabled,
   isCommandMessage,

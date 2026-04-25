@@ -323,6 +323,28 @@ export function resolveCommandArgMenu(params: {
   return { arg, choices, title };
 }
 
+export function formatCommandArgMenuTitle(params: {
+  command: ChatCommandDefinition;
+  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
+}): string {
+  const { command, menu } = params;
+  if (menu.title) {
+    return menu.title;
+  }
+  const commandLabel = command.nativeName ?? command.key;
+  if (typeof menu.arg.choices === "function") {
+    const options = menu.choices
+      .map((choice) => choice.label.trim())
+      .filter(Boolean)
+      .join(", ");
+    if (options.length > 0 && options.length <= 160) {
+      return `Choose ${menu.arg.name} for /${commandLabel}.\nOptions: ${options}.`;
+    }
+    return `Choose ${menu.arg.name} for /${commandLabel}.`;
+  }
+  return `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
+}
+
 export function isCommandMessage(raw: string): boolean {
   const trimmed = normalizeCommandBody(raw);
   return trimmed.startsWith("/");
