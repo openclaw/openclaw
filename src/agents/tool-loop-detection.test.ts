@@ -446,6 +446,31 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck).toBe(false);
     });
 
+    it("does not block known polling after another tool breaks the no-progress tail", () => {
+      const state = createState();
+      const { params, result } = createNoProgressPollFixture("sess-tail");
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: CRITICAL_THRESHOLD,
+      });
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "read",
+        toolParams: { path: "/status.txt" },
+        result: {
+          content: [{ type: "text", text: "checked another signal" }],
+          details: { ok: true },
+        },
+        count: WARNING_THRESHOLD,
+      });
+
+      const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("blocks any tool with global no-progress breaker at 30", () => {
       const fixture = createReadNoProgressFixture();
       const loopResult = detectLoopAfterRepeatedCalls({
@@ -459,6 +484,37 @@ describe("tool-loop-detection", () => {
         expect(loopResult.level).toBe("critical");
         expect(loopResult.detector).toBe("global_circuit_breaker");
         expect(loopResult.message).toContain("global circuit breaker");
+      }
+    });
+
+    it("keeps global no-progress breaker scoped to the current repeated tail", () => {
+      const state = createState();
+      const fixture = createReadNoProgressFixture();
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+      recordSuccessfulCall(
+        state,
+        "list",
+        { dir: "/workspace" },
+        { content: [{ type: "text", text: "workspace files" }], details: { ok: true } },
+        0,
+      );
+
+      const loopResult = detectToolCallLoop(
+        state,
+        fixture.toolName,
+        fixture.params,
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
       }
     });
 
