@@ -11,7 +11,6 @@ Docs: https://docs.openclaw.ai
 - CLI/image generation: expose `--output-format` and
   `--openai-background` on `openclaw infer image generate` and
   `openclaw infer image edit` for transparent-background OpenAI image runs.
-  Thanks @steipete.
 - Browser/config: allow local managed Chrome launch discovery and post-launch
   CDP readiness timeouts to be raised for slower hosts such as Raspberry Pi.
   Fixes #66803. Thanks @beat843796.
