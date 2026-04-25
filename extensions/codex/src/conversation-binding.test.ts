@@ -44,7 +44,7 @@ describe("codex conversation binding", () => {
     await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("ignores inbound bound messages when command authorization is absent", async () => {
+  it("consumes inbound bound messages when command authorization is absent", async () => {
     const result = await handleCodexConversationInboundClaim(
       {
         content: "run this",
@@ -54,8 +54,13 @@ describe("codex conversation binding", () => {
       {
         channelId: "discord",
         pluginBinding: {
+          bindingId: "binding-1",
           pluginId: "codex",
-          source: "conversation-bind",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
           data: {
             kind: "codex-app-server-session",
             version: 1,
@@ -66,6 +71,6 @@ describe("codex conversation binding", () => {
       },
     );
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ handled: true });
   });
 });

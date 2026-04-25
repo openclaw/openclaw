@@ -114,7 +114,7 @@ export async function handleCodexConversationInboundClaim(
     return undefined;
   }
   if (event.commandAuthorized !== true) {
-    return undefined;
+    return { handled: true };
   }
   const prompt = (event.bodyForAgent ?? event.content ?? "").trim();
   if (!prompt) {
