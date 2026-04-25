@@ -69,12 +69,25 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toEqual(SLACK_WRITE_RETRY_OPTIONS);
   });
 
+  it("serializes write client requests by default", () => {
+    const options = resolveSlackWriteClientOptions();
+
+    expect(options.maxRequestConcurrency).toBe(1);
+  });
+
+  it("respects explicit write client concurrency overrides", () => {
+    const options = resolveSlackWriteClientOptions({ maxRequestConcurrency: 5 });
+
+    expect(options.maxRequestConcurrency).toBe(5);
+  });
+
   it("passes no-retry config into the write client by default", () => {
     createSlackWriteClient("xoxb-test", { timeout: 4321 });
 
     expect(WebClient).toHaveBeenCalledWith(
       "xoxb-test",
       expect.objectContaining({
+        maxRequestConcurrency: 1,
         timeout: 4321,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       }),
