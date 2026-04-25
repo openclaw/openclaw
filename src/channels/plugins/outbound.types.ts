@@ -84,6 +84,7 @@ export type ChannelOutboundAdapter = {
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
   normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
+  sendTextOnlyErrorPayloads?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
     cfg: OpenClawConfig;

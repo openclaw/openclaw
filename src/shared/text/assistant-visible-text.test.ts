@@ -529,6 +529,54 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
+  it("strips plural tool_calls wrappers with nested tool_call blocks", () => {
+    const input = [
+      "Before",
+      "<tool_calls>",
+      '<tool_call>{"name":"read","arguments":{"path":"/tmp/x"}}</tool_call>',
+      "</tool_calls>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("strips plural function_calls wrappers with nested function_call blocks", () => {
+    const input = [
+      "Before",
+      "<function_calls>",
+      '<function_call>{"name":"read","arguments":{"path":"/tmp/x"}}</function_call>',
+      "</function_calls>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("does not close plural function_calls wrappers on matching text inside nested JSON", () => {
+    const input = [
+      "Before",
+      "<function_calls>",
+      '<function_call>{"name":"read","arguments":{"html":"</function_calls> SECRET"}}</function_call>',
+      "</function_calls>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("does not close plural tool_calls wrappers on matching text inside nested JSON", () => {
+    const input = [
+      "Before",
+      "<tool_calls>",
+      '<tool_call>{"name":"read","arguments":{"html":"</tool_calls> SECRET"}}</tool_call>',
+      "</tool_calls>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Before\n\nAfter");
+  });
+
   it("drops malformed reasoning before orphan close tags when final text follows", () => {
     expect(sanitizeAssistantVisibleText("private chain of thought </think> Visible answer")).toBe(
       "Visible answer",

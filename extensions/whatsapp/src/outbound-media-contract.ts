@@ -3,7 +3,11 @@ import path from "node:path";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { formatError } from "./session-errors.js";
-import { sleep } from "./text-runtime.js";
+import {
+  sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithOptions,
+  sleep,
+} from "./text-runtime.js";
 
 type WhatsAppOutboundPayloadLike = {
   text?: string;
@@ -31,13 +35,21 @@ const WHATSAPP_VOICE_BITRATE = "64k";
 const WHATSAPP_VOICE_MIMETYPE = "audio/ogg; codecs=opus";
 
 export function normalizeWhatsAppPayloadText(text: string | undefined): string {
-  return text?.trimStart() ?? "";
+  return sanitizeAssistantVisibleText(text?.trimStart() ?? "");
+}
+
+function stripLeadingBlankLines(text: string): string {
+  return text.replace(/^(?:[ \t]*\r?\n)+/, "");
 }
 
 export function normalizeWhatsAppPayloadTextPreservingIndentation(
   text: string | undefined,
 ): string {
-  return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
+  const sanitized = sanitizeAssistantVisibleTextWithOptions(stripLeadingBlankLines(text ?? ""), {
+    trim: "none",
+  });
+  const normalized = stripLeadingBlankLines(sanitized);
+  return normalized.trim() ? normalized : "";
 }
 
 export function resolveWhatsAppOutboundMediaUrls(
