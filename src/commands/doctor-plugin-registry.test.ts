@@ -11,6 +11,7 @@ import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js"
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { note } from "../terminal/note.js";
 import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
+import { DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV } from "./doctor/shared/plugin-registry-migration.js";
 
 vi.mock("../terminal/note.js", () => ({
   note: vi.fn(),
@@ -145,5 +146,31 @@ describe("maybeRepairPluginRegistryState", () => {
         }),
       ],
     });
+  });
+
+  it("does not mutate legacy install records when registry migration is disabled", async () => {
+    const stateDir = makeTempDir();
+
+    const nextConfig = await maybeRepairPluginRegistryState({
+      stateDir,
+      env: hermeticEnv({
+        [DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]: "1",
+      }),
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              resolvedName: "@vendor/demo",
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    expect(nextConfig.plugins?.installs?.demo?.resolvedName).toBe("@vendor/demo");
+    await expect(readPersistedPluginInstallLedger({ stateDir })).resolves.toBeNull();
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain(DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV);
   });
 });

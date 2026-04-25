@@ -28,7 +28,6 @@ type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParam
 type LegacyInstallLedgerMigrationResult = {
   config: OpenClawConfig;
   migrated: boolean;
-  recordCount: number;
 };
 
 function countRecords(records: Record<string, unknown> | undefined): number {
@@ -54,7 +53,6 @@ async function maybeMigrateLegacyInstallLedger(
     return {
       config: params.config,
       migrated: false,
-      recordCount: 0,
     };
   }
 
@@ -70,7 +68,6 @@ async function maybeMigrateLegacyInstallLedger(
     return {
       config: params.config,
       migrated: false,
-      recordCount: legacyCount,
     };
   }
 
@@ -88,22 +85,13 @@ async function maybeMigrateLegacyInstallLedger(
   return {
     config: nextConfig,
     migrated: true,
-    recordCount: legacyCount,
   };
 }
 
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<OpenClawConfig> {
-  let nextConfig = params.config;
-  const ledgerMigration = await maybeMigrateLegacyInstallLedger(params);
-  nextConfig = ledgerMigration.config;
-
-  const migrationParams = {
-    ...params,
-    config: nextConfig,
-  };
-  const preflight = preflightPluginRegistryInstallMigration(migrationParams);
+  const preflight = preflightPluginRegistryInstallMigration(params);
   for (const warning of preflight.deprecationWarnings) {
     note(warning, "Plugin registry");
   }
@@ -112,9 +100,17 @@ export async function maybeRepairPluginRegistryState(
       `${DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV} is set; skipping plugin registry repair.`,
       "Plugin registry",
     );
-    return nextConfig;
+    return params.config;
   }
 
+  let nextConfig = params.config;
+  const ledgerMigration = await maybeMigrateLegacyInstallLedger(params);
+  nextConfig = ledgerMigration.config;
+
+  const migrationParams = {
+    ...params,
+    config: nextConfig,
+  };
   if (!params.prompter.shouldRepair) {
     if (preflight.action === "migrate") {
       note(
