@@ -35,11 +35,11 @@ beforeEach(() => {
   resetSystemEventsForTest();
 });
 
-function createHeartbeatTelegramConfig(): OpenClawConfig {
+function createHeartbeatTelegramConfig(isolatedSession = false): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        heartbeat: { every: "30m" },
+        heartbeat: { every: "30m", ...(isolatedSession ? { isolatedSession: true } : {}) },
         model: { primary: "test/model" },
       },
     },
@@ -122,6 +122,42 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
       expect(replySpy).toHaveBeenCalled();
       expect(result.status).toBe("ran");
+    });
+  });
+
+  it("checks the isolated heartbeat lane when wake re-enters on an active :heartbeat session", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig(true);
+      const baseSessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+
+      enqueueSystemEvent("exec finished: deploy succeeded", {
+        sessionKey: isolatedSessionKey,
+      });
+
+      const getQueueSize = vi.fn((lane?: string) => {
+        if (!lane || lane === "main") {
+          return 0;
+        }
+        return lane === `session:${isolatedSessionKey}` ? 1 : 0;
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        reason: "hook:wake",
+        deps: {
+          getQueueSize,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("skipped");
+      if (result.status === "skipped") {
+        expect(result.reason).toBe("requests-in-flight");
+      }
+      expect(replySpy).not.toHaveBeenCalled();
     });
   });
 });
