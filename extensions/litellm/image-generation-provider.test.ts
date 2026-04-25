@@ -4,12 +4,14 @@ import { buildLitellmImageGenerationProvider } from "./image-generation-provider
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
+  postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "litellm-key" })),
   postJsonRequestMock: vi.fn(),
+  postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
@@ -27,25 +29,29 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
+  postMultipartRequest: postMultipartRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
 
 function mockGeneratedPngResponse() {
-  postJsonRequestMock.mockResolvedValue({
+  const value = {
     response: {
       json: async () => ({
         data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
       }),
     },
     release: vi.fn(async () => {}),
-  });
+  };
+  postJsonRequestMock.mockResolvedValue(value);
+  postMultipartRequestMock.mockResolvedValue(value);
 }
 
 describe("litellm image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
     postJsonRequestMock.mockReset();
+    postMultipartRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     sanitizeConfiguredModelProviderRequestMock.mockClear();
@@ -148,7 +154,7 @@ describe("litellm image generation provider", () => {
     );
   });
 
-  it("routes to the edit endpoint when input images are provided", async () => {
+  it("routes to the edit endpoint with multipart form-data when input images are provided", async () => {
     mockGeneratedPngResponse();
 
     const provider = buildLitellmImageGenerationProvider();
@@ -161,17 +167,26 @@ describe("litellm image generation provider", () => {
         {
           buffer: Buffer.from("fake-input"),
           mimeType: "image/png",
+          fileName: "hero.png",
         },
       ],
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    expect(postMultipartRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "http://localhost:4000/images/edits",
       }),
     );
-    const call = postJsonRequestMock.mock.calls[0][0] as { body: { images: unknown[] } };
-    expect(call.body.images).toHaveLength(1);
+    const call = postMultipartRequestMock.mock.calls[0][0] as { body: FormData };
+    expect(call.body).toBeInstanceOf(FormData);
+    expect(call.body.get("model")).toBe("gpt-image-2");
+    expect(call.body.get("prompt")).toBe("refine the hero");
+    expect(call.body.get("n")).toBe("1");
+    const images = call.body.getAll("image[]");
+    expect(images).toHaveLength(1);
+    expect(images[0]).toBeInstanceOf(Blob);
+    expect((images[0] as Blob).type).toBe("image/png");
   });
 
   it("throws a clear error when the API key is missing", async () => {

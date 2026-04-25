@@ -5,6 +5,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  postMultipartRequest,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -82,8 +83,18 @@ function shouldAutoAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
   }
 }
 
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+function inferLitellmImageFileName(params: {
+  fileName?: string;
+  mimeType?: string;
+  index: number;
+}): string {
+  const fileName = params.fileName?.trim();
+  if (fileName) {
+    return fileName.split(/[\\/]/).pop() ?? fileName;
+  }
+  const mimeType = params.mimeType?.trim().toLowerCase() || DEFAULT_OUTPUT_MIME;
+  const ext = mimeType === "image/jpeg" ? "jpg" : mimeType.replace(/^image\//, "") || "png";
+  return `image-${params.index + 1}.${ext}`;
 }
 
 type LitellmImageApiResponse = {
@@ -157,34 +168,57 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
       const count = req.count ?? 1;
       const size = req.size ?? DEFAULT_SIZE;
 
-      const jsonHeaders = new Headers(headers);
-      jsonHeaders.set("Content-Type", "application/json");
       const endpoint = isEdit ? "images/edits" : "images/generations";
-      const body = isEdit
-        ? {
-            model,
-            prompt: req.prompt,
-            n: count,
-            size,
-            images: inputImages.map((image) => ({
-              image_url: toDataUrl(image.buffer, image.mimeType?.trim() || DEFAULT_OUTPUT_MIME),
-            })),
-          }
-        : {
-            model,
-            prompt: req.prompt,
-            n: count,
-            size,
-          };
-      const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/${endpoint}`,
-        headers: jsonHeaders,
-        body,
-        timeoutMs: req.timeoutMs,
-        fetchFn: fetch,
-        allowPrivateNetwork,
-        dispatcherPolicy,
-      });
+      const url = `${baseUrl}/${endpoint}`;
+      const { response, release } = isEdit
+        ? await (() => {
+            const form = new FormData();
+            form.set("model", model);
+            form.set("prompt", req.prompt);
+            form.set("n", String(count));
+            form.set("size", size);
+            for (const [index, image] of inputImages.entries()) {
+              const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
+              form.append(
+                "image[]",
+                new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+                inferLitellmImageFileName({
+                  fileName: image.fileName,
+                  mimeType,
+                  index,
+                }),
+              );
+            }
+            const multipartHeaders = new Headers(headers);
+            multipartHeaders.delete("Content-Type");
+            return postMultipartRequest({
+              url,
+              headers: multipartHeaders,
+              body: form,
+              timeoutMs: req.timeoutMs,
+              fetchFn: fetch,
+              allowPrivateNetwork,
+              dispatcherPolicy,
+            });
+          })()
+        : await (() => {
+            const jsonHeaders = new Headers(headers);
+            jsonHeaders.set("Content-Type", "application/json");
+            return postJsonRequest({
+              url,
+              headers: jsonHeaders,
+              body: {
+                model,
+                prompt: req.prompt,
+                n: count,
+                size,
+              },
+              timeoutMs: req.timeoutMs,
+              fetchFn: fetch,
+              allowPrivateNetwork,
+              dispatcherPolicy,
+            });
+          })();
       try {
         await assertOkOrThrowHttpError(
           response,
