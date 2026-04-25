@@ -5,7 +5,7 @@ export function isWhatsAppReadOnly(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
-  return resolveWhatsAppAccount(params).readOnly === true;
+  return resolveWhatsAppAccount(params).readOnly;
 }
 
 export function assertWhatsAppWritable(params: {
