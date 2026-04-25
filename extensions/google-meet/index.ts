@@ -186,6 +186,9 @@ const GoogleMeetToolSchema = Type.Object({
     Type.String({ description: "Meet conferenceRecords/{id} resource name or id" }),
   ),
   pageSize: Type.Optional(Type.Number({ description: "Meet API page size for list actions" })),
+  includeTranscriptEntries: Type.Optional(
+    Type.Boolean({ description: "For artifacts, include structured transcript entries" }),
+  ),
   accessToken: Type.Optional(Type.String({ description: "Access token override" })),
   refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
   clientId: Type.Optional(Type.String({ description: "OAuth client id override" })),
@@ -271,6 +274,7 @@ async function resolveArtifactQueryFromParams(
     meeting,
     conferenceRecord,
     pageSize: resolveOptionalPositiveInteger(raw.pageSize),
+    includeTranscriptEntries: raw.includeTranscriptEntries !== false,
   };
 }
 
@@ -397,6 +401,7 @@ export default definePluginEntry({
               meeting: resolved.meeting,
               conferenceRecord: resolved.conferenceRecord,
               pageSize: resolved.pageSize,
+              includeTranscriptEntries: resolved.includeTranscriptEntries,
             }),
           );
         } catch (err) {
@@ -566,6 +571,7 @@ export default definePluginEntry({
                   meeting: resolved.meeting,
                   conferenceRecord: resolved.conferenceRecord,
                   pageSize: resolved.pageSize,
+                  includeTranscriptEntries: resolved.includeTranscriptEntries,
                 }),
               );
             }

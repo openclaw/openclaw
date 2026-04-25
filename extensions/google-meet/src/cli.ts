@@ -51,6 +51,7 @@ type ResolveSpaceOptions = {
 type MeetArtifactOptions = ResolveSpaceOptions & {
   conferenceRecord?: string;
   pageSize?: string;
+  transcriptEntries?: boolean;
 };
 
 type SetupOptions = {
@@ -429,6 +430,7 @@ function resolveArtifactTokenOptions(
   accessToken?: string;
   expiresAt?: number;
   pageSize?: number;
+  includeTranscriptEntries?: boolean;
 } {
   const meeting = options.meeting?.trim() || config.defaults.meeting;
   const conferenceRecord = options.conferenceRecord?.trim();
@@ -446,6 +448,7 @@ function resolveArtifactTokenOptions(
     accessToken: options.accessToken?.trim() || config.oauth.accessToken,
     expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
     pageSize: parseOptionalNumber(options.pageSize),
+    includeTranscriptEntries: options.transcriptEntries !== false,
   };
 }
 
@@ -474,6 +477,10 @@ function writeArtifactsSummary(result: GoogleMeetArtifactsResult): void {
     writeStdoutLine("participants: %d", entry.participants.length);
     writeStdoutLine("recordings: %d", entry.recordings.length);
     writeStdoutLine("transcripts: %d", entry.transcripts.length);
+    writeStdoutLine(
+      "transcript entries: %d",
+      entry.transcriptEntries.reduce((count, transcript) => count + transcript.entries.length, 0),
+    );
     writeStdoutLine("smart notes: %d", entry.smartNotes.length);
     if (entry.smartNotesError) {
       writeStdoutLine("smart notes warning: %s", entry.smartNotesError);
@@ -483,6 +490,15 @@ function writeArtifactsSummary(result: GoogleMeetArtifactsResult): void {
     }
     for (const transcript of entry.transcripts) {
       writeStdoutLine("- transcript: %s", transcript.name);
+    }
+    for (const transcriptEntries of entry.transcriptEntries) {
+      if (transcriptEntries.entriesError) {
+        writeStdoutLine(
+          "- transcript entries warning: %s: %s",
+          transcriptEntries.transcript,
+          transcriptEntries.entriesError,
+        );
+      }
     }
     for (const smartNote of entry.smartNotes) {
       writeStdoutLine("- smart note: %s", smartNote.name);
@@ -840,6 +856,7 @@ export function registerGoogleMeetCli(params: {
     .option("--client-secret <secret>", "OAuth client secret override")
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
     .option("--page-size <n>", "Max resources per Meet API page")
+    .option("--no-transcript-entries", "Skip structured transcript entry lookup")
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
       const resolved = resolveArtifactTokenOptions(params.config, options);
@@ -849,6 +866,7 @@ export function registerGoogleMeetCli(params: {
         meeting: resolved.meeting,
         conferenceRecord: resolved.conferenceRecord,
         pageSize: resolved.pageSize,
+        includeTranscriptEntries: resolved.includeTranscriptEntries,
       });
       if (options.json) {
         writeStdoutJson({

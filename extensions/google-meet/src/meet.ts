@@ -73,6 +73,21 @@ export type GoogleMeetTranscript = {
   docsDestination?: Record<string, unknown>;
 };
 
+export type GoogleMeetTranscriptEntry = {
+  name: string;
+  participant?: string;
+  text?: string;
+  languageCode?: string;
+  startTime?: string;
+  endTime?: string;
+};
+
+export type GoogleMeetTranscriptEntries = {
+  transcript: string;
+  entries: GoogleMeetTranscriptEntry[];
+  entriesError?: string;
+};
+
 export type GoogleMeetSmartNote = {
   name: string;
   startTime?: string;
@@ -85,6 +100,7 @@ export type GoogleMeetArtifactsEntry = {
   participants: GoogleMeetParticipant[];
   recordings: GoogleMeetRecording[];
   transcripts: GoogleMeetTranscript[];
+  transcriptEntries: GoogleMeetTranscriptEntries[];
   smartNotes: GoogleMeetSmartNote[];
   smartNotesError?: string;
 };
@@ -434,6 +450,21 @@ export async function listGoogleMeetTranscripts(params: {
   });
 }
 
+export async function listGoogleMeetTranscriptEntries(params: {
+  accessToken: string;
+  transcript: string;
+  pageSize?: number;
+}): Promise<GoogleMeetTranscriptEntry[]> {
+  return listGoogleMeetCollection<GoogleMeetTranscriptEntry>({
+    accessToken: params.accessToken,
+    path: `${encodeResourceNameForPath(params.transcript)}/entries`,
+    collectionKey: "transcriptEntries",
+    query: { pageSize: params.pageSize },
+    auditContext: "google-meet.conferenceRecords.transcripts.entries.list",
+    errorPrefix: "Google Meet conferenceRecords.transcripts.entries.list",
+  });
+}
+
 export async function listGoogleMeetSmartNotes(params: {
   accessToken: string;
   conferenceRecord: string;
@@ -506,6 +537,7 @@ export async function fetchGoogleMeetArtifacts(params: {
   meeting?: string;
   conferenceRecord?: string;
   pageSize?: number;
+  includeTranscriptEntries?: boolean;
 }): Promise<GoogleMeetArtifactsResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const artifacts = await Promise.all(
@@ -537,11 +569,35 @@ export async function fetchGoogleMeetArtifacts(params: {
             smartNotesError: getErrorMessage(error),
           })),
       ]);
+      const transcriptEntries =
+        params.includeTranscriptEntries === false
+          ? []
+          : await Promise.all(
+              transcripts.map(async (transcript) => {
+                try {
+                  return {
+                    transcript: transcript.name,
+                    entries: await listGoogleMeetTranscriptEntries({
+                      accessToken: params.accessToken,
+                      transcript: transcript.name,
+                      pageSize: params.pageSize,
+                    }),
+                  };
+                } catch (error) {
+                  return {
+                    transcript: transcript.name,
+                    entries: [],
+                    entriesError: getErrorMessage(error),
+                  };
+                }
+              }),
+            );
       return {
         conferenceRecord,
         participants,
         recordings,
         transcripts,
+        transcriptEntries,
         smartNotes: smartNotesResult.smartNotes,
         ...(smartNotesResult.smartNotesError
           ? { smartNotesError: smartNotesResult.smartNotesError }
