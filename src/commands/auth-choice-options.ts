@@ -17,6 +17,7 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "xiaomi"
+  | "deepseek"
   | "opencode-zen"
   | "minimax"
   | "synthetic"
@@ -115,6 +116,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xiaomi-api-key"],
   },
   {
+    value: "deepseek",
+    label: "DeepSeek",
+    hint: "V4 Pro / V4 Flash, 1M context",
+    choices: ["deepseek-api-key"],
+  },
+  {
     value: "opencode-zen",
     label: "OpenCode Zen",
     hint: "API key",
@@ -174,6 +181,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
+  });
+  options.push({
+    value: "deepseek-api-key",
+    label: "DeepSeek API key",
+    hint: "V4 Pro / V4 Flash, 1M context",
   });
   options.push({ value: "qwen-portal", label: "Qwen OAuth" });
   options.push({

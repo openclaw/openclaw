@@ -24,6 +24,7 @@ export type AuthChoice =
   | "google-gemini-cli"
   | "zai-api-key"
   | "xiaomi-api-key"
+  | "deepseek-api-key"
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
@@ -69,6 +70,7 @@ export type OnboardOptions = {
   geminiApiKey?: string;
   zaiApiKey?: string;
   xiaomiApiKey?: string;
+  deepseekApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;

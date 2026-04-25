@@ -78,6 +78,14 @@
       "destination": "/providers/xiaomi"
     },
     {
+      "source": "/deepseek",
+      "destination": "/providers/deepseek"
+    },
+    {
+      "source": "/deepseek/",
+      "destination": "/providers/deepseek"
+    },
+    {
       "source": "/openai",
       "destination": "/providers/openai"
     },
@@ -1024,7 +1032,8 @@
           "providers/synthetic",
           "providers/opencode",
           "providers/glm",
-          "providers/zai"
+          "providers/zai",
+          "providers/deepseek"
         ]
       },
       {

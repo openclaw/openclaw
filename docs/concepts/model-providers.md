@@ -239,6 +239,17 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 
+### DeepSeek (V4)
+
+DeepSeek V4 is configured via `models.providers` and uses an Anthropic-compatible endpoint:
+
+- Provider: `deepseek`
+- Auth: `DEEPSEEK_API_KEY` (or `--auth-choice deepseek-api-key`)
+- Default model ref: `deepseek/deepseek-v4-pro` (also `deepseek/deepseek-v4-flash`)
+- Context window: 1,000,000 tokens
+
+See [/providers/deepseek](/providers/deepseek) for setup details and config snippets.
+
 ### Ollama
 
 Ollama is a local LLM runtime that provides an OpenAI-compatible API:

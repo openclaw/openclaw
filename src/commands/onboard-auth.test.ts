@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   applyAuthProfileConfig,
+  applyDeepseekConfig,
+  applyDeepseekProviderConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
   applyOpencodeZenConfig,
@@ -342,6 +344,51 @@ describe("applySyntheticConfig", () => {
     const ids = cfg.models?.providers?.synthetic?.models.map((m) => m.id);
     expect(ids).toContain("old-model");
     expect(ids).toContain(SYNTHETIC_DEFAULT_MODEL_ID);
+  });
+});
+
+describe("applyDeepseekConfig", () => {
+  it("adds DeepSeek provider with correct settings", () => {
+    const cfg = applyDeepseekConfig({});
+    expect(cfg.models?.providers?.deepseek).toMatchObject({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      api: "anthropic-messages",
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe("deepseek/deepseek-v4-pro");
+    const ids = cfg.models?.providers?.deepseek?.models.map((m) => m.id) ?? [];
+    expect(ids).toContain("deepseek-v4-pro");
+    expect(ids).toContain("deepseek-v4-flash");
+  });
+
+  it("merges DeepSeek models and keeps existing provider overrides", () => {
+    const cfg = applyDeepseekProviderConfig({
+      models: {
+        providers: {
+          deepseek: {
+            baseUrl: "https://old.example.com",
+            apiKey: "old-key",
+            api: "openai-completions",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.deepseek?.baseUrl).toBe("https://api.deepseek.com/anthropic");
+    expect(cfg.models?.providers?.deepseek?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.deepseek?.apiKey).toBe("old-key");
+    const ids = cfg.models?.providers?.deepseek?.models.map((m) => m.id) ?? [];
+    expect(ids).toEqual(["custom-model", "deepseek-v4-pro", "deepseek-v4-flash"]);
   });
 });
 

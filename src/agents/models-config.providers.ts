@@ -41,6 +41,25 @@ const XIAOMI_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic";
+export const DEEPSEEK_DEFAULT_MODEL_ID = "deepseek-v4-pro";
+export const DEEPSEEK_FLASH_MODEL_ID = "deepseek-v4-flash";
+const DEEPSEEK_DEFAULT_CONTEXT_WINDOW = 1_000_000;
+const DEEPSEEK_DEFAULT_MAX_TOKENS = 8192;
+// Pricing: override in models.json for accurate per-token costs.
+const DEEPSEEK_PRO_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+const DEEPSEEK_FLASH_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
@@ -370,6 +389,33 @@ export function buildXiaomiProvider(): ProviderConfig {
   };
 }
 
+export function buildDeepseekProvider(): ProviderConfig {
+  return {
+    baseUrl: DEEPSEEK_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: DEEPSEEK_DEFAULT_MODEL_ID,
+        name: "DeepSeek V4 Pro",
+        reasoning: true,
+        input: ["text"],
+        cost: DEEPSEEK_PRO_COST,
+        contextWindow: DEEPSEEK_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DEEPSEEK_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: DEEPSEEK_FLASH_MODEL_ID,
+        name: "DeepSeek V4 Flash",
+        reasoning: true,
+        input: ["text"],
+        cost: DEEPSEEK_FLASH_COST,
+        contextWindow: DEEPSEEK_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: DEEPSEEK_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
@@ -444,6 +490,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
   if (xiaomiKey) {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+
+  const deepseekKey =
+    resolveEnvApiKeyVarName("deepseek") ??
+    resolveApiKeyFromProfiles({ provider: "deepseek", store: authStore });
+  if (deepseekKey) {
+    providers.deepseek = { ...buildDeepseekProvider(), apiKey: deepseekKey };
   }
 
   // Ollama provider - only add if explicitly configured
