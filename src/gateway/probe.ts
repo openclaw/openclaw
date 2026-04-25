@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
@@ -153,17 +154,26 @@ export async function probeGateway(opts: {
     } catch {
       return null;
     }
-    // Local authenticated probes should stay device-bound so read/detail RPCs
-    // are not scope-limited by the shared-auth scope stripping hardening.
+    // Keep probes non-mutating: only attach a device identity when this CLI
+    // already has a cached operator device token. Fresh diagnostics should not
+    // create a read-only pairing baseline that later blocks admin commands.
     if (isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password)) {
       return null;
     }
     try {
-      const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-      return loadOrCreateDeviceIdentity();
+      const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
+      const identity = loadDeviceIdentityIfPresent();
+      if (!identity) {
+        return null;
+      }
+      const cachedOperatorToken = loadDeviceAuthToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+      });
+      return cachedOperatorToken ? identity : null;
     } catch {
       // Read-only or restricted environments should still be able to run
-      // token/password-auth detail probes without crashing on identity persistence.
+      // token/password-auth detail probes without mutating identity state.
       return null;
     }
   })();
