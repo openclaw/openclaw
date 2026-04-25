@@ -152,6 +152,14 @@ paths and should return the channel metadata, setup-safe config adapter, status
 adapter, and channel secret target metadata needed for those summaries. Do not
 start clients, listeners, or transport runtimes from the setup entry.
 
+Keep the main channel entry import path narrow too. Discovery can evaluate the
+entry and the channel plugin module to register capabilities without activating
+the channel. Files such as `channel-plugin-api.ts` should export the channel
+plugin object without importing setup wizards, transport clients, socket
+listeners, subprocess launchers, or service startup modules. Put those runtime
+pieces in modules loaded from `registerFull(...)`, runtime setters, or lazy
+capability adapters.
+
 `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
 `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
 `splitSetupEntries`
