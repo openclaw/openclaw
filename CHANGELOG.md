@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory-host SDK: use trusted env-proxy mode for remote embedding and batch HTTP calls only when Undici will proxy that target, preserving SSRF DNS pinning for `ALL_PROXY`-only and `NO_PROXY` bypass cases. Fixes #52162. (#71506) Thanks @DhtIsCoding.
 - Gateway/dashboard: render Control UI and WebSocket links with `https://`/`wss://` when `gateway.tls.enabled=true`, including `openclaw gateway status`. Fixes #71494. (#71499) Thanks @deepkilo.
 - Agents/OpenAI-compatible: default proxy/local completions tool requests to `tool_choice: "auto"` when tools are present, so providers enter native tool-calling mode instead of replying with plain-text tool directives. (#71472) Thanks @Speed-maker.
 - OpenAI image generation: use `gpt-5.5` for the Codex OAuth responses transport instead of the retired `gpt-5.4` model, fixing 500s from ChatGPT Codex image generation. Fixes #71513. Thanks @baolongl.
