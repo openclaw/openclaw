@@ -48,9 +48,23 @@ type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
-  ensureBrowserAvailable: () => Promise<void>;
+  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
 };
+
+type BrowserEnsureOptions = {
+  headless?: boolean;
+};
+
+function launchOptionsForEnsure(options?: BrowserEnsureOptions) {
+  return typeof options?.headless === "boolean"
+    ? { headlessOverride: options.headless }
+    : undefined;
+}
+
+function ensureOptionsKey(options?: BrowserEnsureOptions): string {
+  return typeof options?.headless === "boolean" ? `headless:${options.headless}` : "default";
+}
 
 export function createProfileAvailability({
   opts,
@@ -213,9 +227,9 @@ export function createProfileAvailability({
     throw new BrowserProfileUnavailableError(formatChromeMcpAttachFailure(lastError));
   };
 
-  let inflightEnsureBrowserAvailable: Promise<void> | null = null;
+  let inflightEnsureBrowserAvailable: { key: string; promise: Promise<void> } | null = null;
 
-  const ensureBrowserAvailableOnce = async (): Promise<void> => {
+  const ensureBrowserAvailableOnce = async (options?: BrowserEnsureOptions): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       if (profile.userDataDir && !fs.existsSync(profile.userDataDir)) {
@@ -233,6 +247,7 @@ export function createProfileAvailability({
     const attachOnly = profile.attachOnly;
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
+    const launchOptions = launchOptionsForEnsure(options);
 
     if (!httpReachable) {
       if ((attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
@@ -259,7 +274,7 @@ export function createProfileAvailability({
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
-      const launched = await launchOpenClawChrome(current.resolved, profile);
+      const launched = await launchOpenClawChrome(current.resolved, profile, launchOptions);
       attachRunning(launched);
       try {
         await waitForCdpReadyAfterLaunch();
@@ -308,7 +323,7 @@ export function createProfileAvailability({
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
 
-    const relaunched = await launchOpenClawChrome(current.resolved, profile);
+    const relaunched = await launchOpenClawChrome(current.resolved, profile, launchOptions);
     attachRunning(relaunched);
 
     if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {
@@ -320,14 +335,25 @@ export function createProfileAvailability({
     }
   };
 
-  const ensureBrowserAvailable = async (): Promise<void> => {
-    if (inflightEnsureBrowserAvailable) {
-      return inflightEnsureBrowserAvailable;
+  const ensureBrowserAvailable = async (options?: BrowserEnsureOptions): Promise<void> => {
+    const key = ensureOptionsKey(options);
+    for (;;) {
+      const current = inflightEnsureBrowserAvailable;
+      if (!current) {
+        break;
+      }
+      if (current.key === key) {
+        return current.promise;
+      }
+      await current.promise.catch(() => {});
     }
-    inflightEnsureBrowserAvailable = ensureBrowserAvailableOnce().finally(() => {
-      inflightEnsureBrowserAvailable = null;
+    const promise = ensureBrowserAvailableOnce(options).finally(() => {
+      if (inflightEnsureBrowserAvailable?.promise === promise) {
+        inflightEnsureBrowserAvailable = null;
+      }
     });
-    return inflightEnsureBrowserAvailable;
+    inflightEnsureBrowserAvailable = { key, promise };
+    return promise;
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {

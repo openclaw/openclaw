@@ -56,6 +56,7 @@ Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-
 openclaw browser status
 openclaw browser doctor
 openclaw browser start
+openclaw browser start --headless
 openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
@@ -67,6 +68,10 @@ Notes:
   OpenClaw did not launch the browser process itself.
 - For local managed profiles, `openclaw browser stop` stops the spawned browser
   process.
+- `openclaw browser start --headless` applies only to that start request and
+  only when OpenClaw launches a local managed browser. It does not rewrite
+  `browser.headless` or profile config, and it is a no-op for an already-running
+  browser.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
   run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`,
   `browser.headless=false`, or `browser.profiles.<name>.headless=false`

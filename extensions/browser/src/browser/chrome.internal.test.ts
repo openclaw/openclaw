@@ -207,6 +207,18 @@ describe("chrome.ts internal", () => {
       expect(args).not.toContain("--disable-gpu");
     });
 
+    it("lets a request headless override beat env and profile headed settings", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved({ headless: false, headlessSource: "config" }),
+        profile: { ...baseProfile, headless: false, headlessSource: "profile" },
+        userDataDir: "/tmp/foo",
+        headlessOverride: true,
+        env: { OPENCLAW_BROWSER_HEADLESS: "0" },
+      });
+      expect(args).toContain("--headless=new");
+      expect(args).toContain("--disable-gpu");
+    });
+
     it("adds headless args for Linux local managed profiles without a display", () => {
       const args = buildOpenClawChromeLaunchArgs({
         resolved: baseResolved(),

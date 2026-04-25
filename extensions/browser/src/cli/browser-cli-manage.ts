@@ -24,8 +24,18 @@ type BrowserDoctorCheck = {
   detail?: string;
 };
 
-function resolveProfileQuery(profile?: string) {
-  return profile ? { profile } : undefined;
+function resolveProfileQuery(
+  profile?: string,
+  extra?: Record<string, string | number | boolean | undefined>,
+) {
+  const query: Record<string, string | number | boolean | undefined> = {};
+  if (profile) {
+    query.profile = profile;
+  }
+  if (extra) {
+    Object.assign(query, extra);
+  }
+  return Object.keys(query).length > 0 ? query : undefined;
 }
 
 function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
@@ -75,19 +85,24 @@ async function fetchBrowserStatus(
 
 async function runBrowserToggle(
   parent: BrowserParentOpts,
-  params: { profile?: string; path: string },
+  params: {
+    profile?: string;
+    path: string;
+    query?: Record<string, string | number | boolean | undefined>;
+  },
 ) {
   await callBrowserRequest(parent, {
     method: "POST",
     path: params.path,
-    query: resolveProfileQuery(params.profile),
+    query: resolveProfileQuery(params.profile, params.query),
   });
   const status = await fetchBrowserStatus(parent, params.profile);
   if (printJsonResult(parent, status)) {
     return;
   }
   const name = status.profile ?? "openclaw";
-  defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}`));
+  const headlessLabel = params.path === "/start" && status.headless ? " (headless)" : "";
+  defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}${headlessLabel}`));
 }
 
 function runBrowserCommand(action: () => Promise<void>) {
@@ -299,11 +314,16 @@ export function registerBrowserManageCommands(
   browser
     .command("start")
     .description("Start the browser (no-op if already running)")
-    .action(async (_opts, cmd) => {
+    .option("--headless", "Launch a local managed browser headless for this start")
+    .action(async (opts: { headless?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        await runBrowserToggle(parent, { profile, path: "/start" });
+        await runBrowserToggle(parent, {
+          profile,
+          path: "/start",
+          query: opts.headless ? { headless: true } : undefined,
+        });
       });
     });
 
