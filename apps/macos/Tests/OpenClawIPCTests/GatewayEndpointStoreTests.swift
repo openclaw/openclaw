@@ -26,6 +26,20 @@ struct GatewayEndpointStoreTests {
         return defaults
     }
 
+    private final class SecretRunnerCalls: @unchecked Sendable {
+        var calls: [(service: String, account: String)] = []
+    }
+
+    private func makeSecretResolver(
+        value: String?,
+        calls: SecretRunnerCalls = SecretRunnerCalls()) -> GatewayEndpointStore.SecretInputResolver
+    {
+        GatewayEndpointStore.SecretInputResolver { service, account in
+            calls.calls.append((service: service, account: account))
+            return value
+        }
+    }
+
     @Test func `resolve gateway token prefers env and falls back to launchd`() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
@@ -88,6 +102,103 @@ struct GatewayEndpointStoreTests {
             env: [:],
             launchdSnapshot: snapshot)
         #expect(password == "launchd-pass")
+    }
+
+    @Test func resolveGatewayTokenUsesLocalSecretRef() {
+        let calls = SecretRunnerCalls()
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: [
+                "gateway": [
+                    "auth": [
+                        "token": [
+                            "source": "exec",
+                            "provider": "keychain",
+                            "id": "gateway-token",
+                        ],
+                    ],
+                ],
+            ],
+            env: [:],
+            secretResolver: self.makeSecretResolver(value: "  secret-token  ", calls: calls))
+
+        #expect(token == "secret-token")
+        #expect(calls.calls.count == 1)
+        #expect(calls.calls.first?.service == "openclaw")
+        #expect(calls.calls.first?.account == "gateway-token")
+    }
+
+    @Test func resolveGatewayPasswordUsesLocalSecretRef() {
+        let calls = SecretRunnerCalls()
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: false,
+            root: [
+                "gateway": [
+                    "auth": [
+                        "password": [
+                            "source": "exec",
+                            "provider": "keychain",
+                            "service": "custom-service",
+                            "id": "gateway-password",
+                        ],
+                    ],
+                ],
+            ],
+            env: [:],
+            secretResolver: self.makeSecretResolver(value: " secret-password\n", calls: calls))
+
+        #expect(password == "secret-password")
+        #expect(calls.calls.count == 1)
+        #expect(calls.calls.first?.service == "custom-service")
+        #expect(calls.calls.first?.account == "gateway-password")
+    }
+
+    @Test func envGatewayTokenOverridesSecretRefWithoutResolvingIt() {
+        let calls = SecretRunnerCalls()
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: [
+                "gateway": [
+                    "auth": [
+                        "token": [
+                            "source": "exec",
+                            "provider": "keychain",
+                            "id": "gateway-token",
+                        ],
+                    ],
+                ],
+            ],
+            env: ["OPENCLAW_GATEWAY_TOKEN": "env-token"],
+            secretResolver: self.makeSecretResolver(value: "secret-token", calls: calls))
+
+        #expect(token == "env-token")
+        #expect(calls.calls.isEmpty)
+    }
+
+    @Test func launchdGatewayTokenFallbackStillWorksAfterUnresolvedSecretRef() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
+            token: "launchd-token",
+            password: nil)
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: [
+                "gateway": [
+                    "auth": [
+                        "token": [
+                            "source": "exec",
+                            "provider": "keychain",
+                            "id": "missing-token",
+                        ],
+                    ],
+                ],
+            ],
+            env: [:],
+            launchdSnapshot: snapshot,
+            secretResolver: self.makeSecretResolver(value: nil))
+
+        #expect(token == "launchd-token")
     }
 
     @Test func `connection mode resolver prefers config mode over defaults`() {
