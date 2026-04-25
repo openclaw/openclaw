@@ -1234,6 +1234,10 @@ function filterPlansForContractIncludeFile(plans, env) {
 }
 
 export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
+  if (env.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD === "1") {
+    return false;
+  }
+
   if (env.OPENCLAW_TEST_PROJECTS_FORCE_LOCK === "1") {
     return true;
   }
