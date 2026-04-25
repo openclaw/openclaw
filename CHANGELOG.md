@@ -111,6 +111,12 @@ Docs: https://docs.openclaw.ai
 - Providers/Ollama: use Ollama's current `/api/web_search` endpoint and honor
   `https://ollama.com` model-provider base URLs for Ollama Web Search. Fixes
   #71741. Thanks @madhvidua.
+- Memory/Ollama: serialize Ollama memory embedding batches and add an inline
+  batch timeout override, with longer defaults for local/self-hosted embedding
+  providers. Thanks @steipete.
+- Sessions/usage: exclude compaction checkpoint transcript snapshots from usage
+  totals and session discovery, while keeping old checkpoint files removable.
+  Thanks @steipete.
 - CLI/agents: keep `openclaw agents list --json` on the config-only path by
   default, avoiding bundled plugin loading unless callers request
   `--bindings`. Fixes #71739. Thanks @kaloster.
