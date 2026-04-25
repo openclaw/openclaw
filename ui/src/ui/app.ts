@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -80,6 +79,7 @@ import type {
 import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
