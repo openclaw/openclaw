@@ -2276,8 +2276,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       };
       const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
       let runtimePluginRoot = pluginRoot;
-      let runtimeCandidateSource = candidate.source;
-      let runtimeSetupSource = manifestRecord.setupSource;
+      let runtimeCandidateSource =
+        candidate.origin === "bundled" ? safeRealpathOrResolve(candidate.source) : candidate.source;
+      let runtimeSetupSource =
+        candidate.origin === "bundled" && manifestRecord.setupSource
+          ? safeRealpathOrResolve(manifestRecord.setupSource)
+          : manifestRecord.setupSource;
 
       const scopedSetupOnlyChannelPluginRequested =
         includeSetupOnlyChannelPlugins &&
@@ -2381,12 +2385,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             });
             runtimeCandidateSource =
               remapBundledPluginRuntimePath({
-                source: candidate.source,
+                source: runtimeCandidateSource,
                 pluginRoot,
                 mirroredRoot: runtimePluginRoot,
-              }) ?? candidate.source;
+              }) ?? runtimeCandidateSource;
             runtimeSetupSource = remapBundledPluginRuntimePath({
-              source: manifestRecord.setupSource,
+              source: runtimeSetupSource,
               pluginRoot,
               mirroredRoot: runtimePluginRoot,
             });
@@ -3186,7 +3190,11 @@ export async function loadOpenClawPluginCliRegistry(
     const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
     const cliMetadataSource = resolveCliMetadataEntrySource(candidate.rootDir);
     const sourceForCliMetadata =
-      candidate.origin === "bundled" ? cliMetadataSource : (cliMetadataSource ?? candidate.source);
+      candidate.origin === "bundled"
+        ? cliMetadataSource
+          ? safeRealpathOrResolve(cliMetadataSource)
+          : safeRealpathOrResolve(candidate.source)
+        : (cliMetadataSource ?? candidate.source);
     if (!sourceForCliMetadata) {
       record.status = "loaded";
       registry.plugins.push(record);
