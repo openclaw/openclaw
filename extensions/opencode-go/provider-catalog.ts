@@ -12,9 +12,9 @@ const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
     {
       id: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
-      api: "anthropic-messages",
+      api: "openai-completions",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
       input: ["text"],
       cost: {
@@ -25,13 +25,18 @@ const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
       },
       contextWindow: 1_000_000,
       maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
     },
     {
       id: "deepseek-v4-flash",
       name: "DeepSeek V4 Flash",
-      api: "anthropic-messages",
+      api: "openai-completions",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
       input: ["text"],
       cost: {
@@ -42,6 +47,11 @@ const OPENCODE_GO_SUPPLEMENTAL_MODELS = (
       },
       contextWindow: 1_000_000,
       maxTokens: 384_000,
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        maxTokensField: "max_tokens",
+      },
     },
   ] satisfies ProviderRuntimeModel[]
 ).map((model) => normalizeModelCompat(model));
