@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { sameFileIdentity } from "../infra/safe-open-sync.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
@@ -161,7 +162,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
         ? "OpenClaw package root"
         : "bundled plugin directory",
-    rejectHardlinks: false,
+    rejectHardlinks: true,
   });
   if (!opened.ok) {
     throw new Error(
@@ -169,12 +170,22 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       { cause: opened.error },
     );
   }
+  const validatedPath = opened.path;
+  const validatedStat = opened.stat;
   fs.closeSync(opened.fd);
+
+  // TOCTOU guard: ensure the file wasn't swapped between validation and load.
+  const currentStat = fs.statSync(validatedPath);
+  if (!sameFileIdentity(validatedStat, currentStat)) {
+    throw new Error(
+      `BUNDLED PLUGIN PUBLIC SURFACE CHANGED AFTER VALIDATION: ${params.dirName}/${params.artifactBasename}`,
+    );
+  }
 
   const sentinel = {} as T;
   loadedPublicSurfaceModules.set(location.modulePath, sentinel);
   try {
-    const loaded = loadPublicSurfaceModule(location.modulePath);
+    const loaded = loadPublicSurfaceModule(validatedPath);
     // Defensive: if loaded is null/undefined, refuse to cache and throw
     if (loaded === undefined || loaded === null) {
       loadedPublicSurfaceModules.delete(location.modulePath);

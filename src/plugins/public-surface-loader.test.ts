@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import os from "node:os";
-import pathModule from "node:path";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
@@ -102,7 +101,7 @@ describe("bundled plugin public surface loader", () => {
         artifactBasename: "secret-contract-api.js",
       }).marker,
     ).toBe("source-require-ok");
-    expect(requireLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
+    expect(requireLoader).toHaveBeenCalledWith(path.resolve(modulePath));
     expect(createJiti).not.toHaveBeenCalled();
   });
 
