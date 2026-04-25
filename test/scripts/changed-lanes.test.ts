@@ -82,6 +82,7 @@ describe("scripts/changed-lanes", () => {
 
   it("routes core production changes to core prod and core test lanes", () => {
     const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
 
     expect(result.lanes).toMatchObject({
       core: true,
@@ -90,12 +91,12 @@ describe("scripts/changed-lanes", () => {
       extensionTests: false,
       all: false,
     });
-    expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
-      "tsgo:core",
-    );
-    expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
-      "tsgo:core:test",
-    );
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
+    expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toMatchObject({
+      PATH: "/usr/bin",
+      OPENCLAW_TSGO_SPARSE_SKIP: "1",
+    });
   });
 
   it("routes core test-only changes to core test lanes only", () => {
