@@ -49,6 +49,53 @@ type AssistantAttachmentAvailability =
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 
+export type ChatTimestampDisplay = {
+  label: string;
+  title: string;
+  dateTime: string;
+};
+
+export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return {
+      label: "Unknown date",
+      title: "Unknown date",
+      dateTime: "",
+    };
+  }
+
+  return {
+    label: date.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+    title: date.toLocaleString([], {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }),
+    dateTime: date.toISOString(),
+  };
+}
+
+function renderChatTimestamp(timestamp: number) {
+  const display = formatChatTimestampForDisplay(timestamp);
+  return html`
+    <time class="chat-group-timestamp" datetime=${display.dateTime} title=${display.title}>
+      ${display.label}
+    </time>
+  `;
+}
+
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
   assistantAttachmentAvailabilityCache.clear();
   for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
@@ -238,10 +285,6 @@ export function renderStreamingGroup(
   basePath?: string,
   authToken?: string | null,
 ) {
-  const timestamp = new Date(startedAt).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
   const name = assistant?.name ?? "Assistant";
 
   return html`
@@ -260,7 +303,7 @@ export function renderStreamingGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
-          <span class="chat-group-timestamp">${timestamp}</span>
+          ${renderChatTimestamp(startedAt)}
         </div>
       </div>
     </div>
@@ -316,10 +359,6 @@ export function renderMessageGroup(
         : normalizedRole === "tool"
           ? "tool"
           : "other";
-  const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
@@ -365,8 +404,7 @@ export function renderMessageGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
-          <span class="chat-group-timestamp">${timestamp}</span>
-          ${renderMessageMeta(meta)}
+          ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
           ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
@@ -495,7 +533,15 @@ function renderMessageMeta(meta: GroupMeta | null) {
     return nothing;
   }
 
-  return html`<span class="msg-meta">${parts}</span>`;
+  return html`
+    <details class="msg-meta">
+      <summary class="msg-meta__summary" title="Show message context details">
+        <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
+        <span>Context</span>
+      </summary>
+      <span class="msg-meta__details">${parts}</span>
+    </details>
+  `;
 }
 
 function extractGroupText(group: MessageGroup): string {
