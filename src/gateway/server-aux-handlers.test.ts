@@ -25,6 +25,7 @@ function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReload
     restartHeartbeat: overrides?.restartHeartbeat ?? false,
     restartHealthMonitor: overrides?.restartHealthMonitor ?? false,
     restartChannels: overrides?.restartChannels ?? new Set(),
+    disposeMcpRuntimes: overrides?.disposeMcpRuntimes ?? false,
     noopPaths: overrides?.noopPaths ?? [],
   };
 }

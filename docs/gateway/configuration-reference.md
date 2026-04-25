@@ -78,6 +78,9 @@ target server during config edits.
 - `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
   One-shot embedded runs request run-end cleanup; this TTL is the backstop for
   long-lived sessions and future callers.
+- Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
+  The next tool discovery/use recreates them from the new config, so removed
+  `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.
 
 See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 [CLI backends](/gateway/cli-backends#bundle-mcp-overlays) for runtime behavior.

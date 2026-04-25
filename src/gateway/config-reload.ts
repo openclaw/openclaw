@@ -68,6 +68,7 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartCron &&
     !plan.restartHeartbeat &&
     !plan.restartHealthMonitor &&
+    !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0
   );
 }

@@ -322,6 +322,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toContain("gateway.channelHealthCheckMinutes");
   });
 
+  it("hot-reloads MCP config changes by disposing cached runtimes", () => {
+    const plan = buildGatewayReloadPlan(["mcp.servers.context7.command"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(plan.hotReasons).toContain("mcp.servers.context7.command");
+  });
+
   it("treats gateway.remote as no-op", () => {
     const plan = buildGatewayReloadPlan(["gateway.remote.url"]);
     expect(plan.restartGateway).toBe(false);
@@ -383,6 +390,12 @@ describe("buildGatewayReloadPlan", () => {
       expectRestartHeartbeat: true,
     },
     {
+      path: "mcp.servers.context7",
+      expectRestartGateway: false,
+      expectHotPath: "mcp.servers.context7",
+      expectDisposeMcpRuntimes: true,
+    },
+    {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
@@ -420,6 +433,9 @@ describe("buildGatewayReloadPlan", () => {
     }
     if (testCase.expectRestartHeartbeat) {
       expect(plan.restartHeartbeat).toBe(true);
+    }
+    if (testCase.expectDisposeMcpRuntimes) {
+      expect(plan.disposeMcpRuntimes).toBe(true);
     }
   });
 });
