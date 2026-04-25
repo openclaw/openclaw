@@ -112,7 +112,9 @@ Fallback details:
 - If text extraction succeeds but image extraction would require vision on a
   text-only model, OpenClaw drops the rendered images and continues with the
   extracted text.
-- Extraction fallback requires `pdfjs-dist` (and `@napi-rs/canvas` for image rendering).
+- Extraction fallback uses the bundled `document-extract` plugin. The plugin owns
+  `pdfjs-dist`; `@napi-rs/canvas` is used only when image rendering fallback is
+  available.
 
 ## Config
 

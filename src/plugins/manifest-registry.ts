@@ -67,6 +67,7 @@ type PluginManifestContractListKey =
   | "speechProviders"
   | "externalAuthProviders"
   | "mediaUnderstandingProviders"
+  | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
   | "imageGenerationProviders"

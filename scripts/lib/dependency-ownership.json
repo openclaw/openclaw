@@ -48,8 +48,12 @@
       "risk": ["parser", "untrusted-html"]
     },
     "@napi-rs/canvas": {
-      "owner": "capability:document-and-image-rendering",
-      "class": "default-runtime-initially",
+      "owner": "plugin:document-extract",
+      "class": "optional-peer-runtime",
+      "activation": [
+        "input_file.application_pdf.image_fallback",
+        "plugins.entries.document-extract.enabled"
+      ],
       "risk": ["native", "parser", "untrusted-files"]
     },
     "@vincentkoc/qrcode-tui": {
@@ -149,8 +153,9 @@
       "risk": ["terminal-rendering"]
     },
     "pdfjs-dist": {
-      "owner": "capability:document-extract",
-      "class": "default-runtime-initially",
+      "owner": "plugin:document-extract",
+      "class": "plugin-runtime",
+      "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
       "risk": ["parser", "untrusted-files"]
     },
     "proxy-agent": {
