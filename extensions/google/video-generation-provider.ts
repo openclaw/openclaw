@@ -6,6 +6,7 @@ import {
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
@@ -223,21 +224,27 @@ async function downloadGeneratedVideoFromUri(params: {
   if (!downloadUrl) {
     return undefined;
   }
-  const response = await fetch(downloadUrl);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download Google generated video: ${response.status} ${response.statusText}`,
-    );
+  const { response, release } = await fetchWithSsrFGuard({
+    url: downloadUrl,
+  });
+  try {
+    if (!response.ok) {
+      throw new Error(
+        `Failed to download Google generated video: ${response.status} ${response.statusText}`,
+      );
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return {
+      buffer,
+      mimeType:
+        normalizeOptionalString(response.headers.get("content-type")) ||
+        normalizeOptionalString(params.mimeType) ||
+        "video/mp4",
+      fileName: `video-${params.index + 1}.mp4`,
+    };
+  } finally {
+    await release();
   }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  return {
-    buffer,
-    mimeType:
-      normalizeOptionalString(response.headers.get("content-type")) ||
-      normalizeOptionalString(params.mimeType) ||
-      "video/mp4",
-    fileName: `video-${params.index + 1}.mp4`,
-  };
 }
 
 function extractGoogleApiErrorCode(error: unknown): number | undefined {
