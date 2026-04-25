@@ -690,6 +690,7 @@ export const registerTelegramNativeCommands = ({
   const buildCommandDeliveryBaseOptions = (params: {
     cfg: OpenClawConfig;
     chatId: string | number;
+    currentMessageId?: string;
     accountId: string;
     sessionKeyForInternalHooks?: string;
     policySessionKey?: string;
@@ -704,6 +705,7 @@ export const registerTelegramNativeCommands = ({
   }) => ({
     cfg: params.cfg,
     chatId: String(params.chatId),
+    currentMessageId: params.currentMessageId,
     accountId: params.accountId,
     sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
     policySessionKey: params.policySessionKey,
@@ -820,12 +822,24 @@ export const registerTelegramNativeCommands = ({
             );
           }
           const replyMarkup = buildInlineKeyboard(rows);
+          const effectiveReplyToMode = resolveTelegramReplyToModeByChatType({
+            account: runtimeTelegramCfg,
+            chatType: isGroup ? "group" : "direct",
+          });
+          const menuReplyParams =
+            effectiveReplyToMode === "off"
+              ? {}
+              : {
+                  reply_to_message_id: msg.message_id,
+                  allow_sending_without_reply: true as const,
+                };
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, title, {
                 ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+                ...menuReplyParams,
                 ...threadParams,
               }),
           });
@@ -863,6 +877,7 @@ export const registerTelegramNativeCommands = ({
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: executionCfg,
           chatId,
+          currentMessageId: String(msg.message_id),
           accountId: route.accountId,
           sessionKeyForInternalHooks: commandSessionKey,
           policySessionKey: commandTargetSessionKey,
@@ -1054,6 +1069,7 @@ export const registerTelegramNativeCommands = ({
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: runtimeCfg,
           chatId,
+          currentMessageId: String(msg.message_id),
           accountId: route.accountId,
           sessionKeyForInternalHooks: route.sessionKey,
           policySessionKey: route.sessionKey,
@@ -1109,6 +1125,11 @@ export const registerTelegramNativeCommands = ({
           from,
           to,
           accountId,
+          messageId: String(msg.message_id),
+          replyToMessageId:
+            msg.reply_to_message?.message_id == null
+              ? undefined
+              : String(msg.reply_to_message.message_id),
           messageThreadId: threadSpec.id,
         });
 

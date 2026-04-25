@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCommandBot,
   createNativeCommandTestParams,
+  createGroupCommandContext,
   createPrivateCommandContext,
   deliverReplies,
   editMessageTelegram,
@@ -281,6 +282,36 @@ describe("registerTelegramNativeCommands", () => {
     expect(callbackData).toEqual(["tgcmd:/fast status", "tgcmd:/fast on", "tgcmd:/fast off"]);
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
+  });
+
+  it("uses group replyToModeByChatType for built-in native command menus", async () => {
+    const { bot, commandHandlers, sendMessage } = createCommandBot();
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(
+        {
+          channels: {
+            telegram: {
+              replyToModeByChatType: { direct: "off", group: "all" },
+            },
+          },
+        },
+        { accountId: "default", bot },
+      ),
+    });
+
+    const handler = commandHandlers.get("fast");
+    expect(handler).toBeTruthy();
+    await handler?.(createGroupCommandContext({ messageId: 77 }));
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({
+        reply_to_message_id: 77,
+        allow_sending_without_reply: true,
+      }),
+    );
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
@@ -600,6 +631,37 @@ describe("registerTelegramNativeCommands", () => {
         from: "telegram:100",
         to: "telegram:100",
         messageThreadId: undefined,
+      }),
+    );
+  });
+
+  it("passes Telegram message ids to plugin commands", async () => {
+    const { handler } = registerPlugCommand();
+
+    await handler({
+      match: "",
+      message: {
+        message_id: 88,
+        date: Math.floor(Date.now() / 1000),
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        message_thread_id: 77,
+        reply_to_message: {
+          message_id: 66,
+        },
+        from: { id: 200, username: "bob" },
+      },
+    });
+
+    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "88",
+        replyToMessageId: "66",
+        messageThreadId: 77,
       }),
     );
   });

@@ -184,6 +184,8 @@ export async function executePluginCommand(params: {
   from?: PluginCommandContext["from"];
   to?: PluginCommandContext["to"];
   accountId?: PluginCommandContext["accountId"];
+  messageId?: PluginCommandContext["messageId"];
+  replyToMessageId?: PluginCommandContext["replyToMessageId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
 }): Promise<PluginCommandResult> {
@@ -227,6 +229,8 @@ export async function executePluginCommand(params: {
     from: params.from,
     to: params.to,
     accountId: effectiveAccountId,
+    messageId: params.messageId,
+    replyToMessageId: params.replyToMessageId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     requestConversationBinding: async (bindingParams) => {

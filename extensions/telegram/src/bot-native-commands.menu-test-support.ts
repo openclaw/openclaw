@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createNativeCommandTestParams as createBaseNativeCommandTestParams,
+  createTelegramGroupCommandContext,
   createTelegramPrivateCommandContext,
   type NativeCommandTestParams as RegisterTelegramNativeCommandsParams,
 } from "./bot-native-commands.fixture-test-support.js";
@@ -129,4 +130,10 @@ export function createPrivateCommandContext(
   params?: Parameters<typeof createTelegramPrivateCommandContext>[0],
 ) {
   return createTelegramPrivateCommandContext(params);
+}
+
+export function createGroupCommandContext(
+  params?: Parameters<typeof createTelegramGroupCommandContext>[0],
+) {
+  return createTelegramGroupCommandContext(params);
 }

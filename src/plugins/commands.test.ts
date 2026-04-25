@@ -686,4 +686,40 @@ describe("registerPluginCommand", () => {
       accountId: "work",
     });
   });
+
+  it("passes message ids through to the plugin command context", async () => {
+    let receivedCtx:
+      | {
+          messageId?: string;
+          replyToMessageId?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { messageId?: string; replyToMessageId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "messagecheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/messagecheck",
+      config: {} as never,
+      messageId: "77",
+      replyToMessageId: "55",
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx).toMatchObject({
+      messageId: "77",
+      replyToMessageId: "55",
+    });
+  });
 });
