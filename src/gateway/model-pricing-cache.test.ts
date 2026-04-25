@@ -214,30 +214,38 @@ describe("model-pricing-cache", () => {
     });
   });
 
-  it("does not invoke provider hooks for every OpenRouter catalog entry", async () => {
+  it("keeps provider-hook normalization symmetric for OpenRouter catalog entries", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(({ context }) => {
+      return context.modelId === "legacy-model" ? "modern-model" : context.modelId;
+    });
     const config = {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
+          model: { primary: "google/modern-model" },
         },
       },
     } as unknown as OpenClawConfig;
 
-    const openRouterEntries = Array.from({ length: 1000 }, (_, index) => ({
-      id: `anthropic/claude-catalog-${index}.0`,
-      pricing: {
-        prompt: "0.000001",
-        completion: "0.000002",
-      },
-    }));
-
     const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.includes("openrouter.ai")) {
-        return new Response(JSON.stringify({ data: openRouterEntries }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "google/legacy-model",
+                pricing: {
+                  prompt: "0.000001",
+                  completion: "0.000002",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       return new Response(JSON.stringify({}), {
         status: 200,
@@ -247,7 +255,12 @@ describe("model-pricing-cache", () => {
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
-    expect(normalizeProviderModelIdWithPluginMock.mock.calls.length).toBeLessThanOrEqual(5);
+    expect(getCachedGatewayModelPricing({ provider: "google", model: "modern-model" })).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
   });
 
   it("does not recurse forever for native openrouter auto refs", async () => {

@@ -791,6 +791,31 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
+  it("caches provider hook plugin lookup across repeated model id normalization", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "google",
+        label: "Google",
+        auth: [],
+        normalizeModelId: ({ modelId }) => modelId.replace("legacy", "modern"),
+      },
+    ]);
+
+    for (let index = 0; index < 1000; index += 1) {
+      expect(
+        normalizeProviderModelIdWithPlugin({
+          provider: "google",
+          context: {
+            provider: "google",
+            modelId: `gemini-legacy-${index}`,
+          },
+        }),
+      ).toBe(`gemini-modern-${index}`);
+    }
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
   it("resolves config hooks through hook-only aliases without changing provider surfaces", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {

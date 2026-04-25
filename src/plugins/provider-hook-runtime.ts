@@ -35,6 +35,14 @@ let cachedHookProvidersByConfig = new WeakMap<
   OpenClawConfig,
   WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>
 >();
+let cachedHookPluginWithoutConfig = new WeakMap<
+  NodeJS.ProcessEnv,
+  Map<string, ProviderPlugin | null>
+>();
+let cachedHookPluginByConfig = new WeakMap<
+  OpenClawConfig,
+  WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin | null>>
+>();
 
 function resolveHookProviderCacheBucket(params: {
   config?: OpenClawConfig;
@@ -57,6 +65,29 @@ function resolveHookProviderCacheBucket(params: {
   let bucket = envBuckets.get(params.env);
   if (!bucket) {
     bucket = new Map<string, ProviderPlugin[]>();
+    envBuckets.set(params.env, bucket);
+  }
+  return bucket;
+}
+
+function resolveHookPluginCacheBucket(params: { config?: OpenClawConfig; env: NodeJS.ProcessEnv }) {
+  if (!params.config) {
+    let bucket = cachedHookPluginWithoutConfig.get(params.env);
+    if (!bucket) {
+      bucket = new Map<string, ProviderPlugin | null>();
+      cachedHookPluginWithoutConfig.set(params.env, bucket);
+    }
+    return bucket;
+  }
+
+  let envBuckets = cachedHookPluginByConfig.get(params.config);
+  if (!envBuckets) {
+    envBuckets = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin | null>>();
+    cachedHookPluginByConfig.set(params.config, envBuckets);
+  }
+  let bucket = envBuckets.get(params.env);
+  if (!bucket) {
+    bucket = new Map<string, ProviderPlugin | null>();
     envBuckets.set(params.env, bucket);
   }
   return bucket;
@@ -85,6 +116,14 @@ export function clearProviderRuntimeHookCache(): void {
   cachedHookProvidersByConfig = new WeakMap<
     OpenClawConfig,
     WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>
+  >();
+  cachedHookPluginWithoutConfig = new WeakMap<
+    NodeJS.ProcessEnv,
+    Map<string, ProviderPlugin | null>
+  >();
+  cachedHookPluginByConfig = new WeakMap<
+    OpenClawConfig,
+    WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin | null>>
   >();
 }
 
@@ -166,14 +205,41 @@ export function resolveProviderHookPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
-  return (
-    resolveProviderRuntimePlugin(params) ??
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const cacheBucket = resolveHookPluginCacheBucket({ config: params.config, env });
+  const cacheKey = `${buildHookProviderCacheKey({
+    config: params.config,
+    workspaceDir,
+    env,
+  })}::${normalizeProviderId(params.provider) ?? params.provider}`;
+  if (cacheBucket.has(cacheKey)) {
+    return cacheBucket.get(cacheKey) ?? undefined;
+  }
+
+  if (
+    isPluginProvidersLoadInFlight({
+      config: params.config,
+      workspaceDir,
+      env,
+      activate: false,
+      cache: false,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
+    })
+  ) {
+    return undefined;
+  }
+
+  const plugin =
+    resolveProviderRuntimePlugin({ ...params, workspaceDir, env }) ??
     resolveProviderPluginsForHooks({
       config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }).find((candidate) => matchesProviderId(candidate, params.provider))
-  );
+      workspaceDir,
+      env,
+    }).find((candidate) => matchesProviderId(candidate, params.provider));
+  cacheBucket.set(cacheKey, plugin ?? null);
+  return plugin;
 }
 
 export function prepareProviderExtraParams(params: {

@@ -285,10 +285,7 @@ function canonicalizeOpenRouterProvider(provider: string): string {
   return PROVIDER_ALIAS_TO_OPENROUTER[normalized] ?? normalized;
 }
 
-function canonicalizeOpenRouterLookupId(
-  id: string,
-  opts: { providerHooks?: boolean } = {},
-): string {
+function canonicalizeOpenRouterLookupId(id: string): string {
   const trimmed = id.trim();
   if (!trimmed) {
     return "";
@@ -307,16 +304,14 @@ function canonicalizeOpenRouterLookupId(
       .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
       .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
   }
-  if (opts.providerHooks !== false) {
-    model =
-      normalizeProviderModelIdWithPlugin({
+  model =
+    normalizeProviderModelIdWithPlugin({
+      provider,
+      context: {
         provider,
-        context: {
-          provider,
-          modelId: model,
-        },
-      }) ?? model;
-  }
+        modelId: model,
+      },
+    }) ?? model;
   return `${provider}/${model}`;
 }
 
@@ -578,7 +573,7 @@ export async function refreshGatewayModelPricingCache(params: {
 
     const catalogByNormalizedId = new Map<string, OpenRouterPricingEntry>();
     for (const entry of catalogById.values()) {
-      const normalizedId = canonicalizeOpenRouterLookupId(entry.id, { providerHooks: false });
+      const normalizedId = canonicalizeOpenRouterLookupId(entry.id);
       if (!normalizedId || catalogByNormalizedId.has(normalizedId)) {
         continue;
       }
