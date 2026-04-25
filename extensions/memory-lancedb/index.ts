@@ -581,12 +581,26 @@ export default definePluginEntry({
             if (opts.cols) {
               const columns = (opts.cols as string).split(",").map((c: string) => c.trim());
               query = query.select(columns);
+            } else {
+              query = query.select(["id", "text", "importance", "category", "createdAt"]);
             }
             if (opts.filter) {
-              query = query.where(opts.filter);
+              const filterCondition = String(opts.filter);
+              if (filterCondition.length > 200) {
+                throw new Error("Filter condition exceeds maximum length of 200 characters");
+              }
+              if (!/^[a-zA-Z0-9_\-\s='"><!.,()%*]+$/.test(filterCondition)) {
+                throw new Error("Filter condition contains invalid characters");
+              }
+              query = query.where(filterCondition);
             }
-            const limit = parseInt(opts.limit, 10);
-            if (!isNaN(limit) && limit > 0) {
+            const limit = Number.parseInt(opts.limit, 10);
+            if (Number.isNaN(limit) || limit <= 0) {
+              throw new Error("Invalid limit: must be a positive integer");
+            }
+
+            // Fetch all filtered rows first if we need to order them in memory
+            if (!opts.orderBy) {
               query = query.limit(limit);
             }
             let rows = await query.toArray();
@@ -602,6 +616,7 @@ export default definePluginEntry({
                 }
                 return 0;
               });
+              rows = rows.slice(0, limit);
             }
             console.log(JSON.stringify(rows, null, 2));
           });
