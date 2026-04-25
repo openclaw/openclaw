@@ -1058,7 +1058,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      /** Subset of chunk sources to return; narrow single-source queries use a higher QMD fetch cap. */
       sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]> {
@@ -1077,15 +1076,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-    const requestedSources = opts?.sources ?? [];
-    const narrowRecall =
-      requestedSources.length > 0 &&
-      requestedSources.every((s) => s === "memory" || s === "sessions") &&
-      new Set(requestedSources).size < 2;
-    const limit = narrowRecall
-      ? Math.min(this.qmd.limits.maxResults, Math.max(resultLimit * 8, resultLimit))
-      : resultLimit;
-    const collectionNames = this.listManagedCollectionNames();
+    const requestedSources = opts?.sources?.length ? [...new Set(opts.sources)] : undefined;
+    const collectionNames = this.listManagedCollectionNames(requestedSources);
+    const limit = resultLimit;
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
@@ -1159,8 +1152,6 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
         const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
         args.push(...this.buildCollectionFilterArgs(collectionNames));
-        // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
-        // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
         const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
         return parseQmdQueryJson(result.stdout, result.stderr);
       } catch (err) {
@@ -2989,8 +2980,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     return [...bestByDocId.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }
 
-  private listManagedCollectionNames(): string[] {
-    return this.managedCollectionNames;
+  private listManagedCollectionNames(sources?: MemorySource[]): string[] {
+    if (!sources?.length) {
+      return this.managedCollectionNames;
+    }
+    const allowed = new Set(sources);
+    return this.managedCollectionNames.filter((name) => {
+      const source = this.collectionRoots.get(name)?.kind;
+      return source ? allowed.has(source) : false;
+    });
   }
 
   private computeManagedCollectionNames(): string[] {
