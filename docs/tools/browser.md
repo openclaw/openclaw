@@ -69,6 +69,24 @@ Browser config changes require a Gateway restart so the plugin can re-register i
 
 ## Agent guidance
 
+Tool-profile note: `tools.profile: "coding"` includes `web_search` and
+`web_fetch`, but it does not include the full `browser` tool. If the agent or a
+spawned sub-agent should use browser automation, add browser at the profile
+stage:
+
+```json5
+{
+  tools: {
+    profile: "coding",
+    alsoAllow: ["browser"],
+  },
+}
+```
+
+For a single agent, use `agents.list[].tools.alsoAllow: ["browser"]`.
+`tools.subagents.tools.allow: ["browser"]` alone is not enough because sub-agent
+policy is applied after profile filtering.
+
 The browser plugin ships two levels of agent guidance:
 
 - The `browser` tool description carries the compact always-on contract: pick

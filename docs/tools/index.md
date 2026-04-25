@@ -143,6 +143,12 @@ Per-agent override: `agents.list[].tools.profile`.
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
 
+`coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
+but not the full browser-control tool. Browser automation can drive real
+sessions and logged-in profiles, so add it explicitly with
+`tools.alsoAllow: ["browser"]` or a per-agent
+`agents.list[].tools.alsoAllow: ["browser"]`.
+
 The `coding` and `messaging` profiles also allow configured bundle MCP tools
 under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you
 want a profile to keep its normal built-ins but hide all configured MCP tools.

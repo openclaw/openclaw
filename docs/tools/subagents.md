@@ -305,7 +305,11 @@ Announce payloads include a stats line at the end (even when wrapped):
 
 ## Tool Policy (sub-agent tools)
 
-By default, sub-agents get **all tools except session tools** and system tools:
+Sub-agents use the same profile and tool-policy pipeline as the parent or target
+agent first. After that, OpenClaw applies the sub-agent restriction layer.
+
+With no restrictive `tools.profile`, sub-agents get **all tools except session
+tools** and system tools:
 
 - `sessions_list`
 - `sessions_history`
@@ -340,6 +344,24 @@ Override via config:
   },
 }
 ```
+
+`tools.subagents.tools.allow` is a final allow-only filter. It can narrow the
+already-resolved tool set, but it cannot add back a tool removed by
+`tools.profile`. For example, `tools.profile: "coding"` includes
+`web_search`/`web_fetch`, but not the `browser` tool. To let coding-profile
+sub-agents use browser automation, add browser at the profile stage:
+
+```json5
+{
+  tools: {
+    profile: "coding",
+    alsoAllow: ["browser"],
+  },
+}
+```
+
+Use per-agent `agents.list[].tools.alsoAllow: ["browser"]` when only one agent
+should get browser automation.
 
 ## Concurrency
 
