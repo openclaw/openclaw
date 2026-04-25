@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
   forwardSignalToVitestProcessGroup,
@@ -47,15 +48,16 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
 }
 
 export function resolveVitestSpawnEnv(env = process.env) {
-  if (!shouldApplyNativeWorkerBudget(env)) {
-    return env;
+  const nextEnv = resolveLocalVitestEnv(env);
+  if (!shouldApplyNativeWorkerBudget(nextEnv)) {
+    return nextEnv;
   }
 
-  const nativeWorkerCount = String(resolveNativeWorkerCount(env));
+  const nativeWorkerCount = String(resolveNativeWorkerCount(nextEnv));
   return {
-    ...env,
-    RAYON_NUM_THREADS: env.RAYON_NUM_THREADS?.trim() || nativeWorkerCount,
-    TOKIO_WORKER_THREADS: env.TOKIO_WORKER_THREADS?.trim() || nativeWorkerCount,
+    ...nextEnv,
+    RAYON_NUM_THREADS: nextEnv.RAYON_NUM_THREADS?.trim() || nativeWorkerCount,
+    TOKIO_WORKER_THREADS: nextEnv.TOKIO_WORKER_THREADS?.trim() || nativeWorkerCount,
   };
 }
 
