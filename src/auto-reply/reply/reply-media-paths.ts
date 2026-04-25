@@ -159,6 +159,9 @@ export function createReplyMediaPathNormalizer(params: {
     if (!media) {
       return media;
     }
+    if (path.isAbsolute(media) && isManagedGlobalReplyMediaPath(media)) {
+      return media;
+    }
     assertMediaNotDataUrl(media);
     if (isPassThroughRemoteMediaSource(media)) {
       return media;
