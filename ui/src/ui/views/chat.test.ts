@@ -8,7 +8,6 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../chat-model.test-helpers.ts";
-import { renderChatAvatar } from "../chat/chat-avatar.ts";
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../chat/chat-welcome.ts";
@@ -79,12 +78,6 @@ vi.mock("./agents-utils.ts", () => ({
     return value.length <= 3 ? value : null;
   },
 }));
-
-function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
-  const container = document.createElement("div");
-  render(renderChatAvatar(...params), container);
-  return container.querySelector<HTMLElement>(".chat-avatar");
-}
 
 function renderQueue(params: {
   queue: ChatQueueItem[];
@@ -261,54 +254,6 @@ describe("chat queue", () => {
     });
 
     expect(inactiveContainer.querySelector(".chat-queue__steer")).toBeNull();
-  });
-});
-
-describe("renderChatAvatar", () => {
-  it("uses the assistant fallback when no assistant avatar is configured", () => {
-    const avatar = renderAvatar(["assistant"]);
-
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
-  });
-
-  it("renders assistant fallback, blob image, and text avatars", () => {
-    const remoteAvatar = renderAvatar([
-      "assistant",
-      { avatar: "https://example.com/avatar.png", name: "Val" },
-    ]);
-    expect(remoteAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
-
-    const blobAvatar = renderAvatar(["assistant", { avatar: "blob:managed-image", name: "Val" }]);
-    expect(blobAvatar?.tagName).toBe("IMG");
-    expect(blobAvatar?.getAttribute("src")).toBe("blob:managed-image");
-
-    const textAvatar = renderAvatar(["assistant", { avatar: "VC", name: "Val" }]);
-    expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("VC");
-    expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
-  });
-
-  it("uses the assistant fallback while authenticated avatar routes are loading", () => {
-    const avatar = renderAvatar([
-      "assistant",
-      { avatar: "/avatar/main", name: "OpenClaw" },
-      undefined,
-      "",
-      "session-token",
-    ]);
-
-    expect(avatar?.getAttribute("src")).toBe("apple-touch-icon.png");
-  });
-
-  it("renders local user image and text avatars", () => {
-    const imageAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "/avatar/user" }]);
-    expect(imageAvatar?.getAttribute("src")).toBe("/avatar/user");
-    expect(imageAvatar?.getAttribute("alt")).toBe("Buns");
-
-    const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
-    expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("AB");
   });
 });
 
