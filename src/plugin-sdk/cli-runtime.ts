@@ -2,24 +2,7 @@
 
 export * from "../cli/command-format.js";
 export {
-  buildCommandGroupEntries,
-  defineImportedCommandGroupSpec,
-  defineImportedCommandGroupSpecs,
-  defineImportedProgramCommandGroupSpec,
-  defineImportedProgramCommandGroupSpecs,
-  resolveCommandGroupEntries,
-  type CommandGroupDescriptorSpec,
-  type ImportedCommandGroupDefinition,
-  type ImportedProgramCommandGroupDefinition,
-  type NamedCommandDescriptor,
-} from "../cli/program/command-group-descriptors.js";
-export {
-  findCommandGroupEntry,
-  getCommandGroupNames,
-  registerCommandGroupByName,
   registerCommandGroups,
-  registerLazyCommandGroup,
-  removeCommandGroupNames,
   type CommandGroupEntry,
   type CommandGroupPlaceholder,
 } from "../cli/program/register-command-groups.js";
