@@ -101,6 +101,7 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
   onSend: () => void;
+  onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -768,6 +769,8 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+  const compactBusy =
+    props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
@@ -1201,7 +1204,11 @@ export function renderChat(props: ChatProps) {
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
+      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+        compactBusy,
+        compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),
+        onCompact: props.onCompact,
+      })}
       ${props.showNewMessages
         ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
