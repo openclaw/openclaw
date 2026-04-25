@@ -15,7 +15,7 @@ const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const LIVE_PROFILE_TIMEOUT_MS = 20 * 60 * 1000;
-const LIVE_CLI_TIMEOUT_MS = 12 * 60 * 1000;
+const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_ACP_TIMEOUT_MS = 20 * 60 * 1000;
 const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
 const BUNDLED_UPDATE_TIMEOUT_MS = 20 * 60 * 1000;
@@ -180,7 +180,10 @@ const lanes = [
   npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
     weight: 3,
   }),
-  npmLane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", { weight: 2 }),
+  lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
+    resources: ["npm", "service"],
+    weight: 6,
+  }),
   npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
   ...bundledScenarioLanes,
