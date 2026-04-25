@@ -52,13 +52,17 @@ pnpm add -g openclaw@latest
 bun add -g openclaw@latest
 ```
 
-### Root-owned global npm installs
+### Global npm installs and runtime dependencies
 
-Some Linux npm setups install global packages under root-owned directories such as
-`/usr/lib/node_modules/openclaw`. OpenClaw supports that layout: the installed
-package is treated as read-only at runtime, and bundled plugin runtime
+OpenClaw treats packaged global installs as read-only at runtime, even when the
+global package directory is writable by the current user. Bundled plugin runtime
 dependencies are staged into a writable runtime directory instead of mutating the
-package tree.
+package tree. This keeps `openclaw update` from racing with a running gateway or
+local agent that is repairing plugin dependencies during the same install.
+
+Some Linux npm setups install global packages under root-owned directories such
+as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout through the
+same external staging path.
 
 For hardened systemd units, set a writable stage directory that is included in
 `ReadWritePaths`:
