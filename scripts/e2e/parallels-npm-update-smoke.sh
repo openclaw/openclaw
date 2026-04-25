@@ -443,12 +443,25 @@ resolve_registry_target_version() {
   if [[ "$spec" != openclaw@* ]]; then
     spec="openclaw@$spec"
   fi
-  npm view "$spec" version 2>/dev/null || true
+  npm view "$spec" version 2>/dev/null | tail -n 1 | tr -d '\r' || true
 }
 
 is_explicit_package_target() {
   local target="$1"
   [[ "$target" == *"://"* || "$target" == *"#"* || "$target" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
+}
+
+preflight_registry_update_target() {
+  local baseline_version target_version
+  [[ -n "$UPDATE_TARGET" && "$UPDATE_TARGET" != "local-main" ]] || return 0
+  is_explicit_package_target "$UPDATE_TARGET" && return 0
+
+  baseline_version="$(resolve_registry_target_version "$PACKAGE_SPEC")"
+  target_version="$(resolve_registry_target_version "$UPDATE_TARGET")"
+  [[ -n "$baseline_version" && -n "$target_version" ]] || return 0
+  if [[ "$baseline_version" == "$target_version" ]]; then
+    die "--update-target $UPDATE_TARGET resolves to openclaw@$target_version, same as baseline $PACKAGE_SPEC; publish or choose a newer --update-target before running VM update coverage"
+  fi
 }
 
 write_windows_update_script() {
@@ -1879,6 +1892,7 @@ LATEST_VERSION="$(resolve_latest_version)"
 if [[ -z "$PACKAGE_SPEC" ]]; then
   PACKAGE_SPEC="openclaw@$LATEST_VERSION"
 fi
+preflight_registry_update_target
 resolve_current_head
 
 if platform_enabled linux; then

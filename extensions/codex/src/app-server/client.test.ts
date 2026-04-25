@@ -231,6 +231,38 @@ describe("CodexAppServerClient", () => {
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     expect(process.unref).toHaveBeenCalledTimes(1);
   });
+
+  it("waits for app-server transport exit during async shutdown", async () => {
+    vi.useFakeTimers();
+    const process = Object.assign(new EventEmitter(), {
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy: vi.fn(),
+        unref: vi.fn(),
+      },
+      stdout: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      stderr: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(),
+      unref: vi.fn(),
+    });
+
+    const closed = __testing.closeCodexAppServerTransportAndWait(process, {
+      exitTimeoutMs: 100,
+      forceKillDelayMs: 25,
+    });
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(process.kill).toHaveBeenCalledWith("SIGKILL");
+    process.signalCode = "SIGKILL";
+    process.emit("exit");
+
+    await expect(closed).resolves.toBe(true);
+  });
+
   it("handles stdin write errors without crashing the process", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

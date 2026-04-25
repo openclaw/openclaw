@@ -120,6 +120,18 @@ export function clearSharedCodexAppServerClient(): void {
   client?.close();
 }
 
+export async function clearSharedCodexAppServerClientAndWait(options?: {
+  exitTimeoutMs?: number;
+  forceKillDelayMs?: number;
+}): Promise<void> {
+  const state = getSharedCodexAppServerClientState();
+  const client = state.client;
+  state.client = undefined;
+  state.promise = undefined;
+  state.key = undefined;
+  await client?.closeAndWait(options);
+}
+
 function clearSharedClientIfCurrent(client: CodexAppServerClient): void {
   const state = getSharedCodexAppServerClientState();
   if (state.client !== client) {
