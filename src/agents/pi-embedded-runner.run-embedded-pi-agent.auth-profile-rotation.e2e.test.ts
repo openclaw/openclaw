@@ -5,6 +5,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
+import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { buildAttemptReplayMetadata } from "./pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -106,8 +107,7 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let unregisterLogTransport: (() => void) | undefined;
-let registerLogTransportForTestFn: typeof import("../logging/logger.js").__test__.registerLogTransportForTest;
+let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
 const originalFetch = globalThis.fetch;
@@ -116,11 +116,8 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  ({
-    __test__: { registerLogTransportForTest: registerLogTransportForTestFn },
-    resetLogger: resetLoggerFn,
-    setLoggerOverride: setLoggerOverrideFn,
-  } = await import("../logging/logger.js"));
+  ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
+    await import("../logging/logger.js"));
 });
 
 async function runEmbeddedPiAgentInline(
@@ -152,8 +149,8 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  unregisterLogTransport?.();
-  unregisterLogTransport = undefined;
+  cleanupLogCapture?.();
+  cleanupLogCapture = undefined;
   setLoggerOverrideFn(null);
   resetLoggerFn();
 });
@@ -864,14 +861,12 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
-    const records: Array<Record<string, unknown>> = [];
+    const logCapture = createDiagnosticLogRecordCapture();
+    cleanupLogCapture = logCapture.cleanup;
     setLoggerOverrideFn({
       level: "trace",
       consoleLevel: "silent",
       file: path.join(os.tmpdir(), `openclaw-auth-rotation-${Date.now()}.log`),
-    });
-    unregisterLogTransport = registerLogTransportForTestFn((record) => {
-      records.push(record);
     });
 
     await runAutoPinnedRotationCase({
@@ -880,18 +875,17 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       sessionKey: "agent:test:overloaded-logging",
       runId: "run:overloaded-logging",
     });
+    await logCapture.flush();
 
-    const decisionRecord = records.find(
+    const decisionRecord = logCapture.records.find(
       (record) =>
-        record["2"] === "embedded run failover decision" &&
-        record["1"] &&
-        typeof record["1"] === "object" &&
-        (record["1"] as Record<string, unknown>).decision === "rotate_profile",
+        record.message === "embedded run failover decision" &&
+        record.attributes?.decision === "rotate_profile",
     );
 
     expect(decisionRecord).toBeDefined();
     const safeProfileId = redactIdentifier("openai:p1", { len: 12 });
-    expect((decisionRecord as Record<string, unknown>)["1"]).toMatchObject({
+    expect(decisionRecord?.attributes).toMatchObject({
       event: "embedded_run_failover_decision",
       runId: "run:overloaded-logging",
       decision: "rotate_profile",
@@ -903,16 +897,14 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
     });
 
-    const stateRecord = records.find(
+    const stateRecord = logCapture.records.find(
       (record) =>
-        record["2"] === "auth profile failure state updated" &&
-        record["1"] &&
-        typeof record["1"] === "object" &&
-        (record["1"] as Record<string, unknown>).profileId === safeProfileId,
+        record.message === "auth profile failure state updated" &&
+        record.attributes?.profileId === safeProfileId,
     );
 
     expect(stateRecord).toBeDefined();
-    expect((stateRecord as Record<string, unknown>)["1"]).toMatchObject({
+    expect(stateRecord?.attributes).toMatchObject({
       event: "auth_profile_failure_state_updated",
       runId: "run:overloaded-logging",
       profileId: safeProfileId,

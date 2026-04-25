@@ -6,7 +6,6 @@ type LoggerModule = typeof import("./logger.js");
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-logger-transport-");
 const importedModules: LoggerModule[] = [];
-const unsubscribeCallbacks: Array<() => void> = [];
 
 async function importLoggerModule(scope: string): Promise<LoggerModule> {
   const module = await importFreshModule<LoggerModule>(
@@ -27,9 +26,6 @@ describe("logger transport registry", () => {
   });
 
   afterEach(() => {
-    while (unsubscribeCallbacks.length > 0) {
-      unsubscribeCallbacks.pop()?.();
-    }
     while (importedModules.length > 0) {
       const module = importedModules.pop();
       module?.resetLogger();
@@ -41,30 +37,24 @@ describe("logger transport registry", () => {
     await logPathTracker.cleanup();
   });
 
-  it("shares late-registered transports across fresh logger module instances", async () => {
-    const gatewayLoggerModule = await importLoggerModule("gateway");
-    const pluginLoggerModule = await importLoggerModule("plugin");
-    const gatewayLogger = gatewayLoggerModule.getLogger();
-    const pluginLogger = pluginLoggerModule.getLogger();
-    const records: unknown[] = [];
-
-    unsubscribeCallbacks.push(
-      pluginLoggerModule.__test__.registerLogTransportForTest((record) => {
-        records.push(record);
-      }),
-    );
-
-    gatewayLogger.info("gateway message");
-    pluginLogger.info("plugin message");
-
-    expect(records).toHaveLength(2);
-  });
-
-  it("does not expose production log transport registration", async () => {
+  it("does not expose production or test log transport registration", async () => {
     const loggerModule = await importLoggerModule("public-api");
 
     expect(
       (loggerModule as unknown as Record<string, unknown>).registerLogTransport,
+    ).toBeUndefined();
+    expect(
+      (loggerModule.__test__ as unknown as Record<string, unknown>).registerLogTransportForTest,
+    ).toBeUndefined();
+  });
+
+  it("does not publish mutable log transport state on a well-known global symbol", async () => {
+    await importLoggerModule("global-state");
+
+    expect(
+      (globalThis as typeof globalThis & Record<PropertyKey, unknown>)[
+        Symbol.for("openclaw.logging.transports")
+      ],
     ).toBeUndefined();
   });
 });

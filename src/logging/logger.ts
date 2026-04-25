@@ -68,36 +68,7 @@ type ResolvedSettings = {
   maxFileBytes: number;
 };
 export type LoggerResolvedSettings = ResolvedSettings;
-export type LogTransportRecord = Record<string, unknown>;
-export type LogTransport = (logObj: LogTransportRecord) => void;
-
-const LOG_TRANSPORT_STATE_KEY = Symbol.for("openclaw.logging.transports");
-
-type LogTransportGlobalState = {
-  transports: Set<LogTransport>;
-  loggerRefs: Set<WeakRef<TsLogger<LogObj>>>;
-  loggerRefByLogger: WeakMap<TsLogger<LogObj>, WeakRef<TsLogger<LogObj>>>;
-  finalizer: FinalizationRegistry<WeakRef<TsLogger<LogObj>>>;
-  attachedTransports: WeakMap<TsLogger<LogObj>, Set<LogTransport>>;
-};
-
-function getLogTransportGlobalState(): LogTransportGlobalState {
-  const target = globalThis as typeof globalThis & {
-    [LOG_TRANSPORT_STATE_KEY]?: LogTransportGlobalState;
-  };
-  target[LOG_TRANSPORT_STATE_KEY] ??= {
-    transports: new Set<LogTransport>(),
-    loggerRefs: new Set<WeakRef<TsLogger<LogObj>>>(),
-    loggerRefByLogger: new WeakMap<TsLogger<LogObj>, WeakRef<TsLogger<LogObj>>>(),
-    finalizer: new FinalizationRegistry<WeakRef<TsLogger<LogObj>>>((ref) => {
-      getLogTransportGlobalState().loggerRefs.delete(ref);
-    }),
-    attachedTransports: new WeakMap<TsLogger<LogObj>, Set<LogTransport>>(),
-  };
-  return target[LOG_TRANSPORT_STATE_KEY];
-}
-
-const externalTransports = getLogTransportGlobalState().transports;
+type TsLogRecord = Record<string, unknown>;
 
 type DiagnosticLogCode = {
   line?: number;
@@ -112,68 +83,6 @@ const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
-
-function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
-  const state = getLogTransportGlobalState();
-  let attached = state.attachedTransports.get(logger);
-  if (!attached) {
-    attached = new Set<LogTransport>();
-    state.attachedTransports.set(logger, attached);
-  }
-  if (attached.has(transport)) {
-    return;
-  }
-  attached.add(transport);
-  logger.attachTransport((logObj: LogObj) => {
-    if (!externalTransports.has(transport)) {
-      return;
-    }
-    try {
-      transport(logObj as LogTransportRecord);
-    } catch {
-      // never block on logging failures
-    }
-  });
-}
-
-function registerLoggerForExternalTransports(logger: TsLogger<LogObj>): void {
-  const state = getLogTransportGlobalState();
-  let ref = state.loggerRefByLogger.get(logger);
-  if (!ref) {
-    ref = new WeakRef(logger);
-    state.loggerRefByLogger.set(logger, ref);
-    state.loggerRefs.add(ref);
-    state.finalizer.register(logger, ref, ref);
-  }
-  for (const transport of state.transports) {
-    attachExternalTransport(logger, transport);
-  }
-}
-
-function unregisterLoggerForExternalTransports(logger: TsLogger<LogObj> | null): void {
-  if (!logger) {
-    return;
-  }
-  const state = getLogTransportGlobalState();
-  const ref = state.loggerRefByLogger.get(logger);
-  if (!ref) {
-    return;
-  }
-  state.loggerRefs.delete(ref);
-  state.finalizer.unregister(ref);
-}
-
-function forEachRegisteredLogger(callback: (logger: TsLogger<LogObj>) => void): void {
-  const state = getLogTransportGlobalState();
-  for (const ref of state.loggerRefs) {
-    const logger = ref.deref();
-    if (!logger) {
-      state.loggerRefs.delete(ref);
-      continue;
-    }
-    callback(logger);
-  }
-}
 
 function clampDiagnosticLogText(value: string, maxChars: number): string {
   return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
@@ -312,7 +221,7 @@ function findLogTraceContext(
   return undefined;
 }
 
-function buildDiagnosticLogRecord(logObj: LogTransportRecord) {
+function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   const meta = logObj._meta as
     | {
         logLevelName?: string;
@@ -410,7 +319,7 @@ function buildDiagnosticLogRecord(logObj: LogTransportRecord) {
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
   logger.attachTransport((logObj: LogObj) => {
     try {
-      emitDiagnosticEvent(buildDiagnosticLogRecord(logObj as LogTransportRecord));
+      emitDiagnosticEvent(buildDiagnosticLogRecord(logObj as TsLogRecord));
     } catch {
       // never block on logging failures
     }
@@ -500,7 +409,6 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   // Silent logging does not write files; skip all filesystem setup in this path.
   if (settings.level === "silent") {
     attachDiagnosticEventTransport(logger);
-    registerLoggerForExternalTransports(logger);
     return logger;
   }
 
@@ -543,7 +451,6 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     }
   });
   attachDiagnosticEventTransport(logger);
-  registerLoggerForExternalTransports(logger);
 
   return logger;
 }
@@ -577,7 +484,6 @@ export function getLogger(): TsLogger<LogObj> {
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   const cachedSettings = loggingState.cachedSettings as ResolvedSettings | null;
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
-    unregisterLoggerForExternalTransports(cachedLogger);
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
   }
@@ -638,7 +544,6 @@ export function getResolvedLoggerSettings(): LoggerResolvedSettings {
 
 // Test helpers
 export function setLoggerOverride(settings: LoggerSettings | null) {
-  unregisterLoggerForExternalTransports(loggingState.cachedLogger as TsLogger<LogObj> | null);
   loggingState.overrideSettings = settings;
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
@@ -646,32 +551,14 @@ export function setLoggerOverride(settings: LoggerSettings | null) {
 }
 
 export function resetLogger() {
-  unregisterLoggerForExternalTransports(loggingState.cachedLogger as TsLogger<LogObj> | null);
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
 }
 
-function registerLogTransport(transport: LogTransport): () => void {
-  const state = getLogTransportGlobalState();
-  state.transports.add(transport);
-  forEachRegisteredLogger((logger) => {
-    attachExternalTransport(logger, transport);
-  });
-  return () => {
-    state.transports.delete(transport);
-  };
-}
-
 export const __test__ = {
   shouldSkipMutatingLoggingConfigRead,
-  registerLogTransportForTest(transport: LogTransport): () => void {
-    if (process.env.VITEST !== "true") {
-      throw new Error("registerLogTransportForTest is only available in tests");
-    }
-    return registerLogTransport(transport);
-  },
 };
 
 function formatLocalDate(date: Date): string {
