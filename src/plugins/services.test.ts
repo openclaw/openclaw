@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
@@ -17,12 +18,17 @@ vi.mock("../logging/subsystem.js", () => ({
 import { STATE_DIR } from "../config/paths.js";
 import { startPluginServices } from "./services.js";
 
-function createRegistry(services: OpenClawPluginService[], pluginId = "plugin:test") {
+function createRegistry(
+  services: OpenClawPluginService[],
+  pluginId = "plugin:test",
+  origin: PluginOrigin = "workspace",
+) {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
     pluginId,
     service,
     source: "test",
+    origin,
     rootDir: "/plugins/test-plugin",
   })) as typeof registry.services;
   return registry;
@@ -178,7 +184,7 @@ describe("startPluginServices", () => {
     const contexts: OpenClawPluginServiceContext[] = [];
     const diagnosticsService = createTrackingService("diagnostics-otel", { contexts });
     await startPluginServices({
-      registry: createRegistry([diagnosticsService], "diagnostics-otel"),
+      registry: createRegistry([diagnosticsService], "diagnostics-otel", "bundled"),
       config: createServiceConfig(),
     });
 
@@ -189,7 +195,7 @@ describe("startPluginServices", () => {
       contexts: untrustedContexts,
     });
     await startPluginServices({
-      registry: createRegistry([untrustedService], "plugin:test"),
+      registry: createRegistry([untrustedService], "diagnostics-otel", "workspace"),
       config: createServiceConfig(),
     });
 

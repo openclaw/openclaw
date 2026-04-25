@@ -26,7 +26,8 @@ function createServiceContext(params: {
     workspaceDir: params.workspaceDir,
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
-    ...(params.service?.pluginId === "diagnostics-otel" &&
+    ...(params.service?.origin === "bundled" &&
+    params.service.pluginId === "diagnostics-otel" &&
     params.service.service.id === "diagnostics-otel"
       ? { internalDiagnostics: { onEvent: onInternalDiagnosticEvent } }
       : {}),

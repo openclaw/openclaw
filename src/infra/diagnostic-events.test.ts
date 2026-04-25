@@ -223,6 +223,31 @@ describe("diagnostic-events", () => {
     );
   });
 
+  it("isolates nested diagnostic payloads from listener mutation", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const seen: Array<{ total: number | undefined; trusted: boolean }> = [];
+    onInternalDiagnosticEvent((event) => {
+      if (event.type === "model.usage") {
+        event.usage.total = 0;
+      }
+    });
+    onInternalDiagnosticEvent((event, metadata) => {
+      if (event.type === "model.usage") {
+        seen.push({ total: event.usage.total, trusted: metadata.trusted });
+      }
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      usage: { total: 42 },
+    });
+
+    expect(seen).toEqual([{ total: 42, trusted: true }]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("listener error type=model.usage seq=1: TypeError"),
+    );
+  });
+
   it("drops prototype-pollution keys during event enrichment", () => {
     const eventInput = Object.assign(Object.create(null), {
       type: "message.queued",

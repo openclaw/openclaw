@@ -464,11 +464,27 @@ function dispatchDiagnosticEvent(
 }
 
 function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): DiagnosticEventPayload {
-  const cloned = { ...event } as DiagnosticEventPayload & Record<string, unknown>;
-  if (event.trace) {
-    cloned.trace = Object.freeze({ ...event.trace });
+  return deepFreezeDiagnosticValue(structuredClone(event)) as DiagnosticEventPayload;
+}
+
+function deepFreezeDiagnosticValue(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
   }
-  return Object.freeze(cloned) as DiagnosticEventPayload;
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      deepFreezeDiagnosticValue(item, seen);
+    }
+    return Object.freeze(value);
+  }
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    deepFreezeDiagnosticValue(nested, seen);
+  }
+  return Object.freeze(value);
 }
 
 function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void {
