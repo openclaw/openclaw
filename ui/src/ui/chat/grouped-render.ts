@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { DEFAULT_ASSISTANT_AVATAR, type AssistantIdentity } from "../assistant-identity.ts";
+import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -20,7 +20,12 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../user-identity.ts";
-import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
+import {
+  assistantAvatarFallbackUrl,
+  isRenderableControlUiAvatarUrl,
+  resolveAssistantTextAvatar,
+} from "../views/agents-utils.ts";
+export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -685,6 +690,7 @@ function renderAvatar(
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
+  const assistantFallbackAvatar = assistantAvatarFallbackUrl(basePath ?? "");
   const userName = resolveLocalUserName(user);
   const userAvatarUrl = resolveLocalUserAvatarUrl(user);
   const userAvatarText = resolveLocalUserAvatarText(user);
@@ -749,7 +755,7 @@ function renderAvatar(
       if (authToken?.trim() && assistantAvatar.startsWith("/")) {
         return html`<img
           class="chat-avatar ${className} chat-avatar--logo"
-          src="${agentLogoUrl(basePath ?? "")}"
+          src="${assistantFallbackAvatar}"
           alt="${assistantName}"
         />`;
       }
@@ -766,17 +772,15 @@ function renderAvatar(
     }
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
-      src="${agentLogoUrl(basePath ?? "")}"
+      src="${assistantFallbackAvatar}"
       alt="${assistantName}"
     />`;
   }
 
-  /* Assistant with no custom avatar: use logo when basePath available */
-  if (normalized === "assistant" && basePath) {
-    const logoUrl = agentLogoUrl(basePath);
+  if (normalized === "assistant") {
     return html`<img
       class="chat-avatar ${className} chat-avatar--logo"
-      src="${logoUrl}"
+      src="${assistantFallbackAvatar}"
       alt="${assistantName}"
     />`;
   }
@@ -787,27 +791,6 @@ function renderAvatar(
 function isAvatarUrl(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
-}
-
-const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
-
-export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
-    return null;
-  }
-  if (isAvatarUrl(trimmed)) {
-    return null;
-  }
-  if (
-    trimmed.length > 8 ||
-    /\s/.test(trimmed) ||
-    /[\\/.:]/.test(trimmed) ||
-    UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
-  ) {
-    return null;
-  }
-  return trimmed;
 }
 
 function resolveRenderableMessageImages(

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentLogoUrl,
+  assistantAvatarFallbackUrl,
   buildAgentContext,
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
@@ -111,6 +112,13 @@ describe("agentLogoUrl", () => {
 
   it("uses a route-relative fallback before basePath bootstrap finishes", () => {
     expect(agentLogoUrl("")).toBe("favicon.svg");
+  });
+});
+
+describe("assistantAvatarFallbackUrl", () => {
+  it("uses the bundled Molty png for assistant profile fallbacks", () => {
+    expect(assistantAvatarFallbackUrl("/ui")).toBe("/ui/apple-touch-icon.png");
+    expect(assistantAvatarFallbackUrl("")).toBe("apple-touch-icon.png");
   });
 });
 

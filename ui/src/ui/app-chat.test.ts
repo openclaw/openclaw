@@ -54,6 +54,9 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     basePath: "",
     hello: null,
     chatAvatarUrl: null,
+    chatAvatarSource: null,
+    chatAvatarStatus: null,
+    chatAvatarReason: null,
     chatSideResult: null,
     chatSideResultTerminalRuns: new Set<string>(),
     chatModelOverrides: {},
@@ -281,7 +284,12 @@ describe("refreshChatAvatar", () => {
   it("drops remote avatar metadata so the control UI can rely on same-origin images only", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ avatarUrl: "https://example.com/avatar.png" }),
+      json: async () => ({
+        avatarUrl: "https://example.com/avatar.png",
+        avatarSource: "https://example.com/avatar.png",
+        avatarStatus: "remote",
+        avatarReason: null,
+      }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -289,6 +297,29 @@ describe("refreshChatAvatar", () => {
     await refreshChatAvatar(host);
 
     expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBe("https://example.com/avatar.png");
+    expect(host.chatAvatarStatus).toBe("remote");
+  });
+
+  it("keeps unresolved IDENTITY.md avatar metadata when falling back to the logo", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        avatarUrl: null,
+        avatarSource: "assets/avatars/nova-portrait.png",
+        avatarStatus: "none",
+        avatarReason: "missing",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const host = makeHost({ basePath: "", sessionKey: "agent:main" });
+    await refreshChatAvatar(host);
+
+    expect(host.chatAvatarUrl).toBeNull();
+    expect(host.chatAvatarSource).toBe("assets/avatars/nova-portrait.png");
+    expect(host.chatAvatarStatus).toBe("none");
+    expect(host.chatAvatarReason).toBe("missing");
   });
 
   it("ignores stale avatar responses after switching sessions", async () => {

@@ -171,6 +171,11 @@ export class OpenClawApp extends LitElement {
 
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
+  @state() assistantAvatarSource = bootAssistantIdentity.avatarSource ?? null;
+  @state() assistantAvatarStatus = bootAssistantIdentity.avatarStatus ?? null;
+  @state() assistantAvatarReason = bootAssistantIdentity.avatarReason ?? null;
+  @state() assistantAvatarUploadBusy = false;
+  @state() assistantAvatarUploadError: string | null = null;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
   @state() userName = bootLocalUserIdentity.name;
   @state() userAvatar = bootLocalUserIdentity.avatar;
@@ -193,6 +198,9 @@ export class OpenClawApp extends LitElement {
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
+  @state() chatAvatarSource: string | null = null;
+  @state() chatAvatarStatus: "none" | "local" | "remote" | "data" | null = null;
+  @state() chatAvatarReason: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelsLoading = false;

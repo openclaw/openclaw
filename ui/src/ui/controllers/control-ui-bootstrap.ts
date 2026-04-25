@@ -11,6 +11,9 @@ export type ControlUiBootstrapState = {
   basePath: string;
   assistantName: string;
   assistantAvatar: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  assistantAvatarReason?: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
   localMediaPreviewRoots: string[];
@@ -66,9 +69,15 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
       agentId: parsed.assistantAgentId ?? null,
       name: parsed.assistantName,
       avatar: parsed.assistantAvatar ?? null,
+      avatarSource: parsed.assistantAvatarSource ?? null,
+      avatarStatus: parsed.assistantAvatarStatus ?? null,
+      avatarReason: parsed.assistantAvatarReason ?? null,
     });
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
+    state.assistantAvatarSource = normalized.avatarSource ?? null;
+    state.assistantAvatarStatus = normalized.avatarStatus ?? null;
+    state.assistantAvatarReason = normalized.avatarReason ?? null;
     state.assistantAgentId = normalized.agentId ?? null;
     state.serverVersion = parsed.serverVersion ?? null;
     state.localMediaPreviewRoots = Array.isArray(parsed.localMediaPreviewRoots)
