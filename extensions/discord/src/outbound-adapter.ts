@@ -16,11 +16,9 @@ import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
-import {
-  buildDiscordPresentationPayload,
-  normalizeDiscordApprovalPayload,
-  sendDiscordOutboundPayload,
-} from "./outbound-payload.js";
+import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
+import { buildDiscordPresentationPayload } from "./outbound-components.js";
+import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
   loadDiscordSendRuntime,
   resolveDiscordFormattingOptions,

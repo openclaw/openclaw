@@ -7,119 +7,12 @@ import {
   sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
+import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
+import {
+  resolveDiscordComponentSpec,
+  sendDiscordComponentMessageLazy,
+} from "./outbound-components.js";
 import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
-
-type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
-type DiscordSharedInteractiveModule = typeof import("./shared-interactive.js");
-
-let discordComponentSendPromise: Promise<DiscordComponentSendFn> | undefined;
-let discordSharedInteractivePromise: Promise<DiscordSharedInteractiveModule> | undefined;
-
-async function sendDiscordComponentMessageLazy(
-  ...args: Parameters<DiscordComponentSendFn>
-): ReturnType<DiscordComponentSendFn> {
-  discordComponentSendPromise ??= import("./send.components.js").then(
-    (module) => module.sendDiscordComponentMessage,
-  );
-  return await (
-    await discordComponentSendPromise
-  )(...args);
-}
-
-function loadDiscordSharedInteractive(): Promise<DiscordSharedInteractiveModule> {
-  discordSharedInteractivePromise ??= import("./shared-interactive.js");
-  return discordSharedInteractivePromise;
-}
-
-function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
-  const channelData = payload.channelData;
-  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
-    return false;
-  }
-  return Boolean((channelData as { execApproval?: unknown }).execApproval);
-}
-
-function neutralizeDiscordApprovalMentions(value: string): string {
-  return value
-    .replace(/@everyone/gi, "@\u200beveryone")
-    .replace(/@here/gi, "@\u200bhere")
-    .replace(/<@/g, "<@\u200b")
-    .replace(/<#/g, "<#\u200b");
-}
-
-export function normalizeDiscordApprovalPayload<
-  T extends {
-    text?: string;
-    channelData?: unknown;
-  },
->(payload: T): T {
-  return hasApprovalChannelData(payload) && payload.text
-    ? {
-        ...payload,
-        text: neutralizeDiscordApprovalMentions(payload.text),
-      }
-    : payload;
-}
-
-export async function buildDiscordPresentationPayload(params: {
-  payload: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0]["payload"];
-  presentation: Parameters<
-    NonNullable<ChannelOutboundAdapter["renderPresentation"]>
-  >[0]["presentation"];
-}): Promise<typeof params.payload | null> {
-  const componentSpec = (await loadDiscordSharedInteractive()).buildDiscordPresentationComponents(
-    params.presentation,
-  );
-  if (!componentSpec) {
-    return null;
-  }
-  return {
-    ...params.payload,
-    channelData: {
-      ...params.payload.channelData,
-      discord: {
-        ...(params.payload.channelData?.discord as Record<string, unknown> | undefined),
-        presentationComponents: componentSpec,
-      },
-    },
-  };
-}
-
-function resolveDiscordComponentSpec(
-  payload: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"],
-): Promise<DiscordComponentMessageSpec | undefined> {
-  const discordData = payload.channelData?.discord as
-    | { components?: unknown; presentationComponents?: DiscordComponentMessageSpec }
-    | undefined;
-  const rawComponentSpec =
-    discordData?.presentationComponents ?? readDiscordComponentSpec(discordData?.components);
-  if (rawComponentSpec) {
-    return Promise.resolve(
-      rawComponentSpec.text
-        ? rawComponentSpec
-        : {
-            ...rawComponentSpec,
-            text: payload.text?.trim() ? payload.text : undefined,
-          },
-    );
-  }
-  if (!payload.interactive) {
-    return Promise.resolve(undefined);
-  }
-  return loadDiscordSharedInteractive().then((module) => {
-    const interactiveSpec = module.buildDiscordInteractiveComponents(payload.interactive);
-    if (!interactiveSpec) {
-      return undefined;
-    }
-    return interactiveSpec.text
-      ? interactiveSpec
-      : {
-          ...interactiveSpec,
-          text: payload.text?.trim() ? payload.text : undefined,
-        };
-  });
-}
 
 export async function sendDiscordOutboundPayload(params: {
   ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
