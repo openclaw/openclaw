@@ -444,6 +444,7 @@ run_quiet_step() {
 
     local log
     log="$(mktempfile)"
+    local showed_progress=false
 
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
         local cmd_quoted=""
@@ -453,10 +454,18 @@ run_quiet_step() {
         if run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1"; then
             return 0
         fi
+        showed_progress=true
     else
+        # Keep users informed even when gum spinner cannot run (for example shell functions).
+        ui_info "${title}"
+        showed_progress=true
         if "$@" >"$log" 2>&1; then
             return 0
         fi
+    fi
+
+    if [[ "$showed_progress" == "false" ]]; then
+        ui_info "${title}"
     fi
 
     ui_error "${title} failed — re-run with --verbose for details"
@@ -2265,6 +2274,8 @@ main() {
         return 0
     fi
 
+    # bootstrap_gum_temp may perform network downloads before any spinner is available.
+    echo -e "${INFO}Preparing installer interface...${NC}"
     bootstrap_gum_temp || true
     print_installer_banner
     print_gum_status
