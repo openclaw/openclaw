@@ -209,8 +209,15 @@ const defaultStagedRuntimeDepPruneRules = new Map([
   ["@jimp/plugin-print", { paths: ["src/__image_snapshots__"] }],
   ["@jimp/plugin-quantize", { paths: ["src/__image_snapshots__"] }],
   ["@jimp/plugin-threshold", { paths: ["src/__image_snapshots__"] }],
+  // tokenjuice ships built-in rules as JSON data under `dist/rules/tests/*.json`
+  // (e.g. `bun-test.json`, `jest.json`, `pytest.json`). These are NOT test
+  // fixtures — they are the runtime-loaded rule definitions consumed by
+  // `dist/core/builtin-rules.generated.js`. The global `tests` basename prune
+  // would strip them, and the plugin then fails to load with
+  // `Cannot find module '../rules/tests/bun-test.json'`. Keep them staged.
+  ["tokenjuice", { keepDirectories: ["dist/rules/tests"] }],
 ]);
-const runtimeDepsStagingVersion = 6;
+const runtimeDepsStagingVersion = 7;
 const exactVersionSpecRe = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
 function resolveRuntimeDepPruneConfig(params = {}) {
@@ -547,7 +554,7 @@ function isNodeModulesPackageRoot(segments, index) {
   return parent?.startsWith("@") === true && segments[index - 2] === "node_modules";
 }
 
-function pruneDependencyDirectoriesByBasename(depRoot, basenames) {
+function pruneDependencyDirectoriesByBasename(depRoot, basenames, keepDirs = new Set()) {
   if (!basenames || basenames.length === 0 || !fs.existsSync(depRoot)) {
     return;
   }
@@ -562,6 +569,15 @@ function pruneDependencyDirectoriesByBasename(depRoot, basenames) {
       const fullPath = path.join(currentDir, entry.name);
       const segments = relativePathSegments(depRoot, fullPath);
       if (basenameSet.has(entry.name) && !isNodeModulesPackageRoot(segments, segments.length - 1)) {
+        // Per-package opt-out: a pruneRule may keep specific directories that
+        // would otherwise match a global basename prune (e.g. a data/asset
+        // directory named `tests/` that is NOT test code). Descend into kept
+        // directories so their contents are still subject to suffix/pattern
+        // pruning, but do not remove the directory itself.
+        if (keepDirs.has(fullPath)) {
+          queue.push(fullPath);
+          continue;
+        }
         removePathIfExists(fullPath);
         continue;
       }
@@ -591,7 +607,12 @@ function pruneStagedInstalledDependencyCargo(nodeModulesDir, depName, pruneConfi
   for (const relativePath of pruneRule?.paths ?? []) {
     removePathIfExists(path.join(depRoot, relativePath));
   }
-  pruneDependencyDirectoriesByBasename(depRoot, pruneConfig.globalPruneDirectories);
+  // Resolve per-package keepDirectories (opt-out of global basename prune)
+  // against depRoot up front so the walk can skip them cheaply.
+  const keepDirs = new Set(
+    (pruneRule?.keepDirectories ?? []).map((relativePath) => path.resolve(depRoot, relativePath)),
+  );
+  pruneDependencyDirectoriesByBasename(depRoot, pruneConfig.globalPruneDirectories, keepDirs);
   pruneDependencyFilesByPatterns(depRoot, pruneConfig.globalPruneFilePatterns);
   pruneDependencyFilesBySuffixes(depRoot, pruneConfig.globalPruneSuffixes);
   pruneDependencyFilesBySuffixes(depRoot, pruneRule?.suffixes ?? []);
