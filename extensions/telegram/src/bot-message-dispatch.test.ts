@@ -498,6 +498,51 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("suppresses Telegram tool progress by default", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressDefaultToolProgressMessages: true,
+        }),
+      }),
+    );
+  });
+
+  it("streams Telegram tool progress only when explicitly enabled", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { preview: { toolProgress: true } } },
+    });
+
+    expect(draftStream.update).toHaveBeenCalledWith("Working…\n• tool: exec");
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          suppressDefaultToolProgressMessages: true,
+        }),
+      }),
+    );
+  });
+
   it("keeps block streaming enabled when account config enables it", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
