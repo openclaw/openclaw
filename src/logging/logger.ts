@@ -14,7 +14,6 @@ import {
   POSIX_OPENCLAW_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -83,12 +82,10 @@ type LogTransportGlobalState = {
 };
 
 function getLogTransportGlobalState(): LogTransportGlobalState {
-  const processStore = process as NodeJS.Process & Record<PropertyKey, unknown>;
-  const existing = processStore[LOG_TRANSPORT_STATE_KEY];
-  if (existing) {
-    return existing as LogTransportGlobalState;
-  }
-  const created = resolveGlobalSingleton<LogTransportGlobalState>(LOG_TRANSPORT_STATE_KEY, () => ({
+  const target = globalThis as typeof globalThis & {
+    [LOG_TRANSPORT_STATE_KEY]?: LogTransportGlobalState;
+  };
+  target[LOG_TRANSPORT_STATE_KEY] ??= {
     transports: new Set<LogTransport>(),
     loggerRefs: new Set<WeakRef<TsLogger<LogObj>>>(),
     loggerRefByLogger: new WeakMap<TsLogger<LogObj>, WeakRef<TsLogger<LogObj>>>(),
@@ -96,9 +93,8 @@ function getLogTransportGlobalState(): LogTransportGlobalState {
       getLogTransportGlobalState().loggerRefs.delete(ref);
     }),
     attachedTransports: new WeakMap<TsLogger<LogObj>, Set<LogTransport>>(),
-  }));
-  processStore[LOG_TRANSPORT_STATE_KEY] = created;
-  return created;
+  };
+  return target[LOG_TRANSPORT_STATE_KEY];
 }
 
 const externalTransports = getLogTransportGlobalState().transports;
