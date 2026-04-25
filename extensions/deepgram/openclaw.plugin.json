@@ -5,7 +5,19 @@
     "deepgram": ["DEEPGRAM_API_KEY"]
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["deepgram"]
+    "mediaUnderstandingProviders": ["deepgram"],
+    "realtimeTranscriptionProviders": ["deepgram"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "deepgram": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "nova-3"
+      },
+      "autoPriority": {
+        "audio": 30
+      }
+    }
   },
   "configSchema": {
     "type": "object",

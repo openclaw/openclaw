@@ -35,6 +35,7 @@ export const recordPluginInstall: UnknownMock = vi.fn();
 export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
+export const buildPluginInspectReport: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 export const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
@@ -166,6 +167,16 @@ vi.mock("../plugins/status.js", () => ({
       buildPluginSnapshotReport,
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildPluginSnapshotReport"],
+  buildPluginInspectReport: ((
+    ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginInspectReport"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/status.js"))["buildPluginInspectReport"]>,
+      ReturnType<(typeof import("../plugins/status.js"))["buildPluginInspectReport"]>
+    >(
+      buildPluginInspectReport,
+      ...args,
+    )) as (typeof import("../plugins/status.js"))["buildPluginInspectReport"],
   buildPluginDiagnosticsReport: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginDiagnosticsReport"]>
   ) =>
@@ -186,20 +197,25 @@ vi.mock("../plugins/status.js", () => ({
       buildPluginCompatibilityNotices,
       ...args,
     )) as (typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"],
+  formatPluginCompatibilityNotice: (entry: { message: string }) => entry.message,
 }));
 
-vi.mock("../plugins/slots.js", () => ({
-  applyExclusiveSlotSelection: ((
-    params: Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0],
-  ) =>
-    invokeMock<
-      [Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0]],
-      ReturnType<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>
-    >(
-      applyExclusiveSlotSelection,
-      params,
-    )) as (typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"],
-}));
+vi.mock("../plugins/slots.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/slots.js")>();
+  return {
+    ...actual,
+    applyExclusiveSlotSelection: ((
+      params: Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0],
+    ) =>
+      invokeMock<
+        [Parameters<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>[0]],
+        ReturnType<(typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"]>
+      >(
+        applyExclusiveSlotSelection,
+        params,
+      )) as (typeof import("../plugins/slots.js"))["applyExclusiveSlotSelection"],
+  };
+});
 
 vi.mock("../plugins/uninstall.js", () => ({
   uninstallPlugin: ((
@@ -373,6 +389,7 @@ export function resetPluginsCliTestState() {
   clearPluginManifestRegistryCache.mockReset();
   loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
+  buildPluginInspectReport.mockReset();
   buildPluginDiagnosticsReport.mockReset();
   buildPluginCompatibilityNotices.mockReset();
   applyExclusiveSlotSelection.mockReset();

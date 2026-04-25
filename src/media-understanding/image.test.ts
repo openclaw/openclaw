@@ -18,6 +18,7 @@ const hoisted = vi.hoisted(() => ({
   discoverModelsMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
   fetchMock: vi.fn(),
+  registerProviderStreamForModelMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -29,6 +30,7 @@ const {
   discoverModelsMock,
   resolveModelWithRegistryMock,
   fetchMock,
+  registerProviderStreamForModelMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -50,6 +52,10 @@ vi.mock("../agents/model-auth.js", () => ({
   getApiKeyForModel: getApiKeyForModelMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   requireApiKey: requireApiKeyMock,
+}));
+
+vi.mock("../agents/provider-stream.js", () => ({
+  registerProviderStreamForModel: registerProviderStreamForModelMock,
 }));
 
 vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
@@ -171,6 +177,16 @@ describe("describeImageWithModel", () => {
       text: "generic ok",
       model: "custom-vision",
     });
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "minimax-portal",
+          id: "custom-vision",
+        }),
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+      }),
+    );
     expect(completeMock).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -232,6 +248,51 @@ describe("describeImageWithModel", () => {
     );
     const [, context] = completeMock.mock.calls[0] ?? [];
     expect(context?.messages?.[0]?.content).toHaveLength(1);
+  });
+
+  it("places OpenRouter image prompts in user content before images", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "google/gemini-2.5-flash",
+      input: ["text", "image"],
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "openrouter",
+      model: "google/gemini-2.5-flash",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "openrouter ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openrouter",
+      model: "google/gemini-2.5-flash",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "openrouter ok",
+      model: "google/gemini-2.5-flash",
+    });
+    const [, context] = completeMock.mock.calls[0] ?? [];
+    expect(context?.systemPrompt).toBeUndefined();
+    expect(context?.messages?.[0]?.content).toEqual([
+      { type: "text", text: "Describe the image." },
+      expect.objectContaining({
+        type: "image",
+        mimeType: "image/png",
+      }),
+    ]);
   });
 
   it.each([

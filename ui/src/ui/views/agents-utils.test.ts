@@ -4,6 +4,7 @@ import {
   buildAgentContext,
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
+  resolveChatAvatarRenderUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";
@@ -149,6 +150,32 @@ describe("resolveAgentAvatarUrl", () => {
   });
 });
 
+describe("resolveChatAvatarRenderUrl", () => {
+  it("accepts a blob: URL produced by an authenticated avatar fetch", () => {
+    expect(
+      resolveChatAvatarRenderUrl("blob:http://localhost/uuid-123", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("blob:http://localhost/uuid-123");
+  });
+
+  it("falls back to the config-sanitized avatar when no blob candidate is present", () => {
+    expect(
+      resolveChatAvatarRenderUrl(null, {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
+  });
+
+  it("rejects remote URLs passed as the render candidate", () => {
+    expect(
+      resolveChatAvatarRenderUrl("https://example.com/avatar.png", {
+        identity: { avatarUrl: "/avatar/main" },
+      }),
+    ).toBe("/avatar/main");
+  });
+});
+
 describe("buildAgentContext", () => {
   it("falls back to agent payload workspace/model when config form is unavailable", () => {
     const context = buildAgentContext(
@@ -156,7 +183,7 @@ describe("buildAgentContext", () => {
         id: "main",
         workspace: "/tmp/agent-workspace",
         model: {
-          primary: "openai/gpt-5.4",
+          primary: "openai/gpt-5.5",
           fallbacks: ["openai-codex/gpt-5.2-codex"],
         },
       },
@@ -167,7 +194,7 @@ describe("buildAgentContext", () => {
     );
 
     expect(context.workspace).toBe("/tmp/agent-workspace");
-    expect(context.model).toBe("openai/gpt-5.4 (+1 fallback)");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
     expect(context.isDefault).toBe(true);
   });
 
@@ -179,7 +206,7 @@ describe("buildAgentContext", () => {
           defaults: {
             workspace: "/tmp/default-workspace",
             model: {
-              primary: "openai/gpt-5.4",
+              primary: "openai/gpt-5.5",
               fallbacks: ["openai-codex/gpt-5.2-codex"],
             },
           },
@@ -192,6 +219,6 @@ describe("buildAgentContext", () => {
     );
 
     expect(context.workspace).toBe("/tmp/default-workspace");
-    expect(context.model).toBe("openai/gpt-5.4 (+1 fallback)");
+    expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
   });
 });

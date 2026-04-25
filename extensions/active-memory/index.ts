@@ -9,6 +9,8 @@ import {
   resolveAgentWorkspaceDir,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolveLivePluginConfigObject,
+  resolvePluginConfigObject,
   resolveSessionStoreEntry,
   updateSessionStore,
   type OpenClawConfig,
@@ -573,12 +575,8 @@ function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
   if (entry?.enabled === false) {
     return false;
   }
-  const pluginConfig = asRecord(entry?.config);
+  const pluginConfig = resolvePluginConfigObject(cfg, "active-memory");
   return pluginConfig?.enabled !== false;
-}
-
-function resolveActiveMemoryPluginConfigFromConfig(cfg: OpenClawConfig): unknown {
-  return asRecord(cfg.plugins?.entries?.["active-memory"])?.config;
 }
 
 function updateActiveMemoryGlobalEnabledInConfig(
@@ -789,6 +787,7 @@ function buildRecallPrompt(params: {
     "Your job is to search memory and return only the most relevant memory context for that model.",
     "You receive conversation context, including the user's latest message.",
     "Use only memory_search and memory_get.",
+    "When searching for preference or habit recall, use a permissive memory_search threshold before deciding that no useful memory exists.",
     "Do not answer the user directly.",
     `Prompt style: ${params.config.promptStyle}.`,
     ...buildPromptStyleLines(params.config.promptStyle),
@@ -1686,6 +1685,7 @@ async function runRecallSubagent(params: {
       thinkLevel: params.config.thinking,
       reasoningLevel: "off",
       silentExpected: true,
+      cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
     });
     if (params.abortSignal?.aborted) {
@@ -1886,11 +1886,15 @@ export default definePluginEntry({
     };
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
-      const livePluginConfig =
-        resolveActiveMemoryPluginConfigFromConfig(api.runtime.config.loadConfig()) ??
-        api.pluginConfig;
-      config = normalizePluginConfig(livePluginConfig);
-      warnDeprecatedModelFallbackPolicy(livePluginConfig);
+      const livePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.loadConfig,
+        "active-memory",
+        api.pluginConfig as Record<string, unknown>,
+      );
+      config = normalizePluginConfig(livePluginConfig ?? { enabled: false });
+      if (livePluginConfig) {
+        warnDeprecatedModelFallbackPolicy(livePluginConfig);
+      }
     };
     api.registerCommand({
       name: "active-memory",
@@ -1961,6 +1965,7 @@ export default definePluginEntry({
 
     api.on("before_prompt_build", async (event, ctx) => {
       try {
+        refreshLiveConfigFromRuntime();
         const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
         const resolvedSessionKey =
           ctx.sessionKey?.trim() ||

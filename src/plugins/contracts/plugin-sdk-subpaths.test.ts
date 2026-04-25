@@ -136,6 +136,7 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
       "DEFAULT_UPLOAD_DIR",
       "ResolvedBrowserConfig",
       "ResolvedBrowserProfile",
+      "ResolvedBrowserTabCleanupConfig",
       "resolveBrowserConfig",
       "resolveProfile",
     ],
@@ -501,7 +502,12 @@ describe("plugin-sdk subpath exports", () => {
       ],
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
-    expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
+    expectSourceMentions("channel-actions", [
+      "optionalStringEnum",
+      "stringEnum",
+      "createMessageToolButtonsSchema",
+      "createMessageToolCardSchema",
+    ]);
     expectSourceContract("channel-secret-basic-runtime", {
       mentions: [
         "collectSimpleChannelFieldAssignments",
@@ -750,8 +756,6 @@ describe("plugin-sdk subpath exports", () => {
       "buildChannelKeyCandidates",
       "buildMessagingTarget",
       "createDirectTextMediaOutbound",
-      "createMessageToolButtonsSchema",
-      "createMessageToolCardSchema",
       "createScopedAccountReplyToModeResolver",
       "createStaticReplyToModeResolver",
       "createTopLevelChannelReplyToModeResolver",

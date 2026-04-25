@@ -4,9 +4,9 @@ import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import {
   renderMessageGroup,
+  resolveAssistantTextAvatar,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
@@ -19,6 +19,23 @@ vi.mock("../views/agents-utils.ts", () => ({
   agentLogoUrl: () => "/openclaw-logo.svg",
   isRenderableControlUiAvatarUrl: (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
+  resolveChatAvatarRenderUrl: (
+    candidate: string | null | undefined,
+    agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  ) => {
+    if (typeof candidate === "string" && candidate.startsWith("blob:")) {
+      return candidate;
+    }
+    for (const value of [candidate, agent.identity?.avatarUrl, agent.identity?.avatar]) {
+      if (
+        typeof value === "string" &&
+        (/^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")))
+      ) {
+        return value;
+      }
+    }
+    return null;
+  },
 }));
 
 vi.mock("./speech.ts", () => ({
@@ -87,6 +104,44 @@ function createMessageGroup(message: unknown, role: string): MessageGroup {
   };
 }
 
+function createAssistantCanvasBlock(params: {
+  suffix: string;
+  title?: string;
+  url?: string;
+  preferredHeight?: number;
+  presentationTarget?: "assistant_message" | "tool_card";
+}) {
+  const viewId = `cv_inline_${params.suffix}`;
+  const url = params.url ?? `/__openclaw__/canvas/documents/${viewId}/index.html`;
+  const title = params.title ?? "Inline demo";
+  const preferredHeight = params.preferredHeight ?? 360;
+  return {
+    type: "canvas",
+    preview: {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId,
+      title,
+      url,
+      preferredHeight,
+    },
+    rawText: JSON.stringify({
+      kind: "canvas",
+      view: {
+        backend: "canvas",
+        id: viewId,
+        url,
+        title,
+        preferred_height: preferredHeight,
+      },
+      presentation: {
+        target: params.presentationTarget ?? "assistant_message",
+      },
+    }),
+  };
+}
+
 function renderMessageGroups(
   container: HTMLElement,
   groups: MessageGroup[],
@@ -104,24 +159,6 @@ function renderMessageGroups(
     )}`,
     container,
   );
-}
-
-function renderBuiltMessageGroups(
-  container: HTMLElement,
-  props: Partial<BuildChatItemsProps>,
-  opts: Partial<RenderMessageGroupOptions> = {},
-) {
-  const groups = buildChatItems({
-    sessionKey: "main",
-    messages: [],
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-    ...props,
-  }).filter((item) => item.kind === "group");
-  renderMessageGroups(container, groups, opts);
 }
 
 function clearDeleteConfirmSkip() {
@@ -144,6 +181,24 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("falls back to the logo while authenticated avatar routes are loading", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      {
+        assistantAvatar: "/avatar/main",
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    const img = container.querySelector("img.chat-avatar");
+    expect(img?.getAttribute("src")).toBe("/openclaw-logo.svg");
+  });
+
   it("positions delete confirm by message side", () => {
     const renderDeletable = (role: "user" | "assistant") => {
       const container = document.createElement("div");
@@ -188,22 +243,115 @@ describe("grouped chat rendering", () => {
     expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
   });
 
-  it("falls back to the local logo when the assistant avatar is a remote URL", () => {
-    const container = document.createElement("div");
+  it("renders assistant avatar variants", () => {
+    const renderAvatar = (assistantAvatar: string) => {
+      const container = document.createElement("div");
+      renderAssistantMessage(
+        container,
+        {
+          role: "assistant",
+          content: "hello",
+          timestamp: 1000,
+        },
+        { assistantAvatar, assistantName: "Val" },
+      );
+      return container.querySelector<HTMLElement>(".chat-avatar.assistant");
+    };
 
-    renderAssistantMessage(
-      container,
+    const remoteAvatar = renderAvatar("https://example.com/avatar.png");
+    expect(remoteAvatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
+
+    const blobAvatar = renderAvatar("blob:managed-image");
+    expect(blobAvatar?.tagName).toBe("IMG");
+    expect(blobAvatar?.getAttribute("src")).toBe("blob:managed-image");
+
+    const textAvatar = renderAvatar("VC");
+    expect(textAvatar?.tagName).toBe("DIV");
+    expect(textAvatar?.textContent).toContain("VC");
+    expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
+  });
+
+  it("rejects unsafe invisible controls in assistant text avatars", () => {
+    expect(resolveAssistantTextAvatar("VC")).toBe("VC");
+    expect(resolveAssistantTextAvatar("\u{1F43E}")).toBe("\u{1F43E}");
+    expect(resolveAssistantTextAvatar("V\u202eC")).toBeNull();
+    expect(resolveAssistantTextAvatar("V\u200bC")).toBeNull();
+  });
+
+  it("renders assistant context usage from input and cache tokens", () => {
+    const renderUsage = (usage: Record<string, number>, contextWindow: number) => {
+      const container = document.createElement("div");
+      renderAssistantMessage(
+        container,
+        {
+          role: "assistant",
+          content: "Done",
+          usage,
+          model: "anthropic/claude-opus-4-7",
+          timestamp: 1000,
+        },
+        { contextWindow },
+      );
+      return container;
+    };
+
+    const cached = renderUsage(
       {
-        role: "assistant",
-        content: "hello",
-        timestamp: 1000,
+        input: 1,
+        output: 1200,
+        cacheRead: 438_400,
+        cacheWrite: 307,
       },
-      { assistantAvatar: "https://example.com/avatar.png" },
+      1_000_000,
     );
+    expect(cached.querySelector(".msg-meta__ctx")?.textContent).toBe("44% ctx");
+    expect(cached.textContent).toContain("R438.4k");
+    expect(cached.textContent).toContain("W307");
 
-    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
-    expect(avatar).not.toBeNull();
-    expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
+    const outputHeavy = renderUsage(
+      {
+        input: 1_000,
+        output: 9_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      10_000,
+    );
+    expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+  });
+
+  it("renders configured local user names and avatar variants", () => {
+    const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
+      const container = document.createElement("div");
+      renderGroupedMessage(
+        container,
+        {
+          role: "user",
+          content: "hello",
+          timestamp: 1000,
+        },
+        "user",
+        opts,
+      );
+      return container;
+    };
+
+    const named = renderUser({ userName: "Buns" });
+    const sender = named.querySelector<HTMLElement>(".chat-group.user .chat-sender-name");
+    expect(sender?.textContent).toBe("Buns");
+
+    for (const src of ["data:image/png;base64,AAA", "/avatar/user"]) {
+      const container = renderUser({ userName: "Buns", userAvatar: src });
+      const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.user");
+      expect(avatar?.getAttribute("src")).toBe(src);
+      expect(avatar?.getAttribute("alt")).toBe("Buns");
+    }
+
+    const textAvatar = renderUser({ userAvatar: "🦞" }).querySelector<HTMLElement>(
+      ".chat-avatar.user",
+    );
+    expect(textAvatar?.tagName).toBe("DIV");
+    expect(textAvatar?.textContent).toContain("🦞");
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
@@ -265,6 +413,7 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: () => false,
     });
 
+    expect(container.querySelector(".chat-bubble--tool-shell")).not.toBeNull();
     const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
     expect(summary?.textContent).toContain("Tool call");
     expect(container.textContent).not.toContain('"thread": true');
@@ -501,6 +650,96 @@ describe("grouped chat rendering", () => {
 
     const image = container.querySelector<HTMLImageElement>(".chat-message-image");
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,cG5n");
+  });
+
+  it("fetches managed chat images with auth and renders blob previews", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const objectUrl = "blob:managed-image";
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => objectUrl),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = init?.headers as Headers;
+      expect(headers.get("Authorization")).toBe("Bearer session-token");
+      expect(headers.get("x-openclaw-requester-session-key")).toBe("agent:main:main");
+      return {
+        ok: true,
+        blob: async () => new Blob(["png"], { type: "image/png" }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            alt: "Generated image 1",
+            width: 1,
+            height: 1,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    await vi.waitFor(() => {
+      const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+      expect(image?.getAttribute("src")).toBe(objectUrl);
+      expect(image?.getAttribute("alt")).toBe("Generated image 1");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+      expect.objectContaining({
+        method: "GET",
+        credentials: "same-origin",
+      }),
+    );
+  });
+
+  it("does not send auth to cross-origin managed-image-looking URLs", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("cross-origin image URL should not be fetched with Control UI auth");
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "https://evil.example/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            alt: "Untrusted image",
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image?.getAttribute("src")).toBe(
+      "https://evil.example/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("renders canvas-only [embed] shortcodes inside the assistant bubble", () => {
@@ -950,41 +1189,22 @@ describe("grouped chat rendering", () => {
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {
     const container = document.createElement("div");
     const renderCanvas = (params: { embedSandboxMode?: "trusted"; suffix: string }) =>
-      renderBuiltMessageGroups(
+      renderMessageGroups(
         container,
-        {
-          showToolCalls: false,
-          messages: [
+        [
+          createMessageGroup(
             {
               id: `assistant-canvas-inline-${params.suffix}`,
               role: "assistant",
-              content: [{ type: "text", text: "Inline canvas result." }],
+              content: [
+                { type: "text", text: "Inline canvas result." },
+                createAssistantCanvasBlock({ suffix: params.suffix }),
+              ],
               timestamp: Date.now(),
             },
-          ],
-          toolMessages: [
-            {
-              id: `tool-artifact-inline-${params.suffix}`,
-              role: "tool",
-              toolCallId: `call-artifact-inline-${params.suffix}`,
-              toolName: "canvas_render",
-              content: JSON.stringify({
-                kind: "canvas",
-                view: {
-                  backend: "canvas",
-                  id: `cv_inline_${params.suffix}`,
-                  url: `/__openclaw__/canvas/documents/cv_inline_${params.suffix}/index.html`,
-                  title: "Inline demo",
-                  preferred_height: 360,
-                },
-                presentation: {
-                  target: "assistant_message",
-                },
-              }),
-              timestamp: Date.now() + 1,
-            },
-          ],
-        },
+            "assistant",
+          ),
+        ],
         {
           embedSandboxMode: params.embedSandboxMode ?? "scripts",
         },
@@ -1009,19 +1229,22 @@ describe("grouped chat rendering", () => {
 
   it("renders assistant_message canvas results in the assistant bubble even when tool rows are visible", () => {
     const container = document.createElement("div");
-    renderBuiltMessageGroups(
+    renderMessageGroups(
       container,
-      {
-        showToolCalls: true,
-        messages: [
+      [
+        createMessageGroup(
           {
             id: "assistant-canvas-inline-visible",
             role: "assistant",
-            content: [{ type: "text", text: "Inline canvas result." }],
+            content: [
+              { type: "text", text: "Inline canvas result." },
+              createAssistantCanvasBlock({ suffix: "visible" }),
+            ],
             timestamp: Date.now(),
           },
-        ],
-        toolMessages: [
+          "assistant",
+        ),
+        createMessageGroup(
           {
             id: "tool-artifact-inline-visible",
             role: "tool",
@@ -1042,8 +1265,9 @@ describe("grouped chat rendering", () => {
             }),
             timestamp: Date.now() + 1,
           },
-        ],
-      },
+          "tool",
+        ),
+      ],
       {
         isToolMessageExpanded: () => true,
       },
@@ -1062,19 +1286,19 @@ describe("grouped chat rendering", () => {
   it("opens generic tool details instead of a canvas preview from tool rows", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
-    renderBuiltMessageGroups(
+    renderMessageGroups(
       container,
-      {
-        showToolCalls: true,
-        messages: [
+      [
+        createMessageGroup(
           {
             id: "assistant-canvas-sidebar",
             role: "assistant",
             content: [{ type: "text", text: "Sidebar canvas result." }],
             timestamp: Date.now(),
           },
-        ],
-        toolMessages: [
+          "assistant",
+        ),
+        createMessageGroup(
           {
             id: "tool-artifact-sidebar",
             role: "tool",
@@ -1095,8 +1319,9 @@ describe("grouped chat rendering", () => {
             }),
             timestamp: Date.now() + 1,
           },
-        ],
-      },
+          "tool",
+        ),
+      ],
       {
         isToolExpanded: () => true,
         isToolMessageExpanded: () => true,

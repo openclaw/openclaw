@@ -10,6 +10,7 @@ import { findNormalizedProviderValue, normalizeModelRef } from "../agents/model-
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveModelWithRegistry } from "../agents/pi-embedded-runner/model.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
@@ -110,6 +111,38 @@ function pickStringHeaders(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return Boolean(value) && typeof (value as { then?: unknown }).then === "function";
+}
+
+function composeImageDescriptionPayloadHandlers(
+  first: ProviderStreamOptions["onPayload"] | undefined,
+  second: ProviderStreamOptions["onPayload"] | undefined,
+): ProviderStreamOptions["onPayload"] | undefined {
+  if (!first) {
+    return second;
+  }
+  if (!second) {
+    return first;
+  }
+  return (payload, payloadModel) => {
+    const runSecond = (firstResult: unknown) => {
+      const nextPayload = firstResult === undefined ? payload : firstResult;
+      const secondResult = second(nextPayload, payloadModel);
+      const coerceResult = (resolvedSecond: unknown) =>
+        resolvedSecond === undefined ? firstResult : resolvedSecond;
+      return isPromiseLike(secondResult)
+        ? Promise.resolve(secondResult).then(coerceResult)
+        : coerceResult(secondResult);
+    };
+    const firstResult = first(payload, payloadModel);
+    if (isPromiseLike(firstResult)) {
+      return Promise.resolve(firstResult).then(runSecond);
+    }
+    return runSecond(firstResult);
+  };
+}
+
 async function resolveImageRuntime(params: {
   cfg: ImageDescriptionRequest["cfg"];
   agentDir: string;
@@ -198,21 +231,41 @@ async function resolveImageRuntime(params: {
 function buildImageContext(
   prompt: string,
   images: Array<{ buffer: Buffer; mime?: string }>,
+  opts?: { promptInUserContent?: boolean },
 ): Context {
+  const imageContent = images.map((image) => ({
+    type: "image" as const,
+    data: image.buffer.toString("base64"),
+    mimeType: image.mime ?? "image/jpeg",
+  }));
+  const content = opts?.promptInUserContent
+    ? [{ type: "text" as const, text: prompt }, ...imageContent]
+    : imageContent;
+
   return {
-    systemPrompt: prompt,
+    ...(opts?.promptInUserContent ? {} : { systemPrompt: prompt }),
     messages: [
       {
         role: "user",
-        content: images.map((image) => ({
-          type: "image" as const,
-          data: image.buffer.toString("base64"),
-          mimeType: image.mime ?? "image/jpeg",
-        })),
+        content,
         timestamp: Date.now(),
       },
     ],
   };
+}
+
+function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
+  const capabilities = resolveProviderRequestCapabilities({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    capability: "image",
+    transport: "media-understanding",
+  });
+  return (
+    capabilities.endpointClass === "openrouter" ||
+    (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
+  );
 }
 
 async function describeImagesWithMinimax(params: {
@@ -277,8 +330,9 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   };
 }
 
-export async function describeImagesWithModel(
+async function describeImagesWithModelInternal(
   params: ImagesDescriptionRequest,
+  options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
   let apiKey: string;
@@ -312,7 +366,15 @@ export async function describeImagesWithModel(
     });
   }
 
-  const context = buildImageContext(prompt, params.images);
+  registerProviderStreamForModel({
+    model,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  });
+
+  const context = buildImageContext(prompt, params.images, {
+    promptInUserContent: shouldPlaceImagePromptInUserContent(model),
+  });
   const controller = new AbortController();
   const timeout =
     typeof params.timeoutMs === "number" &&
@@ -322,13 +384,15 @@ export async function describeImagesWithModel(
       : undefined;
 
   const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512);
-  const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) =>
-    await complete(model, context, {
+  const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
+    const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
+    return await complete(model, context, {
       apiKey,
       maxTokens,
       signal: controller.signal,
-      ...(onPayload ? { onPayload } : {}),
+      ...(payloadHandler ? { onPayload: payloadHandler } : {}),
     });
+  };
 
   try {
     const message = await completeImage();
@@ -357,6 +421,19 @@ export async function describeImagesWithModel(
   }
 }
 
+export async function describeImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<ImagesDescriptionResult> {
+  return await describeImagesWithModelInternal(params);
+}
+
+export async function describeImagesWithModelPayloadTransform(
+  params: ImagesDescriptionRequest,
+  onPayload: ProviderStreamOptions["onPayload"],
+): Promise<ImagesDescriptionResult> {
+  return await describeImagesWithModelInternal(params, { onPayload });
+}
+
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
@@ -379,4 +456,32 @@ export async function describeImageWithModel(
     agentDir: params.agentDir,
     cfg: params.cfg,
   });
+}
+
+export async function describeImageWithModelPayloadTransform(
+  params: ImageDescriptionRequest,
+  onPayload: ProviderStreamOptions["onPayload"],
+): Promise<ImageDescriptionResult> {
+  return await describeImagesWithModelPayloadTransform(
+    {
+      images: [
+        {
+          buffer: params.buffer,
+          fileName: params.fileName,
+          mime: params.mime,
+        },
+      ],
+      model: params.model,
+      provider: params.provider,
+      prompt: params.prompt,
+      maxTokens: params.maxTokens,
+      timeoutMs: params.timeoutMs,
+      profile: params.profile,
+      preferredProfile: params.preferredProfile,
+      authStore: params.authStore,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+    },
+    onPayload,
+  );
 }
