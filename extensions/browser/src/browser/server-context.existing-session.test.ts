@@ -105,7 +105,7 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
       "chrome-live",
       "/tmp/brave-profile",
-      { ephemeral: true },
+      { ephemeral: true, timeoutMs: 300 },
     );
     expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith("chrome-live", "/tmp/brave-profile", {
       ephemeral: true,
