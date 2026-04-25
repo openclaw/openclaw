@@ -434,8 +434,16 @@ export function resolveContextTokensForModel(params: {
   const explicitProvider = params.provider?.trim();
   if (ref) {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
-    if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
-      return ANTHROPIC_CONTEXT_1M_TOKENS;
+    if (isAnthropic1MModel(ref.provider, ref.model)) {
+      // Respect explicit context1m: false opt-out (e.g. for OAuth/legacy
+      // token auth where Anthropic strips the context-1m beta header).
+      // context1m: true is a no-op now since isAnthropic1MModel already
+      // returns true; absence of the flag no longer prevents 1M context.
+      if (modelParams?.context1m === false) {
+        // Fall through to configured/discovered window
+      } else {
+        return ANTHROPIC_CONTEXT_1M_TOKENS;
+      }
     }
     // Only do the config direct scan when the caller explicitly passed a
     // provider. When provider is inferred from a slash in the model string

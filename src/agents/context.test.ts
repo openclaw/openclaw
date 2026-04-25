@@ -210,7 +210,7 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
-  it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
+  it("returns 1M context for Anthropic opus/sonnet-4 models", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -240,7 +240,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("does not force 1M context when context1m is not enabled", () => {
+  it("returns 1M context for opus/sonnet-4 even without context1m flag", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -267,8 +267,38 @@ describe("resolveContextTokensForModel", () => {
       allowAsyncLoad: false,
     });
 
-    expect(result).toBe(200_000);
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
+
+  it("respects context1m: false opt-out for opus/sonnet-4", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { context1m: false },
+            },
+          },
+        },
+      },
+    },
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    fallbackContextTokens: 200_000,
+    allowAsyncLoad: false,
+  });
+
+  expect(result).toBe(200_000);
+});
 
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {
     const result = resolveContextTokensForModel({
