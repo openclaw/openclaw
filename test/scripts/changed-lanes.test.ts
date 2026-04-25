@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { detectChangedLanes } from "../../scripts/changed-lanes.mjs";
 import {
   CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  createChangedCheckChildEnv,
   createChangedCheckPlan,
   createChangedCheckVitestEnv,
 } from "../../scripts/check-changed.mjs";
@@ -108,6 +109,15 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.find((command) => command.args[0] === "tsgo:core")?.env).toMatchObject({
       OPENCLAW_LOCAL_CHECK: "1",
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("marks changed-check children as covered by the parent heavy-check lock", () => {
+    expect(createChangedCheckChildEnv({ PATH: "/usr/bin" })).toMatchObject({
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       PATH: "/usr/bin",
     });
   });

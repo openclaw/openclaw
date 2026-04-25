@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { DEFAULT_ASSISTANT_AVATAR, type AssistantIdentity } from "../assistant-identity.ts";
+import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -15,12 +15,9 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../types/chat-types.ts";
-import {
-  resolveLocalUserAvatarText,
-  resolveLocalUserAvatarUrl,
-  resolveLocalUserName,
-} from "../user-identity.ts";
-import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
+import { resolveLocalUserName } from "../user-identity.ts";
+export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
+import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -265,7 +262,7 @@ export function renderReadingIndicatorGroup(
 ) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, undefined, basePath, authToken)}
+      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -289,7 +286,7 @@ export function renderStreamingGroup(
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, undefined, basePath, authToken)}
+      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -365,7 +362,7 @@ export function renderMessageGroup(
 
   return html`
     <div class="chat-group ${roleClass}">
-      ${renderAvatar(
+      ${renderChatAvatar(
         group.role,
         {
           name: assistantName,
@@ -672,142 +669,6 @@ function renderTtsButton(group: MessageGroup) {
       ${icons.volume2}
     </button>
   `;
-}
-
-function renderAvatar(
-  role: string,
-  assistant?: Pick<AssistantIdentity, "name" | "avatar">,
-  user?: { name?: string | null; avatar?: string | null },
-  basePath?: string,
-  authToken?: string | null,
-) {
-  const normalized = normalizeRoleForGrouping(role);
-  const assistantName = assistant?.name?.trim() || "Assistant";
-  const assistantAvatar = assistant?.avatar?.trim() || "";
-  const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
-  const userName = resolveLocalUserName(user);
-  const userAvatarUrl = resolveLocalUserAvatarUrl(user);
-  const userAvatarText = resolveLocalUserAvatarText(user);
-  const initial =
-    normalized === "user"
-      ? html`
-          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-            <circle cx="12" cy="8" r="4" />
-            <path d="M20 21a8 8 0 1 0-16 0" />
-          </svg>
-        `
-      : normalized === "assistant"
-        ? html`
-            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-              <path d="M12 2l2.4 7.2H22l-6 4.8 2.4 7.2L12 16l-6.4 5.2L8 14 2 9.2h7.6z" />
-            </svg>
-          `
-        : normalized === "tool"
-          ? html`
-              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-                <path
-                  d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53a7.76 7.76 0 0 0 .07-1 7.76 7.76 0 0 0-.07-.97l2.11-1.63a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.15 7.15 0 0 0-1.69-.98l-.38-2.65A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42l-.38 2.65a7.15 7.15 0 0 0-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.49.49 0 0 0 .12.64L4.57 11a7.9 7.9 0 0 0 0 1.94l-2.11 1.69a.49.49 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1c.52.4 1.08.72 1.69.98l.38 2.65c.05.24.26.42.49.42h4c.23 0 .44-.18.49-.42l.38-2.65a7.15 7.15 0 0 0 1.69-.98l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.49.49 0 0 0-.12-.64z"
-                />
-              </svg>
-            `
-          : html`
-              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-                <circle cx="12" cy="12" r="10" />
-                <text
-                  x="12"
-                  y="16.5"
-                  text-anchor="middle"
-                  font-size="14"
-                  font-weight="600"
-                  fill="var(--bg, #fff)"
-                >
-                  ?
-                </text>
-              </svg>
-            `;
-  const className =
-    normalized === "user"
-      ? "user"
-      : normalized === "assistant"
-        ? "assistant"
-        : normalized === "tool"
-          ? "tool"
-          : "other";
-
-  if (normalized === "user" && userAvatarUrl) {
-    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
-  }
-
-  if (normalized === "user" && userAvatarText) {
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
-      ${userAvatarText}
-    </div>`;
-  }
-
-  if (assistantAvatar && normalized === "assistant") {
-    if (isAvatarUrl(assistantAvatar)) {
-      if (authToken?.trim() && assistantAvatar.startsWith("/")) {
-        return html`<img
-          class="chat-avatar ${className} chat-avatar--logo"
-          src="${agentLogoUrl(basePath ?? "")}"
-          alt="${assistantName}"
-        />`;
-      }
-      return html`<img
-        class="chat-avatar ${className}"
-        src="${assistantAvatar}"
-        alt="${assistantName}"
-      />`;
-    }
-    if (assistantAvatarText) {
-      return html`<div class="chat-avatar ${className}" aria-label="${assistantName}">
-        ${assistantAvatarText}
-      </div>`;
-    }
-    return html`<img
-      class="chat-avatar ${className} chat-avatar--logo"
-      src="${agentLogoUrl(basePath ?? "")}"
-      alt="${assistantName}"
-    />`;
-  }
-
-  /* Assistant with no custom avatar: use logo when basePath available */
-  if (normalized === "assistant" && basePath) {
-    const logoUrl = agentLogoUrl(basePath);
-    return html`<img
-      class="chat-avatar ${className} chat-avatar--logo"
-      src="${logoUrl}"
-      alt="${assistantName}"
-    />`;
-  }
-
-  return html`<div class="chat-avatar ${className}">${initial}</div>`;
-}
-
-function isAvatarUrl(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
-}
-
-const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
-
-export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
-    return null;
-  }
-  if (isAvatarUrl(trimmed)) {
-    return null;
-  }
-  if (
-    trimmed.length > 8 ||
-    /\s/.test(trimmed) ||
-    /[\\/.:]/.test(trimmed) ||
-    UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
-  ) {
-    return null;
-  }
-  return trimmed;
 }
 
 function resolveRenderableMessageImages(

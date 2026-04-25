@@ -37,7 +37,8 @@ Other common Linux launch failures:
   `WAYLAND_DISPLAY` are both unset. If you set `OPENCLAW_BROWSER_HEADLESS=0`,
   `browser.headless: false`, or `browser.profiles.<name>.headless: false`,
   remove that headed override, set `OPENCLAW_BROWSER_HEADLESS=1`, start `Xvfb`,
-  or run OpenClaw in a real desktop session.
+  run `openclaw browser start --headless` for a one-shot managed launch, or run
+  OpenClaw in a real desktop session.
 
 ### Solution 1: Install Google Chrome (Recommended)
 
@@ -124,15 +125,23 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Config Reference
 
-| Option                      | Description                                                          | Default                                                     |
-| --------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `browser.enabled`           | Enable browser control                                               | `true`                                                      |
-| `browser.executablePath`    | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers default browser when Chromium-based) |
-| `browser.headless`          | Run without GUI                                                      | `false`                                                     |
-| `OPENCLAW_BROWSER_HEADLESS` | Per-process override for local managed browser headless mode         | unset                                                       |
-| `browser.noSandbox`         | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                     |
-| `browser.attachOnly`        | Don't launch browser, only attach to existing                        | `false`                                                     |
-| `browser.cdpPort`           | Chrome DevTools Protocol port                                        | `18800`                                                     |
+| Option                           | Description                                                          | Default                                                     |
+| -------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `browser.enabled`                | Enable browser control                                               | `true`                                                      |
+| `browser.executablePath`         | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers default browser when Chromium-based) |
+| `browser.headless`               | Run without GUI                                                      | `false`                                                     |
+| `OPENCLAW_BROWSER_HEADLESS`      | Per-process override for local managed browser headless mode         | unset                                                       |
+| `browser.noSandbox`              | Add `--no-sandbox` flag (needed for some Linux setups)               | `false`                                                     |
+| `browser.attachOnly`             | Don't launch browser, only attach to existing                        | `false`                                                     |
+| `browser.cdpPort`                | Chrome DevTools Protocol port                                        | `18800`                                                     |
+| `browser.localLaunchTimeoutMs`   | Local managed Chrome discovery timeout                               | `15000`                                                     |
+| `browser.localCdpReadyTimeoutMs` | Local managed post-launch CDP readiness timeout                      | `8000`                                                      |
+
+On Raspberry Pi, older VPS hosts, or slow storage, raise
+`browser.localLaunchTimeoutMs` when Chrome needs more time to expose its CDP HTTP
+endpoint. Raise `browser.localCdpReadyTimeoutMs` when launch succeeds but
+`openclaw browser start` still reports `not reachable after start`. Values are
+capped at 120000 ms.
 
 ### Problem: "No Chrome tabs found for profile=\"user\""
 

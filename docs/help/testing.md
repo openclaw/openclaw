@@ -63,6 +63,12 @@ When debugging real providers/models (requires real creds):
   - Runs Crestodian in a configless container with a fake Claude CLI on `PATH`
     and verifies the fuzzy planner fallback translates into an audited typed
     config write.
+- Crestodian first-run Docker smoke: `pnpm test:docker:crestodian-first-run`
+  - Starts from an empty OpenClaw state dir, routes bare `openclaw` to
+    Crestodian, applies setup/model/agent/Discord plugin + SecretRef writes,
+    validates config, and verifies audit entries. The same Ring 0 setup path is
+    also covered in QA Lab by
+    `pnpm openclaw qa suite --scenario crestodian-ring-zero-setup`.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
   `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`
@@ -582,7 +588,7 @@ These Docker runners split into two buckets:
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
-- ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`)
+- ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`; covers Claude, Codex, and Gemini by default, with strict OpenCode coverage via `pnpm test:docker:live-acp-bind:opencode`)
 - CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
 - Codex app-server harness smoke: `pnpm test:docker:live-codex-harness` (script: `scripts/test-live-codex-harness-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)

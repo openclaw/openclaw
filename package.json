@@ -1130,13 +1130,13 @@
       "types": "./dist/plugin-sdk/provider-usage.d.ts",
       "default": "./dist/plugin-sdk/provider-usage.js"
     },
-    "./plugin-sdk/web-content-extractor": {
-      "types": "./dist/plugin-sdk/web-content-extractor.d.ts",
-      "default": "./dist/plugin-sdk/web-content-extractor.js"
-    },
     "./plugin-sdk/document-extractor": {
       "types": "./dist/plugin-sdk/document-extractor.d.ts",
       "default": "./dist/plugin-sdk/document-extractor.js"
+    },
+    "./plugin-sdk/web-content-extractor": {
+      "types": "./dist/plugin-sdk/web-content-extractor.d.ts",
+      "default": "./dist/plugin-sdk/web-content-extractor.js"
     },
     "./plugin-sdk/provider-web-fetch-contract": {
       "types": "./dist/plugin-sdk/provider-web-fetch-contract.d.ts",
@@ -1489,6 +1489,7 @@
     "test:docker:live-acp-bind:claude": "OPENCLAW_LIVE_ACP_BIND_AGENT=claude bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:codex": "OPENCLAW_LIVE_ACP_BIND_AGENT=codex bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:gemini": "OPENCLAW_LIVE_ACP_BIND_AGENT=gemini bash scripts/test-live-acp-bind-docker.sh",
+    "test:docker:live-acp-bind:opencode": "OPENCLAW_LIVE_ACP_BIND_AGENT=opencode OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1 bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-build": "bash scripts/test-live-build-docker.sh",
     "test:docker:live-cli-backend": "bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:claude": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 bash scripts/test-live-cli-backend-docker.sh",
@@ -1636,7 +1637,6 @@
     "osc-progress": "^0.3.0",
     "proxy-agent": "^8.0.1",
     "semver": "7.7.4",
-    "sharp": "^0.34.5",
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",

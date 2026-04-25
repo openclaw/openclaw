@@ -275,7 +275,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
     - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
-    - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
+    - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
 
     Tool-progress preview updates are the short "Working..." lines shown while tools run, for example command execution, file reads, planning updates, or patch summaries. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later. To keep the edited preview for answer text but hide tool-progress lines, set:
 

@@ -634,6 +634,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
           },
+          localLaunchTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 120000,
+            title: "Browser Local Launch Timeout (ms)",
+            description:
+              "Timeout in milliseconds for locally launched managed Chrome to expose its CDP HTTP endpoint after process start. Raise this on slow single-board computers or older hosts.",
+          },
+          localCdpReadyTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 120000,
+            title: "Browser Local CDP Ready Timeout (ms)",
+            description:
+              "Timeout in milliseconds for a locally launched managed browser to finish CDP websocket readiness after the process is discovered. Raise this when Chrome starts but browser start still reports CDP not reachable.",
+          },
           actionTimeoutMs: {
             type: "integer",
             exclusiveMinimum: 0,
@@ -763,6 +779,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Browser Profile User Data Dir",
                   description:
                     "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node.",
+                },
+                mcpCommand: {
+                  type: "string",
+                  title: "Browser Profile Chrome MCP Command",
+                  description:
+                    "Per-profile Chrome DevTools MCP command for existing-session attachment. Defaults to npx.",
+                },
+                mcpArgs: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                  title: "Browser Profile Chrome MCP Args",
+                  description:
+                    "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
                 },
                 driver: {
                   anyOf: [
@@ -3848,6 +3879,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       },
                     },
                     systemPromptArg: {
+                      type: "string",
+                    },
+                    systemPromptFileArg: {
                       type: "string",
                     },
                     systemPromptFileConfigArg: {
@@ -23977,6 +24011,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
       tags: ["performance"],
     },
+    "browser.localLaunchTimeoutMs": {
+      label: "Browser Local Launch Timeout (ms)",
+      help: "Timeout in milliseconds for locally launched managed Chrome to expose its CDP HTTP endpoint after process start. Raise this on slow single-board computers or older hosts.",
+      tags: ["performance"],
+    },
+    "browser.localCdpReadyTimeoutMs": {
+      label: "Browser Local CDP Ready Timeout (ms)",
+      help: "Timeout in milliseconds for a locally launched managed browser to finish CDP websocket readiness after the process is discovered. Raise this when Chrome starts but browser start still reports CDP not reachable.",
+      tags: ["performance"],
+    },
     "browser.color": {
       label: "Browser Accent Color",
       help: "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
@@ -24030,6 +24074,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.profiles.*.userDataDir": {
       label: "Browser Profile User Data Dir",
       help: "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node.",
+      tags: ["storage"],
+    },
+    "browser.profiles.*.mcpCommand": {
+      label: "Browser Profile Chrome MCP Command",
+      help: "Per-profile Chrome DevTools MCP command for existing-session attachment. Defaults to npx.",
+      tags: ["storage"],
+    },
+    "browser.profiles.*.mcpArgs": {
+      label: "Browser Profile Chrome MCP Args",
+      help: "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
       tags: ["storage"],
     },
     "browser.profiles.*.driver": {

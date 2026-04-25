@@ -260,6 +260,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
   "browser.actionTimeoutMs":
     "Default timeout in milliseconds for browser act requests before the client gives up waiting. Raise this when healthy waits or UI interactions exceed the default request budget.",
+  "browser.localLaunchTimeoutMs":
+    "Timeout in milliseconds for locally launched managed Chrome to expose its CDP HTTP endpoint after process start. Raise this on slow single-board computers or older hosts.",
+  "browser.localCdpReadyTimeoutMs":
+    "Timeout in milliseconds for a locally launched managed browser to finish CDP websocket readiness after the process is discovered. Raise this when Chrome starts but browser start still reports CDP not reachable.",
   "browser.color":
     "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
   "browser.executablePath":
@@ -282,6 +286,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
   "browser.profiles.*.userDataDir":
     "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node.",
+  "browser.profiles.*.mcpCommand":
+    "Per-profile Chrome DevTools MCP command for existing-session attachment. Defaults to npx.",
+  "browser.profiles.*.mcpArgs":
+    "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
   "browser.profiles.*.headless":

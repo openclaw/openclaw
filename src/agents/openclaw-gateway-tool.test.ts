@@ -98,6 +98,10 @@ describe("gateway tool", () => {
 
   it("schedules SIGUSR1 restart", async () => {
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const restartSignalKillCalls = () =>
+      kill.mock.calls.filter(
+        ([pid, signal]) => pid === process.pid && (signal === "SIGUSR1" || signal === undefined),
+      );
     const sigusr1Handler = vi.fn();
     process.on("SIGUSR1", sigusr1Handler);
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
@@ -119,13 +123,13 @@ describe("gateway tool", () => {
             delayMs: 0,
           });
 
-          expect(kill).not.toHaveBeenCalled();
+          expect(restartSignalKillCalls()).toHaveLength(0);
           expect(sigusr1Handler).not.toHaveBeenCalled();
           await vi.waitFor(() => expect(sigusr1Handler).toHaveBeenCalledTimes(1), {
             interval: 1,
             timeout: 1_000,
           });
-          expect(kill).not.toHaveBeenCalled();
+          expect(restartSignalKillCalls()).toHaveLength(0);
 
           const sentinelPath = path.join(stateDir, "restart-sentinel.json");
           const raw = await fs.readFile(sentinelPath, "utf-8");

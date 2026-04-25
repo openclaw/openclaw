@@ -396,6 +396,8 @@ export const OpenClawSchema = z
         cdpUrl: z.string().optional(),
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
         remoteCdpHandshakeTimeoutMs: z.number().int().nonnegative().optional(),
+        localLaunchTimeoutMs: z.number().int().positive().max(120_000).optional(),
+        localCdpReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
         actionTimeoutMs: z.number().int().positive().optional(),
         color: z.string().optional(),
         executablePath: z.string().optional(),
@@ -423,6 +425,8 @@ export const OpenClawSchema = z
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
                 userDataDir: z.string().optional(),
+                mcpCommand: z.string().optional(),
+                mcpArgs: z.array(z.string()).optional(),
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),

@@ -12,6 +12,7 @@ describe("live-agent-probes", () => {
     expect(normalizeLiveAgentFamily("claude-cli")).toBe("claude");
     expect(normalizeLiveAgentFamily("codex")).toBe("codex");
     expect(normalizeLiveAgentFamily("google-gemini-cli")).toBe("gemini");
+    expect(normalizeLiveAgentFamily("opencode-ai")).toBe("opencode");
   });
 
   it("accepts only cat for the shared image probe reply", () => {

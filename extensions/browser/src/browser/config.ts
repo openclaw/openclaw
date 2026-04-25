@@ -24,6 +24,8 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
+  DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
   DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
   DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION,
   DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES,
@@ -39,6 +41,8 @@ export {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
+  DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -69,6 +73,8 @@ export type ResolvedBrowserConfig = {
   cdpIsLoopback: boolean;
   remoteCdpTimeoutMs: number;
   remoteCdpHandshakeTimeoutMs: number;
+  localLaunchTimeoutMs: number;
+  localCdpReadyTimeoutMs: number;
   actionTimeoutMs: number;
   color: string;
   executablePath?: string;
@@ -97,6 +103,8 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   userDataDir?: string;
+  mcpCommand?: string;
+  mcpArgs?: string[];
   color: string;
   driver: "openclaw" | "existing-session";
   executablePath?: string;
@@ -106,9 +114,11 @@ export type ResolvedBrowserProfile = {
 };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
+const MAX_BROWSER_STARTUP_TIMEOUT_MS = 120_000;
 export const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
 
 export type ManagedBrowserHeadlessSource =
+  | "request"
   | "env"
   | "profile"
   | "config"
@@ -118,6 +128,12 @@ export type ManagedBrowserHeadlessSource =
 export type ManagedBrowserHeadlessMode = {
   headless: boolean;
   source: ManagedBrowserHeadlessSource;
+};
+
+export type ManagedBrowserHeadlessOptions = {
+  headlessOverride?: boolean;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 };
 
 function normalizeHexColor(raw: string | undefined): string {
@@ -135,6 +151,14 @@ function normalizeHexColor(raw: string | undefined): string {
 function normalizeTimeoutMs(raw: number | undefined, fallback: number): number {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value < 0 ? fallback : value;
+}
+
+function normalizeStartupTimeoutMs(raw: number | undefined, fallback: number): number {
+  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
+  if (value <= 0) {
+    return fallback;
+  }
+  return Math.min(value, MAX_BROWSER_STARTUP_TIMEOUT_MS);
 }
 
 function normalizeNonNegativeInteger(raw: number | undefined, fallback: number): number {
@@ -156,6 +180,37 @@ function normalizeExecutablePath(raw: string | undefined): string | undefined {
     return value;
   }
   return path.resolve(value.replace(/^~(?=$|[\\/])/, os.homedir()));
+}
+
+function normalizeExistingSessionCdpUrl(
+  raw: string | undefined,
+  profileName: string,
+): { cdpUrl: string; cdpHost: string; cdpIsLoopback: boolean } | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`browser.profiles.${profileName}.cdpUrl must be a valid URL.`);
+  }
+
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
+    throw new Error(`browser.profiles.${profileName}.cdpUrl must use http, https, ws, or wss.`);
+  }
+
+  const normalized =
+    parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.toString().replace(/\/$/, "")
+      : parsed.toString();
+  return {
+    cdpUrl: normalized,
+    cdpHost: parsed.hostname,
+    cdpIsLoopback: isLoopbackHost(parsed.hostname),
+  };
 }
 
 function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
@@ -290,6 +345,14 @@ export function resolveBrowserConfig(
     cfg?.remoteCdpHandshakeTimeoutMs,
     Math.max(2000, remoteCdpTimeoutMs * 2),
   );
+  const localLaunchTimeoutMs = normalizeStartupTimeoutMs(
+    cfg?.localLaunchTimeoutMs,
+    DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS,
+  );
+  const localCdpReadyTimeoutMs = normalizeStartupTimeoutMs(
+    cfg?.localCdpReadyTimeoutMs,
+    DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS,
+  );
   const actionTimeoutMs = normalizeTimeoutMs(
     cfg?.actionTimeoutMs,
     DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
@@ -375,6 +438,8 @@ export function resolveBrowserConfig(
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
     remoteCdpTimeoutMs,
     remoteCdpHandshakeTimeoutMs,
+    localLaunchTimeoutMs,
+    localCdpReadyTimeoutMs,
     actionTimeoutMs,
     color: defaultColor,
     executablePath,
@@ -410,13 +475,16 @@ export function resolveProfile(
   const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
 
   if (driver === "existing-session") {
+    const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);
     return {
       name: profileName,
       cdpPort: 0,
-      cdpUrl: "",
-      cdpHost: "",
-      cdpIsLoopback: true,
+      cdpUrl: existingSessionCdp?.cdpUrl ?? "",
+      cdpHost: existingSessionCdp?.cdpHost ?? "",
+      cdpIsLoopback: existingSessionCdp?.cdpIsLoopback ?? true,
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
+      mcpCommand: normalizeOptionalString(profile.mcpCommand),
+      mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
       color: profile.color,
       driver,
       executablePath,
@@ -465,13 +533,14 @@ export function resolveProfile(
 export function resolveManagedBrowserHeadlessMode(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-  } = {},
+  params: ManagedBrowserHeadlessOptions = {},
 ): ManagedBrowserHeadlessMode {
   if (!isLocalManagedProfile(profile)) {
     return { headless: profile.headless, source: profile.headlessSource ?? "default" };
+  }
+
+  if (typeof params.headlessOverride === "boolean") {
+    return { headless: params.headlessOverride, source: "request" };
   }
 
   const env = params.env ?? process.env;
@@ -496,10 +565,7 @@ export function resolveManagedBrowserHeadlessMode(
 export function getManagedBrowserMissingDisplayError(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-  } = {},
+  params: ManagedBrowserHeadlessOptions = {},
 ): string | null {
   if (!isLocalManagedProfile(profile)) {
     return null;
@@ -516,11 +582,13 @@ export function getManagedBrowserMissingDisplayError(
   }
 
   const sourceHint =
-    mode.source === "env"
-      ? `${OPENCLAW_BROWSER_HEADLESS_ENV}=0`
-      : mode.source === "profile"
-        ? `browser.profiles.${profile.name}.headless=false`
-        : "browser.headless=false";
+    mode.source === "request"
+      ? "request override"
+      : mode.source === "env"
+        ? `${OPENCLAW_BROWSER_HEADLESS_ENV}=0`
+        : mode.source === "profile"
+          ? `browser.profiles.${profile.name}.headless=false`
+          : "browser.headless=false";
   return (
     `Headed browser start requested for profile "${profile.name}" via ${sourceHint}, ` +
     "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +

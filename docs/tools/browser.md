@@ -129,6 +129,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
+    localLaunchTimeoutMs: 15000, // local managed Chrome discovery timeout (ms)
+    localCdpReadyTimeoutMs: 8000, // local managed post-launch CDP readiness timeout (ms)
     actionTimeoutMs: 60000, // default browser act timeout (ms)
     tabCleanup: {
       enabled: true, // default: true
@@ -174,6 +176,11 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 - Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). Overriding `gateway.port` or `OPENCLAW_GATEWAY_PORT` shifts the derived ports in the same family.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for remote CDP. `cdpUrl` defaults to the managed local CDP port when unset.
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP HTTP reachability checks; `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket handshakes.
+- `localLaunchTimeoutMs` is the budget for a locally launched managed Chrome
+  process to expose its CDP HTTP endpoint. `localCdpReadyTimeoutMs` is the
+  follow-up budget for CDP websocket readiness after the process is discovered.
+  Raise these on Raspberry Pi, low-end VPS, or older hardware where Chromium
+  starts slowly. Values are capped at 120000 ms.
 - `actionTimeoutMs` is the default budget for browser `act` requests when the caller does not pass `timeoutMs`. The client transport adds a small slack window so long waits can finish instead of timing out at the HTTP boundary.
 - `tabCleanup` is best-effort cleanup for tabs opened by primary-agent browser sessions. Subagent, cron, and ACP lifecycle cleanup still closes their explicit tracked tabs at session end; primary sessions keep active tabs reusable, then close idle or excess tracked tabs in the background.
 
@@ -194,14 +201,20 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 - `attachOnly: true` means never launch a local browser; only attach if one is already running.
 - `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
+- `POST /start?headless=true` and `openclaw browser start --headless` request a
+  one-shot headless launch for local managed profiles without rewriting
+  `browser.headless` or profile config. Existing-session, attach-only, and
+  remote CDP profiles reject the override because OpenClaw does not launch those
+  browser processes.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
   default to headless automatically when neither the environment nor profile/global
   config explicitly chooses headed mode. `openclaw browser status --json`
   reports `headlessSource` as `env`, `profile`, `config`,
-  `linux-display-fallback`, or `default`.
+  `request`, `linux-display-fallback`, or `default`.
 - `OPENCLAW_BROWSER_HEADLESS=1` forces local managed launches headless for the
-  current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode and returns
-  an actionable error on Linux hosts without a display server.
+  current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
+  starts and returns an actionable error on Linux hosts without a display server;
+  an explicit `start --headless` request still wins for that one launch.
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
@@ -533,6 +546,28 @@ Notes:
 - Existing-session can attach on the selected host or through a connected
   browser node. If Chrome lives elsewhere and no browser node is connected, use
   remote CDP or a node host instead.
+
+### Custom Chrome MCP launch
+
+Override the spawned Chrome DevTools MCP server per profile when the default
+`npx chrome-devtools-mcp@latest` flow is not what you want (offline hosts,
+pinned versions, vendored binaries):
+
+| Field        | What it does                                                                                                               |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                          |
+| `mcpArgs`    | Argument array passed verbatim to `mcpCommand`. Replaces the default `chrome-devtools-mcp@latest --autoConnect` arguments. |
+
+When `cdpUrl` is set on an existing-session profile, OpenClaw skips
+`--autoConnect` and forwards the endpoint to Chrome MCP automatically:
+
+- `http(s)://...` → `--browserUrl <url>` (DevTools HTTP discovery endpoint).
+- `ws(s)://...` → `--wsEndpoint <url>` (direct CDP WebSocket).
+
+Endpoint flags and `userDataDir` cannot be combined: when `cdpUrl` is set,
+`userDataDir` is ignored for Chrome MCP launch, since Chrome MCP attaches to
+the running browser behind the endpoint rather than opening a profile
+directory.
 
 <Accordion title="Existing-session feature limitations">
 

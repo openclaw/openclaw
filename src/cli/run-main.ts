@@ -68,7 +68,22 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
-  return resolveCliArgvInvocation(argv).isRootHelpInvocation;
+  return (
+    process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
+    resolveCliArgvInvocation(argv).isRootHelpInvocation
+  );
+}
+
+export function shouldUseBrowserHelpFastPath(argv: string[]): boolean {
+  if (process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "browser" &&
+    invocation.hasHelpOrVersion
+  );
 }
 
 export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
@@ -215,6 +230,13 @@ export async function runCli(argv: string[] = process.argv) {
         await outputRootHelp();
       }
       return;
+    }
+
+    if (shouldUseBrowserHelpFastPath(normalizedArgv)) {
+      const { outputPrecomputedBrowserHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedBrowserHelpText()) {
+        return;
+      }
     }
 
     if (shouldStartCrestodianForBareRoot(normalizedArgv)) {
