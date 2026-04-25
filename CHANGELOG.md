@@ -25,6 +25,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/replies: forward sanitized underlying agent failure details on external
+  channels instead of replacing unknown failures with a generic retry message.
+  Thanks @steipete.
 - Agents/TTS: preserve `[[audio_as_voice]]` directives on trusted text
   tool-result `MEDIA:` payloads so generated audio still delivers as a voice
   note. (#46535) Thanks @azade-c.
