@@ -1,3 +1,4 @@
+import net from "node:net";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { writeConfigFile } from "../config/config.js";
@@ -23,7 +24,9 @@ const NODE_CLIENT = {
 };
 
 async function openLanGatewayWs(params: { host: string; port: number }): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://${params.host}:${params.port}`);
+  const ws = new WebSocket(`ws://${params.host}:${params.port}`, {
+    localAddress: params.host,
+  });
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
@@ -46,10 +49,46 @@ async function openLanGatewayWs(params: { host: string; port: number }): Promise
   return ws;
 }
 
+async function canUseLanSelfConnect(host: string): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    let client: net.Socket | undefined;
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {});
+      socket.end("ok");
+    });
+    const done = (ok: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      client?.destroy();
+      server.close(() => resolve(ok));
+    };
+    const timer = setTimeout(() => done(false), 1_000);
+    server.once("error", () => done(false));
+    server.listen(0, "0.0.0.0", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        done(false);
+        return;
+      }
+      let sawData = false;
+      client = net.connect({ host, port: address.port, localAddress: host });
+      client.on("data", () => {
+        sawData = true;
+      });
+      client.once("error", () => done(false));
+      client.once("close", () => done(sawData));
+    });
+  });
+}
+
 describe("gateway trusted CIDR node pairing auto-approve", () => {
   test("stays disabled by default for a direct non-loopback node", async () => {
     const lanIp = pickPrimaryLanIPv4();
-    if (!lanIp) {
+    if (!lanIp || !(await canUseLanSelfConnect(lanIp))) {
       return;
     }
     const started = await startServer(TOKEN, { bind: "lan", controlUiEnabled: false });
@@ -82,7 +121,7 @@ describe("gateway trusted CIDR node pairing auto-approve", () => {
 
   test("auto-approves first-time node pairing from a matching direct non-loopback CIDR", async () => {
     const lanIp = pickPrimaryLanIPv4();
-    if (!lanIp) {
+    if (!lanIp || !(await canUseLanSelfConnect(lanIp))) {
       return;
     }
     await writeConfigFile({
