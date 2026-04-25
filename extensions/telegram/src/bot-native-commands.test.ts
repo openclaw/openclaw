@@ -193,7 +193,9 @@ describe("registerTelegramNativeCommands", () => {
     await handler(createPrivateCommandContext({ match: "" }));
 
     expect(deliverReplies).toHaveBeenCalled();
-    expect(deliverReplies.mock.calls.at(-1)?.[0]).toMatchObject({ replyToMode: "all" });
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({ replyToMode: "all" }),
+    );
   });
 
   it("normalizes hyphenated native command names for Telegram registration", async () => {
