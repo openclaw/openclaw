@@ -4,18 +4,18 @@
  * /files command lists all files the model has read/written/edited in the active session branch,
  * coalesced by path and sorted newest first. Selecting a file opens it in VS Code.
  */
-
+ 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { showPagedSelectList } from "./ui/paged-select";
-
+ 
 interface FileEntry {
   path: string;
   operations: Set<"read" | "write" | "edit">;
   lastTimestamp: number;
 }
-
+ 
 type FileToolName = "read" | "write" | "edit";
-
+ 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("files", {
     description: "Show files read/written/edited in this session",
@@ -24,19 +24,19 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("No UI available", "error");
         return;
       }
-
+ 
       // Get the current branch (path from leaf to root)
       const branch = ctx.sessionManager.getBranch();
-
+ 
       // First pass: collect tool calls (id -> {path, name}) from assistant messages
       const toolCalls = new Map<string, { path: string; name: FileToolName; timestamp: number }>();
-
+ 
       for (const entry of branch) {
         if (entry.type !== "message") {
           continue;
         }
         const msg = entry.message;
-
+ 
         if (msg.role === "assistant" && Array.isArray(msg.content)) {
           for (const block of msg.content) {
             if (block.type === "toolCall") {
@@ -51,25 +51,25 @@ export default function (pi: ExtensionAPI) {
           }
         }
       }
-
+ 
       // Second pass: match tool results to get the actual execution timestamp
       const fileMap = new Map<string, FileEntry>();
-
+ 
       for (const entry of branch) {
         if (entry.type !== "message") {
           continue;
         }
         const msg = entry.message;
-
+ 
         if (msg.role === "toolResult") {
           const toolCall = toolCalls.get(msg.toolCallId);
           if (!toolCall) {
             continue;
           }
-
+ 
           const { path, name } = toolCall;
           const timestamp = msg.timestamp;
-
+ 
           const existing = fileMap.get(path);
           if (existing) {
             existing.operations.add(name);
@@ -85,17 +85,17 @@ export default function (pi: ExtensionAPI) {
           }
         }
       }
-
+ 
       if (fileMap.size === 0) {
         ctx.ui.notify("No files read/written/edited in this session", "info");
         return;
       }
-
-      // Sort by most recent first
+ 
+      // Sort by most recent first (non-mutating)
       const files = Array.from(fileMap.values()).toSorted(
         (a, b) => b.lastTimestamp - a.lastTimestamp,
       );
-
+ 
       const openSelected = async (file: FileEntry): Promise<void> => {
         try {
           await pi.exec("code", ["-g", file.path], { cwd: ctx.cwd });
@@ -104,7 +104,7 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify(`Failed to open ${file.path}: ${message}`, "error");
         }
       };
-
+ 
       const items = files.map((file) => {
         const ops: string[] = [];
         if (file.operations.has("read")) {
@@ -117,16 +117,22 @@ export default function (pi: ExtensionAPI) {
           ops.push("E");
         }
         return {
-          value: file,
+          value: file.path,
           label: `${ops.join("")} ${file.path}`,
+          description: file.path,
         };
       });
+ 
+      // Map value -> FileEntry so we can look up on select
+      const fileByPath = new Map(files.map((file) => [file.path, file]));
+ 
       await showPagedSelectList({
-        ctx,
+        ctx: ctx as unknown as Parameters<typeof showPagedSelectList>[0]["ctx"],
         title: " Select file to open",
         items,
         onSelect: (item) => {
-          void openSelected(item.value as FileEntry);
+          const file = fileByPath.get(item.value as string);
+          if (file) void openSelected(file);
         },
       });
     },

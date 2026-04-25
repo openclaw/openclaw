@@ -7,7 +7,7 @@ import {
   SelectList,
   Text,
 } from "@mariozechner/pi-tui";
-
+ 
 type CustomUiContext = {
   ui: {
     custom: <T>(
@@ -27,7 +27,7 @@ type CustomUiContext = {
     ) => Promise<T>;
   };
 };
-
+ 
 export async function showPagedSelectList(params: {
   ctx: CustomUiContext;
   title: string;
@@ -36,13 +36,13 @@ export async function showPagedSelectList(params: {
 }): Promise<void> {
   await params.ctx.ui.custom<void>((tui, theme, _kb, done) => {
     const container = new Container();
-
+ 
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
     container.addChild(new Text(theme.fg("accent", theme.bold(params.title)), 0, 0));
-
+ 
     const visibleRows = Math.min(params.items.length, 15);
     let currentIndex = 0;
-
+ 
     const selectList = new SelectList(params.items, visibleRows, {
       selectedPrefix: (text) => theme.fg("accent", text),
       selectedText: (text) => text,
@@ -56,14 +56,17 @@ export async function showPagedSelectList(params: {
       currentIndex = params.items.indexOf(item);
     };
     container.addChild(selectList);
-
+ 
     container.addChild(
       new Text(theme.fg("dim", " ↑↓ navigate • ←→ page • enter open • esc close"), 0, 0),
     );
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
+ 
     return {
-      render: (width) => container.render(width),
+      render: (width) => {
+        const result = container.render(width);
+        return Array.isArray(result) ? result.join("\n") : result;
+      },
       invalidate: () => container.invalidate(),
       handleInput: (data) => {
         if (matchesKey(data, Key.left)) {
@@ -80,3 +83,4 @@ export async function showPagedSelectList(params: {
     };
   });
 }
+ 
