@@ -336,6 +336,23 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.history.messages).toHaveLength(1);
   });
 
+  test("strips quote-wrapped background task done prefix before continue request", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        userTextMessage(
+          [
+            "\u201cSystem: [2026-04-25 17:26:37 GMT+8] Background task done: ACP background task (run 4d909bc6).",
+            "",
+            "[Sat 2026-04-25 17:44 GMT+8] continue\u201d",
+          ].join("\n"),
+        ),
+      ],
+    });
+
+    expect(historyText(snapshot)).toEqual(["continue"]);
+    expect(snapshot.history.messages).toHaveLength(1);
+  });
+
   test("strips failed background task prefix while preserving following user text", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [
