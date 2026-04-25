@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/Gemini: retry reasoning-only, empty, and planning-only Gemini turns instead of letting sessions silently stall. Fixes #71074. (#71362) Thanks @neeravmakwana.
+- Providers/DeepSeek: add missing `reasoning_content` placeholders for replayed assistant tool-call turns when DeepSeek V4 thinking is enabled, so switching an existing session to `deepseek-v4-flash` or `deepseek-v4-pro` no longer trips the provider's 400 replay check. Fixes #71372. Thanks @yangyang1719.
 - Exec approvals: allow bare command-name allowlist patterns to match PATH-resolved executable basenames without trusting `./tool` or absolute path-selected binaries. Fixes #71315. Thanks @chen-zhang-cs-code and @dengluozhang.
 - Config/recovery: skip whole-file last-known-good rollback when invalidity is scoped to `plugins.entries.*`, preserving unrelated user settings during plugin schema or host-version skew. Fixes #71289. Thanks @jalehman.
 - Agents/tools: keep resolved reply-run configs from being overwritten by stale runtime snapshots, and let empty web runtime metadata fall back to configured provider auto-detection so standard and queued turns expose the same tool set. Fixes #71355. Thanks @c-g14.
