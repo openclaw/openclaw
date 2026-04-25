@@ -171,4 +171,116 @@ describe("createBundleMcpToolRuntime", () => {
       "multi__zeta",
     ]);
   });
+
+  it("coerces stringified object params to objects before calling MCP server (issue #70872)", async () => {
+    let capturedInput: unknown;
+    const runtime: SessionMcpRuntime = {
+      sessionId: "session-coerce",
+      workspaceDir: "/tmp",
+      configFingerprint: "fingerprint",
+      createdAt: 0,
+      lastUsedAt: 0,
+      markUsed: () => {},
+      getCatalog: async () => ({
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          synology: {
+            serverName: "synology",
+            launchSummary: "synology",
+            toolCount: 1,
+          },
+        },
+        tools: [
+          {
+            serverName: "synology",
+            safeServerName: "synology",
+            toolName: "test_connection",
+            description: "Test connection",
+            inputSchema: {
+              type: "object",
+              properties: {
+                params: { type: "object" },
+                tags: { type: "array" },
+                name: { type: "string" },
+              },
+            },
+            fallbackDescription: "Test connection",
+          },
+        ],
+      }),
+      callTool: async (_serverName, _toolName, input) => {
+        capturedInput = input;
+        return {
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        };
+      },
+      dispose: async () => {},
+    };
+
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const tool = materialized.tools[0];
+
+    // Simulate LLM sending stringified object/array values
+    await tool.execute("call-1", { params: "{}", tags: '["a","b"]', name: "hello" });
+
+    // params should be coerced from string "{}" to object {}
+    // tags should be coerced from string '["a","b"]' to array ["a","b"]
+    // name should remain a string
+    expect(capturedInput).toEqual({ params: {}, tags: ["a", "b"], name: "hello" });
+  });
+
+  it("leaves params unchanged when they are already objects (issue #70872)", async () => {
+    let capturedInput: unknown;
+    const runtime: SessionMcpRuntime = {
+      sessionId: "session-coerce-noop",
+      workspaceDir: "/tmp",
+      configFingerprint: "fingerprint",
+      createdAt: 0,
+      lastUsedAt: 0,
+      markUsed: () => {},
+      getCatalog: async () => ({
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          synology: {
+            serverName: "synology",
+            launchSummary: "synology",
+            toolCount: 1,
+          },
+        },
+        tools: [
+          {
+            serverName: "synology",
+            safeServerName: "synology",
+            toolName: "test_connection",
+            description: "Test connection",
+            inputSchema: {
+              type: "object",
+              properties: {
+                params: { type: "object" },
+              },
+            },
+            fallbackDescription: "Test connection",
+          },
+        ],
+      }),
+      callTool: async (_serverName, _toolName, input) => {
+        capturedInput = input;
+        return {
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        };
+      },
+      dispose: async () => {},
+    };
+
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const tool = materialized.tools[0];
+
+    // Already correct object — should pass through unchanged
+    await tool.execute("call-2", { params: { key: "value" } });
+    expect(capturedInput).toEqual({ params: { key: "value" } });
+  });
 });

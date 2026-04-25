@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
@@ -12,6 +13,65 @@ import {
 } from "./pi-bundle-mcp-names.js";
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+/**
+ * Coerce stringified JSON values back to objects/arrays when the inputSchema
+ * declares the property as `type: "object"` or `type: "array"`.  LLMs sometimes
+ * serialize nested parameters as JSON strings (e.g. `"params": "{}"` instead of
+ * `"params": {}`).  Strict MCP servers (Pydantic-backed) reject the string form,
+ * causing "params: must be object" validation errors.
+ *
+ * Fixes https://github.com/openclaw/openclaw/issues/70872
+ */
+function coerceStringifiedObjectProperties(input: unknown, schema: TSchema | undefined): unknown {
+  // Nothing to coerce when input is not a record.
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return input;
+  }
+
+  const properties: Record<string, TSchema> | undefined =
+    schema && typeof schema === "object" && !Array.isArray(schema)
+      ? ((schema as Record<string, unknown>).properties as Record<string, TSchema> | undefined)
+      : undefined;
+
+  if (!properties) {
+    return input;
+  }
+
+  const record = input as Record<string, unknown>;
+  let mutated = false;
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(record)) {
+    const propSchema = properties[key] as Record<string, unknown> | undefined;
+    if (
+      typeof value === "string" &&
+      propSchema &&
+      typeof propSchema.type === "string" &&
+      (propSchema.type === "object" || propSchema.type === "array")
+    ) {
+      try {
+        const parsed = JSON.parse(value);
+        if (
+          (propSchema.type === "object" &&
+            parsed !== null &&
+            typeof parsed === "object" &&
+            !Array.isArray(parsed)) ||
+          (propSchema.type === "array" && Array.isArray(parsed))
+        ) {
+          result[key] = parsed;
+          mutated = true;
+          continue;
+        }
+      } catch {
+        // Not valid JSON — pass through as-is.
+      }
+    }
+    result[key] = value;
+  }
+
+  return mutated ? result : input;
+}
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -104,7 +164,8 @@ export async function materializeBundleMcpToolsForRun(params: {
       description: tool.description || tool.fallbackDescription,
       parameters: tool.inputSchema,
       execute: async (_toolCallId: string, input: unknown) => {
-        const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
+        const coercedInput = coerceStringifiedObjectProperties(input, tool.inputSchema);
+        const result = await params.runtime.callTool(tool.serverName, tool.toolName, coercedInput);
         return toAgentToolResult({
           serverName: tool.serverName,
           toolName: tool.toolName,
