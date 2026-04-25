@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -364,13 +365,23 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
     : never
   : never;
 
+export type DiagnosticEventMetadata = {
+  trusted: boolean;
+};
+
+type DiagnosticEventListener = (
+  evt: DiagnosticEventPayload,
+  metadata: DiagnosticEventMetadata,
+) => void;
+
 type DiagnosticEventsGlobalState = {
   enabled: boolean;
   seq: number;
-  listeners: Set<(evt: DiagnosticEventPayload) => void>;
+  listeners: Set<DiagnosticEventListener>;
   dispatchDepth: number;
   asyncQueue: DiagnosticEventPayload[];
   asyncDrainScheduled: boolean;
+  trustedEvents: WeakSet<DiagnosticEventPayload>;
 };
 
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
@@ -388,8 +399,6 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "log.record",
 ]);
 
-let trustedDiagnosticEvents = new WeakSet<DiagnosticEventPayload>();
-
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
   const globalStore = globalThis as typeof globalThis & {
     __openclawDiagnosticEventsState?: DiagnosticEventsGlobalState;
@@ -398,12 +407,15 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
     globalStore.__openclawDiagnosticEventsState = {
       enabled: true,
       seq: 0,
-      listeners: new Set<(evt: DiagnosticEventPayload) => void>(),
+      listeners: new Set<DiagnosticEventListener>(),
       dispatchDepth: 0,
       asyncQueue: [],
       asyncDrainScheduled: false,
+      trustedEvents: new WeakSet<DiagnosticEventPayload>(),
     };
   }
+  globalStore.__openclawDiagnosticEventsState.trustedEvents ??=
+    new WeakSet<DiagnosticEventPayload>();
   return globalStore.__openclawDiagnosticEventsState;
 }
 
@@ -432,9 +444,12 @@ function dispatchDiagnosticEvent(
 
   state.dispatchDepth += 1;
   try {
+    const metadata: DiagnosticEventMetadata = {
+      trusted: state.trustedEvents.has(enriched),
+    };
     for (const listener of state.listeners) {
       try {
-        listener(enriched);
+        listener(enriched, metadata);
       } catch (err) {
         const errorMessage =
           err instanceof Error
@@ -470,21 +485,34 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
   });
 }
 
+function enrichDiagnosticEvent(
+  state: DiagnosticEventsGlobalState,
+  event: DiagnosticEventInput,
+  trusted: boolean,
+): DiagnosticEventPayload {
+  const enriched = {} as DiagnosticEventPayload & Record<string, unknown>;
+  for (const [key, value] of Object.entries(event as Record<string, unknown>)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    enriched[key] = value;
+  }
+  state.seq += 1;
+  enriched.seq = state.seq;
+  enriched.ts = Date.now();
+  if (trusted) {
+    state.trustedEvents.add(enriched);
+  }
+  return enriched;
+}
+
 function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: boolean) {
   const state = getDiagnosticEventsState();
   if (!state.enabled) {
     return;
   }
 
-  const enriched = {
-    ...event,
-    seq: (state.seq += 1),
-    ts: Date.now(),
-  } satisfies DiagnosticEventPayload;
-
-  if (trusted) {
-    trustedDiagnosticEvents.add(enriched);
-  }
+  const enriched = enrichDiagnosticEvent(state, event, trusted);
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
@@ -507,12 +535,10 @@ export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
 }
 
 export function isTrustedDiagnosticEvent(event: DiagnosticEventPayload): boolean {
-  return trustedDiagnosticEvents.has(event);
+  return getDiagnosticEventsState().trustedEvents.has(event);
 }
 
-export function onInternalDiagnosticEvent(
-  listener: (evt: DiagnosticEventPayload) => void,
-): () => void {
+export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
   return () => {
@@ -537,5 +563,5 @@ export function resetDiagnosticEventsForTest(): void {
   state.dispatchDepth = 0;
   state.asyncQueue = [];
   state.asyncDrainScheduled = false;
-  trustedDiagnosticEvents = new WeakSet<DiagnosticEventPayload>();
+  state.trustedEvents = new WeakSet<DiagnosticEventPayload>();
 }

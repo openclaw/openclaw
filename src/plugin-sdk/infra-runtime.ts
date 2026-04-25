@@ -31,7 +31,16 @@ export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
 export * from "../infra/dedupe.js";
-export * from "../infra/diagnostic-events.js";
+export type * from "../infra/diagnostic-events.js";
+export {
+  areDiagnosticsEnabledForProcess,
+  emitDiagnosticEvent,
+  isDiagnosticsEnabled,
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
 export * from "../infra/errors.js";

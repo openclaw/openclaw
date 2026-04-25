@@ -2,10 +2,10 @@
 // Keep this list additive and scoped to the bundled diagnostics-otel surface.
 
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+export type { DiagnosticEventMetadata } from "../infra/diagnostic-events.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export {
   emitDiagnosticEvent,
-  isTrustedDiagnosticEvent,
   onDiagnosticEvent,
   onInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";

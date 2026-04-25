@@ -120,11 +120,17 @@ describe("diagnostic-events", () => {
   it("marks only internal trusted diagnostic emissions as trusted", async () => {
     const events: Array<{
       event: Parameters<typeof isTrustedDiagnosticEvent>[0];
+      metadataTrusted: boolean;
       trusted: boolean;
       type: string;
     }> = [];
-    onInternalDiagnosticEvent((event) => {
-      events.push({ event, trusted: isTrustedDiagnosticEvent(event), type: event.type });
+    onInternalDiagnosticEvent((event, metadata) => {
+      events.push({
+        event,
+        metadataTrusted: metadata.trusted,
+        trusted: isTrustedDiagnosticEvent(event),
+        type: event.type,
+      });
     });
 
     emitDiagnosticEvent({
@@ -140,15 +146,42 @@ describe("diagnostic-events", () => {
     });
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(events.map(({ trusted, type }) => ({ trusted, type }))).toEqual([
-      { trusted: false, type: "message.queued" },
-      { trusted: true, type: "model.call.started" },
+    expect(
+      events.map(({ metadataTrusted, trusted, type }) => ({ metadataTrusted, trusted, type })),
+    ).toEqual([
+      { metadataTrusted: false, trusted: false, type: "message.queued" },
+      { metadataTrusted: true, trusted: true, type: "model.call.started" },
     ]);
 
     const trustedEvent = events[1]?.event;
     resetDiagnosticEventsForTest();
     expect(trustedEvent).toBeDefined();
     expect(trustedEvent ? isTrustedDiagnosticEvent(trustedEvent) : false).toBe(false);
+  });
+
+  it("drops prototype-pollution keys during event enrichment", () => {
+    const eventInput = Object.assign(Object.create(null), {
+      type: "message.queued",
+      source: "plugin",
+      constructor: "blocked",
+      prototype: "blocked",
+    }) as Parameters<typeof emitDiagnosticEvent>[0] & Record<string, unknown>;
+    Object.defineProperty(eventInput, "__proto__", {
+      enumerable: true,
+      value: { polluted: true },
+    });
+    const events: Array<Parameters<typeof isTrustedDiagnosticEvent>[0]> = [];
+    onInternalDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    emitDiagnosticEvent(eventInput);
+
+    expect(events).toHaveLength(1);
+    expect(Object.hasOwn(events[0] ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(events[0] ?? {}, "constructor")).toBe(false);
+    expect(Object.hasOwn(events[0] ?? {}, "prototype")).toBe(false);
+    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it("dispatches high-frequency tool and model lifecycle events asynchronously", async () => {

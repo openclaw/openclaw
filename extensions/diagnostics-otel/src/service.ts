@@ -16,6 +16,7 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import type {
+  DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticTraceContext,
   OpenClawPluginService,
@@ -24,7 +25,6 @@ import {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
-  isTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   redactSensitiveText,
 } from "../api.js";
@@ -340,35 +340,31 @@ function contextForTraceContext(traceContext: DiagnosticTraceContext | undefined
   });
 }
 
-function contextForDiagnosticSpanParent(
-  traceContext: DiagnosticTraceContext | undefined,
-  options: { fallbackToSpanId?: boolean } = {},
-) {
+function contextForDiagnosticSpanParent(traceContext: DiagnosticTraceContext | undefined) {
   const normalized = normalizeTraceContext(traceContext);
-  const parentSpanId =
-    normalized?.parentSpanId ?? (options.fallbackToSpanId ? normalized?.spanId : undefined);
-  if (!normalized || !parentSpanId) {
+  if (!normalized?.parentSpanId) {
     return undefined;
   }
   return trace.setSpanContext(otelContextApi.active(), {
     traceId: normalized.traceId,
-    spanId: parentSpanId,
+    spanId: normalized.parentSpanId,
     traceFlags: traceFlagsToOtel(normalized.traceFlags),
     isRemote: true,
   });
 }
 
-function contextForTrustedTraceContext(evt: DiagnosticEventPayload) {
-  return isTrustedDiagnosticEvent(evt) ? contextForTraceContext(evt.trace) : undefined;
+function contextForTrustedTraceContext(
+  evt: DiagnosticEventPayload,
+  metadata: DiagnosticEventMetadata,
+) {
+  return metadata.trusted ? contextForTraceContext(evt.trace) : undefined;
 }
 
 function contextForTrustedDiagnosticSpanParent(
   evt: DiagnosticEventPayload,
-  options: { fallbackToSpanId?: boolean } = {},
+  metadata: DiagnosticEventMetadata,
 ) {
-  return isTrustedDiagnosticEvent(evt)
-    ? contextForDiagnosticSpanParent(evt.trace, options)
-    : undefined;
+  return metadata.trusted ? contextForDiagnosticSpanParent(evt.trace) : undefined;
 }
 
 function addTraceAttributes(
@@ -616,7 +612,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       });
 
       let recordLogRecord:
-        | ((evt: Extract<DiagnosticEventPayload, { type: "log.record" }>) => void)
+        | ((
+            evt: Extract<DiagnosticEventPayload, { type: "log.record" }>,
+            metadata: DiagnosticEventMetadata,
+          ) => void)
         | undefined;
       if (logsEnabled) {
         let logRecordExportFailureLastReportedAt = Number.NEGATIVE_INFINITY;
@@ -635,7 +634,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           processors: [logProcessor],
         });
         const otelLogger = logProvider.getLogger("openclaw");
-        recordLogRecord = (evt) => {
+        recordLogRecord = (evt, metadata) => {
           try {
             const logLevelName = evt.level || "INFO";
             const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
@@ -658,7 +657,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             if (evt.code?.functionName) {
               assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
             }
-            addTraceAttributes(attributes, evt.trace);
+            if (metadata.trusted) {
+              addTraceAttributes(attributes, evt.trace);
+            }
 
             const logRecord: LogRecord = {
               body: normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS),
@@ -667,7 +668,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               attributes: redactOtelAttributes(attributes),
               timestamp: evt.ts,
             };
-            const logContext = contextForTrustedTraceContext(evt);
+            const logContext = contextForTrustedTraceContext(evt, metadata);
             if (logContext) {
               logRecord.context = logContext;
             }
@@ -751,7 +752,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         };
       };
 
-      const recordModelUsage = (evt: Extract<DiagnosticEventPayload, { type: "model.usage" }>) => {
+      const recordModelUsage = (
+        evt: Extract<DiagnosticEventPayload, { type: "model.usage" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
         const attrs = {
           "openclaw.channel": evt.channel ?? "unknown",
           "openclaw.provider": evt.provider ?? "unknown",
@@ -810,7 +814,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         };
 
         const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs, {
-          parentContext: contextForTrustedDiagnosticSpanParent(evt),
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
           endTimeMs: evt.ts,
         });
         span.end(evt.ts);
@@ -1029,6 +1033,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordRunCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs: Record<string, string | number> = {
           "openclaw.outcome": evt.outcome,
@@ -1050,7 +1055,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.errorCategory"] = lowCardinalityAttr(evt.errorCategory, "other");
         }
         const span = spanWithDuration("openclaw.run", spanAttrs, evt.durationMs, {
-          parentContext: contextForTrustedDiagnosticSpanParent(evt),
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
           endTimeMs: evt.ts,
         });
         if (evt.outcome === "error") {
@@ -1073,6 +1078,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordModelCallCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         modelCallDurationHistogram.record(evt.durationMs, modelCallMetricAttrs(evt));
         if (!tracesEnabled) {
@@ -1097,7 +1103,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           contentCapturePolicy,
         );
         const span = spanWithDuration("openclaw.model.call", spanAttrs, evt.durationMs, {
-          parentContext: contextForTrustedDiagnosticSpanParent(evt),
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
           endTimeMs: evt.ts,
         });
         span.end(evt.ts);
@@ -1105,6 +1111,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordModelCallError = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.error" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         modelCallDurationHistogram.record(evt.durationMs, {
           ...modelCallMetricAttrs(evt),
@@ -1133,7 +1140,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           contentCapturePolicy,
         );
         const span = spanWithDuration("openclaw.model.call", spanAttrs, evt.durationMs, {
-          parentContext: contextForTrustedDiagnosticSpanParent(evt),
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
           endTimeMs: evt.ts,
         });
         span.setStatus({
@@ -1145,6 +1152,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordToolExecutionCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.completed" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
           "openclaw.toolName": evt.toolName,
@@ -1166,7 +1174,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           contentCapturePolicy,
         );
         const span = spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
-          parentContext: contextForTrustedDiagnosticSpanParent(evt),
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
           endTimeMs: evt.ts,
         });
         span.end(evt.ts);
@@ -1174,6 +1182,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordToolExecutionError = (
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.error" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
           "openclaw.toolName": evt.toolName,
@@ -1200,7 +1209,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           contentCapturePolicy,
         );
         const span = spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
-          parentContext: contextForTrustedDiagnosticSpanParent(evt),
+          parentContext: contextForTrustedDiagnosticSpanParent(evt, metadata),
           endTimeMs: evt.ts,
         });
         span.setStatus({
@@ -1258,90 +1267,92 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
-      unsubscribe = onInternalDiagnosticEvent((evt: DiagnosticEventPayload) => {
-        try {
-          switch (evt.type) {
-            case "model.usage":
-              recordModelUsage(evt);
-              return;
-            case "webhook.received":
-              recordWebhookReceived(evt);
-              return;
-            case "webhook.processed":
-              recordWebhookProcessed(evt);
-              return;
-            case "webhook.error":
-              recordWebhookError(evt);
-              return;
-            case "message.queued":
-              recordMessageQueued(evt);
-              return;
-            case "message.processed":
-              recordMessageProcessed(evt);
-              return;
-            case "message.delivery.started":
-              recordMessageDeliveryStarted(evt);
-              return;
-            case "message.delivery.completed":
-              recordMessageDeliveryCompleted(evt);
-              return;
-            case "message.delivery.error":
-              recordMessageDeliveryError(evt);
-              return;
-            case "queue.lane.enqueue":
-              recordLaneEnqueue(evt);
-              return;
-            case "queue.lane.dequeue":
-              recordLaneDequeue(evt);
-              return;
-            case "session.state":
-              recordSessionState(evt);
-              return;
-            case "session.stuck":
-              recordSessionStuck(evt);
-              return;
-            case "run.attempt":
-              recordRunAttempt(evt);
-              return;
-            case "diagnostic.heartbeat":
-              recordHeartbeat(evt);
-              return;
-            case "run.completed":
-              recordRunCompleted(evt);
-              return;
-            case "model.call.completed":
-              recordModelCallCompleted(evt);
-              return;
-            case "model.call.error":
-              recordModelCallError(evt);
-              return;
-            case "tool.execution.completed":
-              recordToolExecutionCompleted(evt);
-              return;
-            case "tool.execution.error":
-              recordToolExecutionError(evt);
-              return;
-            case "exec.process.completed":
-              recordExecProcessCompleted(evt);
-              return;
-            case "log.record":
-              recordLogRecord?.(evt);
-              return;
-            case "tool.loop":
-            case "tool.execution.started":
-            case "run.started":
-            case "model.call.started":
-            case "diagnostic.memory.sample":
-            case "diagnostic.memory.pressure":
-            case "payload.large":
-              return;
+      unsubscribe = onInternalDiagnosticEvent(
+        (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => {
+          try {
+            switch (evt.type) {
+              case "model.usage":
+                recordModelUsage(evt, metadata);
+                return;
+              case "webhook.received":
+                recordWebhookReceived(evt);
+                return;
+              case "webhook.processed":
+                recordWebhookProcessed(evt);
+                return;
+              case "webhook.error":
+                recordWebhookError(evt);
+                return;
+              case "message.queued":
+                recordMessageQueued(evt);
+                return;
+              case "message.processed":
+                recordMessageProcessed(evt);
+                return;
+              case "message.delivery.started":
+                recordMessageDeliveryStarted(evt);
+                return;
+              case "message.delivery.completed":
+                recordMessageDeliveryCompleted(evt);
+                return;
+              case "message.delivery.error":
+                recordMessageDeliveryError(evt);
+                return;
+              case "queue.lane.enqueue":
+                recordLaneEnqueue(evt);
+                return;
+              case "queue.lane.dequeue":
+                recordLaneDequeue(evt);
+                return;
+              case "session.state":
+                recordSessionState(evt);
+                return;
+              case "session.stuck":
+                recordSessionStuck(evt);
+                return;
+              case "run.attempt":
+                recordRunAttempt(evt);
+                return;
+              case "diagnostic.heartbeat":
+                recordHeartbeat(evt);
+                return;
+              case "run.completed":
+                recordRunCompleted(evt, metadata);
+                return;
+              case "model.call.completed":
+                recordModelCallCompleted(evt, metadata);
+                return;
+              case "model.call.error":
+                recordModelCallError(evt, metadata);
+                return;
+              case "tool.execution.completed":
+                recordToolExecutionCompleted(evt, metadata);
+                return;
+              case "tool.execution.error":
+                recordToolExecutionError(evt, metadata);
+                return;
+              case "exec.process.completed":
+                recordExecProcessCompleted(evt);
+                return;
+              case "log.record":
+                recordLogRecord?.(evt, metadata);
+                return;
+              case "tool.loop":
+              case "tool.execution.started":
+              case "run.started":
+              case "model.call.started":
+              case "diagnostic.memory.sample":
+              case "diagnostic.memory.pressure":
+              case "payload.large":
+                return;
+            }
+          } catch (err) {
+            ctx.logger.error(
+              `diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`,
+            );
           }
-        } catch (err) {
-          ctx.logger.error(
-            `diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`,
-          );
-        }
-      });
+        },
+      );
 
       if (logsEnabled) {
         ctx.logger.info("diagnostics-otel: logs exporter enabled (OTLP/Protobuf)");

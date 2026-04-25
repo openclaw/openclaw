@@ -517,13 +517,11 @@ describe("diagnostics-otel service", () => {
       },
     });
 
-    expect(emitCall?.attributes).toMatchObject({
-      "openclaw.traceFlags": "01",
-    });
     expect(emitCall?.attributes).toEqual(
       expect.not.objectContaining({
         "openclaw.traceId": expect.anything(),
         "openclaw.spanId": expect.anything(),
+        "openclaw.traceFlags": expect.anything(),
       }),
     );
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
