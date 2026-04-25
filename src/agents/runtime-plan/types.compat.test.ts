@@ -3,11 +3,14 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FailoverReason } from "../pi-embedded-helpers/types.js";
 import type { PromptMode } from "../system-prompt.types.js";
+import type { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
 import type {
   AgentRuntimeFailoverReason,
   AgentRuntimePromptMode,
   AgentRuntimeReplyPayload,
   AgentRuntimeThinkLevel,
+  BuildAgentRuntimeDeliveryPlanParams,
+  BuildAgentRuntimePlanParams,
 } from "./types.js";
 
 type Equal<X, Y> = [X] extends [Y] ? ([Y] extends [X] ? true : false) : false;
@@ -27,5 +30,14 @@ describe("AgentRuntimePlan structural type compatibility", () => {
     >;
     expectTypeOf<ReplyPayload>().toMatchTypeOf<AgentRuntimeReplyPayload>();
     expectTypeOf<AgentRuntimeReplyPayload>().toMatchTypeOf<ReplyPayload>();
+  });
+
+  it("keeps builder call signatures aligned with exported structural params", () => {
+    expectTypeOf<
+      Parameters<typeof buildAgentRuntimeDeliveryPlan>[0]
+    >().toEqualTypeOf<BuildAgentRuntimeDeliveryPlanParams>();
+    expectTypeOf<
+      Parameters<typeof buildAgentRuntimePlan>[0]
+    >().toEqualTypeOf<BuildAgentRuntimePlanParams>();
   });
 });

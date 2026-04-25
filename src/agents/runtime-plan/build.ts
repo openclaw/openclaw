@@ -25,22 +25,6 @@ import type {
   BuildAgentRuntimePlanParams,
 } from "./types.js";
 
-type BuildConcreteAgentRuntimeDeliveryPlanParams = Omit<
-  BuildAgentRuntimeDeliveryPlanParams,
-  "config"
-> & {
-  config?: OpenClawConfig;
-};
-
-type BuildConcreteAgentRuntimePlanParams = Omit<
-  BuildAgentRuntimePlanParams,
-  "config" | "model" | "thinkingLevel"
-> & {
-  config?: OpenClawConfig;
-  model?: ProviderRuntimeModel;
-  thinkingLevel?: ThinkLevel;
-};
-
 function formatResolvedRef(params: { provider: string; modelId: string }): string {
   return `${params.provider}/${params.modelId}`;
 }
@@ -55,10 +39,20 @@ function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
     : undefined;
 }
 
+function asProviderRuntimeModel(
+  value: BuildAgentRuntimePlanParams["model"],
+): ProviderRuntimeModel | undefined {
+  return value !== undefined ? (value as ProviderRuntimeModel) : undefined;
+}
+
+function asThinkLevel(value: BuildAgentRuntimePlanParams["thinkingLevel"]): ThinkLevel | undefined {
+  return value !== undefined ? (value as ThinkLevel) : undefined;
+}
+
 export function buildAgentRuntimeDeliveryPlan(
-  params: BuildConcreteAgentRuntimeDeliveryPlanParams,
+  params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
-  const config = params.config;
+  const config = asOpenClawConfig(params.config);
   return {
     isSilentPayload(payload): boolean {
       return isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) && !hasMedia(payload);
@@ -91,11 +85,9 @@ export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
   };
 }
 
-export function buildAgentRuntimePlan(
-  params: BuildConcreteAgentRuntimePlanParams,
-): AgentRuntimePlan {
-  const config = params.config;
-  const model = params.model;
+export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
+  const config = asOpenClawConfig(params.config);
+  const model = asProviderRuntimeModel(params.model);
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
   const auth = buildAgentRuntimeAuthPlan({
@@ -132,9 +124,7 @@ export function buildAgentRuntimePlan(
     ...toolContext,
     ...(overrides?.workspaceDir !== undefined ? { workspaceDir: overrides.workspaceDir } : {}),
     ...(overrides?.modelApi !== undefined ? { modelApi: overrides.modelApi } : {}),
-    ...(overrides?.model !== undefined
-      ? { model: overrides.model as ProviderRuntimeModel | undefined }
-      : {}),
+    ...(overrides?.model !== undefined ? { model: asProviderRuntimeModel(overrides.model) } : {}),
   });
   const resolveTranscriptRuntimePolicy = (overrides?: {
     workspaceDir?: string;
@@ -148,7 +138,7 @@ export function buildAgentRuntimePlan(
       workspaceDir: overrides?.workspaceDir ?? params.workspaceDir,
       env: process.env,
       modelApi: overrides?.modelApi ?? modelApi,
-      model: (overrides?.model as ProviderRuntimeModel | undefined) ?? model,
+      model: asProviderRuntimeModel(overrides?.model) ?? model,
     });
   const resolveTransportExtraParams = (
     overrides: Parameters<AgentRuntimePlan["transport"]["resolveExtraParams"]>[0] = {},
@@ -160,9 +150,9 @@ export function buildAgentRuntimePlan(
       agentDir: params.agentDir,
       workspaceDir: overrides.workspaceDir ?? params.workspaceDir,
       extraParamsOverride: overrides.extraParamsOverride ?? params.extraParamsOverride,
-      thinkingLevel: (overrides.thinkingLevel ?? params.thinkingLevel) as ThinkLevel | undefined,
+      thinkingLevel: asThinkLevel(overrides.thinkingLevel ?? params.thinkingLevel),
       agentId: overrides.agentId ?? params.agentId,
-      model: (overrides.model as ProviderRuntimeModel | undefined) ?? model,
+      model: asProviderRuntimeModel(overrides.model) ?? model,
       resolvedTransport: overrides.resolvedTransport ?? transport,
     });
 
