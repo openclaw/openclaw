@@ -25,4 +25,41 @@ describe("resolveCronAgentSessionKey", () => {
       "agent:main:hook:webhook:42",
     );
   });
+
+  it("canonicalizes main alias when cfg.session.mainKey differs from default (#29683)", () => {
+    const cfg = { session: { mainKey: "work" } };
+    expect(
+      resolveCronAgentSessionKey({ sessionKey: "main", agentId: "ops", mainKey: "work", cfg }),
+    ).toBe("agent:ops:work");
+  });
+
+  it("canonicalizes agent:id:main alias to configured mainKey (#29683)", () => {
+    const cfg = { session: { mainKey: "work" } };
+    expect(
+      resolveCronAgentSessionKey({
+        sessionKey: "agent:ops:main",
+        agentId: "ops",
+        mainKey: "work",
+        cfg,
+      }),
+    ).toBe("agent:ops:work");
+  });
+
+  it("does not change non-alias keys when cfg is provided", () => {
+    const cfg = { session: { mainKey: "work" } };
+    expect(
+      resolveCronAgentSessionKey({
+        sessionKey: "hook:webhook:42",
+        agentId: "ops",
+        mainKey: "work",
+        cfg,
+      }),
+    ).toBe("agent:ops:hook:webhook:42");
+  });
+
+  it("behaves unchanged when cfg is omitted (backward compat)", () => {
+    expect(resolveCronAgentSessionKey({ sessionKey: "main", agentId: "main" })).toBe(
+      "agent:main:main",
+    );
+  });
 });

@@ -1,17 +1,19 @@
 import { Command } from "commander";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerOnboardCommand } from "./register.onboard.js";
 
-const setupWizardCommandMock = vi.fn();
-
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
-
-vi.mock("../../commands/auth-choice-options.static.js", () => ({
-  formatStaticAuthChoiceChoicesForCli: () => "token|oauth",
+const mocks = vi.hoisted(() => ({
+  runCrestodian: vi.fn(),
+  setupWizardCommandMock: vi.fn(),
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
 }));
+
+const setupWizardCommandMock = mocks.setupWizardCommandMock;
+const runtime = mocks.runtime;
 
 vi.mock("../../commands/auth-choice-options.js", () => ({
   formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
@@ -38,34 +40,16 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
 }));
 
 vi.mock("../../commands/onboard.js", () => ({
-  setupWizardCommand: setupWizardCommandMock,
+  setupWizardCommand: mocks.setupWizardCommandMock,
+}));
+
+vi.mock("../../crestodian/crestodian.js", () => ({
+  runCrestodian: mocks.runCrestodian,
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: runtime,
+  defaultRuntime: mocks.runtime,
 }));
-
-const mockedModuleIds = [
-  "../../commands/auth-choice-options.static.js",
-  "../../commands/auth-choice-options.js",
-  "../../commands/onboard-core-auth-flags.js",
-  "../../plugins/provider-auth-choices.js",
-  "../../commands/onboard.js",
-  "../../runtime.js",
-];
-
-let registerOnboardCommand: typeof import("./register.onboard.js").registerOnboardCommand;
-
-beforeAll(async () => {
-  ({ registerOnboardCommand } = await import("./register.onboard.js"));
-});
-
-afterAll(() => {
-  for (const id of mockedModuleIds) {
-    vi.doUnmock(id);
-  }
-  vi.resetModules();
-});
 
 describe("registerOnboardCommand", () => {
   async function runCli(args: string[]) {
@@ -76,6 +60,7 @@ describe("registerOnboardCommand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.runCrestodian.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
@@ -88,6 +73,7 @@ describe("registerOnboardCommand", () => {
       }),
       runtime,
     );
+    expect(mocks.runCrestodian).not.toHaveBeenCalled();
   });
 
   it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
@@ -150,6 +136,16 @@ describe("registerOnboardCommand", () => {
     );
   });
 
+  it("forwards --skip-bootstrap to setup wizard options", async () => {
+    await runCli(["onboard", "--skip-bootstrap"]);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skipBootstrap: true,
+      }),
+      runtime,
+    );
+  });
+
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(setupWizardCommandMock).toHaveBeenCalledWith(
@@ -177,5 +173,29 @@ describe("registerOnboardCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("routes --modern to Crestodian", async () => {
+    await runCli(["onboard", "--modern", "--json"]);
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(mocks.runCrestodian).toHaveBeenCalledWith({
+      message: undefined,
+      yes: false,
+      json: true,
+      interactive: true,
+    });
+  });
+
+  it("uses a noninteractive overview for modern noninteractive onboarding", async () => {
+    await runCli(["onboard", "--modern", "--non-interactive"]);
+
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(mocks.runCrestodian).toHaveBeenCalledWith({
+      message: "overview",
+      yes: false,
+      json: false,
+      interactive: false,
+    });
   });
 });

@@ -1,4 +1,4 @@
-import type { LookupFn, SsrFPolicy } from "../../api.js";
+import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 

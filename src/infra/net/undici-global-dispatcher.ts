@@ -1,8 +1,16 @@
 import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
+import { isWSL2Sync } from "../wsl.js";
 import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
+
+/**
+ * Module-level bridge so `resolveDispatcherTimeoutMs` in fetch-guard.ts
+ * can read the global dispatcher timeout without relying on Undici's
+ * non-public `.options` field.
+ */
+export let _globalUndiciStreamTimeoutMs: number | undefined;
 
 const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 
@@ -33,7 +41,14 @@ function resolveAutoSelectFamily(): boolean | undefined {
     return undefined;
   }
   try {
-    return net.getDefaultAutoSelectFamily();
+    const systemDefault = net.getDefaultAutoSelectFamily();
+    // WSL2 has unstable IPv6 connectivity; disable autoSelectFamily to
+    // force IPv4 connections and avoid "fetch failed" errors when reaching
+    // Windows-host services (e.g. Ollama) from inside WSL2.
+    if (systemDefault && isWSL2Sync()) {
+      return false;
+    }
+    return systemDefault;
   } catch {
     return undefined;
   }
@@ -102,10 +117,11 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
 
 export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
   const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
-  const timeoutMs = Math.max(1, Math.floor(timeoutMsRaw));
   if (!Number.isFinite(timeoutMsRaw)) {
     return;
   }
+  const timeoutMs = Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
+  _globalUndiciStreamTimeoutMs = timeoutMs;
   const kind = resolveCurrentDispatcherKind();
   if (kind === null) {
     return;
@@ -144,4 +160,5 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedTimeoutKey = null;
   lastAppliedProxyBootstrap = false;
+  _globalUndiciStreamTimeoutMs = undefined;
 }

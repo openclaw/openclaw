@@ -1,20 +1,17 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDirectoryCli } from "./directory-cli.js";
-import type { CliRuntimeCapture } from "./test-runtime-capture.js";
 
-const runtimeState = vi.hoisted(() => ({ capture: null as CliRuntimeCapture | null }));
-
-function getRuntimeCapture(): CliRuntimeCapture {
-  if (!runtimeState.capture) {
-    throw new Error("runtime capture not initialized");
-  }
-  return runtimeState.capture;
-}
+const runtimeState = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  return createCliRuntimeMock(vi, { exitPrefix: "exit" });
+});
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
-  writeConfigFile: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
+  applyPluginAutoEnable: vi.fn(),
+  replaceConfigFile: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
   resolveMessageChannelSelection: vi.fn(),
   getChannelPlugin: vi.fn(),
@@ -23,7 +20,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
-  writeConfigFile: mocks.writeConfigFile,
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  replaceConfigFile: mocks.replaceConfigFile,
+}));
+
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: mocks.applyPluginAutoEnable,
 }));
 
 vi.mock("../commands/channel-setup/channel-plugin-resolution.js", () => ({
@@ -42,25 +44,31 @@ vi.mock("../channels/plugins/helpers.js", () => ({
   resolveChannelDefaultAccountId: mocks.resolveChannelDefaultAccountId,
 }));
 
-vi.mock("../runtime.js", async () => {
-  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
-  runtimeState.capture ??= createCliRuntimeCapture();
-  return { defaultRuntime: runtimeState.capture.defaultRuntime };
-});
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: runtimeState.defaultRuntime,
+}));
 
 describe("registerDirectoryCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getRuntimeCapture().resetRuntimeCapture();
+    runtimeState.runtimeLogs.length = 0;
+    runtimeState.runtimeErrors.length = 0;
     mocks.loadConfig.mockReturnValue({ channels: {} });
-    mocks.writeConfigFile.mockResolvedValue(undefined);
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
     mocks.resolveMessageChannelSelection.mockResolvedValue({
-      channel: "slack",
-      configured: ["slack"],
+      channel: "demo-channel",
+      configured: ["demo-channel"],
       source: "explicit",
     });
-    getRuntimeCapture().defaultRuntime.exit.mockImplementation((code: number) => {
+    runtimeState.defaultRuntime.log.mockClear();
+    runtimeState.defaultRuntime.error.mockClear();
+    runtimeState.defaultRuntime.writeStdout.mockClear();
+    runtimeState.defaultRuntime.writeJson.mockClear();
+    runtimeState.defaultRuntime.exit.mockClear();
+    runtimeState.defaultRuntime.exit.mockImplementation((code: number) => {
       throw new Error(`exit:${code}`);
     });
   });
@@ -70,11 +78,11 @@ describe("registerDirectoryCli", () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: {
         channels: {},
-        plugins: { entries: { whatsapp: { enabled: true } } },
+        plugins: { entries: { "demo-directory": { enabled: true } } },
       },
-      channelId: "whatsapp",
+      channelId: "demo-directory",
       plugin: {
-        id: "whatsapp",
+        id: "demo-directory",
         directory: { self },
       },
       configChanged: true,
@@ -83,29 +91,71 @@ describe("registerDirectoryCli", () => {
     const program = new Command().name("openclaw");
     registerDirectoryCli(program);
 
-    await program.parseAsync(["directory", "self", "--channel", "whatsapp", "--json"], {
+    await program.parseAsync(["directory", "self", "--channel", "demo-directory", "--json"], {
       from: "user",
     });
 
     expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
-        rawChannel: "whatsapp",
+        rawChannel: "demo-directory",
         allowInstall: true,
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        plugins: { entries: { whatsapp: { enabled: true } } },
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: expect.objectContaining({
+        plugins: { entries: { "demo-directory": { enabled: true } } },
       }),
-    );
+      baseHash: "config-1",
+    });
     expect(self).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "default",
       }),
     );
-    expect(getRuntimeCapture().defaultRuntime.log).toHaveBeenCalledWith(
+    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify({ id: "self-1", name: "Family Phone" }, null, 2),
     );
-    expect(getRuntimeCapture().defaultRuntime.error).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("uses the auto-enabled config snapshot for omitted channel selection", async () => {
+    const autoEnabledConfig = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
+    const self = vi.fn().mockResolvedValue({ id: "self-2", name: "WhatsApp Bot" });
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: ["whatsapp"],
+    });
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "whatsapp",
+      configured: ["whatsapp"],
+      source: "single-configured",
+    });
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      directory: { self },
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(["directory", "self", "--json"], { from: "user" });
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: { channels: {} },
+      env: process.env,
+    });
+    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
+      cfg: autoEnabledConfig,
+      channel: null,
+    });
+    expect(self).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: autoEnabledConfig,
+      }),
+    );
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: autoEnabledConfig,
+      baseHash: "config-1",
+    });
   });
 });

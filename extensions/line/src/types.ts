@@ -1,15 +1,15 @@
-import type {
-  AudioMessage,
-  ImageMessage,
-  LocationMessage,
-  StickerMessage,
-  TextMessage,
-  VideoMessage,
-  WebhookEvent,
-} from "@line/bot-sdk";
+import type { messagingApi, webhook } from "@line/bot-sdk";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
+
+export interface LineThreadBindingsConfig {
+  enabled?: boolean;
+  idleHours?: number;
+  maxAgeHours?: number;
+  spawnSubagentSessions?: boolean;
+  spawnAcpSessions?: boolean;
+}
 
 interface LineAccountBaseConfig {
   enabled?: boolean;
@@ -25,6 +25,7 @@ interface LineAccountBaseConfig {
   responsePrefix?: string;
   mediaMaxMb?: number;
   webhookPath?: string;
+  threadBindings?: LineThreadBindingsConfig;
   groups?: Record<string, LineGroupConfig>;
 }
 
@@ -54,15 +55,15 @@ export interface ResolvedLineAccount {
 }
 
 export type LineMessageType =
-  | TextMessage
-  | ImageMessage
-  | VideoMessage
-  | AudioMessage
-  | StickerMessage
-  | LocationMessage;
+  | messagingApi.TextMessage
+  | messagingApi.ImageMessage
+  | messagingApi.VideoMessage
+  | messagingApi.AudioMessage
+  | messagingApi.StickerMessage
+  | messagingApi.LocationMessage;
 
 export interface LineWebhookContext {
-  event: WebhookEvent;
+  event: webhook.Event;
   replyToken?: string;
   userId?: string;
   groupId?: string;

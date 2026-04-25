@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   listMattermostAccountIdsMock,
@@ -28,9 +28,15 @@ vi.mock("./client.js", () => {
   };
 });
 
-import { listMattermostDirectoryGroups, listMattermostDirectoryPeers } from "./directory.js";
+let listMattermostDirectoryGroups: typeof import("./directory.js").listMattermostDirectoryGroups;
+let listMattermostDirectoryPeers: typeof import("./directory.js").listMattermostDirectoryPeers;
 
 describe("mattermost directory", () => {
+  beforeAll(async () => {
+    ({ listMattermostDirectoryGroups, listMattermostDirectoryPeers } =
+      await import("./directory.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

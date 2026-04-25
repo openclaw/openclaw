@@ -2,8 +2,6 @@ name: Docker Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
     paths-ignore:
@@ -85,10 +83,10 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -155,7 +153,7 @@ jobs:
       - name: Build and push amd64 image
         id: build
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/amd64
@@ -169,7 +167,7 @@ jobs:
       - name: Build and push amd64 slim image
         id: build-slim
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/amd64
@@ -202,10 +200,10 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -272,7 +270,7 @@ jobs:
       - name: Build and push arm64 image
         id: build
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/arm64
@@ -286,7 +284,7 @@ jobs:
       - name: Build and push arm64 slim image
         id: build-slim
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/arm64
@@ -316,7 +314,7 @@ jobs:
           fetch-depth: 0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -364,28 +362,36 @@ jobs:
 
       - name: Create and push default manifest
         shell: bash
+        env:
+          TAGS: ${{ steps.tags.outputs.value }}
+          AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
         run: |
           set -euo pipefail
-          mapfile -t tags <<< "${{ steps.tags.outputs.value }}"
+          mapfile -t tags <<< "${TAGS}"
           args=()
           for tag in "${tags[@]}"; do
             [ -z "$tag" ] && continue
             args+=("-t" "$tag")
           done
           docker buildx imagetools create "${args[@]}" \
-            ${{ needs.build-amd64.outputs.digest }} \
-            ${{ needs.build-arm64.outputs.digest }}
+            "${AMD64_DIGEST}" \
+            "${ARM64_DIGEST}"
 
       - name: Create and push slim manifest
         shell: bash
+        env:
+          SLIM_TAGS: ${{ steps.tags.outputs.slim }}
+          AMD64_SLIM_DIGEST: ${{ needs.build-amd64.outputs.slim-digest }}
+          ARM64_SLIM_DIGEST: ${{ needs.build-arm64.outputs.slim-digest }}
         run: |
           set -euo pipefail
-          mapfile -t tags <<< "${{ steps.tags.outputs.slim }}"
+          mapfile -t tags <<< "${SLIM_TAGS}"
           args=()
           for tag in "${tags[@]}"; do
             [ -z "$tag" ] && continue
             args+=("-t" "$tag")
           done
           docker buildx imagetools create "${args[@]}" \
-            ${{ needs.build-amd64.outputs.slim-digest }} \
-            ${{ needs.build-arm64.outputs.slim-digest }}
+            "${AMD64_SLIM_DIGEST}" \
+            "${ARM64_SLIM_DIGEST}"

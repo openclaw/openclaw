@@ -1,18 +1,21 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import {
   createSetupWizardAdapter,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
 import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
+import { blueBubblesSetupAdapter, blueBubblesSetupWizard } from "./setup-surface.js";
 import {
   inferBlueBubblesTargetChatType,
   isAllowedBlueBubblesSender,
@@ -25,7 +28,6 @@ import {
 import { DEFAULT_WEBHOOK_PATH } from "./webhook-shared.js";
 
 async function createBlueBubblesConfigureAdapter() {
-  const { blueBubblesSetupAdapter, blueBubblesSetupWizard } = await import("./setup-surface.js");
   const plugin = {
     id: "bluebubbles",
     meta: {
@@ -34,6 +36,9 @@ async function createBlueBubblesConfigureAdapter() {
       selectionLabel: "BlueBubbles",
       docsPath: "/channels/bluebubbles",
       blurb: "iMessage via BlueBubbles",
+    },
+    capabilities: {
+      chatTypes: ["direct", "group"],
     },
     config: {
       listAccountIds: () => [DEFAULT_ACCOUNT_ID],
@@ -139,7 +144,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("disables the channel through the setup wizard", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
     const next = blueBubblesSetupWizard.disable?.({
       channels: {
         bluebubbles: {
@@ -150,6 +154,151 @@ describe("bluebubbles setup surface", () => {
     });
 
     expect(next?.channels?.bluebubbles?.enabled).toBe(false);
+  });
+
+  it("reads the named-account DM policy instead of the channel root", async () => {
+    expect(
+      blueBubblesSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            bluebubbles: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  serverUrl: "http://localhost:1234",
+                  password: "secret",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", async () => {
+    expect(blueBubblesSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "work")).toEqual({
+      policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
+      allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
+    });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+    const cfg = {
+      channels: {
+        bluebubbles: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["user@example.com"],
+          accounts: {
+            work: {
+              serverUrl: "http://localhost:1234",
+              password: "secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(blueBubblesSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(blueBubblesSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
+      allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
+    });
+
+    const next = blueBubblesSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    const workAccount = next?.channels?.bluebubbles?.accounts?.work as
+      | {
+          dmPolicy?: string;
+        }
+      | undefined;
+    expect(next?.channels?.bluebubbles?.dmPolicy).toBe("disabled");
+    expect(workAccount?.dmPolicy).toBe("open");
+  });
+
+  it("uses configured defaultAccount when accountId is omitted in account resolution", async () => {
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            defaultAccount: "work",
+            serverUrl: "http://localhost:3000",
+            password: "top-secret",
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret",
+                name: "Work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.name).toBe("Work");
+    expect(resolved.baseUrl).toBe("http://localhost:1234");
+    expect(resolved.configured).toBe(true);
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await blueBubblesSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            defaultAccount: "work",
+            serverUrl: "http://localhost:3000",
+            password: "top-secret",
+            accounts: {
+              alerts: {
+                serverUrl: "http://localhost:4000",
+                password: "alerts-secret",
+              },
+              work: {
+                serverUrl: "",
+                password: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
+    const next = blueBubblesSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          bluebubbles: {
+            allowFrom: ["user@example.com"],
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    const workAccount = next?.channels?.bluebubbles?.accounts?.work as
+      | {
+          dmPolicy?: string;
+          allowFrom?: string[];
+        }
+      | undefined;
+    expect(next?.channels?.bluebubbles?.dmPolicy).toBeUndefined();
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["user@example.com", "*"]);
   });
 });
 
@@ -173,6 +322,36 @@ describe("resolveBlueBubblesAccount", () => {
 
     expect(resolved.configured).toBe(true);
     expect(resolved.baseUrl).toBe("http://localhost:1234");
+  });
+
+  it("strips stale legacy private-network aliases after canonical normalization", () => {
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            network: {
+              allowPrivateNetwork: true,
+            },
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret", // pragma: allowlist secret
+                network: {
+                  dangerouslyAllowPrivateNetwork: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.network).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+    });
+    expect("allowPrivateNetwork" in resolved.config).toBe(false);
+    expect(isPrivateNetworkOptInEnabled(resolved.config)).toBe(false);
   });
 });
 
@@ -239,6 +418,50 @@ describe("BlueBubblesConfigSchema", () => {
     });
     expect(parsed.success).toBe(true);
   });
+
+  it("defaults enrichGroupParticipantsFromContacts to true", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: "secret", // pragma: allowlist secret
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) {
+      return;
+    }
+    expect(parsed.data.enrichGroupParticipantsFromContacts).toBe(true);
+  });
+
+  it("defaults account enrichGroupParticipantsFromContacts to true", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      accounts: {
+        work: {
+          serverUrl: "http://localhost:1234",
+          password: "secret", // pragma: allowlist secret
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) {
+      return;
+    }
+    const accountConfig = (
+      parsed.data as { accounts?: { work?: { enrichGroupParticipantsFromContacts?: boolean } } }
+    ).accounts?.work;
+    expect(accountConfig?.enrichGroupParticipantsFromContacts).toBe(true);
+  });
+
+  it("accepts explicit enrichGroupParticipantsFromContacts at channel and account scope", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      enrichGroupParticipantsFromContacts: true,
+      accounts: {
+        work: {
+          enrichGroupParticipantsFromContacts: false,
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
 });
 
 describe("bluebubbles group policy", () => {
@@ -258,7 +481,6 @@ describe("bluebubbles group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveBlueBubblesGroupRequireMention({ cfg, groupId: "chat:primary" })).toBe(false);

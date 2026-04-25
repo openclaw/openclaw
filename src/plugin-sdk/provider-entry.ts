@@ -1,12 +1,18 @@
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
-import { buildSingleProviderApiKeyCatalog } from "../plugins/provider-catalog.js";
-import type { ProviderPlugin, ProviderPluginWizardSetup } from "../plugins/types.js";
+import type {
+  ProviderPlugin,
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderPluginCatalog,
+  ProviderPluginWizardSetup,
+} from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
 } from "./plugin-entry.js";
+import { buildSingleProviderApiKeyCatalog } from "./provider-catalog-shared.js";
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
 
@@ -18,10 +24,23 @@ export type SingleProviderPluginApiKeyAuthOptions = Omit<
   wizard?: false | ProviderPluginWizardSetup;
 };
 
-export type SingleProviderPluginCatalogOptions = {
-  buildProvider: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
-  allowExplicitBaseUrl?: boolean;
-};
+export type SingleProviderPluginCatalogOptions =
+  | {
+      buildProvider: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
+      buildStaticProvider?: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
+      allowExplicitBaseUrl?: boolean;
+      run?: never;
+      order?: never;
+      staticRun?: never;
+    }
+  | {
+      run: ProviderPluginCatalog["run"];
+      staticRun?: ProviderPluginCatalog["run"];
+      order?: ProviderPluginCatalog["order"];
+      buildProvider?: never;
+      buildStaticProvider?: never;
+      allowExplicitBaseUrl?: never;
+    };
 
 export type SingleProviderPluginOptions = {
   id: string;
@@ -39,7 +58,7 @@ export type SingleProviderPluginOptions = {
     catalog: SingleProviderPluginCatalogOptions;
   } & Omit<
     ProviderPlugin,
-    "id" | "label" | "docsPath" | "aliases" | "envVars" | "auth" | "catalog"
+    "id" | "label" | "docsPath" | "aliases" | "envVars" | "auth" | "catalog" | "staticCatalog"
   >;
   register?: (api: OpenClawPluginApi) => void;
 };
@@ -111,6 +130,42 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             ...(wizard ? { wizard } : {}),
           });
         });
+        let catalog: ProviderPluginCatalog;
+        if ("run" in provider.catalog) {
+          const catalogRun = provider.catalog.run;
+          catalog = {
+            order: provider.catalog.order ?? "simple",
+            run: catalogRun!,
+          };
+        } else {
+          const buildProvider = provider.catalog.buildProvider;
+          catalog = {
+            order: "simple",
+            run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> =>
+              buildSingleProviderApiKeyCatalog({
+                ctx,
+                providerId,
+                buildProvider,
+                ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
+              }),
+          };
+        }
+        const staticCatalog: ProviderPluginCatalog | undefined =
+          "run" in provider.catalog
+            ? provider.catalog.staticRun
+              ? {
+                  order: provider.catalog.order ?? "simple",
+                  run: provider.catalog.staticRun,
+                }
+              : undefined
+            : provider.catalog.buildStaticProvider
+              ? {
+                  order: "simple",
+                  run: async () => ({
+                    provider: await provider.catalog.buildStaticProvider!(),
+                  }),
+                }
+              : undefined;
         api.registerProvider({
           id: providerId,
           label: provider.label,
@@ -118,20 +173,21 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           ...(provider.aliases ? { aliases: provider.aliases } : {}),
           ...(envVars ? { envVars } : {}),
           auth,
-          catalog: {
-            order: "simple",
-            run: (ctx) =>
-              buildSingleProviderApiKeyCatalog({
-                ctx,
-                providerId,
-                buildProvider: provider.catalog.buildProvider,
-                ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
-              }),
-          },
+          catalog,
+          ...(staticCatalog ? { staticCatalog } : {}),
           ...Object.fromEntries(
             Object.entries(provider).filter(
               ([key]) =>
-                !["id", "label", "docsPath", "aliases", "envVars", "auth", "catalog"].includes(key),
+                ![
+                  "id",
+                  "label",
+                  "docsPath",
+                  "aliases",
+                  "envVars",
+                  "auth",
+                  "catalog",
+                  "staticCatalog",
+                ].includes(key),
             ),
           ),
         });

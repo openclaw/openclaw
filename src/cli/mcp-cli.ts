@@ -5,7 +5,13 @@ import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../config/mcp-config.js";
+import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
+import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 
 function fail(message: string): never {
   defaultRuntime.error(message);
@@ -18,7 +24,47 @@ function printJson(value: unknown): void {
 }
 
 export function registerMcpCli(program: Command) {
-  const mcp = program.command("mcp").description("Manage OpenClaw MCP server config");
+  const mcp = program.command("mcp").description("Manage OpenClaw MCP config and channel bridge");
+
+  mcp
+    .command("serve")
+    .description("Expose OpenClaw channels over MCP stdio")
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--token-file <path>", "Read gateway token from file")
+    .option("--password <password>", "Gateway password (if required)")
+    .option("--password-file <path>", "Read gateway password from file")
+    .option(
+      "--claude-channel-mode <mode>",
+      "Claude channel notification mode: auto, on, or off",
+      "auto",
+    )
+    .option("-v, --verbose", "Verbose logging to stderr", false)
+    .action(async (opts) => {
+      try {
+        const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
+        const claudeChannelMode = normalizeLowercaseStringOrEmpty(
+          normalizeStringifiedOptionalString(opts.claudeChannelMode) ?? "auto",
+        );
+        if (
+          claudeChannelMode !== "auto" &&
+          claudeChannelMode !== "on" &&
+          claudeChannelMode !== "off"
+        ) {
+          throw new Error("Invalid --claude-channel-mode value. Use auto, on, or off.");
+        }
+        await serveOpenClawChannelMcp({
+          gatewayUrl: opts.url as string | undefined,
+          gatewayToken,
+          gatewayPassword,
+          claudeChannelMode,
+          verbose: Boolean(opts.verbose),
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
 
   mcp
     .command("list")

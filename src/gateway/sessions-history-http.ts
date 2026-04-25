@@ -3,24 +3,37 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   setSseHeaders,
 } from "./http-common.js";
-import { getHeader } from "./http-utils.js";
 import {
-  attachOpenClawTranscriptMeta,
+  authorizeScopedGatewayHttpRequestOrReply,
+  checkGatewayHttpRequestAuth,
+  getHeader,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
+import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
+import {
   readSessionMessages,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
+
+const log = createSubsystemLogger("gateway/sessions-history-sse");
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
@@ -31,14 +44,14 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
     return null;
   }
   try {
-    return decodeURIComponent(match[1] ?? "").trim() || null;
+    return normalizeOptionalString(decodeURIComponent(match[1] ?? "")) ?? null;
   } catch {
     return "";
   }
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = getHeader(req, "accept")?.toLowerCase() ?? "";
+  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
   return accept.includes("text/event-stream");
 }
 
@@ -58,63 +71,8 @@ function resolveLimit(req: IncomingMessage): number | undefined {
   return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
 }
 
-function resolveCursor(req: IncomingMessage): string | undefined {
-  const raw = getRequestUrl(req).searchParams.get("cursor");
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-type PaginatedSessionHistory = {
-  items: unknown[];
-  messages: unknown[];
-  nextCursor?: string;
-  hasMore: boolean;
-};
-
-function resolveCursorSeq(cursor: string | undefined): number | undefined {
-  if (!cursor) {
-    return undefined;
-  }
-  const normalized = cursor.startsWith("seq:") ? cursor.slice(4) : cursor;
-  const value = Number.parseInt(normalized, 10);
-  return Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function resolveMessageSeq(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const meta = (message as { __openclaw?: unknown }).__openclaw;
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const seq = (meta as { seq?: unknown }).seq;
-  return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : undefined;
-}
-
-function paginateSessionMessages(
-  messages: unknown[],
-  limit: number | undefined,
-  cursor: string | undefined,
-): PaginatedSessionHistory {
-  const cursorSeq = resolveCursorSeq(cursor);
-  const endExclusive =
-    typeof cursorSeq === "number"
-      ? Math.max(0, Math.min(messages.length, cursorSeq - 1))
-      : messages.length;
-  const start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
-  const items = messages.slice(start, endExclusive);
-  const firstSeq = resolveMessageSeq(items[0]);
-  return {
-    items,
-    messages: items,
-    hasMore: start > 0,
-    ...(start > 0 && typeof firstSeq === "number" ? { nextCursor: String(firstSeq) } : {}),
-  };
-}
-
 function canonicalizePath(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -136,6 +94,7 @@ export async function handleSessionHistoryHttpRequest(
   res: ServerResponse,
   opts: {
     auth: ResolvedGatewayAuth;
+    getResolvedAuth?: () => ResolvedGatewayAuth;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
@@ -154,18 +113,22 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  const cfg = loadConfig();
-  const ok = await authorizeGatewayBearerRequestOrReply({
+  // HTTP callers must declare the same least-privilege operator scopes they
+  // intend to use over WS so both transport surfaces enforce the same gate.
+  const authResult = await authorizeScopedGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
-    trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
+    operatorMethod: "chat.history",
+    resolveOperatorScopes: resolveTrustedHttpOperatorScopes,
   });
-  if (!ok) {
+  if (!authResult) {
     return true;
   }
+  const { cfg } = authResult;
 
   const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
   const store = loadSessionStore(target.storePath);
@@ -181,14 +144,24 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const limit = resolveLimit(req);
-  const cursor = resolveCursor(req);
-  const history = paginateSessionMessages(
-    entry?.sessionId
-      ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
-      : [],
+  const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
+  const effectiveMaxChars =
+    typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
+      ? cfg.gateway.webchat.chatHistoryMaxChars
+      : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  // Read the transcript once and derive both sanitized and raw views from the
+  // same snapshot, eliminating the theoretical race window where a concurrent
+  // write between two separate reads could cause seq/content divergence.
+  const rawSnapshot = entry?.sessionId
+    ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
+    : [];
+  const historySnapshot = buildSessionHistorySnapshot({
+    rawMessages: rawSnapshot,
+    maxChars: effectiveMaxChars,
     limit,
     cursor,
-  );
+  });
+  const history = historySnapshot.history;
 
   if (!shouldStreamSse(req)) {
     sendJson(res, 200, {
@@ -212,6 +185,18 @@ export async function handleSessionHistoryHttpRequest(
     : new Set<string>();
 
   let sentHistory = history;
+  const sseState = SessionHistorySseState.fromRawSnapshot({
+    target: {
+      sessionId: entry.sessionId,
+      storePath: target.storePath,
+      sessionFile: entry.sessionFile,
+    },
+    rawMessages: rawSnapshot,
+    maxChars: effectiveMaxChars,
+    limit,
+    cursor,
+  });
+  sentHistory = sseState.snapshot();
   setSseHeaders(res);
   res.write("retry: 1000\n\n");
   sseWrite(res, "history", {
@@ -219,59 +204,128 @@ export async function handleSessionHistoryHttpRequest(
     ...sentHistory,
   });
 
-  const heartbeat = setInterval(() => {
-    if (!res.writableEnded) {
-      res.write(": keepalive\n\n");
+  let cleanedUp = false;
+  let streamQueue = Promise.resolve();
+  // Forward-declared so `cleanup` can reference them without relying on
+  // Temporal-Dead-Zone leniency. A future refactor that wires the close event
+  // listeners before the `setInterval` / `onSessionTranscriptUpdate` calls
+  // would otherwise hit a `ReferenceError` on the first cleanup invocation.
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let unsubscribe: (() => void) | undefined;
+
+  const cleanup = () => {
+    if (cleanedUp) {
+      return;
     }
+    cleanedUp = true;
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+    if (unsubscribe) {
+      unsubscribe();
+    }
+  };
+
+  const closeStream = () => {
+    cleanup();
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+
+  const queueStreamWork = (work: () => Promise<void>) => {
+    streamQueue = streamQueue
+      .then(async () => {
+        if (cleanedUp || res.writableEnded) {
+          return;
+        }
+        await work();
+      })
+      .catch((error) => {
+        // Surface the underlying error so operators can distinguish transient
+        // infrastructure failures (for example a `loadConfig()` read error
+        // inside the reauth path) from deliberate revocation, then fail closed.
+        log.warn("session history SSE stream work failed; closing stream", { error });
+        closeStream();
+      });
+  };
+
+  const isStreamStillAuthorized = async (): Promise<boolean> => {
+    const cfg = loadConfig();
+    const currentRequestAuth = await checkGatewayHttpRequestAuth({
+      req,
+      auth: opts.getResolvedAuth?.() ?? opts.auth,
+      trustedProxies: cfg.gateway?.trustedProxies,
+      allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
+      rateLimiter: opts.rateLimiter,
+      cfg,
+    });
+    if (!currentRequestAuth.ok) {
+      return false;
+    }
+    const requestedScopes = resolveTrustedHttpOperatorScopes(req, currentRequestAuth.requestAuth);
+    return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
+  };
+
+  heartbeat = setInterval(() => {
+    queueStreamWork(async () => {
+      if (!(await isStreamStillAuthorized())) {
+        closeStream();
+        return;
+      }
+      if (!res.writableEnded) {
+        res.write(": keepalive\n\n");
+      }
+    });
   }, 15_000);
 
-  const unsubscribe = onSessionTranscriptUpdate((update) => {
-    if (res.writableEnded || !entry?.sessionId) {
+  unsubscribe = onSessionTranscriptUpdate((update) => {
+    // Filter to candidate sessions synchronously before enqueueing any async
+    // work. `onSessionTranscriptUpdate` is a global fan-out listener, so every
+    // transcript write in the gateway would otherwise append a Promise-chain
+    // entry capturing `update.message` to every open SSE stream's queue —
+    // O(streams × updates) for busy deployments.
+    if (!entry?.sessionId) {
       return;
     }
     const updatePath = canonicalizePath(update.sessionFile);
     if (!updatePath || !transcriptCandidates.has(updatePath)) {
       return;
     }
-    if (update.message !== undefined) {
-      const previousSeq = resolveMessageSeq(sentHistory.items.at(-1));
-      const nextMessage = attachOpenClawTranscriptMeta(update.message, {
-        ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
-        seq:
-          typeof previousSeq === "number"
-            ? previousSeq + 1
-            : readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile).length,
-      });
-      if (limit === undefined && cursor === undefined) {
-        sentHistory = {
-          items: [...sentHistory.items, nextMessage],
-          messages: [...sentHistory.items, nextMessage],
-          hasMore: false,
-        };
-        sseWrite(res, "message", {
-          sessionKey: target.canonicalKey,
-          message: nextMessage,
-          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-          messageSeq: resolveMessageSeq(nextMessage),
-        });
+    queueStreamWork(async () => {
+      if (res.writableEnded) {
         return;
       }
-    }
-    sentHistory = paginateSessionMessages(
-      readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile),
-      limit,
-      cursor,
-    );
-    sseWrite(res, "history", {
-      sessionKey: target.canonicalKey,
-      ...sentHistory,
+      if (!(await isStreamStillAuthorized())) {
+        closeStream();
+        return;
+      }
+      if (update.message !== undefined) {
+        if (limit === undefined && cursor === undefined) {
+          const nextEvent = sseState.appendInlineMessage({
+            message: update.message,
+            messageId: update.messageId,
+          });
+          if (!nextEvent) {
+            return;
+          }
+          sentHistory = sseState.snapshot();
+          sseWrite(res, "message", {
+            sessionKey: target.canonicalKey,
+            message: nextEvent.message,
+            ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+            messageSeq: nextEvent.messageSeq,
+          });
+          return;
+        }
+      }
+      sentHistory = sseState.refresh();
+      sseWrite(res, "history", {
+        sessionKey: target.canonicalKey,
+        ...sentHistory,
+      });
     });
   });
-
-  const cleanup = () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-  };
   req.on("close", cleanup);
   res.on("close", cleanup);
   res.on("finish", cleanup);

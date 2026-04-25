@@ -2,17 +2,21 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/extensions/jiti-runtime-api.ts";
+import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
-import { setLineRuntime } from "./runtime.js";
+import { lineGatewayAdapter } from "./gateway.js";
+import { probeLineBot } from "./probe.js";
+import { clearLineRuntime, setLineRuntime } from "./runtime.js";
+import { lineSetupWizard } from "./setup-surface.js";
+import { lineStatusAdapter } from "./status.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMock = vi.fn();
@@ -27,14 +31,14 @@ vi.mock("@line/bot-sdk", () => ({
 }));
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
-let probeLineBot: typeof import("./probe.js").probeLineBot;
+const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;
 
 function normalizeModuleSpecifier(specifier: string): string | null {
   if (specifier.startsWith("./src/")) {
     return specifier;
   }
-  if (specifier.startsWith("../../extensions/line/src/")) {
-    return `./src/${specifier.slice("../../extensions/line/src/".length)}`;
+  if (specifier.startsWith(LINE_SRC_PREFIX)) {
+    return `./src/${specifier.slice(LINE_SRC_PREFIX.length)}`;
   }
   return null;
 }
@@ -88,18 +92,15 @@ function collectModuleExportNames(filePath: string): string[] {
   return Array.from(names).toSorted();
 }
 
-function collectRuntimeApiOverlapExports(params: {
-  lineRuntimePath: string;
-  runtimeApiPath: string;
-}): string[] {
-  const runtimeApiSource = readFileSync(params.runtimeApiPath, "utf8");
+function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
+  const runtimeApiSource = readFileSync(runtimeApiPath, "utf8");
   const runtimeApiFile = ts.createSourceFile(
-    params.runtimeApiPath,
+    runtimeApiPath,
     runtimeApiSource,
     ts.ScriptTarget.Latest,
     true,
   );
-  const runtimeApiLocalModules = new Set<string>();
+  const preExports = new Set<string>();
   let pluginSdkLineRuntimeSeen = false;
 
   for (const statement of runtimeApiFile.statements) {
@@ -115,36 +116,10 @@ function collectRuntimeApiOverlapExports(params: {
     }
     if (moduleSpecifier === "openclaw/plugin-sdk/line-runtime") {
       pluginSdkLineRuntimeSeen = true;
-      continue;
-    }
-    if (!pluginSdkLineRuntimeSeen) {
-      continue;
+      break;
     }
     const normalized = normalizeModuleSpecifier(moduleSpecifier);
-    if (normalized) {
-      runtimeApiLocalModules.add(normalized);
-    }
-  }
-
-  const lineRuntimeSource = readFileSync(params.lineRuntimePath, "utf8");
-  const lineRuntimeFile = ts.createSourceFile(
-    params.lineRuntimePath,
-    lineRuntimeSource,
-    ts.ScriptTarget.Latest,
-    true,
-  );
-  const overlapExports = new Set<string>();
-
-  for (const statement of lineRuntimeFile.statements) {
-    if (!ts.isExportDeclaration(statement)) {
-      continue;
-    }
-    const moduleSpecifier =
-      statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
-        ? statement.moduleSpecifier.text
-        : undefined;
-    const normalized = moduleSpecifier ? normalizeModuleSpecifier(moduleSpecifier) : null;
-    if (!normalized || !runtimeApiLocalModules.has(normalized)) {
+    if (!normalized) {
       continue;
     }
 
@@ -152,7 +127,7 @@ function collectRuntimeApiOverlapExports(params: {
       for (const name of collectModuleExportNames(
         path.join(process.cwd(), "extensions", "line", normalized),
       )) {
-        overlapExports.add(name);
+        preExports.add(name);
       }
       continue;
     }
@@ -163,47 +138,13 @@ function collectRuntimeApiOverlapExports(params: {
 
     for (const element of statement.exportClause.elements) {
       if (!element.isTypeOnly) {
-        overlapExports.add(element.name.text);
+        preExports.add(element.name.text);
       }
     }
   }
 
-  return Array.from(overlapExports).toSorted();
-}
-
-function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
-  const runtimeApiSource = readFileSync(runtimeApiPath, "utf8");
-  const runtimeApiFile = ts.createSourceFile(
-    runtimeApiPath,
-    runtimeApiSource,
-    ts.ScriptTarget.Latest,
-    true,
-  );
-  const preExports = new Set<string>();
-
-  for (const statement of runtimeApiFile.statements) {
-    if (!ts.isExportDeclaration(statement)) {
-      continue;
-    }
-    const moduleSpecifier =
-      statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
-        ? statement.moduleSpecifier.text
-        : undefined;
-    if (!moduleSpecifier) {
-      continue;
-    }
-    if (moduleSpecifier === "openclaw/plugin-sdk/line-runtime") {
-      break;
-    }
-    const normalized = normalizeModuleSpecifier(moduleSpecifier);
-    if (!normalized || !statement.exportClause || !ts.isNamedExports(statement.exportClause)) {
-      continue;
-    }
-    for (const element of statement.exportClause.elements) {
-      if (!element.isTypeOnly) {
-        preExports.add(element.name.text);
-      }
-    }
+  if (!pluginSdkLineRuntimeSeen) {
+    return [];
   }
 
   return Array.from(preExports).toSorted();
@@ -235,20 +176,139 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelAccessToken).toBe("line-token");
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
+
+  it("reads the named-account DM policy instead of the channel root", async () => {
+    expect(
+      lineSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            line: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  channelAccessToken: "token",
+                  channelSecret: "secret",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", async () => {
+    expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual({
+      policyKey: "channels.line.accounts.work.dmPolicy",
+      allowFromKey: "channels.line.accounts.work.allowFrom",
+    });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+    const cfg = {
+      channels: {
+        line: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["Uroot"],
+          accounts: {
+            work: {
+              channelAccessToken: "token",
+              channelSecret: "secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(lineSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.line.accounts.work.dmPolicy",
+      allowFromKey: "channels.line.accounts.work.allowFrom",
+    });
+
+    const next = lineSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    const workAccount = next?.channels?.line?.accounts?.work as
+      | {
+          dmPolicy?: string;
+        }
+      | undefined;
+    expect(next?.channels?.line?.dmPolicy).toBe("disabled");
+    expect(workAccount?.dmPolicy).toBe("open");
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
+    const next = lineSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          line: {
+            allowFrom: ["Uroot"],
+            accounts: {
+              work: {
+                channelAccessToken: "token",
+                channelSecret: "secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "open",
+      "work",
+    );
+
+    const workAccount = next?.channels?.line?.accounts?.work as
+      | {
+          dmPolicy?: string;
+          allowFrom?: string[];
+        }
+      | undefined;
+    expect(next?.channels?.line?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.line?.allowFrom).toEqual(["Uroot"]);
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["Uroot", "*"]);
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await lineSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            channelAccessToken: "root-token",
+            channelSecret: "root-secret",
+            accounts: {
+              alerts: {
+                channelAccessToken: "alerts-token",
+                channelSecret: "alerts-secret",
+              },
+              work: {
+                channelAccessToken: "",
+                channelSecret: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
+  });
 });
 
 describe("probeLineBot", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     getBotInfoMock.mockReset();
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };
     });
-    ({ probeLineBot } = await import("./probe.js"));
   });
 
   afterEach(() => {
+    clearLineRuntime();
     vi.useRealTimers();
     getBotInfoMock.mockClear();
   });
@@ -280,41 +340,47 @@ describe("probeLineBot", () => {
   });
 });
 
-describe("line runtime api", () => {
-  it("loads through Jiti without duplicate export errors", () => {
-    const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-
-    expect(
-      loadRuntimeApiExportTypesViaJiti({
-        modulePath: runtimeApiPath,
-        exportNames: [
-          "buildTemplateMessageFromPayload",
-          "downloadLineMedia",
-          "isSenderAllowed",
-          "probeLineBot",
-          "pushMessageLine",
-        ],
-        realPluginSdkSpecifiers: ["openclaw/plugin-sdk/line-runtime"],
-      }),
-    ).toEqual({
-      buildTemplateMessageFromPayload: "function",
-      downloadLineMedia: "function",
-      isSenderAllowed: "function",
-      probeLineBot: "function",
-      pushMessageLine: "function",
+describe("linePlugin status.probeAccount", () => {
+  it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    MessagingApiClientMock.mockReset();
+    MessagingApiClientMock.mockImplementation(function () {
+      return { getBotInfo: getBotInfoMock };
     });
-  }, 240_000);
+    getBotInfoMock.mockResolvedValue({
+      displayName: "OpenClaw",
+      userId: "U123",
+      basicId: "@openclaw",
+      pictureUrl: "https://example.com/bot.png",
+    });
 
-  it("keeps the LINE pre-export block aligned with plugin-sdk/line-runtime overlap", () => {
-    const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-    const lineRuntimePath = path.join(process.cwd(), "src", "plugin-sdk", "line-runtime.ts");
+    const params = {
+      cfg: {} as OpenClawConfig,
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+      } as ResolvedLineAccount,
+      timeoutMs: 50,
+    };
 
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual(
-      collectRuntimeApiOverlapExports({
-        lineRuntimePath,
-        runtimeApiPath,
-      }),
+    clearLineRuntime();
+
+    await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual(
+      await probeLineBot("token", 50),
     );
+  });
+});
+
+describe("line runtime api", () => {
+  it("keeps the LINE runtime barrel self-contained", () => {
+    const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
+    expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
+    const runtimeApiSource = readFileSync(runtimeApiPath, "utf8");
+
+    expect(runtimeApiSource).not.toContain("openclaw/plugin-sdk/line-runtime");
+    expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
   });
 });
 
@@ -355,7 +421,7 @@ function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: 
   setLineRuntime(runtime);
   return {
     monitorLineProvider,
-    task: linePlugin.gateway!.startAccount!(
+    task: lineGatewayAdapter.startAccount!(
       createStartAccountContext({
         account: params.account,
         abortSignal: params.abortSignal,

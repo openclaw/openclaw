@@ -1,13 +1,11 @@
 ---
-summary: "Group chat behavior across surfaces (WhatsApp/Telegram/Discord/Slack/Signal/iMessage/Microsoft Teams/Zalo)"
+summary: "Group chat behavior across surfaces (Discord/iMessage/Matrix/Microsoft Teams/Signal/Slack/Telegram/WhatsApp/Zalo)"
 read_when:
   - Changing group chat behavior or mention gating
 title: "Groups"
 ---
 
-# Groups
-
-OpenClaw treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Microsoft Teams, Zalo.
+OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo.
 
 ## Beginner intro (2 minutes)
 
@@ -36,6 +34,28 @@ requireMention? yes -> mentioned? no -> store for context only
 otherwise -> reply
 ```
 
+## Context visibility and allowlists
+
+Two different controls are involved in group safety:
+
+- **Trigger authorization**: who can trigger the agent (`groupPolicy`, `groups`, `groupAllowFrom`, channel-specific allowlists).
+- **Context visibility**: what supplemental context is injected into the model (reply text, quotes, thread history, forwarded metadata).
+
+By default, OpenClaw prioritizes normal chat behavior and keeps context mostly as received. This means allowlists primarily decide who can trigger actions, not a universal redaction boundary for every quoted or historical snippet.
+
+Current behavior is channel-specific:
+
+- Some channels already apply sender-based filtering for supplemental context in specific paths (for example Slack thread seeding, Matrix reply/thread lookups).
+- Other channels still pass quote/reply/forward context through as received.
+
+Hardening direction (planned):
+
+- `contextVisibility: "all"` (default) keeps current as-received behavior.
+- `contextVisibility: "allowlist"` filters supplemental context to allowlisted senders.
+- `contextVisibility: "allowlist_quote"` is `allowlist` plus one explicit quote/reply exception.
+
+Until this hardening model is implemented consistently across channels, expect differences by surface.
+
 ![Group message flow](/images/groups-flow.svg)
 
 If you want...
@@ -54,16 +74,18 @@ If you want...
 - Direct chats use the main session (or per-sender if configured).
 - Heartbeats are skipped for group sessions.
 
+<a id="pattern-personal-dms-public-groups-single-agent"></a>
+
 ## Pattern: personal DMs + public groups (single agent)
 
 Yes — this works well if your “personal” traffic is **DMs** and your “public” traffic is **groups**.
 
-Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in Docker while your main DM session stays on-host.
+Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in the configured sandbox backend while your main DM session stays on-host. Docker is the default backend if you do not choose one.
 
 This gives you one agent “brain” (shared workspace + memory), but two execution postures:
 
 - **DMs**: full tools (host)
-- **Groups**: sandbox + restricted tools (Docker)
+- **Groups**: sandbox + restricted tools
 
 > If you need truly separate workspaces/personas (“personal” and “public” must never mix), use a second agent + bindings. See [Multi-Agent Routing](/concepts/multi-agent).
 
@@ -116,7 +138,7 @@ Want “groups can only see folder X” instead of “no host access”? Keep `w
 
 Related:
 
-- Configuration keys and defaults: [Gateway configuration](/gateway/configuration-reference#agentsdefaultssandbox)
+- Configuration keys and defaults: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
 - Bind mounts details: [Sandboxing](/gateway/sandboxing#custom-bind-mounts)
 
@@ -166,8 +188,8 @@ Control how group/room messages are handled per channel:
       groupPolicy: "allowlist",
       groupAllowFrom: ["@owner:example.org"],
       groups: {
-        "!roomId:example.org": { allow: true },
-        "#alias:example.org": { allow: true },
+        "!roomId:example.org": { enabled: true },
+        "#alias:example.org": { enabled: true },
       },
     },
   },
@@ -187,7 +209,7 @@ Notes:
 - DM pairing approvals (`*-allowFrom` store entries) apply to DM access only; group sender authorization stays explicit to group allowlists.
 - Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
 - Slack: allowlist uses `channels.slack.channels`.
-- Matrix: allowlist uses `channels.matrix.groups` (room IDs, aliases, or names). Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
+- Matrix: allowlist uses `channels.matrix.groups`. Prefer room IDs or aliases; joined-room name lookup is best-effort, and unresolved names are ignored at runtime. Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
 - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`).
 - Telegram allowlist can match user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) or usernames (`"@alice"` or `"alice"`); prefixes are case-insensitive.
 - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
@@ -203,7 +225,10 @@ Quick mental model (evaluation order for group messages):
 
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
-Replying to a bot message counts as an implicit mention (when the channel supports reply metadata). This applies to Telegram, WhatsApp, Slack, Discord, and Microsoft Teams.
+Replying to a bot message counts as an implicit mention when the channel
+supports reply metadata. Quoting a bot message can also count as an implicit
+mention on channels that expose quote metadata. Current built-in cases include
+Telegram, WhatsApp, Slack, Discord, Microsoft Teams, and ZaloUser.
 
 ```json5
 {
@@ -296,6 +321,9 @@ Notes:
 
 When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
 
+Common confusion: DM pairing approval is not the same as group authorization.
+For channels that support DM pairing, the pairing store unlocks DMs only. Group commands still require explicit group sender authorization from config allowlists such as `groupAllowFrom` or the documented config fallback for that channel.
+
 Common intents (copy/paste):
 
 1. Disable all group replies
@@ -366,7 +394,11 @@ Group inbound payloads set:
 - `WasMentioned` (mention gating result)
 - Telegram forum topics also include `MessageThreadId` and `IsForum`.
 
-The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, and avoid typing literal `\n` sequences.
+Channel specific notes:
+
+- BlueBubbles can optionally enrich unnamed macOS group participants from the local Contacts database before populating `GroupMembers`. This is off by default and only runs after normal group gating passes.
+
+The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
 
 ## iMessage specifics
 
@@ -374,6 +406,17 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - List chats: `imsg chats --limit 20`.
 - Group replies always go back to the same `chat_id`.
 
+## WhatsApp system prompts
+
+See [WhatsApp](/channels/whatsapp#system-prompts) for the canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics.
+
 ## WhatsApp specifics
 
 See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
+
+## Related
+
+- [Group messages](/channels/group-messages)
+- [Broadcast groups](/channels/broadcast-groups)
+- [Channel routing](/channels/channel-routing)
+- [Pairing](/channels/pairing)

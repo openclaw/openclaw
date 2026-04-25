@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
+import { useFrozenTime, useRealTime } from "../../../test/helpers/plugins/frozen-time.js";
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const {
@@ -10,10 +10,12 @@ const {
   telegramBotDepsForTest,
   telegramBotRuntimeForTest,
 } = harness;
+const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot-core.js");
 
 let createTelegramBot: (
-  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
-) => ReturnType<typeof import("./bot.js").createTelegramBot>;
+  opts: import("./bot.types.js").TelegramBotOptions,
+) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
 
 const loadConfig = getLoadConfigMock();
 
@@ -136,10 +138,7 @@ async function queueChannelPostAlbum(
 }
 
 describe("createTelegramBot channel_post media", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot.js");
+  beforeAll(() => {
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -150,8 +149,7 @@ describe("createTelegramBot channel_post media", () => {
     );
   });
 
-  beforeEach(async () => {
-    const { setTelegramBotRuntimeForTest } = await import("./bot.js");
+  beforeEach(() => {
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
@@ -258,11 +256,9 @@ describe("createTelegramBot channel_post media", () => {
     });
     sendMessageSpy.mockClear();
     replySpy.mockClear();
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async () =>
-        Promise.reject(new Error("MediaFetchError: Failed to fetch media")),
-      );
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("MediaFetchError: Failed to fetch media");
+    });
 
     try {
       createTelegramBot({ token: "tok" });

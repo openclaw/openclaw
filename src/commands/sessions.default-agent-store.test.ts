@@ -1,8 +1,37 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
-const loadConfigMock = vi.hoisted(() =>
-  vi.fn(() => ({
+const loadConfigMock = vi.hoisted(() => vi.fn());
+
+const resolveStorePathMock = vi.hoisted(() =>
+  vi.fn((_store: string | undefined, opts?: { agentId?: string }) => {
+    return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
+  }),
+);
+const loadSessionStoreMock = vi.hoisted(() => vi.fn(() => ({})));
+
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+  };
+});
+
+vi.mock("../config/sessions.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+  return {
+    ...actual,
+    resolveStorePath: resolveStorePathMock,
+    loadSessionStore: loadSessionStoreMock,
+  };
+});
+
+import { sessionsCommand } from "./sessions.js";
+
+function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
+  return {
     agents: {
       defaults: {
         model: { primary: "pi:opus" },
@@ -14,37 +43,9 @@ const loadConfigMock = vi.hoisted(() =>
         { id: "voice", default: true },
       ],
     },
-    session: {
-      store: "/tmp/sessions-{agentId}.json",
-    },
-  })),
-);
-
-const resolveStorePathMock = vi.hoisted(() =>
-  vi.fn((_store: string | undefined, opts?: { agentId?: string }) => {
-    return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
-  }),
-);
-const loadSessionStoreMock = vi.hoisted(() => vi.fn(() => ({})));
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: loadConfigMock,
+    session: { store },
   };
-});
-
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    resolveStorePath: resolveStorePathMock,
-    loadSessionStore: loadSessionStoreMock,
-  };
-});
-
-import { sessionsCommand } from "./sessions.js";
+}
 
 function createRuntime(): { runtime: RuntimeEnv; logs: string[] } {
   const logs: string[] = [];
@@ -61,22 +62,7 @@ function createRuntime(): { runtime: RuntimeEnv; logs: string[] } {
 describe("sessionsCommand default store agent selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadConfigMock.mockImplementation(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "pi:opus" },
-          models: { "pi:opus": {} },
-          contextTokens: 32000,
-        },
-        list: [
-          { id: "main", default: false },
-          { id: "voice", default: true },
-        ],
-      },
-      session: {
-        store: "/tmp/sessions-{agentId}.json",
-      },
-    }));
+    loadConfigMock.mockImplementation(() => createSessionsConfig());
     resolveStorePathMock.mockImplementation(
       (_store: string | undefined, opts?: { agentId?: string }) => {
         return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
@@ -109,22 +95,7 @@ describe("sessionsCommand default store agent selection", () => {
   });
 
   it("avoids duplicate rows when --all-agents resolves to a shared store path", async () => {
-    loadConfigMock.mockImplementation(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "pi:opus" },
-          models: { "pi:opus": {} },
-          contextTokens: 32000,
-        },
-        list: [
-          { id: "main", default: false },
-          { id: "voice", default: true },
-        ],
-      },
-      session: {
-        store: "/tmp/shared-sessions.json",
-      },
-    }));
+    loadConfigMock.mockImplementation(() => createSessionsConfig("/tmp/shared-sessions.json"));
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock.mockReturnValue({
       "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },

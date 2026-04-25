@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseBooleanValue } from "../utils/boolean.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
 const loggedEnv = new Set<string>();
@@ -53,7 +53,28 @@ export function normalizeZaiEnv(): void {
 }
 
 export function isTruthyEnvValue(value?: string): boolean {
-  return parseBooleanValue(value) === true;
+  if (typeof value !== "string") {
+    return false;
+  }
+  switch (normalizeLowercaseStringOrEmpty(value)) {
+    case "1":
+    case "on":
+    case "true":
+    case "yes":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    env.VITEST === "true" ||
+    env.VITEST === "1" ||
+    env.VITEST_POOL_ID !== undefined ||
+    env.VITEST_WORKER_ID !== undefined ||
+    env.NODE_ENV === "test"
+  );
 }
 
 export function normalizeEnv(): void {

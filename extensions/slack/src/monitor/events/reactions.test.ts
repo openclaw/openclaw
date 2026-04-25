@@ -6,13 +6,15 @@ let createSlackSystemEventTestHarness: typeof import("./system-event-test-harnes
 type SlackSystemEventTestOverrides =
   import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
-  return {
-    ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
+}));
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
+}));
+vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
+  readStoreAllowFromForDmPolicy: async () => [],
+}));
 
 type ReactionHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -72,7 +74,6 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
 
 describe("registerSlackReactionEvents", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerSlackReactionEvents } = await import("./reactions.js"));
     ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
   });

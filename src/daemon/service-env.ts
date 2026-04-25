@@ -5,6 +5,7 @@ import {
   resolveLinuxSystemCaBundle,
 } from "../bootstrap/node-extra-ca-certs.js";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -105,6 +106,23 @@ function addCommonEnvConfiguredBinDirs(
   addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
 }
 
+// Nix shell precedence: rightmost profile in NIX_PROFILES = highest priority.
+// When NIX_PROFILES is absent, fall back to the default single-user profile.
+function addNixProfileBinDirs(
+  dirs: string[],
+  home: string,
+  env: Record<string, string | undefined> | undefined,
+): void {
+  const nixProfiles = env?.NIX_PROFILES?.trim();
+  if (nixProfiles) {
+    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
+      addNonEmptyDir(dirs, appendSubdir(profile, "bin"));
+    }
+  } else {
+    dirs.push(`${home}/.nix-profile/bin`);
+  }
+}
+
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
     return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
@@ -147,6 +165,9 @@ export function resolveDarwinUserBinDirs(
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
 
+  // Nix Home Manager (cross-platform)
+  addNixProfileBinDirs(dirs, home, env);
+
   // Node version managers - macOS specific paths
   // nvm: no stable default path, depends on user's shell configuration
   // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
@@ -180,6 +201,9 @@ export function resolveLinuxUserBinDirs(
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
+
+  // Nix Home Manager (cross-platform)
+  addNixProfileBinDirs(dirs, home, env);
 
   // Node version managers
   dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
@@ -296,10 +320,12 @@ export function buildNodeServiceEnvironment(params: {
     extraPathDirs,
     params.execPath,
   );
-  const gatewayToken = env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  const gatewayToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
+  const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+    OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),

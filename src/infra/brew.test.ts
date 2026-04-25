@@ -1,19 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { resolveBrewExecutable, resolveBrewPathDirs } from "./brew.js";
 
 describe("brew helpers", () => {
-  async function withBrewRoot(run: (tmp: string) => Promise<void>) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-brew-"));
-    try {
-      await run(tmp);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  }
-
   async function writeExecutable(filePath: string) {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, "#!/bin/sh\necho ok\n", "utf-8");
@@ -21,7 +12,7 @@ describe("brew helpers", () => {
   }
 
   it("resolves brew from ~/.linuxbrew/bin when executable exists", async () => {
-    await withBrewRoot(async (tmp) => {
+    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const homebrewBin = path.join(tmp, ".linuxbrew", "bin");
       const brewPath = path.join(homebrewBin, "brew");
       await writeExecutable(brewPath);
@@ -32,7 +23,7 @@ describe("brew helpers", () => {
   });
 
   it("prefers HOMEBREW_PREFIX/bin/brew when present", async () => {
-    await withBrewRoot(async (tmp) => {
+    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const prefix = path.join(tmp, "prefix");
       const prefixBin = path.join(prefix, "bin");
       const prefixBrew = path.join(prefixBin, "brew");
@@ -48,7 +39,7 @@ describe("brew helpers", () => {
   });
 
   it("prefers HOMEBREW_BREW_FILE over prefix and trims value", async () => {
-    await withBrewRoot(async (tmp) => {
+    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");
       const prefix = path.join(tmp, "prefix");
       const prefixBrew = path.join(prefix, "bin", "brew");
@@ -64,7 +55,7 @@ describe("brew helpers", () => {
   });
 
   it("falls back to prefix when HOMEBREW_BREW_FILE is missing or not executable", async () => {
-    await withBrewRoot(async (tmp) => {
+    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");
       const prefix = path.join(tmp, "prefix");
       const prefixBrew = path.join(prefix, "bin", "brew");
@@ -89,7 +80,7 @@ describe("brew helpers", () => {
   });
 
   it("ignores blank HOMEBREW_BREW_FILE and HOMEBREW_PREFIX values", async () => {
-    await withBrewRoot(async (tmp) => {
+    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const homebrewBin = path.join(tmp, ".linuxbrew", "bin");
       const brewPath = path.join(homebrewBin, "brew");
       await writeExecutable(brewPath);

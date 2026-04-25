@@ -1,27 +1,31 @@
-import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../config/config.js";
+import { createCodingTools, createReadTool } from "@mariozechner/pi-coding-agent";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
-import {
-  createExecTool,
-  createProcessTool,
-  type ExecToolDefaults,
-  type ProcessToolDefaults,
-} from "./bash-tools.js";
+import { describeExecTool, describeProcessTool } from "./bash-tools.descriptions.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import type { ProcessToolDefaults } from "./bash-tools.process.js";
+import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
+import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
-import { hasNativeWebSearchTool } from "./model-compat.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
+import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy.js";
 import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
@@ -36,16 +40,23 @@ import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
+  getToolParamsRecord,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
-  wrapToolParamNormalization,
+  wrapToolParamValidation,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "./subagent-capabilities.js";
+import {
+  EXEC_TOOL_DISPLAY_SUMMARY,
+  PROCESS_TOOL_DISPLAY_SUMMARY,
+} from "./tool-description-presets.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
@@ -60,47 +71,96 @@ import {
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
-  const normalized = provider?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(provider);
   return normalized === "openai" || normalized === "openai-codex";
 }
 
-const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
-  voice: ["tts"],
-};
-const TOOL_DENY_FOR_XAI_PROVIDERS = new Set(["web_search"]);
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
-function normalizeMessageProvider(messageProvider?: string): string | undefined {
-  const normalized = messageProvider?.trim().toLowerCase();
-  return normalized && normalized.length > 0 ? normalized : undefined;
+type BashToolsModule = typeof import("./bash-tools.js");
+
+let bashToolsModulePromise: Promise<BashToolsModule> | undefined;
+
+function loadBashToolsModule(): Promise<BashToolsModule> {
+  bashToolsModulePromise ??= import("./bash-tools.js");
+  return bashToolsModulePromise;
 }
 
-function applyMessageProviderToolPolicy(
-  tools: AnyAgentTool[],
-  messageProvider?: string,
-): AnyAgentTool[] {
-  const normalizedProvider = normalizeMessageProvider(messageProvider);
-  if (!normalizedProvider) {
-    return tools;
-  }
-  const deniedTools = TOOL_DENY_BY_MESSAGE_PROVIDER[normalizedProvider];
-  if (!deniedTools || deniedTools.length === 0) {
-    return tools;
-  }
-  const deniedSet = new Set(deniedTools);
-  return tools.filter((tool) => !deniedSet.has(tool.name));
+function createLazyExecTool(defaults?: ExecToolDefaults): AnyAgentTool {
+  let loadedTool: AnyAgentTool | undefined;
+  const loadTool = async () => {
+    if (!loadedTool) {
+      const { createExecTool } = await loadBashToolsModule();
+      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
+    }
+    return loadedTool;
+  };
+
+  return {
+    name: "exec",
+    label: "exec",
+    displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
+    get description() {
+      return describeExecTool({
+        agentId: defaults?.agentId,
+        hasCronTool: defaults?.hasCronTool === true,
+      });
+    },
+    parameters: execSchema,
+    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
+      (await loadTool()).execute(...args),
+  } as AnyAgentTool;
+}
+
+function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
+  let loadedTool: AnyAgentTool | undefined;
+  const loadTool = async () => {
+    if (!loadedTool) {
+      const { createProcessTool } = await loadBashToolsModule();
+      loadedTool = createProcessTool(defaults) as unknown as AnyAgentTool;
+    }
+    return loadedTool;
+  };
+
+  return {
+    name: "process",
+    label: "process",
+    displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
+    description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
+    parameters: processSchema,
+    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
+      (await loadTool()).execute(...args),
+  } as AnyAgentTool;
 }
 
 function applyModelProviderToolPolicy(
   tools: AnyAgentTool[],
-  params?: { modelCompat?: ModelCompatConfig },
+  params?: {
+    config?: OpenClawConfig;
+    modelProvider?: string;
+    modelApi?: string;
+    modelId?: string;
+    agentDir?: string;
+    modelCompat?: ModelCompatConfig;
+  },
 ): AnyAgentTool[] {
-  if (!hasNativeWebSearchTool(params?.modelCompat)) {
-    return tools;
+  if (params?.config?.agents?.defaults?.experimental?.localModelLean === true) {
+    const leanDeny = new Set(["browser", "cron", "message"]);
+    tools = tools.filter((tool) => !leanDeny.has(tool.name));
   }
-  // Models with a native web_search tool cannot receive OpenClaw's
-  // web_search at the same time or the request will collide.
-  return tools.filter((tool) => !TOOL_DENY_FOR_XAI_PROVIDERS.has(tool.name));
+
+  if (
+    shouldSuppressManagedWebSearchTool({
+      config: params?.config,
+      modelProvider: params?.modelProvider,
+      modelApi: params?.modelApi,
+      agentDir: params?.agentDir,
+    })
+  ) {
+    return tools.filter((tool) => tool.name !== "web_search");
+  }
+
+  return tools;
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -116,14 +176,14 @@ function isApplyPatchAllowedForModel(params: {
   if (!modelId) {
     return false;
   }
-  const normalizedModelId = modelId.toLowerCase();
-  const provider = params.modelProvider?.trim().toLowerCase();
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const provider = normalizeOptionalLowercaseString(params.modelProvider);
   const normalizedFull =
     provider && !normalizedModelId.includes("/")
       ? `${provider}/${normalizedModelId}`
       : normalizedModelId;
   return allowModels.some((entry) => {
-    const normalized = entry.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(entry);
     if (!normalized) {
       return false;
     }
@@ -190,9 +250,8 @@ export function resolveToolLoopDetectionConfig(params: {
 
 export const __testing = {
   cleanToolSchemaForGemini,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
-  wrapToolParamNormalization,
+  getToolParamsRecord,
+  wrapToolParamValidation,
   assertRequiredParams,
   applyModelProviderToolPolicy,
 } as const;
@@ -210,6 +269,8 @@ export function createOpenClawCodingTools(options?: {
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /** Diagnostic trace context for hook/log correlation during this run. */
+  trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -232,6 +293,8 @@ export function createOpenClawCodingTools(options?: {
   modelProvider?: string;
   /** Model id for the current provider (used for model-specific tool gating). */
   modelId?: string;
+  /** Model API for the current provider (used for provider-native tool arbitration). */
+  modelApi?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */
@@ -253,6 +316,8 @@ export function createOpenClawCodingTools(options?: {
   groupChannel?: string | null;
   /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
   groupSpace?: string | null;
+  /** Trusted provider role ids for the requester in this group turn. */
+  memberRoleIds?: string[];
   /** Parent session key for subagent group policy inheritance. */
   spawnedBy?: string | null;
   senderId?: string | null;
@@ -260,7 +325,7 @@ export function createOpenClawCodingTools(options?: {
   senderUsername?: string | null;
   senderE164?: string | null;
   /** Reply-to mode for Slack auto-threading. */
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
   /** Allow plugin tools for this run to late-bind the gateway subagent. */
@@ -271,6 +336,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Keep the message tool available even when the selected profile omits it. */
+  forceMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
@@ -300,6 +367,10 @@ export function createOpenClawCodingTools(options?: {
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,
   });
+  // Prefer the already-resolved sandbox context policy. Recomputing from
+  // sessionKey/config can lose the real sandbox agent when callers pass a
+  // legacy alias like `main` instead of an agent session key.
+  const sandboxToolPolicy = sandbox?.tools;
   const groupPolicy = resolveGroupToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
@@ -317,18 +388,31 @@ export function createOpenClawCodingTools(options?: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
-  );
+  const runtimeProfileAlsoAllow = options?.forceMessageTool ? ["message"] : [];
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
+    ...(profileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
+    ...(providerProfileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey =
     options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
+  const subagentStore = resolveSubagentCapabilityStore(options?.sessionKey, {
+    cfg: options?.config,
+  });
   const subagentPolicy =
-    isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
-      ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey)
+    options?.sessionKey &&
+    isSubagentEnvelopeSession(options.sessionKey, {
+      cfg: options.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey, {
+          store: subagentStore,
+        })
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
@@ -338,7 +422,7 @@ export function createOpenClawCodingTools(options?: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
-    sandbox?.tools,
+    sandboxToolPolicy,
     subagentPolicy,
   ]);
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
@@ -356,7 +440,7 @@ export function createOpenClawCodingTools(options?: {
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
   const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
-    !!applyPatchConfig?.enabled &&
+    applyPatchConfig?.enabled !== false &&
     isOpenAIProvider(options?.modelProvider) &&
     isApplyPatchAllowedForModel({
       modelProvider: options?.modelProvider,
@@ -369,8 +453,8 @@ export function createOpenClawCodingTools(options?: {
   }
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
 
-  const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
-    if (tool.name === readTool.name) {
+  const base = (createCodingTools(workspaceRoot) as unknown as AnyAgentTool[]).flatMap((tool) => {
+    if (tool.name === "read") {
       if (sandboxRoot) {
         const sandboxed = createSandboxedReadTool({
           root: sandboxRoot,
@@ -413,11 +497,12 @@ export function createOpenClawCodingTools(options?: {
     return [tool];
   });
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
-  const execTool = createExecTool({
+  const execTool = createLazyExecTool({
     ...execDefaults,
     host: options?.exec?.host ?? execConfig.host,
     security: options?.exec?.security ?? execConfig.security,
     ask: options?.exec?.ask ?? execConfig.ask,
+    trigger: options?.trigger,
     node: options?.exec?.node ?? execConfig.node,
     pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
@@ -451,7 +536,7 @@ export function createOpenClawCodingTools(options?: {
         }
       : undefined,
   });
-  const processTool = createProcessTool({
+  const processTool = createLazyProcessTool({
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
     scopeKey,
   });
@@ -508,8 +593,10 @@ export function createOpenClawCodingTools(options?: {
       agentGroupId: options?.groupId ?? null,
       agentGroupChannel: options?.groupChannel ?? null,
       agentGroupSpace: options?.groupSpace ?? null,
+      agentMemberRoleIds: options?.memberRoleIds,
       agentDir: options?.agentDir,
       sandboxRoot,
+      sandboxContainerWorkdir: sandbox?.containerWorkdir,
       sandboxFsBridge,
       fsPolicy,
       workspaceDir: workspaceRoot,
@@ -526,12 +613,14 @@ export function createOpenClawCodingTools(options?: {
         agentPolicy,
         agentProviderPolicy,
         groupPolicy,
-        sandbox?.tools,
+        sandboxToolPolicy,
         subagentPolicy,
       ]),
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
       currentMessageId: options?.currentMessageId,
+      modelProvider: options?.modelProvider,
+      modelId: options?.modelId,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
       modelHasVision: options?.modelHasVision,
@@ -567,11 +656,16 @@ export function createOpenClawCodingTools(options?: {
           return [tool];
         })
       : tools;
-  const toolsForMessageProvider = applyMessageProviderToolPolicy(
+  const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.messageProvider,
   );
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
+    config: options?.config,
+    modelProvider: options?.modelProvider,
+    modelApi: options?.modelApi,
+    modelId: options?.modelId,
+    agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
@@ -585,8 +679,10 @@ export function createOpenClawCodingTools(options?: {
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy: profilePolicyWithAlsoAllow,
         profile,
+        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
+        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
         globalPolicy,
         globalProviderPolicy,
         agentPolicy,
@@ -594,7 +690,7 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy,
         agentId,
       }),
-      { policy: sandbox?.tools, label: "sandbox tools.allow" },
+      { policy: sandboxToolPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
@@ -614,15 +710,19 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,
+      ...(options?.trace ? { trace: options.trace } : {}),
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
   );
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : withHooks;
+  const withDeferredFollowupDescriptions = applyDeferredFollowupToolDescriptions(withAbort, {
+    agentId,
+  });
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  return withDeferredFollowupDescriptions;
 }
