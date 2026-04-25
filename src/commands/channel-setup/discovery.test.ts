@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
 
 const loadInstalledPluginIndex = vi.hoisted(() => vi.fn());
+const listInstalledPluginContributionIds = vi.hoisted(() =>
+  vi.fn((_index?: unknown, _contribution?: unknown, _options?: unknown): string[] => []),
+);
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((): unknown[] => []));
 const listChatChannels = vi.hoisted(() => vi.fn((): Array<Record<string, string>> => []));
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -16,6 +19,8 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 
 vi.mock("../../plugins/installed-plugin-index.js", () => ({
   loadInstalledPluginIndex: (...args: unknown[]) => loadInstalledPluginIndex(...args),
+  listInstalledPluginContributionIds: (index: unknown, contribution: unknown, options?: unknown) =>
+    listInstalledPluginContributionIds(index, contribution, options),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -39,6 +44,7 @@ describe("listManifestInstalledChannelIds", () => {
       plugins: [],
       diagnostics: [],
     });
+    listInstalledPluginContributionIds.mockReset().mockReturnValue([]);
     listChannelPluginCatalogEntries.mockReset().mockReturnValue([]);
     listChatChannels.mockReset().mockReturnValue([]);
     applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({
@@ -65,6 +71,7 @@ describe("listManifestInstalledChannelIds", () => {
       plugins: [{ pluginId: "slack", contributions: { channels: ["slack"] } }],
       diagnostics: [],
     });
+    listInstalledPluginContributionIds.mockReturnValue(["slack"]);
 
     const installedIds = listManifestInstalledChannelIds({
       cfg: {} as never,
@@ -81,6 +88,14 @@ describe("listManifestInstalledChannelIds", () => {
       workspaceDir: "/tmp/workspace",
       env: { OPENCLAW_HOME: "/tmp/home" },
     });
+    expect(listInstalledPluginContributionIds).toHaveBeenCalledWith(
+      {
+        plugins: [{ pluginId: "slack", contributions: { channels: ["slack"] } }],
+        diagnostics: [],
+      },
+      "channels",
+      undefined,
+    );
     expect(installedIds).toEqual(new Set(["slack"]));
   });
 

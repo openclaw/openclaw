@@ -2,6 +2,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  listInstalledPluginContributionIds,
   loadInstalledPluginIndex,
   type InstalledPluginIndex,
   type LoadInstalledPluginIndexParams,
@@ -56,14 +57,11 @@ export function resolveInstalledPluginProviderContributionIds(
   params: ResolveInstalledPluginProviderContributionIdsParams = {},
 ): string[] {
   const index = params.index ?? loadInstalledPluginIndex(params);
-  const providerIds: string[] = [];
-  for (const plugin of index.plugins) {
-    if (!params.includeDisabled && !plugin.enabled) {
-      continue;
-    }
-    providerIds.push(...plugin.contributions.providers);
-  }
-  return sortedValues(providerIds);
+  return sortedValues(
+    listInstalledPluginContributionIds(index, "providers", {
+      includeDisabled: params.includeDisabled,
+    }),
+  );
 }
 
 export async function resolveRuntimePluginDiscoveryProviders(

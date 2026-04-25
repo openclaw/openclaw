@@ -4,8 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
   diffInstalledPluginIndexInvalidationReasons,
+  getInstalledPluginRecord,
+  isInstalledPluginEnabled,
+  listEnabledInstalledPluginRecords,
+  listInstalledPluginContributionIds,
+  listInstalledPluginRecords,
   loadInstalledPluginIndex,
   refreshInstalledPluginIndex,
+  resolveInstalledPluginContributionOwners,
   resolveInstalledPluginContributions,
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
@@ -199,6 +205,66 @@ describe("installed plugin index", () => {
     expect(contributions.providers.get("demo")).toEqual(["demo"]);
     expect(contributions.channels.get("demo-chat")).toEqual(["demo"]);
     expect(contributions.contracts.get("tools")).toEqual(["demo"]);
+  });
+
+  it("exposes cold registry records and owners for existing plugins without install ledgers", () => {
+    const fixture = createRichPluginFixture();
+    const index = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      env: hermeticEnv(),
+    });
+
+    expect(listInstalledPluginRecords(index).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
+    expect(listEnabledInstalledPluginRecords(index).map((plugin) => plugin.pluginId)).toEqual([
+      "demo",
+    ]);
+    const record = getInstalledPluginRecord(index, "demo");
+    expect(record).toMatchObject({
+      pluginId: "demo",
+      enabled: true,
+    });
+    expect(record?.installRecord).toBeUndefined();
+    expect(isInstalledPluginEnabled(index, "demo")).toBe(true);
+    expect(listInstalledPluginContributionIds(index, "providers")).toEqual(["demo"]);
+    expect(resolveInstalledPluginContributionOwners(index, "providers", "demo")).toEqual(["demo"]);
+    expect(resolveInstalledPluginContributionOwners(index, "channels", "demo-chat")).toEqual([
+      "demo",
+    ]);
+  });
+
+  it("keeps disabled plugins in inventory while excluding them from cold owner resolution", () => {
+    const fixture = createRichPluginFixture();
+    const index = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      config: {
+        plugins: {
+          entries: {
+            demo: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(listInstalledPluginRecords(index).map((plugin) => plugin.pluginId)).toEqual(["demo"]);
+    expect(listEnabledInstalledPluginRecords(index)).toEqual([]);
+    expect(getInstalledPluginRecord(index, "demo")).toMatchObject({
+      pluginId: "demo",
+      enabled: false,
+    });
+    expect(isInstalledPluginEnabled(index, "demo")).toBe(false);
+    expect(listInstalledPluginContributionIds(index, "providers")).toEqual([]);
+    expect(
+      listInstalledPluginContributionIds(index, "providers", { includeDisabled: true }),
+    ).toEqual(["demo"]);
+    expect(resolveInstalledPluginContributionOwners(index, "providers", "demo")).toEqual([]);
+    expect(
+      resolveInstalledPluginContributionOwners(index, "providers", "demo", {
+        includeDisabled: true,
+      }),
+    ).toEqual(["demo"]);
   });
 
   it("records the config install ledger separately from package install intent", () => {
