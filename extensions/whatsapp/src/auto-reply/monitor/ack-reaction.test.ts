@@ -200,6 +200,7 @@ describe("maybeSendAckReaction", () => {
         fromMe: false,
         participant: undefined,
         accountId: "default",
+        cfg: expect.any(Object),
       },
     );
   });
@@ -237,6 +238,7 @@ describe("maybeSendAckReaction", () => {
       fromMe: false,
       participant: "999@s.whatsapp.net",
       accountId: "default",
+      cfg: expect.any(Object),
     });
   });
 
