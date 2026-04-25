@@ -209,6 +209,124 @@ jobs:
             //     labels: [trustedLabel],
             //   });
             // }
+      - name: Apply core-plugin routing labels
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              return;
+            }
+
+            const closeLabel = "r: plugin-clawhub";
+            const overrideLabel = "core-plugin-approved";
+
+            const ensureLabel = async (name, color, description) => {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color,
+                  description,
+                });
+              }
+            };
+
+            await ensureLabel(
+              closeLabel,
+              "B60205",
+              "Close new plugin PRs and redirect them to ClawHub",
+            );
+            await ensureLabel(
+              overrideLabel,
+              "0E8A16",
+              "Explicit maintainer approval to consider a new plugin for core",
+            );
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullRequest.number,
+              per_page: 100,
+            });
+
+            const manifestDirs = new Set();
+            const packageDirs = new Set();
+
+            for (const file of files) {
+              const path = file.filename ?? "";
+              if (file.status !== "added") {
+                continue;
+              }
+              const manifestMatch = path.match(/^extensions\/([^/]+)\/openclaw\.plugin\.json$/);
+              if (manifestMatch) {
+                manifestDirs.add(manifestMatch[1]);
+                continue;
+              }
+              const packageMatch = path.match(/^extensions\/([^/]+)\/package\.json$/);
+              if (packageMatch) {
+                packageDirs.add(packageMatch[1]);
+              }
+            }
+
+            const isNewPluginPr = [...manifestDirs].some((dir) => packageDirs.has(dir));
+
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              per_page: 100,
+            });
+            const labelSet = new Set(currentLabels.map((label) => label.name ?? ""));
+            const hasCloseLabel = labelSet.has(closeLabel);
+            const hasOverrideLabel = labelSet.has(overrideLabel);
+            const isReopened = context.payload.action === "reopened";
+
+            if (isNewPluginPr && !hasOverrideLabel && hasCloseLabel && isReopened) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                name: closeLabel,
+              });
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [closeLabel],
+              });
+              return;
+            }
+
+            if (isNewPluginPr && !hasOverrideLabel && !hasCloseLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [closeLabel],
+              });
+              return;
+            }
+
+            if ((!isNewPluginPr || hasOverrideLabel) && hasCloseLabel) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                name: closeLabel,
+              });
+            }
       - name: Apply beta-blocker title label
         uses: actions/github-script@v9
         with:

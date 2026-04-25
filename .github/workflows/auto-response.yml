@@ -84,6 +84,16 @@ jobs:
                   "Please make this as a third-party plugin that you maintain yourself in your own repo. Docs: https://docs.openclaw.ai/plugin. Feel free to open a PR after to add it to our community plugins page: https://docs.openclaw.ai/plugins/community",
               },
               {
+                label: "r: plugin-clawhub",
+                close: true,
+                message:
+                  "Thanks for this contribution. We’re moving new plugins like this to ClawHub instead of `openclaw/openclaw` core. Please consider resubmitting it there.\n\n" +
+                  "- ClawHub: https://clawhub.ai\n" +
+                  "- GitHub: https://github.com/openclaw/clawhub\n" +
+                  "- Plugin docs: https://docs.openclaw.ai/plugins\n\n" +
+                  "If you believe this should be considered for core, please open an enhancement issue first describing why it belongs in core rather than ClawHub.",
+              },
+              {
                 label: "r: moltbook",
                 close: true,
                 lock: true,
@@ -271,6 +281,8 @@ jobs:
             const triggerLabel = "trigger-response";
             const activePrLimitLabel = "r: too-many-prs";
             const activePrLimitOverrideLabel = "r: too-many-prs-override";
+            const pluginClawhubLabel = "r: plugin-clawhub";
+            const corePluginApprovedLabel = "core-plugin-approved";
             const target = context.payload.issue ?? context.payload.pull_request;
             if (!target) {
               return;
@@ -499,6 +511,34 @@ jobs:
 
             if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
               labelSet.delete(activePrLimitLabel);
+            }
+
+            if (
+              pullRequest &&
+              labelSet.has(corePluginApprovedLabel) &&
+              labelSet.has(pluginClawhubLabel)
+            ) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  name: pluginClawhubLabel,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+              labelSet.delete(pluginClawhubLabel);
+              if (pullRequest.state === "closed" && !pullRequest.merged_at) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "open",
+                });
+              }
             }
 
             const rule = rules.find((item) => labelSet.has(item.label));
