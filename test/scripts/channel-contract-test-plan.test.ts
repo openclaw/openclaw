@@ -16,7 +16,7 @@ function listContractTests(rootDir = "src/channels/plugins/contracts"): string[]
 
 describe("scripts/lib/channel-contract-test-plan.mjs", () => {
   it("splits channel contracts into focused shards", () => {
-    const suffixes = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const suffixes = ["a", "b", "c"];
 
     expect(
       createChannelContractTestShards().map((shard) => ({
@@ -25,13 +25,11 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
         task: shard.task,
       })),
     ).toEqual(
-      ["registry", "core"].flatMap((family) =>
-        suffixes.map((suffix) => ({
-          checkName: `checks-fast-contracts-channels-${family}-${suffix}`,
-          runtime: "node",
-          task: "contracts-channels",
-        })),
-      ),
+      suffixes.map((suffix) => ({
+        checkName: `checks-fast-contracts-channels-${suffix}`,
+        runtime: "node",
+        task: "contracts-channels",
+      })),
     );
   });
 
@@ -45,13 +43,11 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
   });
 
   it("keeps registry-backed surface shards spread across checks", () => {
-    for (const shard of createChannelContractTestShards().filter((entry) =>
-      entry.checkName.includes("-registry-"),
-    )) {
+    for (const shard of createChannelContractTestShards()) {
       const surfaceRegistryFiles = shard.includePatterns.filter((pattern) =>
         pattern.includes("/surfaces-only.registry-backed-shard-"),
       );
-      expect(surfaceRegistryFiles.length).toBeLessThanOrEqual(1);
+      expect(surfaceRegistryFiles.length).toBeLessThanOrEqual(4);
     }
   });
 });

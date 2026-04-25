@@ -96,6 +96,7 @@ export async function start(state: CronServiceState) {
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
     for (const job of jobs) {
+      job.state ??= {};
       if (typeof job.state.runningAtMs === "number") {
         state.deps.log.warn(
           { jobId: job.id, runningAtMs: job.state.runningAtMs },

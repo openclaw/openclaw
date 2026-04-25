@@ -1,6 +1,6 @@
 ---
 name: openclaw-pr-maintainer
-description: Maintainer workflow for reviewing, triaging, preparing, closing, or landing OpenClaw pull requests and related issues. Use when Codex needs to validate bug-fix claims, search for related issues or PRs, apply or recommend close/reason labels, prepare GitHub comments safely, check review-thread follow-up, or perform maintainer-style PR decision making before merge or closure.
+description: Review, triage, close, label, comment on, or land OpenClaw PRs/issues with maintainer evidence checks.
 ---
 
 # OpenClaw PR Maintainer
@@ -68,6 +68,7 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.
 - Use `.github/pull_request_template.md` for PR submissions and `.github/ISSUE_TEMPLATE/` for issues.
+- Do not commit PR-only artifacts such as screenshots under `.github/pr-assets`; attach them to the PR/comment or use an external artifact store instead.
 
 ## Extra safety
 

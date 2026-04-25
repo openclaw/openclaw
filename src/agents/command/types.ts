@@ -27,6 +27,8 @@ export type AgentRunContext = {
 
 export type AgentCommandOpts = {
   message: string;
+  /** User-visible transcript body; defaults to message and excludes runtime-only context. */
+  transcriptMessage?: string;
   /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
@@ -56,10 +58,11 @@ export type AgentCommandOpts = {
   replyAccountId?: string;
   /** Override delivery thread/topic id (separate from session routing). */
   threadId?: string | number;
-  /** Message channel context (webchat|voicewake|whatsapp|...). */
+  /** Message channel context. */
   messageChannel?: string;
-  channel?: string; // delivery channel (whatsapp|telegram|...)
-  /** Account ID for multi-account channel routing (e.g., WhatsApp account). */
+  /** Delivery channel. */
+  channel?: string;
+  /** Account ID for multi-account channel routing. */
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;

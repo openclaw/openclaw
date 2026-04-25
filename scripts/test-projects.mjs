@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
-import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
+import {
+  isCiLikeEnv,
+  resolveLocalFullSuiteProfile,
+  resolveLocalVitestEnv,
+} from "./lib/vitest-local-scheduling.mjs";
 import {
   resolveVitestCliEntry,
   resolveVitestNodeArgs,
@@ -10,6 +14,8 @@ import {
   spawnWatchedVitestProcess,
 } from "./run-vitest.mjs";
 import {
+  applyDefaultMultiSpecVitestCachePaths,
+  applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestRunSpecs,
@@ -18,6 +24,7 @@ import {
   resolveParallelFullSuiteConcurrency,
   resolveChangedTargetArgs,
   shouldAcquireLocalHeavyCheckLock,
+  shouldRetryVitestNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 
@@ -187,11 +194,15 @@ function runVitestSpec(spec) {
   if (spec.includeFilePath && spec.includePatterns) {
     writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
   }
+  let noOutputTimedOut = false;
   return new Promise((resolve, reject) => {
     const { child, teardown } = spawnWatchedVitestProcess({
       pnpmArgs: spec.pnpmArgs,
       env: spec.env,
       label: spec.config,
+      onNoOutputTimeout: () => {
+        noOutputTimedOut = true;
+      },
       spawnParams: {
         cwd: process.cwd(),
         ...resolveVitestSpawnParams(spec.env),
@@ -201,7 +212,7 @@ function runVitestSpec(spec) {
     child.on("exit", (code, signal) => {
       teardown();
       cleanupVitestRunSpec(spec);
-      resolve({ code: code ?? 1, signal });
+      resolve({ code: code ?? (signal ? 143 : 1), noOutputTimedOut, signal });
     });
 
     child.on("error", (error) => {
@@ -229,8 +240,21 @@ function applyDefaultParallelVitestWorkerBudget(specs, env) {
 async function runLoggedVitestSpec(spec) {
   console.error(`[test] starting ${spec.config}`);
   const startedAt = performance.now();
-  const result = await runVitestSpec(spec);
+  let result = await runVitestSpec(spec);
+  if (result.noOutputTimedOut && !spec.watchMode && shouldRetryVitestNoOutputTimeout(spec.env)) {
+    console.error(`[test] retrying ${spec.config} after no-output timeout`);
+    result = await runVitestSpec(spec);
+  }
   const durationMs = performance.now() - startedAt;
+  if (result.noOutputTimedOut && result.signal) {
+    console.error(`[test] ${spec.config} exceeded no-output timeout`);
+    return {
+      ...result,
+      code: result.code || 143,
+      signal: null,
+      timing: null,
+    };
+  }
   if (result.signal) {
     console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
     releaseLockOnce();
@@ -321,15 +345,16 @@ async function runVitestSpecsParallel(specs, concurrency) {
 
 async function main() {
   const args = process.argv.slice(2);
+  const baseEnv = resolveLocalVitestEnv(process.env);
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
-  const runSpecs =
+  const rawRunSpecs =
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
           config: plan.config,
           continueOnFailure: true,
-          env: process.env,
+          env: baseEnv,
           includeFilePath: null,
           includePatterns: null,
           pnpmArgs: [
@@ -345,19 +370,23 @@ async function main() {
           watchMode: plan.watchMode,
         }))
       : createVitestRunSpecs(args, {
-          baseEnv: process.env,
+          baseEnv,
           cwd: process.cwd(),
         });
+  const runSpecs = applyDefaultMultiSpecVitestCachePaths(
+    applyDefaultVitestNoOutputTimeout(rawRunSpecs, { env: baseEnv }),
+    { cwd: process.cwd(), env: baseEnv },
+  );
 
   if (runSpecs.length === 0) {
     console.error("[test] no changed test targets; skipping Vitest.");
     return;
   }
 
-  releaseLock = shouldAcquireLocalHeavyCheckLock(runSpecs, process.env)
+  releaseLock = shouldAcquireLocalHeavyCheckLock(runSpecs, baseEnv)
     ? acquireLocalHeavyCheckLockSync({
         cwd: process.cwd(),
-        env: process.env,
+        env: baseEnv,
         toolName: "test",
       })
     : () => {};
@@ -366,24 +395,29 @@ async function main() {
     targetArgs.length === 0 &&
     changedTargetArgs === null &&
     !runSpecs.some((spec) => spec.watchMode);
-  const isParallelShardRun = isFullSuiteRun || isFullExtensionsProjectRun(runSpecs);
+  const isExplicitParallelMultiConfigRun =
+    Boolean(baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL) &&
+    runSpecs.length > 1 &&
+    !runSpecs.some((spec) => spec.watchMode);
+  const isParallelShardRun =
+    isFullSuiteRun || isFullExtensionsProjectRun(runSpecs) || isExplicitParallelMultiConfigRun;
   if (isParallelShardRun) {
-    const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
+    const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, baseEnv);
     if (concurrency > 1) {
-      const localFullSuiteProfile = resolveLocalFullSuiteProfile(process.env);
-      const shardTimings = readShardTimings(process.cwd(), process.env);
+      const localFullSuiteProfile = resolveLocalFullSuiteProfile(baseEnv);
+      const shardTimings = readShardTimings(process.cwd(), baseEnv);
       const parallelSpecs = applyDefaultParallelVitestWorkerBudget(
         applyParallelVitestCachePaths(orderFullSuiteSpecsForParallelRun(runSpecs, shardTimings), {
           cwd: process.cwd(),
-          env: process.env,
+          env: baseEnv,
         }),
-        process.env,
+        baseEnv,
       );
       if (
-        !isCiLikeEnv(process.env) &&
-        !process.env.OPENCLAW_TEST_PROJECTS_PARALLEL &&
-        !process.env.OPENCLAW_VITEST_MAX_WORKERS &&
-        !process.env.OPENCLAW_TEST_WORKERS &&
+        !isCiLikeEnv(baseEnv) &&
+        !baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL &&
+        !baseEnv.OPENCLAW_VITEST_MAX_WORKERS &&
+        !baseEnv.OPENCLAW_TEST_WORKERS &&
         localFullSuiteProfile.shardParallelism === 10 &&
         localFullSuiteProfile.vitestMaxWorkers === 2
       ) {
@@ -396,7 +430,7 @@ async function main() {
         parallelSpecs,
         concurrency,
       );
-      writeShardTimings(timings, process.cwd(), process.env);
+      writeShardTimings(timings, process.cwd(), baseEnv);
       console.error(
         `[test] completed ${parallelSpecs.length} Vitest shards; Vitest summaries above are per-shard, not aggregate totals.`,
       );
@@ -426,7 +460,7 @@ async function main() {
       timings.push(result.timing);
     }
   }
-  writeShardTimings(timings, process.cwd(), process.env);
+  writeShardTimings(timings, process.cwd(), baseEnv);
 
   releaseLockOnce();
   if (exitCode !== 0) {

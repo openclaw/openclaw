@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  PluginHookGatewayContext,
+  PluginHookGatewayStartEvent,
+} from "../plugins/hook-types.js";
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn(async () => null);
@@ -179,6 +183,34 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it("waits for sidecars by default before returning", async () => {
+    let resumeSidecars!: () => void;
+    const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
+      resumeSidecars = () => resolve({ pluginServices: null });
+    });
+    const startGatewaySidecars = vi.fn(async () => {
+      return await sidecarsReady;
+    });
+    let returned = false;
+
+    const runtimePromise = startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    ).then(() => {
+      returned = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(returned).toBe(false);
+
+    resumeSidecars();
+    await runtimePromise;
+    expect(returned).toBe(true);
+  });
+
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
     let resumeSidecars!: () => void;
     const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
@@ -193,6 +225,7 @@ describe("startGatewayPostAttachRuntime", () => {
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
+        deferSidecars: true,
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars }),
     );
@@ -259,6 +292,57 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {
+    const runGatewayStart = vi.fn<
+      (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
+    >(async () => undefined);
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
+      runGatewayStart,
+    };
+    const initialCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    const params = createPostAttachParams({
+      gatewayPluginConfigAtStart: {
+        hooks: { internal: { enabled: false } },
+        plugins: { entries: { demo: { enabled: true } } },
+      } as never,
+      deps: { cron: initialCron } as never,
+    });
+
+    await startGatewayPostAttachRuntime(
+      params,
+      createPostAttachRuntimeDeps({
+        getGlobalHookRunner: vi.fn(async () => hookRunner as never),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(runGatewayStart).toHaveBeenCalledTimes(1);
+    });
+
+    const firstCall = runGatewayStart.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("gateway_start was not invoked");
+    }
+    const [event, ctx] = firstCall;
+    expect(event).toEqual({ port: 18789 });
+    expect(ctx).toMatchObject({
+      port: 18789,
+      config: params.gatewayPluginConfigAtStart,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    expect(typeof ctx.getCron).toBe("function");
+    const getCron = ctx.getCron;
+    if (!getCron) {
+      throw new Error("gateway_start context did not expose getCron");
+    }
+    expect(getCron()).toBe(initialCron);
+
+    const reloadedCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
+    params.deps.cron = reloadedCron as never;
+    expect(getCron()).toBe(reloadedCron);
   });
 });
 

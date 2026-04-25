@@ -13,7 +13,6 @@ export {
   getPageForTargetId,
   listPagesViaPlaywright,
   refLocator,
-  type WithSnapshotForAI,
 } from "./pw-session.js";
 
 export {
@@ -54,6 +53,7 @@ export {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
+  storeAriaSnapshotRefsViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,
   storageGetViaPlaywright,

@@ -227,7 +227,7 @@ function setMinimalAcpCommandRegistryForTests(): void {
           ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
           conversationBindings: {
             defaultTopLevelPlacement: "current",
-            buildBoundReplyChannelData: ({
+            buildBoundReplyPayload: ({
               operation,
               conversation,
             }: {
@@ -235,7 +235,7 @@ function setMinimalAcpCommandRegistryForTests(): void {
               conversation: { conversationId: string };
             }) =>
               operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
-                ? { telegram: { pin: true } }
+                ? { delivery: { pin: { enabled: true } } }
                 : null,
           },
           bindings: {
@@ -1252,7 +1252,7 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
-    expect(result?.reply?.channelData).toEqual({ telegram: { pin: true } });
+    expect(result?.reply?.delivery).toEqual({ pin: { enabled: true } });
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
@@ -1305,7 +1305,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "room:!room:example.org",
+          conversationId: "!room:example.org",
         }),
       }),
     );
@@ -1333,7 +1333,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "room:!room:example.org",
+          conversationId: "!room:example.org",
         }),
       }),
     );

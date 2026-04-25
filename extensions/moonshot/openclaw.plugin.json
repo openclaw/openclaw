@@ -1,9 +1,10 @@
 {
   "id": "moonshot",
   "enabledByDefault": true,
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],
   "providerAuthEnvVars": {
-    "moonshot": ["MOONSHOT_API_KEY"]
+    "moonshot": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
   },
   "providerAuthChoices": [
     {
@@ -51,6 +52,18 @@
   "contracts": {
     "mediaUnderstandingProviders": ["moonshot"],
     "webSearchProviders": ["kimi"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "moonshot": {
+      "capabilities": ["image", "video"],
+      "defaultModels": {
+        "image": "kimi-k2.6",
+        "video": "kimi-k2.6"
+      },
+      "autoPriority": {
+        "video": 20
+      }
+    }
   },
   "configContracts": {
     "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
