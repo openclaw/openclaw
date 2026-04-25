@@ -1,12 +1,10 @@
 import type { Command } from "commander";
 import {
-  buildCommandGroupEntries,
   registerCommandGroups,
   resolveCliArgvInvocation,
   shouldEagerRegisterSubcommands,
   type CommandGroupEntry,
-  type CommandGroupDescriptorSpec,
-  type NamedCommandDescriptor,
+  type CommandGroupPlaceholder,
 } from "openclaw/plugin-sdk/cli-runtime";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
@@ -20,124 +18,36 @@ import {
   theme,
 } from "./core-api.js";
 
-type BrowserCommandDescriptor = NamedCommandDescriptor;
 type BrowserCommandRegistrar = (args: {
   browser: Command;
   parentOpts: (cmd: Command) => BrowserParentOpts;
 }) => Promise<void> | void;
 
-const browserCommandDescriptors: readonly BrowserCommandDescriptor[] = [
-  { name: "status", description: "Show browser status", hasSubcommands: false },
-  {
-    name: "start",
-    description: "Start the browser (no-op if already running)",
-    hasSubcommands: false,
-  },
-  { name: "stop", description: "Stop the browser (best-effort)", hasSubcommands: false },
-  {
-    name: "reset-profile",
-    description: "Reset browser profile (moves it to Trash)",
-    hasSubcommands: false,
-  },
-  { name: "tabs", description: "List open tabs", hasSubcommands: false },
-  { name: "tab", description: "Tab shortcuts (index-based)", hasSubcommands: true },
-  { name: "open", description: "Open a URL in a new tab", hasSubcommands: false },
-  {
-    name: "focus",
-    description: "Focus a tab by target id (or unique prefix)",
-    hasSubcommands: false,
-  },
-  { name: "close", description: "Close a tab (target id optional)", hasSubcommands: false },
-  { name: "profiles", description: "List all browser profiles", hasSubcommands: false },
-  { name: "create-profile", description: "Create a new browser profile", hasSubcommands: false },
-  { name: "delete-profile", description: "Delete a browser profile", hasSubcommands: false },
-  { name: "screenshot", description: "Capture a screenshot (MEDIA:<path>)", hasSubcommands: false },
-  {
-    name: "snapshot",
-    description: "Capture a snapshot (default: ai; aria is the accessibility tree)",
-    hasSubcommands: false,
-  },
-  { name: "navigate", description: "Navigate the current tab to a URL", hasSubcommands: false },
-  { name: "resize", description: "Resize the viewport", hasSubcommands: false },
-  { name: "click", description: "Click an element by ref from snapshot", hasSubcommands: false },
-  { name: "click-coords", description: "Click viewport coordinates", hasSubcommands: false },
-  { name: "type", description: "Type into an element by ref from snapshot", hasSubcommands: false },
-  { name: "press", description: "Press a key", hasSubcommands: false },
-  { name: "hover", description: "Hover an element by ai ref", hasSubcommands: false },
-  {
-    name: "scrollintoview",
-    description: "Scroll an element into view by ref from snapshot",
-    hasSubcommands: false,
-  },
-  { name: "drag", description: "Drag from one ref to another", hasSubcommands: false },
-  { name: "select", description: "Select option(s) in a select element", hasSubcommands: false },
-  {
-    name: "upload",
-    description: "Arm file upload for the next file chooser",
-    hasSubcommands: false,
-  },
-  {
-    name: "waitfordownload",
-    description: "Wait for the next download (and save it)",
-    hasSubcommands: false,
-  },
-  {
-    name: "download",
-    description: "Click a ref and save the resulting download",
-    hasSubcommands: false,
-  },
-  {
-    name: "dialog",
-    description: "Arm the next modal dialog (alert/confirm/prompt)",
-    hasSubcommands: false,
-  },
-  { name: "fill", description: "Fill a form with JSON field descriptors", hasSubcommands: false },
-  {
-    name: "wait",
-    description: "Wait for time, selector, URL, load state, or JS conditions",
-    hasSubcommands: false,
-  },
-  {
-    name: "evaluate",
-    description: "Evaluate a function against the page or a ref",
-    hasSubcommands: false,
-  },
-  { name: "console", description: "Get recent console messages", hasSubcommands: false },
-  { name: "pdf", description: "Save page as PDF", hasSubcommands: false },
-  {
-    name: "responsebody",
-    description: "Wait for a network response and return its body",
-    hasSubcommands: false,
-  },
-  { name: "highlight", description: "Highlight an element by ref", hasSubcommands: false },
-  { name: "errors", description: "Get recent page errors", hasSubcommands: false },
-  {
-    name: "requests",
-    description: "Get recent network requests (best-effort)",
-    hasSubcommands: false,
-  },
-  { name: "doctor", description: "Diagnose browser readiness", hasSubcommands: false },
-  { name: "trace", description: "Record a Playwright trace", hasSubcommands: true },
-  { name: "cookies", description: "Read/write cookies", hasSubcommands: true },
-  { name: "storage", description: "Read/write localStorage/sessionStorage", hasSubcommands: true },
-  { name: "set", description: "Browser environment settings", hasSubcommands: true },
-];
+type BrowserCommandGroupDefinition = {
+  placeholders: readonly CommandGroupPlaceholder[];
+  register: BrowserCommandRegistrar;
+};
 
-const browserCommandGroupSpecs: readonly CommandGroupDescriptorSpec<BrowserCommandRegistrar>[] = [
+const command = (name: string, description: string): CommandGroupPlaceholder => ({
+  name,
+  description,
+});
+
+const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] = [
   {
-    commandNames: [
-      "status",
-      "start",
-      "stop",
-      "reset-profile",
-      "tabs",
-      "tab",
-      "open",
-      "focus",
-      "close",
-      "profiles",
-      "create-profile",
-      "delete-profile",
+    placeholders: [
+      command("status", "Show browser status"),
+      command("start", "Start the browser (no-op if already running)"),
+      command("stop", "Stop the browser (best-effort)"),
+      command("reset-profile", "Reset browser profile (moves it to Trash)"),
+      command("tabs", "List open tabs"),
+      command("tab", "Tab shortcuts (index-based)"),
+      command("open", "Open a URL in a new tab"),
+      command("focus", "Focus a tab by target id, tab id, label, or unique target id prefix"),
+      command("close", "Close a tab (target id optional)"),
+      command("profiles", "List all browser profiles"),
+      command("create-profile", "Create a new browser profile"),
+      command("delete-profile", "Delete a browser profile"),
     ],
     register: async (args) => {
       const module = await import("./browser-cli-manage.js");
@@ -145,31 +55,34 @@ const browserCommandGroupSpecs: readonly CommandGroupDescriptorSpec<BrowserComma
     },
   },
   {
-    commandNames: ["screenshot", "snapshot"],
+    placeholders: [
+      command("screenshot", "Capture a screenshot (MEDIA:<path>)"),
+      command("snapshot", "Capture a snapshot (default: ai; aria is the accessibility tree)"),
+    ],
     register: async (args) => {
       const module = await import("./browser-cli-inspect.js");
       module.registerBrowserInspectCommands(args.browser, args.parentOpts);
     },
   },
   {
-    commandNames: [
-      "navigate",
-      "resize",
-      "click",
-      "click-coords",
-      "type",
-      "press",
-      "hover",
-      "scrollintoview",
-      "drag",
-      "select",
-      "upload",
-      "waitfordownload",
-      "download",
-      "dialog",
-      "fill",
-      "wait",
-      "evaluate",
+    placeholders: [
+      command("navigate", "Navigate the current tab to a URL"),
+      command("resize", "Resize the viewport"),
+      command("click", "Click an element by ref from snapshot"),
+      command("click-coords", "Click viewport coordinates"),
+      command("type", "Type into an element by ref from snapshot"),
+      command("press", "Press a key"),
+      command("hover", "Hover an element by ai ref"),
+      command("scrollintoview", "Scroll an element into view by ref from snapshot"),
+      command("drag", "Drag from one ref to another"),
+      command("select", "Select option(s) in a select element"),
+      command("upload", "Arm file upload for the next file chooser"),
+      command("waitfordownload", "Wait for the next download (and save it)"),
+      command("download", "Click a ref and save the resulting download"),
+      command("dialog", "Arm the next modal dialog (alert/confirm/prompt)"),
+      command("fill", "Fill a form with JSON field descriptors"),
+      command("wait", "Wait for time, selector, URL, load state, or JS conditions"),
+      command("evaluate", "Evaluate a function against the page or a ref"),
     ],
     register: async (args) => {
       const module = await import("./browser-cli-actions-input.js");
@@ -177,21 +90,35 @@ const browserCommandGroupSpecs: readonly CommandGroupDescriptorSpec<BrowserComma
     },
   },
   {
-    commandNames: ["console", "pdf", "responsebody"],
+    placeholders: [
+      command("console", "Get recent console messages"),
+      command("pdf", "Save page as PDF"),
+      command("responsebody", "Wait for a network response and return its body"),
+    ],
     register: async (args) => {
       const module = await import("./browser-cli-actions-observe.js");
       module.registerBrowserActionObserveCommands(args.browser, args.parentOpts);
     },
   },
   {
-    commandNames: ["highlight", "errors", "requests", "doctor", "trace"],
+    placeholders: [
+      command("highlight", "Highlight an element by ref"),
+      command("errors", "Get recent page errors"),
+      command("requests", "Get recent network requests (best-effort)"),
+      command("doctor", "Check browser plugin readiness"),
+      command("trace", "Record a Playwright trace"),
+    ],
     register: async (args) => {
       const module = await import("./browser-cli-debug.js");
       module.registerBrowserDebugCommands(args.browser, args.parentOpts);
     },
   },
   {
-    commandNames: ["cookies", "storage", "set"],
+    placeholders: [
+      command("cookies", "Read/write cookies"),
+      command("storage", "Read/write localStorage/sessionStorage"),
+      command("set", "Browser environment settings"),
+    ],
     register: async (args) => {
       const module = await import("./browser-cli-state.js");
       module.registerBrowserStateCommands(args.browser, args.parentOpts);
@@ -203,11 +130,10 @@ function buildBrowserCommandGroups(params: {
   browser: Command;
   parentOpts: (cmd: Command) => BrowserParentOpts;
 }): CommandGroupEntry[] {
-  return buildCommandGroupEntries(
-    browserCommandDescriptors,
-    browserCommandGroupSpecs,
-    (register) => async () => await register(params),
-  );
+  return browserCommandGroupDefinitions.map((entry) => ({
+    placeholders: entry.placeholders,
+    register: async () => await entry.register(params),
+  }));
 }
 
 function registerLazyBrowserCommands(
