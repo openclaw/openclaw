@@ -141,6 +141,31 @@ Set config under `plugins.entries.voice-call.config`:
 }
 ```
 
+Check setup before testing with a real provider:
+
+```bash
+openclaw voicecall setup
+```
+
+The default output is readable in chat logs and terminal sessions. It checks
+whether the plugin is enabled, the provider and credentials are present, webhook
+exposure is configured, and only one audio mode is active. Use
+`openclaw voicecall setup --json` for scripts.
+
+For a no-surprises smoke test, run:
+
+```bash
+openclaw voicecall smoke
+openclaw voicecall smoke --to "+15555550123"
+```
+
+The second command is still a dry run. Add `--yes` to place a short outbound
+notify call:
+
+```bash
+openclaw voicecall smoke --to "+15555550123" --yes
+```
+
 Notes:
 
 - Twilio/Telnyx require a **publicly reachable** webhook URL.
