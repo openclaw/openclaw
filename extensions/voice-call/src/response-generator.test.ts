@@ -223,6 +223,8 @@ describe("generateVoiceResponse", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw/agents/main",
+        agentId: "main",
+        sandboxSessionKey: "agent:main:voice:15550001111",
         workspaceDir: "/tmp/openclaw/workspace/main",
         sessionFile: "/tmp/openclaw/main/sessions/session.jsonl",
       }),
@@ -265,6 +267,8 @@ describe("generateVoiceResponse", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw/agents/voice",
+        agentId: "voice",
+        sandboxSessionKey: "agent:voice:voice:15550001111",
         workspaceDir: "/tmp/openclaw/workspace/voice",
         sessionFile: "/tmp/openclaw/voice/sessions/session.jsonl",
       }),

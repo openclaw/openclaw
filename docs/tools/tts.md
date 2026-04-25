@@ -231,6 +231,32 @@ Resolution order is `messages.tts.providers.xai.apiKey` -> `XAI_API_KEY`.
 Current live voices are `ara`, `eve`, `leo`, `rex`, `sal`, and `una`; `eve` is
 the default. `language` accepts a BCP-47 tag or `auto`.
 
+### OpenRouter primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "openrouter",
+      providers: {
+        openrouter: {
+          apiKey: "openrouter_api_key",
+          model: "hexgrad/kokoro-82m",
+          voice: "af_alloy",
+          responseFormat: "mp3",
+        },
+      },
+    },
+  },
+}
+```
+
+OpenRouter TTS uses the same `OPENROUTER_API_KEY` path as the bundled
+OpenRouter model provider. Resolution order is
+`messages.tts.providers.openrouter.apiKey` ->
+`models.providers.openrouter.apiKey` -> `OPENROUTER_API_KEY`.
+
 ### Gradium primary
 
 ```json5
@@ -321,13 +347,15 @@ Then run:
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
 - `provider`: speech provider id such as `"elevenlabs"`, `"google"`, `"gradium"`, `"microsoft"`, `"minimax"`, `"openai"`, `"vydra"`, or `"xai"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw uses the first configured speech provider in registry auto-select order.
-- Legacy `provider: "edge"` still works and is normalized to `microsoft`.
+- Legacy `provider: "edge"` config is repaired by `openclaw doctor --fix` and
+  rewritten to `provider: "microsoft"`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
   - `allowProvider` defaults to `false` (provider switching is opt-in).
 - `providers.<id>`: provider-owned settings keyed by speech provider id.
-- Legacy direct provider blocks (`messages.tts.openai`, `messages.tts.elevenlabs`, `messages.tts.microsoft`, `messages.tts.edge`) are auto-migrated to `messages.tts.providers.<id>` on load.
+- Legacy direct provider blocks (`messages.tts.openai`, `messages.tts.elevenlabs`, `messages.tts.microsoft`, `messages.tts.edge`) are repaired by `openclaw doctor --fix`; committed config should use `messages.tts.providers.<id>`.
+- Legacy `messages.tts.providers.edge` is also repaired by `openclaw doctor --fix`; committed config should use `messages.tts.providers.microsoft`.
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
@@ -348,9 +376,11 @@ Then run:
 - `providers.minimax.voiceId`: voice identifier (default `English_expressive_narrator`, env: `MINIMAX_TTS_VOICE_ID`).
 - `providers.minimax.speed`: playback speed `0.5..2.0` (default 1.0).
 - `providers.minimax.vol`: volume `(0, 10]` (default 1.0; must be greater than 0).
-- `providers.minimax.pitch`: pitch shift `-12..12` (default 0).
+- `providers.minimax.pitch`: integer pitch shift `-12..12` (default 0). Fractional values are truncated before calling MiniMax T2A because the API rejects non-integer pitch values.
 - `providers.google.model`: Gemini TTS model (default `gemini-3.1-flash-tts-preview`).
 - `providers.google.voiceName`: Gemini prebuilt voice name (default `Kore`; `voice` is also accepted).
+- `providers.google.audioProfile`: natural-language style prompt prepended before the spoken text.
+- `providers.google.speakerName`: optional speaker label prepended before the spoken text when your TTS prompt uses a named speaker.
 - `providers.google.baseUrl`: override the Gemini API base URL. Only `https://generativelanguage.googleapis.com` is accepted.
   - If `messages.tts.providers.google.apiKey` is omitted, TTS can reuse `models.providers.google.apiKey` before env fallback.
 - `providers.gradium.baseUrl`: override Gradium API base URL (default `https://api.gradium.ai`).
@@ -361,6 +391,12 @@ Then run:
 - `providers.xai.language`: BCP-47 language code or `auto` (default `en`).
 - `providers.xai.responseFormat`: `mp3`, `wav`, `pcm`, `mulaw`, or `alaw` (default `mp3`).
 - `providers.xai.speed`: provider-native speed override.
+- `providers.openrouter.apiKey`: OpenRouter API key (env: `OPENROUTER_API_KEY`; can reuse `models.providers.openrouter.apiKey`).
+- `providers.openrouter.baseUrl`: override the OpenRouter TTS base URL (default `https://openrouter.ai/api/v1`; legacy `https://openrouter.ai/v1` is normalized).
+- `providers.openrouter.model`: OpenRouter TTS model id (default `hexgrad/kokoro-82m`; `modelId` is also accepted).
+- `providers.openrouter.voice`: provider-specific voice id (default `af_alloy`; `voiceId` is also accepted).
+- `providers.openrouter.responseFormat`: `mp3` or `pcm` (default `mp3`).
+- `providers.openrouter.speed`: provider-native speed override.
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).
@@ -370,7 +406,8 @@ Then run:
 - `providers.microsoft.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `providers.microsoft.proxy`: proxy URL for Microsoft speech requests.
 - `providers.microsoft.timeoutMs`: request timeout override (ms).
-- `edge.*`: legacy alias for the same Microsoft settings.
+- `edge.*`: legacy alias for the same Microsoft settings. Run
+  `openclaw doctor --fix` to rewrite persisted config to `providers.microsoft`.
 
 ## Model-driven overrides (default on)
 
@@ -400,7 +437,7 @@ Available directive keys (when enabled):
 - `model` (OpenAI TTS model, ElevenLabs model id, or MiniMax model) or `google_model` (Google TTS model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0-10)
-- `pitch` (MiniMax pitch, -12 to 12)
+- `pitch` (MiniMax integer pitch, -12 to 12; fractional values are truncated before the MiniMax request)
 - `applyTextNormalization` (`auto|on|off`)
 - `languageCode` (ISO 639-1)
 - `seed`
@@ -456,7 +493,7 @@ These override `messages.tts.*` for that host.
   - 48kHz / 64kbps is a good voice message tradeoff.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
-- **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate). Voice-note format not natively supported; use OpenAI or ElevenLabs for guaranteed Opus voice messages.
+- **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate) for normal audio attachments. For voice-note targets such as Feishu and Telegram, OpenClaw transcodes the MiniMax MP3 to 48kHz Opus with `ffmpeg` before delivery.
 - **Google Gemini**: Gemini API TTS returns raw 24kHz PCM. OpenClaw wraps it as WAV for audio attachments and returns PCM directly for Talk/telephony. Native Opus voice-note format is not supported by this path.
 - **Gradium**: WAV for audio attachments, Opus for voice-note targets, and `ulaw_8000` at 8 kHz for telephony.
 - **xAI**: MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. OpenClaw uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported by this path.

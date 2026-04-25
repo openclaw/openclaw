@@ -63,7 +63,7 @@ export const telegramChannelConfigUiHints = {
   },
   "streaming.preview.toolProgress": {
     label: "Telegram Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: false). Enable only when visible Telegram progress updates are desired.",
+    help: "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
   },
   "retry.attempts": {
     label: "Telegram Retry Attempts",

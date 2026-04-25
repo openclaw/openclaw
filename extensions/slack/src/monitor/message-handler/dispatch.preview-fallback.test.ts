@@ -42,13 +42,14 @@ let mockedDispatchSequence: Array<{
     mediaUrls?: string[];
   };
 }> = [];
+let mockedProgressEvents: string[] = [];
 
 const noop = () => {};
 const noopAsync = async () => {};
 
 function createDraftStreamStub() {
   return {
-    update: noop,
+    update: vi.fn(),
     flush: noopAsync,
     clear: noopAsync,
     discardPending: noopAsync,
@@ -292,7 +293,10 @@ vi.mock("../reply.runtime.js", () => ({
     markDispatchIdle: () => {},
   }),
   dispatchInboundMessage: async (params: {
-    replyOptions?: { disableBlockStreaming?: boolean };
+    replyOptions?: {
+      disableBlockStreaming?: boolean;
+      onItemEvent?: (payload: { progressText: string }) => Promise<void> | void;
+    };
     dispatcher: {
       deliver: (
         payload: {
@@ -307,6 +311,9 @@ vi.mock("../reply.runtime.js", () => ({
     };
   }) => {
     capturedReplyOptions = params.replyOptions;
+    for (const progressText of mockedProgressEvents) {
+      await params.replyOptions?.onItemEvent?.({ progressText });
+    }
     for (const entry of mockedDispatchSequence) {
       await params.dispatcher.deliver(entry.payload, { kind: entry.kind });
     }
@@ -344,6 +351,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyThreadTs = THREAD_TS;
     mockedReplyThreadTsSequence = undefined;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedProgressEvents = [];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
     finalizeSlackPreviewEditMock.mockRejectedValue(new Error("socket closed"));
@@ -404,6 +412,19 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("escapes Slack mrkdwn in tool progress preview labels", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedProgressEvents = ["ran <!here> <@U123> *bold* `code` & done"];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Working…\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+    );
   });
 
   it("starts native streams in the first-reply thread for top-level channel messages", async () => {

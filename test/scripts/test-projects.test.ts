@@ -137,6 +137,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toBeNull();
   });
 
+  it("routes precise plugin contract helpers without broad-running every shard", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "test/helpers/plugins/tts-contract-suites.ts",
+      ]),
+    ).toEqual([
+      "src/plugins/contracts/core-extension-facade-boundary.test.ts",
+      "src/plugins/contracts/tts.contract.test.ts",
+    ]);
+  });
+
   it("keeps the broad changed run for unknown root surfaces", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
@@ -290,6 +301,64 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
     });
   });
+
+  it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/src/cli.test.ts"],
+    });
+  });
+
+  it("routes Google Meet OAuth edits to the lightweight OAuth tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/oauth.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/src/oauth.test.ts"],
+    });
+  });
+
+  it("routes Google Meet entry edits to the plugin entry tests", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/google-meet/index.ts"])).toEqual({
+      mode: "targets",
+      targets: ["extensions/google-meet/index.test.ts"],
+    });
+  });
+
+  it("routes memory doctor and embedding default edits to focused tests", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/commands/doctor-memory-search.ts",
+        "src/memory-host-sdk/host/embedding-defaults.ts",
+        "src/memory-host-sdk/host/embeddings.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/commands/doctor-memory-search.test.ts",
+        "src/memory-host-sdk/host/embeddings.test.ts",
+      ],
+    });
+  });
+
+  it("routes provider auth choice edits to focused auth-choice tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugins/provider-auth-choice.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/commands/auth-choice.apply.plugin-provider.test.ts",
+        "src/commands/auth-choice.test.ts",
+      ],
+    });
+  });
+
+  it("routes provider env var edits to focused secret tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/secrets/provider-env-vars.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/secrets/provider-env-vars.dynamic.test.ts",
+        "src/secrets/provider-env-vars.test.ts",
+      ],
+    });
+  });
+
   it("routes changed utils and shared files to their light scoped lanes", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/shared/string-normalization.ts",

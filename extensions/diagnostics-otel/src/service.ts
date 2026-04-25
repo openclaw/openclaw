@@ -49,6 +49,7 @@ const LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS = 60_000;
 const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
 const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 
 type OtelContentCapturePolicy = {
   inputMessages: boolean;
@@ -162,6 +163,10 @@ function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
     toolOutputs: config.toolOutputs === true,
     systemPrompt: config.systemPrompt === true,
   };
+}
+
+function hasPreloadedOtelSdk(): boolean {
+  return process.env[PRELOADED_OTEL_SDK_ENV] === "1";
 }
 
 function normalizeOtelContentValue(value: unknown): string | undefined {
@@ -400,38 +405,39 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       if (!tracesEnabled && !metricsEnabled && !logsEnabled) {
         return;
       }
+      const sdkPreloaded = hasPreloadedOtelSdk();
 
       const resource = resourceFromAttributes({
         [ATTR_SERVICE_NAME]: serviceName,
       });
 
-      const traceUrl = resolveOtelUrl(endpoint, "v1/traces");
-      const metricUrl = resolveOtelUrl(endpoint, "v1/metrics");
       const logUrl = resolveOtelUrl(endpoint, "v1/logs");
-      const traceExporter = tracesEnabled
-        ? new OTLPTraceExporter({
-            ...(traceUrl ? { url: traceUrl } : {}),
-            ...(headers ? { headers } : {}),
-          })
-        : undefined;
+      if (!sdkPreloaded && (tracesEnabled || metricsEnabled)) {
+        const traceUrl = resolveOtelUrl(endpoint, "v1/traces");
+        const metricUrl = resolveOtelUrl(endpoint, "v1/metrics");
+        const traceExporter = tracesEnabled
+          ? new OTLPTraceExporter({
+              ...(traceUrl ? { url: traceUrl } : {}),
+              ...(headers ? { headers } : {}),
+            })
+          : undefined;
 
-      const metricExporter = metricsEnabled
-        ? new OTLPMetricExporter({
-            ...(metricUrl ? { url: metricUrl } : {}),
-            ...(headers ? { headers } : {}),
-          })
-        : undefined;
+        const metricExporter = metricsEnabled
+          ? new OTLPMetricExporter({
+              ...(metricUrl ? { url: metricUrl } : {}),
+              ...(headers ? { headers } : {}),
+            })
+          : undefined;
 
-      const metricReader = metricExporter
-        ? new PeriodicExportingMetricReader({
-            exporter: metricExporter,
-            ...(typeof otel.flushIntervalMs === "number"
-              ? { exportIntervalMillis: Math.max(1000, otel.flushIntervalMs) }
-              : {}),
-          })
-        : undefined;
+        const metricReader = metricExporter
+          ? new PeriodicExportingMetricReader({
+              exporter: metricExporter,
+              ...(typeof otel.flushIntervalMs === "number"
+                ? { exportIntervalMillis: Math.max(1000, otel.flushIntervalMs) }
+                : {}),
+            })
+          : undefined;
 
-      if (tracesEnabled || metricsEnabled) {
         sdk = new NodeSDK({
           resource,
           ...(traceExporter ? { traceExporter } : {}),
@@ -452,6 +458,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           ctx.logger.error(`diagnostics-otel: failed to start SDK: ${formatError(err)}`);
           throw err;
         }
+      } else if (sdkPreloaded && (tracesEnabled || metricsEnabled)) {
+        ctx.logger.info("diagnostics-otel: using preloaded OpenTelemetry SDK");
       }
 
       const logSeverityMap: Record<string, SeverityNumber> = {
@@ -549,6 +557,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Tool execution duration",
         },
       );
+      const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
+        unit: "ms",
+        description: "Exec process duration",
+      });
 
       let recordLogRecord:
         | ((evt: Extract<DiagnosticEventPayload, { type: "log.record" }>) => void)
@@ -1079,6 +1091,48 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordExecProcessCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "exec.process.completed" }>,
+      ) => {
+        const attrs: Record<string, string | number> = {
+          "openclaw.exec.target": evt.target,
+          "openclaw.exec.mode": evt.mode,
+          "openclaw.outcome": evt.outcome,
+        };
+        if (evt.failureKind) {
+          attrs["openclaw.failureKind"] = evt.failureKind;
+        }
+        execProcessDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+
+        const spanAttrs: Record<string, string | number | boolean> = {
+          ...attrs,
+          "openclaw.exec.command_length": evt.commandLength,
+        };
+        if (typeof evt.exitCode === "number") {
+          spanAttrs["openclaw.exec.exit_code"] = evt.exitCode;
+        }
+        if (evt.exitSignal) {
+          spanAttrs["openclaw.exec.exit_signal"] = lowCardinalityAttr(evt.exitSignal, "other");
+        }
+        if (evt.timedOut !== undefined) {
+          spanAttrs["openclaw.exec.timed_out"] = evt.timedOut;
+        }
+
+        const span = spanWithDuration("openclaw.exec", spanAttrs, evt.durationMs, {
+          endTimeMs: evt.ts,
+        });
+        if (evt.outcome === "failed") {
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            ...(evt.failureKind ? { message: evt.failureKind } : {}),
+          });
+        }
+        span.end(evt.ts);
+      };
+
       const recordHeartbeat = (
         evt: Extract<DiagnosticEventPayload, { type: "diagnostic.heartbeat" }>,
       ) => {
@@ -1138,6 +1192,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "tool.execution.error":
               recordToolExecutionError(evt);
+              return;
+            case "exec.process.completed":
+              recordExecProcessCompleted(evt);
               return;
             case "log.record":
               recordLogRecord?.(evt);

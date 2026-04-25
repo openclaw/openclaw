@@ -353,11 +353,12 @@ async function runStaleCallReaperCase(params: {
   callAgeMs: number;
   staleCallReaperSeconds: number;
   advanceMs: number;
+  callOverrides?: Partial<CallRecord>;
 }) {
   const now = new Date("2026-02-16T00:00:00Z");
   vi.setSystemTime(now);
 
-  const call = createCall(now.getTime() - params.callAgeMs);
+  const call = { ...createCall(now.getTime() - params.callAgeMs), ...params.callOverrides };
   const { manager, endCall } = createManager([call]);
   const config = createConfig({ staleCallReaperSeconds: params.staleCallReaperSeconds });
   const server = new VoiceCallWebhookServer(config, manager, provider);
@@ -484,6 +485,19 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
     } finally {
       await server.stop();
     }
+  });
+
+  it("does not reap calls that reached the answered state", async () => {
+    const { endCall } = await runStaleCallReaperCase({
+      callAgeMs: 120_000,
+      staleCallReaperSeconds: 60,
+      advanceMs: 30_000,
+      callOverrides: {
+        state: "answered",
+        answeredAt: new Date("2026-02-15T23:58:30Z").getTime(),
+      },
+    });
+    expect(endCall).not.toHaveBeenCalled();
   });
 });
 

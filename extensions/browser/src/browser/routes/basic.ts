@@ -61,13 +61,15 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     throw new BrowserError(profileCtx.error, profileCtx.status);
   }
 
-  const [cdpHttp, cdpReady] = await Promise.all([
-    profileCtx.isHttpReachable(300),
-    profileCtx.isReachable(600),
-  ]);
+  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  const [cdpHttp, cdpReady] = capabilities.usesChromeMcp
+    ? await (async () => {
+        const ready = await profileCtx.isTransportAvailable(600);
+        return [ready, ready] as const;
+      })()
+    : await Promise.all([profileCtx.isHttpReachable(300), profileCtx.isTransportAvailable(600)]);
 
   const profileState = current.profiles.get(profileCtx.profile.name);
-  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
   let detectedBrowser: string | null = null;
   let detectedExecutablePath: string | null = null;
   let detectError: string | null = null;
@@ -103,7 +105,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     color: profileCtx.profile.color,
     headless: profileCtx.profile.headless,
     noSandbox: current.resolved.noSandbox,
-    executablePath: current.resolved.executablePath ?? null,
+    executablePath: profileCtx.profile.executablePath ?? null,
     attachOnly: profileCtx.profile.attachOnly,
   };
 }

@@ -244,6 +244,29 @@ exposed separately through the plugin-owned `MiniMax-VL-01` media provider.
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
 
+### Text-to-speech
+
+The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
+`messages.tts`.
+
+- Default TTS model: `speech-2.8-hd`
+- Default voice: `English_expressive_narrator`
+- Normal audio attachments stay MP3.
+- Voice-note targets such as Feishu and Telegram are transcoded from MiniMax
+  MP3 to 48kHz Opus with `ffmpeg`, because the Feishu/Lark file API only
+  accepts `file_type: "opus"` for native audio messages.
+- MiniMax T2A accepts fractional `speed` and `vol`, but `pitch` is sent as an
+  integer; OpenClaw truncates fractional `pitch` values before the API request.
+
+| Setting                                  | Env var                | Default                       | Description                      |
+| ---------------------------------------- | ---------------------- | ----------------------------- | -------------------------------- |
+| `messages.tts.providers.minimax.baseUrl` | `MINIMAX_API_HOST`     | `https://api.minimax.io`      | MiniMax T2A API host.            |
+| `messages.tts.providers.minimax.model`   | `MINIMAX_TTS_MODEL`    | `speech-2.8-hd`               | TTS model id.                    |
+| `messages.tts.providers.minimax.voiceId` | `MINIMAX_TTS_VOICE_ID` | `English_expressive_narrator` | Voice id used for speech output. |
+| `messages.tts.providers.minimax.speed`   |                        | `1.0`                         | Playback speed, `0.5..2.0`.      |
+| `messages.tts.providers.minimax.vol`     |                        | `1.0`                         | Volume, `(0, 10]`.               |
+| `messages.tts.providers.minimax.pitch`   |                        | `0`                           | Integer pitch shift, `-12..12`.  |
+
 ### Music generation
 
 The bundled `minimax` plugin also registers music generation through the shared

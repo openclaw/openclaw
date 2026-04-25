@@ -14,7 +14,7 @@ the finished turn to OpenClaw.
 Runtimes are easy to confuse with providers because both show up near model
 configuration. They are different layers:
 
-| Layer         | Examples                              | What It Means                                                       |
+| Layer         | Examples                              | What it means                                                       |
 | ------------- | ------------------------------------- | ------------------------------------------------------------------- |
 | Provider      | `openai`, `anthropic`, `openai-codex` | How OpenClaw authenticates, discovers models, and names model refs. |
 | Model         | `gpt-5.5`, `claude-opus-4-6`          | The model selected for the agent turn.                              |
@@ -45,6 +45,10 @@ The common Codex setup uses the `openai` provider with the `codex` runtime:
 That means OpenClaw selects an OpenAI model ref, then asks the Codex app-server
 runtime to run the embedded agent turn. It does not mean the channel, model
 provider catalog, or OpenClaw session store becomes Codex.
+
+For the OpenAI-family prefix split, see [OpenAI](/providers/openai) and
+[Model providers](/concepts/model-providers). For the Codex runtime support
+contract, see [Codex harness](/plugins/codex-harness#v1-support-contract).
 
 ## Runtime ownership
 
@@ -84,14 +88,16 @@ OpenClaw chooses an embedded runtime after provider and model resolution:
 
 Explicit plugin runtimes fail closed by default. For example,
 `runtime: "codex"` means Codex or a clear selection error unless you set
-`fallback: "pi"` in the same override scope.
+`fallback: "pi"` in the same override scope. A runtime override does not inherit
+a broader fallback setting, so an agent-level `runtime: "codex"` is not silently
+routed back to PI just because defaults used `fallback: "pi"`.
 
 ## Compatibility contract
 
 When a runtime is not PI, it should document what OpenClaw surfaces it supports.
 Use this shape for runtime docs:
 
-| Question                               | Why It Matters                                                                                    |
+| Question                               | Why it matters                                                                                    |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Who owns the model loop?               | Determines where retries, tool continuation, and final answer decisions happen.                   |
 | Who owns canonical thread history?     | Determines whether OpenClaw can edit history or only mirror it.                                   |
@@ -122,6 +128,8 @@ session systems.
 ## Related
 
 - [Codex harness](/plugins/codex-harness)
+- [OpenAI](/providers/openai)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
 - [Agent loop](/concepts/agent-loop)
 - [Models](/concepts/models)
+- [Status](/cli/status)

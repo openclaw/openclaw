@@ -185,6 +185,27 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   errorCode?: string;
 };
 
+export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
+  type: "exec.process.completed";
+  sessionKey?: string;
+  target: "host" | "sandbox";
+  mode: "child" | "pty";
+  outcome: "completed" | "failed";
+  durationMs: number;
+  commandLength: number;
+  exitCode?: number;
+  exitSignal?: string;
+  timedOut?: boolean;
+  failureKind?:
+    | "shell-command-not-found"
+    | "shell-not-executable"
+    | "overall-timeout"
+    | "no-output-timeout"
+    | "signal"
+    | "aborted"
+    | "runtime-error";
+};
+
 type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
   runId: string;
   sessionKey?: string;
@@ -299,6 +320,7 @@ export type DiagnosticEventPayload =
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
+  | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
   | DiagnosticModelCallStartedEvent
@@ -329,6 +351,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.started",
   "tool.execution.completed",
   "tool.execution.error",
+  "exec.process.completed",
   "model.call.started",
   "model.call.completed",
   "model.call.error",

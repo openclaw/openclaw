@@ -361,6 +361,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
+    - reply payloads preserve `audioAsVoice`; WhatsApp sends audio media as Baileys PTT voice notes
     - `audio/ogg` is rewritten to `audio/ogg; codecs=opus` for voice-note compatibility
     - animated GIF playback is supported via `gifPlayback: true` on video sends
     - captions are applied to the first media item when sending multi-media reply payloads

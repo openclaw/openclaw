@@ -90,6 +90,12 @@ back on the follow-up request. OpenClaw handles this inside the DeepSeek plugin,
 so normal multi-turn tool use works with `deepseek/deepseek-v4-flash` and
 `deepseek/deepseek-v4-pro`.
 
+If you switch an existing session from another OpenAI-compatible provider to a
+DeepSeek V4 model, older assistant tool-call turns may not have native
+DeepSeek `reasoning_content`. OpenClaw fills that missing field for DeepSeek V4
+thinking requests so the provider can accept the replayed tool-call history
+without requiring `/new`.
+
 When thinking is disabled in OpenClaw (including the UI **None** selection),
 OpenClaw sends DeepSeek `thinking: { type: "disabled" }` and strips replayed
 `reasoning_content` from the outgoing history. This keeps disabled-thinking

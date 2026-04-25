@@ -75,12 +75,24 @@ type ManifestContractKey =
 
 type ManifestRegistryContractKey = "webFetchProviders" | "webSearchProviders";
 
+function normalizeProviderAuthEnvVars(
+  providerAuthEnvVars: Record<string, string[]> | undefined,
+): Record<string, string[]> {
+  return Object.fromEntries(
+    Object.entries(providerAuthEnvVars ?? {}).map(([providerId, envVars]) => [
+      providerId,
+      uniqueStrings(envVars),
+    ]),
+  );
+}
+
 function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
   if (process.env.VITEST) {
     return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => ({
       pluginId: entry.pluginId,
       cliBackendIds: [...entry.cliBackendIds],
       providerIds: [...entry.providerIds],
+      providerAuthEnvVars: normalizeProviderAuthEnvVars(entry.providerAuthEnvVars),
       speechProviderIds: [...entry.speechProviderIds],
       realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
       realtimeVoiceProviderIds: [...entry.realtimeVoiceProviderIds],
@@ -118,6 +130,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       pluginId: plugin.id,
       cliBackendIds: uniqueStrings(plugin.cliBackends),
       providerIds: uniqueStrings(plugin.providers),
+      providerAuthEnvVars: normalizeProviderAuthEnvVars(plugin.providerAuthEnvVars),
       speechProviderIds: uniqueStrings(plugin.contracts?.speechProviders ?? []),
       realtimeTranscriptionProviderIds: uniqueStrings(
         plugin.contracts?.realtimeTranscriptionProviders ?? [],
