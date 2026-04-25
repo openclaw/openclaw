@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { estimateTokens } from "@mariozechner/pi-coding-agent";
-import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
+import { SAFETY_MARGIN, estimateMessagesTokens, estimateTokensCjkAware } from "../../compaction.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
   MIN_PROMPT_BUDGET_TOKENS,
@@ -34,7 +33,7 @@ export function estimatePrePromptTokens(params: {
 
   const estimated =
     estimateMessagesTokens(messages) +
-    syntheticMessages.reduce((sum, message) => sum + estimateTokens(message), 0);
+    syntheticMessages.reduce((sum, message) => sum + estimateTokensCjkAware(message), 0);
   return Math.max(0, Math.ceil(estimated * SAFETY_MARGIN));
 }
 
