@@ -298,12 +298,10 @@ function resolveDarwinUserBinDirs(
 }
 
 /**
- * Resolve the Linux service PATH user directories.
- *
- * Linux intentionally keeps the minimal service PATH to stable user bin roots,
- * Nix profiles, and pnpm's stable global bin location. Version-manager-specific
- * directories like nvm, fnm, Volta, asdf, and Bun stay out of the durable
- * service PATH because they are often session-scoped or machine-specific.
+ * Resolve stable user bin directories for Linux.
+ * These cover shared user bin locations, package managers with stable install roots,
+ * and Nix profiles. Linux intentionally leaves version-manager-specific directories
+ * like nvm, fnm, Volta, asdf, and Bun out of the durable service PATH.
  */
 function resolveLinuxUserBinDirs(
   home: string | undefined,
@@ -346,6 +344,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const includeUserDirs = options.includeUserDirs ?? platform !== "darwin";
 
   const existsSync = options.existsSync ?? fs.existsSync;
+  // Add stable user bin directories for package managers, shared user bins, and Nix profiles.
   const userDirs = includeUserDirs
     ? platform === "linux"
       ? resolveLinuxUserBinDirs(options.home, options.env, existsSync, options)
