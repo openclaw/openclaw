@@ -5,6 +5,8 @@ import { readFlagValue } from "./lib/arg-utils.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
+  getLocalHeavyCheckPressureError,
+  prepareLocalHeavyCheckEnvironment,
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
@@ -13,10 +15,11 @@ import {
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mjs";
 
-const { args: finalArgs, env } = applyLocalTsgoPolicy(
+const { args: finalArgs, env: policyEnv } = applyLocalTsgoPolicy(
   process.argv.slice(2),
   resolveLocalHeavyCheckEnv(process.env),
 );
+const env = prepareLocalHeavyCheckEnvironment({ cwd: process.cwd(), env: policyEnv });
 
 const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
 const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
@@ -24,10 +27,16 @@ if (tsBuildInfoFile) {
   fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
 }
 const sparseGuardError = getSparseTsgoGuardError(finalArgs, { cwd: process.cwd() });
+const shouldRunHeavyCheck = shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env);
+const pressureGuardError =
+  sparseGuardError || !shouldRunHeavyCheck
+    ? null
+    : getLocalHeavyCheckPressureError({ cwd: process.cwd(), env });
 const releaseLock =
   sparseGuardError ||
+  pressureGuardError ||
   env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1" ||
-  !shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env)
+  !shouldRunHeavyCheck
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
         cwd: process.cwd(),
@@ -44,6 +53,9 @@ try {
     } else {
       process.exitCode = 1;
     }
+  } else if (pressureGuardError) {
+    console.error(pressureGuardError);
+    process.exitCode = 1;
   } else {
     const result = spawnSync(tsgoPath, finalArgs, {
       stdio: "inherit",

@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  getLocalHeavyCheckPressureError,
+  prepareLocalHeavyCheckEnvironment,
+} from "../../scripts/lib/local-heavy-check-runtime.mjs";
+import {
   createSparseTsgoSkipEnv,
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
@@ -151,5 +155,63 @@ describe("run-tsgo sparse guard", () => {
       PATH: "/usr/bin",
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
     });
+  });
+});
+
+describe("run-tsgo pressure guard", () => {
+  it("allows heavy checks when memory and temp space have headroom", () => {
+    expect(
+      getLocalHeavyCheckPressureError({
+        env: {},
+        hostPressure: {
+          memAvailableBytes: 4 * 1024 ** 3,
+          tmpAvailableBytes: 2 * 1024 ** 3,
+          tmpUsedPercent: 25,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses heavy checks when temp space or memory is already pressured", () => {
+    expect(
+      getLocalHeavyCheckPressureError({
+        env: {},
+        hostPressure: {
+          memAvailableBytes: 512 * 1024 ** 2,
+          tmpAvailableBytes: 256 * 1024 ** 2,
+          tmpUsedPercent: 91,
+        },
+      }),
+    ).toMatchInlineSnapshot(`
+      "Refusing to start a local heavy check because this host is already under pressure:
+      - MemAvailable 512 MiB is below 1.5 GiB
+      - temp directory available 256 MiB is below 1.0 GiB
+      - temp directory is 91% used (limit 80%)
+      Wait for pressure to clear, free temp space, or rerun with OPENCLAW_HEAVY_CHECK_FORCE=1 if you really mean it."
+    `);
+  });
+
+  it("lets explicit force bypass pressure refusal", () => {
+    expect(
+      getLocalHeavyCheckPressureError({
+        env: { OPENCLAW_HEAVY_CHECK_FORCE: "1" },
+        hostPressure: {
+          memAvailableBytes: 1,
+          tmpAvailableBytes: 1,
+          tmpUsedPercent: 99,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("routes local heavy-check temp files into the worktree artifact directory", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    const env = prepareLocalHeavyCheckEnvironment({ cwd, env: {} });
+    const expectedTmp = path.join(cwd, ".artifacts", "tmp", "local-heavy-checks");
+
+    expect(env.TMPDIR).toBe(expectedTmp);
+    expect(env.TEMP).toBe(expectedTmp);
+    expect(env.TMP).toBe(expectedTmp);
+    expect(fs.existsSync(expectedTmp)).toBe(true);
   });
 });
