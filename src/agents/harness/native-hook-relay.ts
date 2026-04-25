@@ -966,8 +966,11 @@ function isJsonValue(value: unknown): value is JsonValue {
       continue;
     }
     if (Array.isArray(current.value)) {
-      for (const item of current.value) {
-        stack.push({ value: item, depth: current.depth + 1 });
+      for (let index = 0; index < current.value.length; index += 1) {
+        if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
+          return false;
+        }
+        stack.push({ value: current.value[index], depth: current.depth + 1 });
       }
       continue;
     }
@@ -984,6 +987,9 @@ function isJsonValue(value: unknown): value is JsonValue {
         }
         totalStringLength += key.length;
         if (totalStringLength > MAX_NATIVE_HOOK_RELAY_TOTAL_STRING_LENGTH) {
+          return false;
+        }
+        if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
           return false;
         }
         stack.push({ value: current.value[key], depth: current.depth + 1 });

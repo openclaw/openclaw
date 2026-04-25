@@ -232,6 +232,37 @@ describe("native hook relay registry", () => {
     ).rejects.toThrow("JSON-compatible");
   });
 
+  it("rejects broad object payloads before reading children beyond the JSON node budget", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+    const rawPayload: Record<string, unknown> = {};
+    for (let index = 0; index < 19_999; index += 1) {
+      rawPayload[`k${index}`] = index;
+    }
+    let overBudgetValueRead = false;
+    Object.defineProperty(rawPayload, "overBudget", {
+      enumerable: true,
+      get() {
+        overBudgetValueRead = true;
+        return "should not be read";
+      },
+    });
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload,
+      }),
+    ).rejects.toThrow("JSON-compatible");
+    expect(overBudgetValueRead).toBe(false);
+  });
+
   it("rejects payloads beyond the relay string budget", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
