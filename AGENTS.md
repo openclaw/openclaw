@@ -320,6 +320,7 @@
 - **Multi-agent safety:** do **not** switch branches / check out a different branch unless explicitly requested.
 - **Multi-agent safety:** running multiple agents is OK as long as each agent has its own session.
 - **Multi-agent safety:** when you see unrecognized files, keep going; focus on your changes and commit only those.
+- **Branch model on Outta-Bounds/openclaw fork:** `deploy` is the protected production mainline. Never push directly to `deploy` and never force-push it. All changes land via PR from a topic branch (e.g. `fix/...`, `chore/...`, `feat/...`) into `deploy`, gated by the `deploy branch check` workflow. The `main` branch mirrors upstream and is fast-forwarded by the monthly `upstream-sync` workflow. If `deploy` is force-pushed, `git pull --rebase` will silently break for everyone — preserve the shared history.
 - Lint/format churn:
   - If staged+unstaged diffs are formatting-only, auto-resolve without asking.
   - If commit/push already requested, auto-stage and include formatting-only follow-ups in the same commit (or a tiny follow-up commit if needed), no extra confirmation.
